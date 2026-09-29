@@ -383,8 +383,9 @@ async fn open_session(
         .authorized_session(&session_id, &headers, now_ms)
         .await?;
     match session.state {
-        GuestSessionState::Opened | GuestSessionState::Rejected => {
-            state.finalize_terminal_cleanup(&session, now_ms).await?;
+        GuestSessionState::Opened => return open_response_from_stored(&session),
+        GuestSessionState::Rejected => {
+            state.finalize_rejected_cleanup(&session, now_ms).await?;
             return open_response_from_stored(&session);
         }
         GuestSessionState::Opening => {
@@ -453,7 +454,7 @@ async fn open_session(
                 .sessions
                 .finish_rejected(&opening.session_id, code, now_ms)
                 .await?;
-            state.finalize_terminal_cleanup(&rejected, now_ms).await?;
+            state.finalize_rejected_cleanup(&rejected, now_ms).await?;
             return Ok(GuestJson(GuestOpenResponse {
                 protocol_version: GUEST_PROTOCOL_V1,
                 session_id: rejected.session_id,
@@ -518,7 +519,7 @@ async fn open_session(
             now_ms,
         )
         .await?;
-    state.finalize_terminal_cleanup(&opened, now_ms).await?;
+    state.release_admission(&opened, now_ms).await?;
 
     Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
@@ -552,7 +553,6 @@ async fn get_scene(
     ) {
         return Err(GuestReaderError::conflict("guest_scene_not_ready"));
     }
-    state.finalize_terminal_cleanup(&session, now_ms).await?;
     let scene = session
         .scene_json
         .as_deref()
@@ -615,7 +615,7 @@ impl GuestReaderHttpState {
         Ok(session)
     }
 
-    async fn finalize_terminal_cleanup(
+    async fn finalize_rejected_cleanup(
         &self,
         session: &GuestReaderSession,
         now_ms: i64,
