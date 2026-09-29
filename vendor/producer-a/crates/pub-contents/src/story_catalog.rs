@@ -25,6 +25,19 @@ pub struct MatureStoryCatalog {
     pub entries: Vec<MatureStoryCatalogEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryCatalogCardinalityAuthority {
+    PhysicalEmptyChunk,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatureEmptyStoryCatalogVariant {
+    pub source: RawSpan,
+    pub fields: Vec<RawContentsBlock>,
+    pub cardinality_authority: StoryCatalogCardinalityAuthority,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatureStoryCatalogEntry {
     pub source: RawSpan,
@@ -62,6 +75,9 @@ pub enum StoryCatalogReadError {
     InvalidLayoutKey { entry_index: usize },
     DuplicateTextIdentity { text_id: u32 },
     EntryCountMismatch { declared: u32, actual: usize },
+    PhysicalEmptyChunkUnexpectedLength { actual: u32 },
+    PhysicalEmptyChunkHasFields { actual: usize },
+    PhysicalEmptyChunkAmbiguousTail { source: RawSpan },
 }
 
 impl fmt::Display for StoryCatalogReadError {
@@ -196,6 +212,42 @@ pub fn parse_confirmed_mature_story_catalog(
         declared_count_source,
         entry_array_source: entry_array_source.clone(),
         entries,
+    })
+}
+
+/// Parses only the separately-grounded physically empty mature 0x65 variant.
+///
+/// The exact 1,050-file corpus contains eight mature publications whose 0x65
+/// chunk is physically just the 4-byte chunk-length word: declared_length=4,
+/// zero top-level fields, and no unsupported tail. This parser records that
+/// physical absence without inventing a declared Story count or entry array.
+///
+/// This does not relax the strict mature catalog parser. Any extra field,
+/// unsupported tail, or non-empty chunk remains rejected.
+pub fn parse_bounded_empty_mature_story_catalog_variant(
+    _bytes: &[u8],
+    chunk: &Contents0x2cChunk,
+) -> Result<MatureEmptyStoryCatalogVariant, StoryCatalogReadError> {
+    if chunk.declared_length != 4 {
+        return Err(StoryCatalogReadError::PhysicalEmptyChunkUnexpectedLength {
+            actual: chunk.declared_length,
+        });
+    }
+    if !chunk.fields.is_empty() {
+        return Err(StoryCatalogReadError::PhysicalEmptyChunkHasFields {
+            actual: chunk.fields.len(),
+        });
+    }
+    if let Some(source) = &chunk.unsupported_tail {
+        return Err(StoryCatalogReadError::PhysicalEmptyChunkAmbiguousTail {
+            source: source.clone(),
+        });
+    }
+
+    Ok(MatureEmptyStoryCatalogVariant {
+        source: chunk.source.clone(),
+        fields: chunk.fields.clone(),
+        cardinality_authority: StoryCatalogCardinalityAuthority::PhysicalEmptyChunk,
     })
 }
 
@@ -405,12 +457,10 @@ mod tests {
         array.extend_from_slice(&container(0, BLOCK_TYPE_CONTAINER_88, &e1));
         array.extend_from_slice(&container(0, BLOCK_TYPE_CONTAINER_88, &e2));
 
-        let mut fields = crate::encode_packed_field_tag(
-            STORY_CATALOG_DECLARED_COUNT_ID,
-            BLOCK_TYPE_U16,
-        )
-        .expect("declared-count tag must encode")
-        .to_vec();
+        let mut fields =
+            crate::encode_packed_field_tag(STORY_CATALOG_DECLARED_COUNT_ID, BLOCK_TYPE_U16)
+                .expect("declared-count tag must encode")
+                .to_vec();
         fields.extend_from_slice(&2_u16.to_le_bytes());
         fields.extend_from_slice(&container(
             STORY_CATALOG_ENTRY_ARRAY_ID,
@@ -469,6 +519,74 @@ mod tests {
                 .map(|entry| (entry.text_id, entry.layout_key))
                 .collect::<Vec<_>>(),
             vec![(6, Some(4)), (9, Some(12))]
+        );
+    }
+
+    #[test]
+    fn physical_empty_variant_requires_exact_four_byte_chunk() {
+        let bytes = 4_u32.to_le_bytes().to_vec();
+        let chunk = parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+        let variant = parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk).unwrap();
+
+        assert!(variant.fields.is_empty());
+        assert_eq!(
+            variant.cardinality_authority,
+            StoryCatalogCardinalityAuthority::PhysicalEmptyChunk
+        );
+        assert_eq!(
+            parse_confirmed_mature_story_catalog(&bytes, &chunk),
+            Err(StoryCatalogReadError::MissingDeclaredCount)
+        );
+    }
+
+    #[test]
+    fn physical_empty_variant_rejects_ambiguous_chunk_tail() {
+        let bytes = 4_u32.to_le_bytes().to_vec();
+        let mut chunk =
+            parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+        let ambiguous = RawSpan {
+            stream: StreamPath("/Contents".into()),
+            offset: u64::try_from(bytes.len()).unwrap(),
+            len: 1,
+        };
+        chunk.unsupported_tail = Some(ambiguous.clone());
+
+        assert_eq!(
+            parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk),
+            Err(StoryCatalogReadError::PhysicalEmptyChunkAmbiguousTail {
+                source: ambiguous
+            })
+        );
+    }
+
+    #[test]
+    fn physical_empty_variant_rejects_even_empty_entry_array_field() {
+        let array = container(STORY_CATALOG_ENTRY_ARRAY_ID, BLOCK_TYPE_CONTAINER_A0, &[]);
+        let mut bytes = u32::try_from(array.len() + 4)
+            .unwrap()
+            .to_le_bytes()
+            .to_vec();
+        bytes.extend_from_slice(&array);
+
+        let chunk = parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+        assert_eq!(
+            parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk),
+            Err(StoryCatalogReadError::PhysicalEmptyChunkUnexpectedLength {
+                actual: u32::try_from(bytes.len()).unwrap()
+            })
+        );
+    }
+
+    #[test]
+    fn physical_empty_variant_rejects_nonempty_chunk_metadata() {
+        let bytes = 4_u32.to_le_bytes().to_vec();
+        let mut chunk =
+            parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+        chunk.declared_length = 8;
+
+        assert_eq!(
+            parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk),
+            Err(StoryCatalogReadError::PhysicalEmptyChunkUnexpectedLength { actual: 8 })
         );
     }
 
