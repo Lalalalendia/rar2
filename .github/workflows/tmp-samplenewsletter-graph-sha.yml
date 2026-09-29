@@ -1,0 +1,45 @@
+name: Temporary SampleNewsletter resolved-graph SHA probe
+
+on:
+  push:
+    branches:
+      - "cloud/cloud-reader-corpus-promotion-01b-current-main"
+
+permissions:
+  contents: read
+
+jobs:
+  graph-sha:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build Producer A
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p chaptera-producer-a --release
+          if ($LASTEXITCODE -ne 0) { throw "producer build failed" }
+
+      - name: Acquire exact SampleNewsletter and emit graph SHA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $graph = Join-Path $env:RUNNER_TEMP "resolved-graph.json"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" -OutFile $fixture
+          $sourceSha = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sourceSha -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "source SHA mismatch: $sourceSha"
+          }
+          & "vendor/producer-a/target/release/chaptera-producer-a.exe" resolved-graph $fixture > $graph
+          if ($LASTEXITCODE -ne 0) { throw "resolved-graph producer failed" }
+          $graphSha = (Get-FileHash -LiteralPath $graph -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item -LiteralPath $graph).Length
+          Write-Host "CHAPTERA_SAMPLE_NEWSLETTER_GRAPH_SHA=$graphSha"
+          Write-Host "CHAPTERA_SAMPLE_NEWSLETTER_GRAPH_BYTES=$bytes"
