@@ -182,13 +182,13 @@ fn read_contents(bytes: &[u8]) -> Result<Vec<u8>> {
         Ok(contents) => return Ok(contents),
         Err(error) => error,
     };
-    let recovered =
-        pub_cfb::recover_root_regular_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH)
-            .with_context(|| {
-                format!(
-                    "strict legacy Contents read failed ({strict_error}); bounded root recovery failed"
-                )
-            })?;
+    let recovered = pub_cfb::recover_root_regular_stream_reader(
+        Cursor::new(bytes),
+        CONTENTS_STREAM_PATH,
+    )
+    .with_context(|| {
+        format!("strict legacy Contents read failed ({strict_error}); bounded root recovery failed")
+    })?;
     Ok(recovered.bytes)
 }
 
