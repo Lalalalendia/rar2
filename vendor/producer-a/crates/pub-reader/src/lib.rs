@@ -994,6 +994,115 @@ pub fn probe_mature_0x2c_contents_story_count(bytes: &[u8]) -> Option<u32> {
     Some(catalog.declared_count)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PubMatureContentsStoryDemand {
+    pub live_shape_chunk_count: usize,
+    pub live_table_chunk_count: usize,
+    pub live_shape_chunks_with_field_27: usize,
+    pub live_table_chunks_with_field_27: usize,
+    pub live_shape_field_27_occurrence_count: usize,
+    pub live_table_field_27_occurrence_count: usize,
+    pub live_distinct_field_27_value_count: usize,
+}
+
+/// Returns source-safe grounded Story demand from live mature Contents objects.
+///
+/// "Live" means the SHAPE/TABLE object's persisted parent chain reaches a
+/// DOCUMENT PageList PAGE. Only already-decoded scalar field 0x27 values count
+/// as Story identities; opaque-tail bytes are deliberately excluded. The
+/// receipt retains counts only and never exposes the persisted Story IDs.
+pub fn probe_mature_0x2c_contents_story_demand(
+    bytes: &[u8],
+) -> Option<PubMatureContentsStoryDemand> {
+    let contents = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH).ok()?;
+    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let header = parse_0x2c_header(contents_stream.clone(), &contents).ok()?;
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header).ok()?;
+    let references = build_reference_index(&contents, &trailer.directory).ok()?;
+
+    let document_reference =
+        unique_reference_by_raw_type(&references, RAW_TYPE_DOCUMENT, "DOCUMENT").ok()?;
+    let document_chunk =
+        chunk_for_reference(contents_stream.clone(), &contents, document_reference).ok()?;
+    let page_list_block = unique_block(&document_chunk, DOCUMENT_PAGE_LIST_ID).ok()?.clone();
+    let page_list = parse_confirmed_document_page_list(&contents, page_list_block).ok()?;
+    let document_page_handles = page_list
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            references
+                .get(&entry.handle)
+                .is_some_and(|reference| single_raw_type(reference) == Some(RAW_TYPE_PAGE))
+                .then_some(entry.handle)
+        })
+        .collect::<BTreeSet<_>>();
+
+    let mut result = PubMatureContentsStoryDemand::default();
+    let mut distinct_values = BTreeSet::new();
+
+    for reference in references.values() {
+        let raw_type = single_raw_type(reference);
+        if !matches!(raw_type, Some(RAW_TYPE_SHAPE) | Some(RAW_TYPE_TABLE)) {
+            continue;
+        }
+
+        let mut current = single_parent_seq(reference);
+        let mut seen = BTreeSet::new();
+        let mut is_live = false;
+        while let Some(seq_num) = current {
+            if document_page_handles.contains(&seq_num) {
+                is_live = true;
+                break;
+            }
+            if !seen.insert(seq_num) {
+                break;
+            }
+            current = references.get(&seq_num).and_then(single_parent_seq);
+        }
+        if !is_live {
+            continue;
+        }
+
+        let chunk = chunk_for_reference(contents_stream.clone(), &contents, reference).ok()?;
+        let mut occurrences = 0_usize;
+        for field in &chunk.fields {
+            if field.id != FIELD_STORY_ID {
+                continue;
+            }
+            let value = match &field.body {
+                RawContentsBlockBody::U16 { value, .. } => Some(u32::from(*value)),
+                RawContentsBlockBody::U32 { value, .. } => Some(*value),
+                _ => None,
+            };
+            if let Some(value) = value {
+                occurrences += 1;
+                distinct_values.insert(value);
+            }
+        }
+
+        match raw_type {
+            Some(RAW_TYPE_SHAPE) => {
+                result.live_shape_chunk_count += 1;
+                result.live_shape_field_27_occurrence_count += occurrences;
+                if occurrences > 0 {
+                    result.live_shape_chunks_with_field_27 += 1;
+                }
+            }
+            Some(RAW_TYPE_TABLE) => {
+                result.live_table_chunk_count += 1;
+                result.live_table_field_27_occurrence_count += occurrences;
+                if occurrences > 0 {
+                    result.live_table_chunks_with_field_27 += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    result.live_distinct_field_27_value_count = distinct_values.len();
+    Some(result)
+}
+
 /// Returns only the stable mature Contents Story-catalog error class.
 ///
 /// Dynamic payloads such as offsets, counts and identities are deliberately
