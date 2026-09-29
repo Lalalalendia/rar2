@@ -7,7 +7,7 @@ use pub_reader::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io::Cursor;
@@ -16,7 +16,6 @@ use std::path::PathBuf;
 const RAW_IMAGE: u16 = 0x0002;
 const RAW_IMAGE_DATA: u16 = 0x0021;
 const RAW_FILENAME: u16 = 0x0054;
-const RAW_IMAGE_REPL: u16 = 0x0056;
 const RAW_GROUP: u16 = 0x000f;
 const RAW_PAGE: u16 = 0x0014;
 const RAW_DOCUMENT: u16 = 0x0015;
