@@ -52,8 +52,7 @@ use pub_reader::{
     FailureTelemetryChoice, PubAssetExportDiagnostic, PubBridgeDiagnostic,
     PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubSourceGraphBuild,
-    analyze_mature_0x2c_page_roles,
-    build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
     resolve_pub_source_graph,
@@ -1148,16 +1147,11 @@ pub fn open_mature_0x2c_geometry(
 
                 let mut placements = Vec::with_capacity(entry.uses.len());
                 for usage in &entry.uses {
-                    let source_window = match pipeline
-                        .resolved
-                        .graph
-                        .nodes
-                        .get(&usage.node_id)
-                        .map(|node| {
-                            viewer_image_source_window_v1(
-                                node.payload.explicit_image_crop.as_ref(),
-                            )
-                        }) {
+                    let source_window = match pipeline.resolved.graph.nodes.get(&usage.node_id).map(
+                        |node| {
+                            viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
+                        },
+                    ) {
                         Some(Ok(source_window)) => source_window,
                         Some(Err(reason)) => {
                             document.diagnostics.push(ViewerDiagnostic {
