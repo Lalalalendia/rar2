@@ -276,6 +276,16 @@ jobs:
               if profile.get("candidate") is True
               and profile.get("raster_success") is not True
           )
+          raster_blocker_profiles = Counter(
+              json.dumps(
+                  profile.get("raster_blocker_profile") or {"kind": "missing"},
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+              and profile.get("raster_success") is not True
+          )
           raster_success_files = {
               item["source_sha256"]
               for item, profile in zip(direct_child, raster_profiles)
@@ -422,6 +432,9 @@ jobs:
               ),
               "direct_raster_error_detail_counts": dict(
                   raster_error_details.most_common()
+              ),
+              "direct_raster_blocker_profile_counts": dict(
+                  raster_blocker_profiles.most_common()
               ),
               "direct_raster_success_file_count": len(raster_success_files),
               "direct_raster_positive_geometry_candidate_count": raster_positive_geometry_candidate_count,
