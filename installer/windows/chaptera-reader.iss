@@ -50,6 +50,9 @@ Name: "{app}\.rollback"
 
 [Files]
 Source: "{#SourceDir}\Chaptera-Reader.exe"; DestDir: "{app}\current"; DestName: "chaptera-reader.exe"; Flags: {#ReaderPayloadFlags}
+Source: "{#SourceDir}\chaptera-desktop-open-worker.exe"; DestDir: "{app}\current"; Flags: {#ReaderPayloadFlags}
+Source: "{#SourceDir}\chaptera-desktop-open-sandbox-host.exe"; DestDir: "{app}\current"; Flags: {#ReaderPayloadFlags}
+Source: "{#SourceDir}\chaptera-desktop-open-runtime.json"; DestDir: "{app}\current"; Flags: ignoreversion
 Source: "{#SourceDir}\README.md"; DestDir: "{app}\current"; Flags: ignoreversion
 
 [Icons]
