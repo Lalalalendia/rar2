@@ -13,6 +13,7 @@ from typing import Iterable
 SCOPES = (
     "tier_a",
     "reader_windows",
+    "reader_windows_full",
     "editor_windows",
     "visual_oracle",
     "typography_golden",
@@ -86,7 +87,10 @@ READER_DESKTOP = (
     "apps/chaptera-desktop/src/render_backend.rs",
 )
 
-READER_WINDOWS = READER_SHARED + READER_DESKTOP + (
+READER_WINDOWS_FULL = (
+    "Cargo.toml",
+    "Cargo.lock",
+) + READER_DESKTOP + (
     "crates/chaptera-update-engine/**",
     "crates/chaptera-update-orchestrator/**",
     "crates/chaptera-update-handoff/**",
@@ -96,6 +100,8 @@ READER_WINDOWS = READER_SHARED + READER_DESKTOP + (
     "tools/test_package_reader_portable.py",
     ".github/workflows/chaptera-reader-windows.yml",
 )
+
+READER_WINDOWS = READER_SHARED + READER_WINDOWS_FULL
 
 EDITOR_WINDOWS = (
     "Cargo.toml",
@@ -225,6 +231,7 @@ def classify(paths: list[str]) -> dict[str, bool]:
     mapping = {
         "tier_a": TIER_A,
         "reader_windows": READER_WINDOWS,
+        "reader_windows_full": READER_WINDOWS_FULL,
         "editor_windows": EDITOR_WINDOWS,
         "visual_oracle": VISUAL_ORACLE,
         "typography_golden": TYPOGRAPHY_GOLDEN,
