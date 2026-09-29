@@ -1,0 +1,131 @@
+name: Legacy22 full corpus replay
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "vendor/producer-a/crates/pub-contents/src/legacy22_directory.rs"
+      - "vendor/producer-a/crates/pub-reader/src/family_classifier.rs"
+      - "vendor/producer-a/crates/pub-reader/src/legacy22_graph.rs"
+      - "vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: legacy22-full-corpus-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+
+jobs:
+  replay:
+    name: Replay 625 strict PUB
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact Reader candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Checkout pinned 625-file corpus
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: ${{ env.LALAMU_CORPUS_REF }}
+          path: corpus-src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Install pinned CFB parser
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Build exact Reader structural receipt
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin corpus-reader-receipt
+
+      - name: Replay full pinned corpus
+        run: |
+          set -euo pipefail
+          rm -rf out/legacy625
+          python corpus-src/pub-corpus/scripts/deep_profile.py \
+            --corpus-root corpus-src/pub-corpus \
+            --rar-tools tools/corpus \
+            --reader-receipt-exe "${CARGO_TARGET_DIR}/release/corpus-reader-receipt" \
+            --rar-ref "rar2:${GITHUB_SHA}" \
+            --out out/legacy625 \
+            --workers 4
+
+      - name: Guard legacy22 product depth
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("out/legacy625/summary.json").read_text())
+          rows = json.loads(Path("out/legacy625/reader-records.json").read_text())
+          reader = summary["reader"]
+
+          assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
+          assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
+          assert reader["opened_by_family"].get("0x22") == 165, reader["opened_by_family"]
+
+          legacy_open = [
+              row for row in rows
+              if row.get("opened") is True and row.get("contents_family") == "0x22"
+          ]
+          legacy_with_scene = [
+              row for row in legacy_open if int(row.get("scene_node_count") or 0) > 0
+          ]
+          legacy_scene_nodes = sum(int(row.get("scene_node_count") or 0) for row in legacy_open)
+          legacy_story_frames = sum(int(row.get("story_frame_count") or 0) for row in legacy_open)
+          legacy_text_fragments = sum(int(row.get("text_fragment_count") or 0) for row in legacy_open)
+
+          assert len(legacy_with_scene) == 144, len(legacy_with_scene)
+          assert legacy_scene_nodes == 706, legacy_scene_nodes
+          assert legacy_story_frames == 509, legacy_story_frames
+          assert legacy_text_fragments == 498, legacy_text_fragments
+
+          receipt = {
+              "corpus_file_count": summary["corpus_file_count"],
+              "opened_count": reader["opened_count"],
+              "failed_count": reader["failed_count"],
+              "opened_by_family": reader["opened_by_family"],
+              "failed_by_family": reader["failed_by_family"],
+              "legacy_opened": len(legacy_open),
+              "legacy_files_with_scene_nodes": len(legacy_with_scene),
+              "legacy_scene_node_count": legacy_scene_nodes,
+              "legacy_story_frame_count": legacy_story_frames,
+              "legacy_text_fragment_count": legacy_text_fragments,
+              "lalamu_corpus_ref": "f78cc6f455f4dc222868f9cc035511a6ca7a91ea",
+          }
+          Path("out/legacy625/acceptance.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legacy22-full-corpus-${{ github.run_id }}
+          path: out/legacy625/**
+          if-no-files-found: error
+          retention-days: 30
