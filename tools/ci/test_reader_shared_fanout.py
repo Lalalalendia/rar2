@@ -57,3 +57,20 @@ expect(
     web_acceptance=False,
 )
 print("reader shared fanout classifier tests: ok")
+
+expect(
+    [".github/workflows/mobile-reader-android-local-open.yml"],
+    android_local=True,
+    android_render=False,
+    reader_windows=False,
+)
+expect(
+    [".github/workflows/chaptera-local-portable-windows.yml"],
+    local_portable=True,
+    reader_windows=False,
+)
+expect(
+    [".github/workflows/chaptera-reader-windows.yml"],
+    reader_windows=True,
+    editor_windows=False,
+)
