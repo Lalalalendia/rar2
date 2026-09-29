@@ -510,7 +510,6 @@ fn object_string(value: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{key} must be a string"))
 }
 
-
 fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
     if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif")
         || bytes.is_empty()
