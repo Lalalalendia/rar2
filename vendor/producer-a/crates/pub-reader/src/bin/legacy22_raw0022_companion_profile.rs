@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use pub_contents::{Legacy0x22Directory, Legacy0x22DirectoryEntry, parse_legacy_0x22_directory};
+use pub_contents::{parse_legacy_0x22_directory, Legacy0x22Directory, Legacy0x22DirectoryEntry};
 use pub_core::StreamPath;
 use pub_model::Sha256Digest;
-use pub_reader::{CONTENTS_STREAM_PATH, build_legacy_0x22_noquill_source_graph};
-use serde_json::{Value, json};
+use pub_reader::{build_legacy_0x22_noquill_source_graph, CONTENTS_STREAM_PATH};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
