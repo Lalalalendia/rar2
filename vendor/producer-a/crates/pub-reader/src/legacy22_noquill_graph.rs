@@ -433,13 +433,9 @@ fn materialize_legacy_noquill_child(
         None
     };
     let (table_story, table_source) = if let Some(table) = resolved_table {
-        let Some((story, source)) = build_legacy_table_projection(
-            graph,
-            source_hash,
-            contents_stream,
-            table,
-            diagnostics,
-        )? else {
+        let Some((story, source)) =
+            build_legacy_table_projection(graph, source_hash, table, diagnostics)?
+        else {
             return Ok(());
         };
         (Some(story), Some(source))
@@ -544,7 +540,6 @@ fn materialize_legacy_noquill_child(
 fn build_legacy_table_projection(
     graph: &mut PubSourceGraph,
     source_hash: &Sha256Digest,
-    contents_stream: &StreamPath,
     table: &Legacy0x22ResolvedTable,
     diagnostics: &mut Vec<PubBridgeDiagnostic>,
 ) -> Result<Option<(PubTableStoryOwnershipSource, PubTableSource)>> {
