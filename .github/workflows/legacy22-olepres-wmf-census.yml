@@ -1,0 +1,158 @@
+name: Legacy22 OLE cached WMF census
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/legacy22-olepres-wmf-census.yml"
+      - "vendor/producer-a/crates/pub-reader/src/wmf.rs"
+      - "vendor/producer-a/crates/pub-reader/src/ole_presentation.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/olepres_wmf_profile.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: legacy22-olepres-wmf-census-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: ${{ env.LALAMU_CORPUS_REF }}
+          path: corpus-src
+          sparse-checkout: |
+            pub-corpus/corpus/native/unclassified
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - run: python -m pip install --disable-pip-version-check olefile==0.47
+      - name: Build bounded profilers
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --release \
+            --bin legacy22_raw0022_companion_profile --bin olepres_wmf_profile
+      - name: Census real OlePres WMF record families
+        run: |
+          set -euo pipefail
+          mkdir -p out/olepres-wmf
+          python - <<'PY'
+          import json, re, subprocess, tempfile
+          from collections import Counter
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+          import olefile
+
+          corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
+          paths = sorted(corpus.glob("*.pub"))
+          legacy = Path("rar2-target/release/legacy22_raw0022_companion_profile").resolve()
+          wmf = Path("rar2-target/release/olepres_wmf_profile").resolve()
+          assert len(paths) == 625, len(paths)
+
+          def profile_legacy(path, root):
+              out = root / f"{path.stem}.json"
+              subprocess.run([str(legacy), str(path.resolve()), str(out)], check=True, stdout=subprocess.DEVNULL)
+              return path, json.loads(out.read_text())
+
+          candidates = []
+          with tempfile.TemporaryDirectory() as td:
+              root = Path(td)
+              with ThreadPoolExecutor(max_workers=8) as pool:
+                  futures = [pool.submit(profile_legacy, p, root) for p in paths]
+                  for future in as_completed(futures):
+                      path, row = future.result()
+                      for item in row.get("candidates") or []:
+                          values = item.get("child_u16_first64") or {}
+                          candidates.append((path, row["source_sha256"], int(values["0x0a"]), int(values["0x0e"])))
+          assert len(candidates) == 305, len(candidates)
+
+          total = Counter()
+          stream_presence = Counter()
+          object_presence = Counter()
+          versions = Counter()
+          placeable = Counter()
+          record_hist = Counter()
+          failures = []
+          streams = 0
+          multi = 0
+
+          with tempfile.TemporaryDirectory() as td:
+              root = Path(td)
+              for index, (path, sha, storage, raw_flag) in enumerate(sorted(candidates, key=lambda x: (x[1], x[2]))):
+                  with olefile.OleFileIO(str(path)) as ole:
+                      pres = []
+                      for parts in ole.listdir(streams=True, storages=False):
+                          if len(parts) < 3 or parts[0].casefold() != "objects":
+                              continue
+                          m = re.fullmatch(r"Object\s*(\d+)", parts[1], flags=re.IGNORECASE)
+                          if m and int(m.group(1)) == storage and "olepres" in parts[-1].casefold():
+                              pres.append(parts)
+                      if not pres:
+                          raise RuntimeError(f"{sha}: Object {storage} has no OlePres")
+                      if len(pres) > 1:
+                          multi += 1
+                      object_funcs = set()
+                      for ordinal, stream_path in enumerate(sorted(pres)):
+                          raw = ole.openstream(stream_path).read()
+                          inp = root / f"{index}-{ordinal}.bin"
+                          out = root / f"{index}-{ordinal}.json"
+                          inp.write_bytes(raw)
+                          cp = subprocess.run([str(wmf), str(inp), str(out)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                          if cp.returncode:
+                              failures.append({"sha": sha, "storage": storage, "stream": stream_path[-1], "error": cp.stderr[-1000:]})
+                              continue
+                          row = json.loads(out.read_text())
+                          funcs = {int(k, 16): int(v) for k, v in row["wmf"]["functions"].items()}
+                          total.update(funcs)
+                          stream_presence.update(funcs.keys())
+                          object_funcs.update(funcs.keys())
+                          versions[int(row["wmf"]["version"])] += 1
+                          placeable[bool(row["wmf"]["placeable"])] += 1
+                          record_hist[int(row["wmf"]["record_count"])] += 1
+                          streams += 1
+                      object_presence.update(object_funcs)
+
+          receipt = {
+              "schema": "chaptera.legacy22-olepres-wmf-census.v1",
+              "corpus_file_count": len(paths),
+              "ole_candidate_count": len(candidates),
+              "profiled_presentation_count": streams,
+              "profile_failure_count": len(failures),
+              "candidate_with_multiple_presentations": multi,
+              "wmf_version_counts": {str(k): v for k, v in sorted(versions.items())},
+              "wmf_placeable_counts": {str(k).lower(): v for k, v in sorted(placeable.items())},
+              "wmf_record_count_histogram": {str(k): v for k, v in sorted(record_hist.items())},
+              "function_total_counts": {f"0x{k:04x}": v for k, v in sorted(total.items())},
+              "function_presentation_counts": {f"0x{k:04x}": v for k, v in sorted(stream_presence.items())},
+              "function_object_counts": {f"0x{k:04x}": v for k, v in sorted(object_presence.items())},
+              "failures": failures,
+          }
+          Path("out/olepres-wmf/census.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          if failures:
+              raise RuntimeError(f"{len(failures)} presentations failed bounded WMF profiling")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legacy22-olepres-wmf-census-${{ github.run_id }}
+          path: out/olepres-wmf/**
+          if-no-files-found: error
+          retention-days: 30
