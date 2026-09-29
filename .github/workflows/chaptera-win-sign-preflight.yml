@@ -120,7 +120,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           function Assert-TestSignature([string]$Path) {
             $sig = Get-AuthenticodeSignature -LiteralPath $Path
-            if ($sig.Status -ne "Valid") { throw "signature is not valid for $Path: $($sig.Status) $($sig.StatusMessage)" }
+            if ($sig.Status -ne "Valid") { throw "signature is not valid for ${Path}: $($sig.Status) $($sig.StatusMessage)" }
             if (-not $sig.SignerCertificate) { throw "missing signer certificate for $Path" }
             if ($sig.SignerCertificate.Thumbprint -ne $env:CHAPTERA_TEST_SIGN_THUMBPRINT) { throw "unexpected signer for $Path" }
             return [ordered]@{ path = $Path; status = [string]$sig.Status; thumbprint = $sig.SignerCertificate.Thumbprint }
