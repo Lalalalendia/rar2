@@ -57,6 +57,13 @@ jobs:
           $workerTarget = Join-Path $env:RUNNER_TEMP "chaptera-worker-target"
           $sandboxTarget = Join-Path $env:RUNNER_TEMP "chaptera-sandbox-target"
 
+          # AppContainer startup on windows-latest fails before Rust main with
+          # STATUS_DLL_INIT_FAILED when the contained child imports the dynamic
+          # MSVC/UCRT bootstrap. The contained boundary does not require a dynamic
+          # CRT, so make child release artifacts self-contained and keep dumpbin
+          # below as an executable proof of the dependency boundary.
+          $env:RUSTFLAGS = "-C target-feature=+crt-static"
+
           $env:CARGO_TARGET_DIR = $workerTarget
           cargo build --manifest-path apps/chaptera-desktop-open-worker/Cargo.toml --release
           if ($LASTEXITCODE -ne 0) { throw "worker build failed" }
@@ -64,6 +71,8 @@ jobs:
           $env:CARGO_TARGET_DIR = $sandboxTarget
           cargo build --manifest-path apps/chaptera-desktop-open-sandbox/Cargo.toml --release
           if ($LASTEXITCODE -ne 0) { throw "sandbox build failed" }
+
+          Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
 
           $stage = Join-Path $env:RUNNER_TEMP "chaptera-contained-stage"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
