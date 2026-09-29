@@ -3,10 +3,10 @@
 use anyhow::{Context, Result, anyhow};
 use chaptera_desktop_open_protocol::{
     CONTROL_JSON_MAX_BYTES_V1, DESKTOP_OPEN_RESPONSE_SCHEMA_V1, DesktopOpenOutcomeV1,
-    DesktopOpenRequestV1, DesktopOpenResponseV1, DesktopOpenSuccessV1, FrameKindV1,
-    FrameLimitsV1, FrameV1, PayloadDescriptorV1, SourceIdentityV1, WorkerFailureCodeV1,
-    decode_control_json, decode_frames, encode_control_json, encode_frames,
-    validate_request_frames, validate_success_frames,
+    DesktopOpenRequestV1, DesktopOpenResponseV1, DesktopOpenSuccessV1, FrameKindV1, FrameLimitsV1,
+    FrameV1, PayloadDescriptorV1, SourceIdentityV1, WorkerFailureCodeV1, decode_control_json,
+    decode_frames, encode_control_json, encode_frames, validate_request_frames,
+    validate_success_frames,
 };
 use chaptera_untrusted_pub_scan::{DEFAULT_MAX_FILE_BYTES, SECURITY_PROFILE_V1};
 
@@ -36,10 +36,7 @@ pub fn request_wire_max_bytes_v1() -> u64 {
     request_frame_limits_v1().max_total_bytes
 }
 
-fn encode_failure(
-    source: SourceIdentityV1,
-    code: WorkerFailureCodeV1,
-) -> Result<Vec<u8>> {
+fn encode_failure(source: SourceIdentityV1, code: WorkerFailureCodeV1) -> Result<Vec<u8>> {
     let response = DesktopOpenResponseV1 {
         schema_version: DESKTOP_OPEN_RESPONSE_SCHEMA_V1.to_owned(),
         source,
@@ -50,8 +47,7 @@ fn encode_failure(
         key: "response".to_owned(),
         payload: encode_control_json(&response).context("encode failure control")?,
     };
-    encode_frames(&[control], response_frame_limits_v1())
-        .context("encode failure response frames")
+    encode_frames(&[control], response_frame_limits_v1()).context("encode failure response frames")
 }
 
 pub fn process_wire_v1(input: &[u8]) -> Result<Vec<u8>> {
