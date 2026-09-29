@@ -429,12 +429,7 @@ fn draw_line(
     }
 }
 
-fn draw_polyline(
-    canvas: &mut Canvas,
-    state: &PlaybackState,
-    points: &[(i32, i32)],
-    closed: bool,
-) {
+fn draw_polyline(canvas: &mut Canvas, state: &PlaybackState, points: &[(i32, i32)], closed: bool) {
     if state.pen.style == PS_NULL || points.len() < 2 {
         return;
     }
@@ -467,16 +462,19 @@ fn draw_polyline(
     }
 }
 
-fn fill_rings(
-    canvas: &mut Canvas,
-    state: &PlaybackState,
-    rings: &[Vec<(i32, i32)>],
-    color: Color,
-) {
-    let Some(min_y) = rings.iter().flat_map(|ring| ring.iter().map(|point| point.1)).min() else {
+fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32)>], color: Color) {
+    let Some(min_y) = rings
+        .iter()
+        .flat_map(|ring| ring.iter().map(|point| point.1))
+        .min()
+    else {
         return;
     };
-    let Some(max_y) = rings.iter().flat_map(|ring| ring.iter().map(|point| point.1)).max() else {
+    let Some(max_y) = rings
+        .iter()
+        .flat_map(|ring| ring.iter().map(|point| point.1))
+        .max()
+    else {
         return;
     };
     let start_y = min_y.max(state.clip.top).max(0);
@@ -524,13 +522,7 @@ fn fill_rings(
                         start = Some(x);
                     } else if before != 0 && winding == 0 {
                         if let Some(from) = start.take() {
-                            canvas.span(
-                                state.clip,
-                                y,
-                                from.ceil() as i32,
-                                x.floor() as i32,
-                                color,
-                            );
+                            canvas.span(state.clip, y, from.ceil() as i32, x.floor() as i32, color);
                         }
                     }
                 }
@@ -587,8 +579,7 @@ fn validate_enhanced_metafile_escape(params: &[u8]) -> Result<()> {
     if params.len() < 4 {
         bail!("WMF META_ESCAPE record is truncated");
     }
-    let escape =
-        read_u16(params, 0).ok_or_else(|| anyhow!("WMF escape function is truncated"))?;
+    let escape = read_u16(params, 0).ok_or_else(|| anyhow!("WMF escape function is truncated"))?;
     if escape != META_ESCAPE_ENHANCED_METAFILE {
         bail!("unsupported WMF escape function 0x{escape:04x}");
     }
@@ -691,8 +682,8 @@ pub fn rasterize_wmf_preview(
         }
         let record_words =
             read_u32(bytes, offset).ok_or_else(|| anyhow!("WMF record size is truncated"))?;
-        let function =
-            read_u16(bytes, offset + 4).ok_or_else(|| anyhow!("WMF record function is truncated"))?;
+        let function = read_u16(bytes, offset + 4)
+            .ok_or_else(|| anyhow!("WMF record function is truncated"))?;
         if record_words < 3 {
             bail!("WMF record size {record_words} is smaller than three words");
         }
@@ -740,7 +731,8 @@ pub fn rasterize_wmf_preview(
                 }
             }
             META_SETROP2 => {
-                let mode = read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETROP2 is truncated"))?;
+                let mode =
+                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETROP2 is truncated"))?;
                 if mode != R2_COPYPEN {
                     bail!("unsupported WMF ROP2 mode {mode}");
                 }
@@ -783,18 +775,22 @@ pub fn rasterize_wmf_preview(
             }
             META_SETWINDOWORG => {
                 state.window_org_y = i32::from(
-                    read_i16(params, 0).ok_or_else(|| anyhow!("WMF SETWINDOWORG y is truncated"))?,
+                    read_i16(params, 0)
+                        .ok_or_else(|| anyhow!("WMF SETWINDOWORG y is truncated"))?,
                 );
                 state.window_org_x = i32::from(
-                    read_i16(params, 2).ok_or_else(|| anyhow!("WMF SETWINDOWORG x is truncated"))?,
+                    read_i16(params, 2)
+                        .ok_or_else(|| anyhow!("WMF SETWINDOWORG x is truncated"))?,
                 );
             }
             META_SETWINDOWEXT => {
                 state.window_ext_y = i32::from(
-                    read_i16(params, 0).ok_or_else(|| anyhow!("WMF SETWINDOWEXT y is truncated"))?,
+                    read_i16(params, 0)
+                        .ok_or_else(|| anyhow!("WMF SETWINDOWEXT y is truncated"))?,
                 );
                 state.window_ext_x = i32::from(
-                    read_i16(params, 2).ok_or_else(|| anyhow!("WMF SETWINDOWEXT x is truncated"))?,
+                    read_i16(params, 2)
+                        .ok_or_else(|| anyhow!("WMF SETWINDOWEXT x is truncated"))?,
                 );
                 if state.window_ext_x == 0 || state.window_ext_y == 0 {
                     bail!("WMF SETWINDOWEXT contains a zero extent");
@@ -954,8 +950,8 @@ pub fn rasterize_wmf_preview(
                     read_i16(params, 2).ok_or_else(|| anyhow!("WMF RECTANGLE right is truncated"))?;
                 let top =
                     read_i16(params, 4).ok_or_else(|| anyhow!("WMF RECTANGLE top is truncated"))?;
-                let left =
-                    read_i16(params, 6).ok_or_else(|| anyhow!("WMF RECTANGLE left is truncated"))?;
+                let left = read_i16(params, 6)
+                    .ok_or_else(|| anyhow!("WMF RECTANGLE left is truncated"))?;
                 let logical = [(left, top), (right, top), (right, bottom), (left, bottom)];
                 let points = map_points(&state, &canvas, &logical)?;
                 if state.brush.style != BS_NULL {
@@ -1094,8 +1090,6 @@ mod tests {
         let image = rasterize_wmf_preview(&synthetic_polygon(), 10_000, 5_000).expect("preview");
         assert!(image.width <= MAX_OUTPUT_SIDE);
         assert!(image.height <= MAX_OUTPUT_SIDE);
-        assert!(
-            u64::from(image.width) * u64::from(image.height) <= MAX_OUTPUT_PIXELS
-        );
+        assert!(u64::from(image.width) * u64::from(image.height) <= MAX_OUTPUT_PIXELS);
     }
 }
