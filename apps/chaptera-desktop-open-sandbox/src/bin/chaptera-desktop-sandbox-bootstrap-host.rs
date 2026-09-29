@@ -38,8 +38,8 @@ fn run() -> Result<()> {
         if args.next().is_some() {
             bail!("unexpected arguments");
         }
-        let output =
-            launch_contained(&probe, b"", DEFAULT_WALL_TIMEOUT).context("launch strict init probe")?;
+        let output = launch_contained(&probe, b"", DEFAULT_WALL_TIMEOUT)
+            .context("launch strict init probe")?;
         if output.receipt.exit_code != 0 {
             bail!(
                 "strict init probe exited with {}: {}",
