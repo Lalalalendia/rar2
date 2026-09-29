@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use pub_reader::{build_legacy_0x22_noquill_source_graph, PubBridgeDiagnostic};
-use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
+use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, env, fs, io::Cursor, path::PathBuf};
+use std::{collections::{BTreeMap, BTreeSet}, env, fs, io::Cursor, path::PathBuf};
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -63,8 +63,10 @@ fn main() -> Result<()> {
     let bytes = fs::read(&source).with_context(|| format!("read {}", source.display()))?;
     let source_sha256 = sha256_hex(&bytes);
 
-    let receipt = match open_pub_geometry(&bytes, viewer_geometry_environment_v0_1()) {
-        Ok(visual) => {
+    let receipt = match open_pub_bundle(&bytes, viewer_geometry_environment_v0_1()) {
+        Ok(bundle) => {
+            let visual = bundle.geometry;
+            let resolved_graph = bundle.resolved_graph;
             let mut diagnostic_codes = visual
                 .document
                 .diagnostics
@@ -84,6 +86,47 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|image| image.node_ids.len())
                 .sum::<usize>();
+
+            let legacy_ole_node_ids = resolved_graph
+                .nodes
+                .values()
+                .filter(|node| node.payload.legacy_ole.is_some())
+                .map(|node| node.header.id)
+                .collect::<BTreeSet<_>>();
+            let renderable_node_ids = visual
+                .scene
+                .nodes
+                .iter()
+                .map(|node| node.origin)
+                .collect::<BTreeSet<_>>();
+            let legacy_ole_renderable_node_count = legacy_ole_node_ids
+                .intersection(&renderable_node_ids)
+                .count();
+            let legacy_ole_preview_node_ids = visual
+                .images
+                .iter()
+                .flat_map(|image| image.node_ids.iter().copied())
+                .filter(|node_id| legacy_ole_node_ids.contains(node_id))
+                .collect::<BTreeSet<_>>();
+            let legacy_ole_preview_resource_count = visual
+                .images
+                .iter()
+                .filter(|image| {
+                    image
+                        .node_ids
+                        .iter()
+                        .any(|node_id| legacy_ole_node_ids.contains(node_id))
+                })
+                .count();
+            let mut legacy_ole_preview_diagnostic_counts = BTreeMap::<String, usize>::new();
+            for diagnostic in &visual.document.diagnostics {
+                if diagnostic.code.starts_with("viewer.legacy_ole.") {
+                    *legacy_ole_preview_diagnostic_counts
+                        .entry(diagnostic.code.clone())
+                        .or_default() += 1;
+                }
+            }
+
             let legacy_object_residuals = legacy_object_residual_census(
                 &bytes,
                 visual.document.source.source_hash,
@@ -108,6 +151,11 @@ fn main() -> Result<()> {
                 "inherited_typography_run_count": inherited_typography_run_count,
                 "image_resource_count": visual.images.len(),
                 "image_placement_count": image_placement_count,
+                "legacy_ole_node_count": legacy_ole_node_ids.len(),
+                "legacy_ole_renderable_node_count": legacy_ole_renderable_node_count,
+                "legacy_ole_preview_resource_count": legacy_ole_preview_resource_count,
+                "legacy_ole_preview_node_count": legacy_ole_preview_node_ids.len(),
+                "legacy_ole_preview_diagnostic_counts": legacy_ole_preview_diagnostic_counts,
                 "paint_node_count": visual.paints.len(),
                 "solid_fill_count": visual.paints.iter().filter(|paint| paint.solid_fill_rgb.is_some()).count(),
                 "solid_line_count": visual.paints.iter().filter(|paint| paint.solid_line.is_some()).count(),
