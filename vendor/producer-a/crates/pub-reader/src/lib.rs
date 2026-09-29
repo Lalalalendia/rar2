@@ -18,6 +18,7 @@ mod guide_bridge;
 mod intake_protocol;
 mod legacy22_graph;
 mod legacy22_noquill_graph;
+mod legacy_olepres;
 mod resolve;
 mod structural_base;
 mod table_bridge;
@@ -64,6 +65,12 @@ pub use legacy22_graph::{
 };
 pub use legacy22_noquill_graph::{
     build_legacy_0x22_noquill_from_contents, build_legacy_0x22_noquill_source_graph,
+};
+pub use legacy_olepres::{
+    LEGACY_OLEPRES_MAX_PRESENTATION_DATA_BYTES, LEGACY_OLEPRES_MAX_REGISTERED_CLIPBOARD_NAME_BYTES,
+    LEGACY_OLEPRES_MAX_STREAM_BYTES, LEGACY_OLEPRES_MAX_TARGET_DEVICE_BYTES,
+    PubLegacyOlePresClipboardFormat, PubLegacyOlePresEnvelope, PubLegacyOlePresParseError,
+    parse_legacy_olepres_envelope,
 };
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
