@@ -268,6 +268,14 @@ jobs:
               if profile.get("candidate") is True
               and profile.get("raster_success") is not True
           )
+          raster_error_details = Counter(
+              profile.get("raster_error_detail")
+              or profile.get("raster_error_class")
+              or "unclassified"
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+              and profile.get("raster_success") is not True
+          )
           raster_success_files = {
               item["source_sha256"]
               for item, profile in zip(direct_child, raster_profiles)
@@ -411,6 +419,9 @@ jobs:
               ),
               "direct_raster_error_class_counts": dict(
                   raster_error_classes.most_common()
+              ),
+              "direct_raster_error_detail_counts": dict(
+                  raster_error_details.most_common()
               ),
               "direct_raster_success_file_count": len(raster_success_files),
               "direct_raster_positive_geometry_candidate_count": raster_positive_geometry_candidate_count,
