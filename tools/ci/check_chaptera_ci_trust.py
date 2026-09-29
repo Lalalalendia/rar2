@@ -9,6 +9,7 @@ import sys
 PROTECTED_WORKFLOWS = (
     ".github/workflows/chaptera-local-portable-windows.yml",
     ".github/workflows/chaptera-reader-installer.yml",
+    ".github/workflows/chaptera-win-sign-preflight.yml",
     ".github/workflows/chaptera-server-package-integrity-v1.yml",
     ".github/workflows/editor-live-trial-package.yml",
     ".github/workflows/pub-ksu-publication4-provenance.yml",
