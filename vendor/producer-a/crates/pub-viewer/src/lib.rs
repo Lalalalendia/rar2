@@ -51,7 +51,7 @@ use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, PubAssetExportDiagnostic, PubBridgeDiagnostic,
     PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubSourceGraphBuild,
+    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
     analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
@@ -210,6 +210,8 @@ pub struct ViewerGeometryDocument {
     pub text_fragments: Vec<ViewerTextFragment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<ViewerTypographyRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_font_maps: Vec<ViewerScriptFontMap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<ViewerTable>,
     #[cfg(feature = "cmo-slot-compose")]
@@ -598,6 +600,38 @@ pub struct ViewerTextFragment {
     pub line_count: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerScriptFontEntryDisposition {
+    Resolved,
+    UnresolvedSentinel,
+    InvalidFontOrdinal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerScriptFontEntry {
+    pub script_slot: u16,
+    pub source_font_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_font_name: Option<String>,
+    pub disposition: ViewerScriptFontEntryDisposition,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerScriptFontMap {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub entries: Vec<ViewerScriptFontEntry>,
+    pub source_story_text_sha256: Sha256Digest,
+}
+
+impl ViewerScriptFontMap {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerTypographyRun {
     pub story_id: StoryId,
@@ -933,6 +967,7 @@ fn open_legacy_0x22_noquill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
@@ -1054,6 +1089,7 @@ fn open_legacy_0x22_quill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
@@ -1158,6 +1194,61 @@ fn open_mature_0x2c_bundle(
                 "{} source typography range(s) are available for preview sizing; {} use bounded inherited font/size authority. The renderer still uses the pinned fallback font face and does not claim Publisher-exact reflow.",
                 typography_runs.len(),
                 inherited
+            ),
+        });
+    }
+
+    let script_font_maps = pipeline
+        .source
+        .script_font_maps
+        .iter()
+        .filter_map(|map| {
+            let story = pipeline.resolved.graph.stories.get(&map.story_id)?;
+            Some(ViewerScriptFontMap {
+                story_id: map.story_id,
+                scalar_start: map.story_scalar_start,
+                scalar_end: map.story_scalar_end,
+                entries: map
+                    .entries
+                    .iter()
+                    .map(|entry| ViewerScriptFontEntry {
+                        script_slot: entry.script_slot,
+                        source_font_index: entry.source_font_index,
+                        source_font_name: entry.source_font_name.clone(),
+                        disposition: match entry.disposition {
+                            PubScriptFontEntryDisposition::Resolved => {
+                                ViewerScriptFontEntryDisposition::Resolved
+                            }
+                            PubScriptFontEntryDisposition::UnresolvedSentinel => {
+                                ViewerScriptFontEntryDisposition::UnresolvedSentinel
+                            }
+                            PubScriptFontEntryDisposition::InvalidFontOrdinal => {
+                                ViewerScriptFontEntryDisposition::InvalidFontOrdinal
+                            }
+                        },
+                    })
+                    .collect(),
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
+    if !script_font_maps.is_empty() {
+        let unresolved = script_font_maps
+            .iter()
+            .flat_map(|map| map.entries.iter())
+            .filter(|entry| entry.disposition != ViewerScriptFontEntryDisposition::Resolved)
+            .count();
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.text.script_font_map_preserved".to_owned(),
+            severity: if unresolved == 0 {
+                ViewerDiagnosticSeverity::Info
+            } else {
+                ViewerDiagnosticSeverity::FidelityWarning
+            },
+            message: format!(
+                "{} source script-font map range(s) are preserved with exact source FONT ordinals; {} entrie(s) remain unresolved. The Reader does not yet use this map to change effective font selection.",
+                script_font_maps.len(),
+                unresolved
             ),
         });
     }
@@ -1306,6 +1397,7 @@ fn open_mature_0x2c_bundle(
         story_frames,
         text_fragments,
         typography_runs,
+        script_font_maps,
         tables,
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances,
@@ -2916,6 +3008,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
@@ -3068,6 +3161,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
@@ -3506,6 +3600,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
@@ -3611,6 +3706,7 @@ mod tests {
             story_frames: initial_frames.clone(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
@@ -3677,6 +3773,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
