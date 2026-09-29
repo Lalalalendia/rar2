@@ -1,0 +1,60 @@
+# Rar2 live branch GC wave 4 — 2026-09-29
+# Conservative inclusion only.
+# Every ref below was re-read live and its current branch tip exactly matched
+# a merged or closed PR head. No open PR head and no no-PR unique-work branch
+# is included. Runtime GC rechecks open heads + exact SHA before deletion.
+# Format: <branch> <expected_sha>
+
+ci/reader-tier-a-cargo-cache-127 ae9a8e755a91b2c0488e6e2b17cd79eea0019351
+ci/reader-tier-a-desktop-bin-scope-99 20215661b73190d50d5fd20dc98f7d9c6a277848
+ci/reader-tier-a-desktop-clippy-scope 899b15c2d9017b1017a6e31e11defad28e8c8dcf
+ci/reader-tier-a-desktop-clippy-scope-02 27f170a2a293652024405bb3c2e5a5de6a9c7fa4
+ci/selective-reader-fanout-01 24ef499c2754ecda4bebefe9ce80f5c611fd05b1
+ci-reader-pr-dag-02 764b8af587adf9e8f42e98a9ba5d0c1c220238a3
+ci-reader-windows-split-measurement-01 59bfb258eb6b081dd237f45306f3872f2e17d8b9
+control/ci-reader-fanout-postmerge-01 3e7c888d095fb66dcca8d8ed0b9e6631ec98acd6
+control/ci-reader-fanout-pub-contents-04 2f0e46758fdf0c4a2452a8c82542dbdf09713957
+control/ci-reader-pr-dag-probe-01 8af60ed78d40bea12d8509606f72ef83e0dda610
+control/ci-selective-fanout-probe-01 c9b4669e471520df17cc8b9eaded81a71e4a91e4
+control/ci-selective-fanout-probe-02 941093b35defb0a565eeac7c2aefde883976a255
+control/ci-selective-fanout-probe-03 2dd5e7b4943f4e8c7198d4cd18f3aa8f0c39284e
+control/ci-selective-fanout-pub-contents 049e38400ed38eb53381b7f45b5abd7e2de1d53f
+control/reader-tier-a-clippy-negative-86 20c3e62ae75fd2bc0c4bee144c3bc600a9d04d2a
+control/reader-tier-a-negative-01 4c2aed34b412b15bb752e1580f27a8efa1e44b4b
+fix/reader-tier-a-desktop-clippy-delta b1bf6622ba04519865f834b1108a770bddc527ef
+fix/reader-tier-a-desktop-clippy-scope f558200c735d44821b4f8f97083a839e7394bd5d
+ci/reader-fidelity-windows-cache-01 cb41e18485197b34662922ee6957ec928c12bde3
+ci/render-bench-real-pub-page-count-171 e00093221dceb31d88e5a9a72a42043271e0c82f
+corpus/authority-1556-lalamu35 9ba6fec3d4cf7c5e834ae71a0f625c272f8d780f
+corpus/reader-1050-baseline ff365abde0f6860c4596d8ee5dd31963a24123da
+ops/branch-gc-20260929-live-wave3 390497b966e11ea1529306ee7fc96ab0a9225edf
+replay/viewer-table-render-01-post-effective-paint dce5fc0feeb751f774e687200d7822ca62663d43
+security/desktop-pub-parent-admission-01 429e3860bf30a2d990f1e64552d818d511a38d38
+viewer/effective-paint-bridge-01 5bc4ccc353439ccc048ea988c041cfc931d9445e
+fix/render-bench-real-pub-page-count-01 4e88534b4182f705f11f62c7e44ccf288a34f088
+measure/reader-fidelity-runner-reuse-115 48e78325be40bd7eacec3903c4aa02e24cecca63
+measure/reader-fidelity-win-smoke-reuse-131 904227d8b8881ec2c022ee5a8be7b14b81e135b2
+measure/reader-fidelity-windows-cache-162 a40093495c00cce3e637538bb998c9a07354f81e
+ops/execute-branch-gc-wave3-20260929 2850314d6eb2d0df8fb43fe219ab761cade379b8
+reader/legacy22-lowtext-table0001-01 cb33a47a6e66b8395d68d6f9d6a05c5d94c1dd7f
+reader/legacy22-residual-telemetry-01 7284d6a150e7455123d13c38651145aa6c5e97c3
+reader/win-shell-activation-v0-hosted-01 077a324d50082c164053e47d9a0533864416d168
+replay/legacy22-ole-inert-frame-01-current-main d36018aff8ca40e925515c944a72a7944ebda70c
+replay/viewer-effective-paint-bridge-02 7fd45053060faae15f59461e7a2f72380a578378
+replay/viewer-effective-paint-bridge-03 2b8e6c8812692d4bb6427c274fbdb71ebccd6b0a
+replay/viewer-effective-paint-bridge-post-table 307da3483638f5442521e9477ee4c55f3e096e1d
+replay/viewer-officeart-effective-defaults-01-fresh-main 9b54dfcb7c5ee432b477eb47bb565493ba2a8735
+replay/viewer-table-render-01-current-main eec9221e215f307b33c241fe7c249fa50bf27602
+replay/viewer-table-render-01-final-main 76f43a4ff8dc3de22ff53823b6b0f597463cbc42
+replay/viewer-table-render-01-fresh-main bc9e9a34e8ba9ed3754f66c9e65e67ef91881ad9
+replay/viewer-table-render-01-fresh-main-02 2ca11bb1ac3dc8f9aeb336dc0e98d5736b2c5278
+replay/viewer-table-render-01-fresh-main-03 47333ba1d72aa020c69bbd087f3e81561034ddab
+replay/viewer-table-render-01-fresh-main-v2 ca73d2b95f11ad43c8eaf3efb27581f02e71dda8
+replay/viewer-table-render-01-main-65a1022 4b6d8543986a603383c41f02dc99b3808e598ad4
+research/legacy22-geometry-profile-01 6ad81b2f87cb5384c669e981542624b959cf8313
+research/legacy22-oledata-presentation-discriminator 073dd1328bd7c88207004abf27e5bc604ee253ce
+research/legacy22-perlost-discriminator-restack 49a853d7e9eaad29bd1fd8abdc8d6ba57156cab0
+research/legacy22-raw0003-classify-restack c58ddcf0f19140cddb2821d11348285e9368ef13
+research/legacy22-raw0022-scalar-aggregates aad5c115284683d318a35964865db2b5cb917354
+verify/opnhous-exact-acceptance-01 76f9ad7d0c1d588b95c0425872edf6a7404accc7
+viewer-officeart-effective-paint-01 bdf7951ce6aaa009de1fc83d03691f5f85e14225
