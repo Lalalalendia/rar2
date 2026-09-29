@@ -1,3 +1,4 @@
+// Validation-only touch: rerun the Reader visual oracle after source-font execution landed.
 use chaptera_viewer_render_plan::{ExplicitRenderTextFontResourceV1, RenderTextFragmentV1};
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(target_os = "windows")]
