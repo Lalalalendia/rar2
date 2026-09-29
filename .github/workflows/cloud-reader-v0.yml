@@ -78,10 +78,16 @@ jobs:
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node apps/cloud-reader/reader-browser.test.mjs
+      - name: Measure preview and TABLE text scale in real SVG user units
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node apps/cloud-reader/render-browser.test.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: cloud-reader-ui-synthetic
-          path: target/cloud-reader-ui/
+          path: |
+            target/cloud-reader-ui/
+            target/cloud-reader-render/
           if-no-files-found: warn
           retention-days: 14

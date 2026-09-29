@@ -7,6 +7,36 @@ const FORBIDDEN_SOURCE_KEYS = new Set([
 const SVG_NS = "http://www.w3.org/2000/svg";
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 const Q16_ONE = 65_536;
+// Physical fallback metrics from chaptera-desktop-fallback-font-resource.
+// Convert preview CSS to bounded pixel-sized local coordinates, then map
+// the frame back into canonical EMU. Huge CSS font sizes are browser-clamped.
+// Preview typography remains explicitly non-authoritative.
+const PREVIEW_FONT_SIZE_EMU = 114_300;
+const PREVIEW_LINE_HEIGHT_EMU = 142_875;
+const EMU_PER_PREVIEW_CSS_PX = 9525;
+
+function previewForeignObject(bounds, attrs) {
+  return svgNode("foreignObject", {
+    x: 0,
+    y: 0,
+    width: safeInteger(bounds.width, "preview.bounds.width") / EMU_PER_PREVIEW_CSS_PX,
+    height: safeInteger(bounds.height, "preview.bounds.height") / EMU_PER_PREVIEW_CSS_PX,
+    transform: "translate(" + safeInteger(bounds.x, "preview.bounds.x") + " "
+      + safeInteger(bounds.y, "preview.bounds.y") + ") scale(" + EMU_PER_PREVIEW_CSS_PX + ")",
+    ...attrs
+  });
+}
+
+function previewTextStyle(div, plan = null) {
+  div.style.width = "100%";
+  div.style.height = "100%";
+  div.style.overflow = "hidden";
+  div.style.whiteSpace = "pre-wrap";
+  div.style.fontFamily = "system-ui, sans-serif";
+  div.style.fontSize = ((plan?.font_size_emu ?? PREVIEW_FONT_SIZE_EMU) / EMU_PER_PREVIEW_CSS_PX) + "px";
+  div.style.lineHeight = ((plan?.line_height_emu ?? PREVIEW_LINE_HEIGHT_EMU) / EMU_PER_PREVIEW_CSS_PX) + "px";
+  div.style.color = "#000";
+}
 
 function safeInteger(value, label) {
   if (!Number.isSafeInteger(value)) {
@@ -162,24 +192,14 @@ export function resolvedTextLinePaintPlan(node) {
   });
 }
 
-function appendPreviewText(group, node) {
+function appendPreviewText(group, node, plan = null) {
   if (!node.text) return;
   const bounds = node.bounds;
-  const foreign = svgNode("foreignObject", {
-    x: bounds.x,
-    y: bounds.y,
-    width: bounds.width,
-    height: bounds.height,
+  const foreign = previewForeignObject(bounds, {
     "data-text-authority": "browser-preview-only"
   });
   const div = document.createElementNS(XHTML_NS, "div");
-  div.style.width = "100%";
-  div.style.height = "100%";
-  div.style.overflow = "hidden";
-  div.style.whiteSpace = "pre-wrap";
-  div.style.font = "12px system-ui, sans-serif";
-  div.style.lineHeight = "1.2";
-  div.style.color = "#000";
+  previewTextStyle(div, plan);
   div.textContent = node.text;
   foreign.appendChild(div);
   group.appendChild(foreign);
@@ -190,7 +210,7 @@ function appendText(group, defs, node, fonts, index) {
   const plan = resolvedTextLinePaintPlan(node);
   const installed = plan ? fonts.get(plan.font_resource_id) ?? null : null;
   if (!plan || !installed) {
-    appendPreviewText(group, node);
+    appendPreviewText(group, node, plan);
     return;
   }
 
@@ -240,11 +260,7 @@ function appendTableText(group, node) {
     const geometry = tableCellPaintGeometry(cell);
     if (!geometry || !cell.text) continue;
 
-    const foreign = svgNode("foreignObject", {
-      x: geometry.x,
-      y: geometry.y,
-      width: geometry.width,
-      height: geometry.height,
+    const foreign = previewForeignObject(geometry, {
       "data-table-cell-id": cell.cell_id,
       "data-table-row": cell.row,
       "data-table-column": cell.column,
@@ -252,13 +268,7 @@ function appendTableText(group, node) {
       "data-text-authority": "browser-preview-only"
     });
     const div = document.createElementNS(XHTML_NS, "div");
-    div.style.width = "100%";
-    div.style.height = "100%";
-    div.style.overflow = "hidden";
-    div.style.whiteSpace = "pre-wrap";
-    div.style.font = "12px system-ui, sans-serif";
-    div.style.lineHeight = "1.2";
-    div.style.color = "#000";
+    previewTextStyle(div);
     div.style.padding = "2px";
     div.style.boxSizing = "border-box";
     div.textContent = cell.text.replace(/\r/g, "\n");
