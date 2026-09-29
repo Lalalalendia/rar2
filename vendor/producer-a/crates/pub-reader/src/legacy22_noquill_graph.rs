@@ -1578,6 +1578,60 @@ mod tests {
         assert!(parse_legacy_ole_data_chunk(&chunk).is_none());
     }
 
+    fn minimal_wmf() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&12_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes
+    }
+
+    fn image_data_chunk(payload: &[u8]) -> Vec<u8> {
+        let mut chunk = vec![0_u8; LEGACY_IMAGE_PAYLOAD_OFFSET];
+        chunk[0x04..0x08]
+            .copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        chunk.extend_from_slice(payload);
+        chunk
+    }
+
+    #[test]
+    fn legacy_image_wmf_recovery_accepts_strict_payload() {
+        let wmf = minimal_wmf();
+        let chunk = image_data_chunk(&wmf);
+        assert_eq!(recover_legacy_image_wmf_from_chunk(&chunk), Some(wmf));
+    }
+
+    #[test]
+    fn legacy_image_wmf_recovery_uses_internal_declared_prefix_not_outer_payload() {
+        let wmf = minimal_wmf();
+        let mut payload = wmf.clone();
+        payload.extend_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd]);
+        assert!(validate_wmf_metafile(&payload).is_err());
+
+        let chunk = image_data_chunk(&payload);
+        assert_eq!(recover_legacy_image_wmf_from_chunk(&chunk), Some(wmf));
+    }
+
+    #[test]
+    fn legacy_image_wmf_recovery_stops_at_first_eof_and_normalizes_copy_only() {
+        let wmf = minimal_wmf();
+        let mut payload = wmf.clone();
+        payload.extend_from_slice(&[0_u8; 6]);
+        write_u32(&mut payload, 6, 15).expect("stale mtSize patch");
+        assert!(validate_wmf_metafile(&payload).is_err());
+
+        let original = payload.clone();
+        let chunk = image_data_chunk(&payload);
+        assert_eq!(recover_legacy_image_wmf_from_chunk(&chunk), Some(wmf));
+        assert_eq!(payload, original);
+    }
+
     #[test]
     fn simple_geometry_shape_admission_is_bounded() {
         for chunk_type in LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES {
@@ -1588,7 +1642,7 @@ mod tests {
             LEGACY_TEXT_SHAPE_TYPE,
             LEGACY_OLE_TYPE, // OLE is admitted only through its bounded OleData profile
             LEGACY_0X22_TABLE_CHUNK_TYPE, // low/no-Quill table, admitted separately
-            0x0002,          // image
+            LEGACY_IMAGE_TYPE, // image is admitted separately through its direct native-WMF profile
             0x0008,          // Quill-era text shape
             0x000a,          // table
             LEGACY_GROUP_TYPE, // group is admitted separately from simple geometry
