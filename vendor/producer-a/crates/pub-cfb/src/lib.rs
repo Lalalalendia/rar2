@@ -112,6 +112,7 @@ pub fn read_direct_child_streams_with_prefix_reader<R: Read + Seek>(
     name_prefix: &str,
     max_count: usize,
     max_stream_bytes: usize,
+    max_total_bytes: usize,
 ) -> Result<Vec<CfbStreamBlob>> {
     let mut compound =
         cfb::CompoundFile::open(reader).context("не удалось разобрать CFB-контейнер")?;
@@ -140,6 +141,33 @@ pub fn read_direct_child_streams_with_prefix_reader<R: Read + Seek>(
             storage_path.display(),
             candidates.len(),
             max_count
+        );
+    }
+
+    let total_bytes = candidates.iter().try_fold(
+        0usize,
+        |total, (path, _, len)| -> Result<usize> {
+            let len =
+                usize::try_from(*len).context("размер CFB stream не помещается в usize")?;
+            if len > max_stream_bytes {
+                anyhow::bail!(
+                    "CFB stream {} превышает bounded size: {} > {}",
+                    path.display(),
+                    len,
+                    max_stream_bytes
+                );
+            }
+            total
+                .checked_add(len)
+                .context("суммарный размер matching CFB streams переполнен")
+        },
+    )?;
+    if total_bytes > max_total_bytes {
+        anyhow::bail!(
+            "суммарный размер matching streams under {} превышает bounded size: {} > {}",
+            storage_path.display(),
+            total_bytes,
+            max_total_bytes
         );
     }
 
@@ -544,6 +572,7 @@ mod tests {
             "\u{2}OlePres",
             2,
             16,
+            32,
         )
         .expect("OlePres streams должны читаться");
 
@@ -562,6 +591,7 @@ mod tests {
             "\u{2}OlePres",
             1,
             16,
+            32,
         )
         .expect_err("count limit должен быть fail-closed");
         assert!(
@@ -576,9 +606,25 @@ mod tests {
             "\u{2}OlePres",
             2,
             4,
+            32,
         )
         .expect_err("size limit должен быть fail-closed");
         assert!(size_error.to_string().contains("превышает bounded size"));
+
+        let total_error = read_direct_child_streams_with_prefix_reader(
+            synthetic_cfb(),
+            "/Objects/Object 73",
+            "\u{2}OlePres",
+            2,
+            16,
+            10,
+        )
+        .expect_err("aggregate byte limit должен быть fail-closed");
+        assert!(
+            total_error
+                .to_string()
+                .contains("суммарный размер matching streams")
+        );
     }
 
     #[test]
