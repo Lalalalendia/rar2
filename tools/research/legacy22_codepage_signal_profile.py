@@ -131,6 +131,14 @@ def main() -> int:
         b = (r["document_summary_codepage"] or {}).get("value") if (r["document_summary_codepage"] or {}).get("status") == "present" else None
         pair_cp[f"{a}/{b}"] += 1
 
+    high_byte_counts = Counter()
+    high_byte_set_counts = Counter()
+    for r in high_rows:
+        for value in r["high_byte_distinct"]:
+            high_byte_counts[f"0x{value:02x}"] += 1
+        high_byte_set_counts[",".join(f"{value:02x}" for value in r["high_byte_distinct"])] += 1
+    error_counts = Counter(r["error"] for r in errors)
+
     summary = {
         "schema": "chaptera.legacy22-codepage-signal-profile.v1",
         "legacy22_noquill_file_count": len(rows),
@@ -139,7 +147,10 @@ def main() -> int:
         "summary_codepage_counts_on_non_ascii": dict(sorted(summary_cp.items())),
         "document_summary_codepage_counts_on_non_ascii": dict(sorted(doc_cp.items())),
         "codepage_pair_counts_on_non_ascii": dict(sorted(pair_cp.items())),
+        "high_byte_presence_counts_on_non_ascii": dict(sorted(high_byte_counts.items())),
+        "high_byte_set_counts_on_non_ascii": dict(sorted(high_byte_set_counts.items())),
         "profile_error_count": len(errors),
+        "profile_error_counts": dict(sorted(error_counts.items())),
         "evidence_boundary": (
             "OLE Property Set PID_CODEPAGE governs strings in that property set. "
             "It is profiled here only as a persisted discriminator candidate; "
