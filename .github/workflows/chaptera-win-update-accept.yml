@@ -3,13 +3,11 @@ name: Chaptera Windows update acceptance
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/**"
       - "crates/chaptera-update-engine/**"
       - "crates/chaptera-update-orchestrator/**"
       - "crates/chaptera-update-trust/**"
       - "crates/chaptera-update-handoff/**"
       - "installer/windows/chaptera-reader.iss"
-      - "vendor/producer-a/**"
       - ".github/workflows/chaptera-win-update-accept.yml"
       - ".github/workstream-scopes/chaptera-win-update-accept-01.md"
   workflow_dispatch:
