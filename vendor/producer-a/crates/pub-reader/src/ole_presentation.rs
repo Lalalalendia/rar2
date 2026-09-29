@@ -1,4 +1,5 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use std::io::{Read, Seek};
 
 const STANDARD_CLIPBOARD_MARKER_ANSI: u32 = 0xffff_ffff;
 const STANDARD_CLIPBOARD_MARKER_UNICODE: u32 = 0xffff_fffe;
@@ -6,6 +7,8 @@ const CF_METAFILEPICT: u32 = 3;
 const METAFILE_RESERVED2_LEN: usize = 18;
 const MAX_PRESENTATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TARGET_DEVICE_BYTES: usize = 1024 * 1024;
+const MAX_OLE_PRESENTATION_COUNT: usize = 999;
+const OLE_PRES_STREAM_PREFIX: &str = "\u{2}OlePres";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OlePresentation<'a> {
@@ -16,6 +19,19 @@ pub struct OlePresentation<'a> {
     pub width: u32,
     pub height: u32,
     pub data: &'a [u8],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyOleCachedPresentation {
+    pub stream_path: String,
+    pub stream_name: String,
+    pub clipboard_format: u32,
+    pub aspect: u32,
+    pub lindex: u32,
+    pub advf: u32,
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
@@ -99,6 +115,49 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
     })
 }
 
+fn parse_cached_presentation_blob(
+    blob: pub_cfb::CfbStreamBlob,
+) -> Result<LegacyOleCachedPresentation> {
+    let parsed = parse_cf_metafilepict_ole_presentation(&blob.bytes)
+        .with_context(|| format!("parse bounded OLE presentation {}", blob.path))?;
+
+    Ok(LegacyOleCachedPresentation {
+        stream_path: blob.path,
+        stream_name: blob.name,
+        clipboard_format: parsed.clipboard_format,
+        aspect: parsed.aspect,
+        lindex: parsed.lindex,
+        advf: parsed.advf,
+        width: parsed.width,
+        height: parsed.height,
+        data: parsed.data.to_vec(),
+    })
+}
+
+/// Reads only persisted cached OLE presentations under the proven Object N storage.
+///
+/// This function never activates OLE/COM servers. It only reads bounded direct-child
+/// OlePres streams and parses the MS-OLEDS presentation envelope.
+pub fn read_legacy_ole_cached_presentations<R: Read + Seek>(
+    reader: R,
+    storage_number: u16,
+) -> Result<Vec<LegacyOleCachedPresentation>> {
+    let storage_path = format!("/Objects/Object {storage_number}");
+    let blobs = pub_cfb::read_direct_child_streams_with_prefix_reader(
+        reader,
+        &storage_path,
+        OLE_PRES_STREAM_PREFIX,
+        MAX_OLE_PRESENTATION_COUNT,
+        MAX_PRESENTATION_BYTES,
+    )
+    .with_context(|| format!("read bounded cached presentations under {storage_path}"))?;
+
+    blobs
+        .into_iter()
+        .map(parse_cached_presentation_blob)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +180,22 @@ mod tests {
         bytes.extend_from_slice(payload);
         bytes.extend_from_slice(&[0u8; METAFILE_RESERVED2_LEN]);
         bytes
+    }
+
+    #[test]
+    fn owned_cached_presentation_preserves_stream_identity_and_payload() {
+        let payload = [0x04u8; 18];
+        let blob = pub_cfb::CfbStreamBlob {
+            path: "/Objects/Object 73/\u{2}OlePres001".into(),
+            name: "\u{2}OlePres001".into(),
+            bytes: fixture(CF_METAFILEPICT, 4, &payload),
+        };
+
+        let parsed = parse_cached_presentation_blob(blob).expect("cached presentation");
+        assert_eq!(parsed.stream_path, "/Objects/Object 73/\u{2}OlePres001");
+        assert_eq!(parsed.stream_name, "\u{2}OlePres001");
+        assert_eq!(parsed.clipboard_format, CF_METAFILEPICT);
+        assert_eq!(parsed.data, payload);
     }
 
     #[test]
