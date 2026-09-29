@@ -130,7 +130,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: rar2-target
-          key: ${{ steps.reader-1050-cache-key.outputs.cache-primary-key }}
+          key: ${{ steps.reader-1050-cache-key.outputs.key }}
 
       - name: Restore exact historical 425-SHA tranche
         if: steps.pinned-1050.outcome != 'success'
