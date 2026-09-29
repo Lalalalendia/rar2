@@ -23,6 +23,12 @@ FORBIDDEN = {
         'crates/chaptera-viewer-render-plan/**',
         'apps/chaptera-desktop/**',
     ),
+    '.github/workflows/reader-page-role-observation.yml': (
+        'vendor/producer-a/crates/pub-reader/**',
+        'vendor/producer-a/crates/pub-viewer/**',
+        'crates/pub-model/**',
+        'crates/pub-presentation-profile/**',
+    ),
 }
 
 def main() -> int:
