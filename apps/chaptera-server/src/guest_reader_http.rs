@@ -454,8 +454,8 @@ async fn open_session(
                 .sessions
                 .finish_rejected(&opening.session_id, code, now_ms)
                 .await?;
-            state.release_admission(&rejected, now_ms).await?;
             state.delete_quarantine(&rejected, now_ms).await?;
+            state.release_admission(&rejected, now_ms).await?;
             return Ok(GuestJson(GuestOpenResponse {
                 protocol_version: GUEST_PROTOCOL_V1,
                 session_id: rejected.session_id,
@@ -520,8 +520,8 @@ async fn open_session(
             now_ms,
         )
         .await?;
-    state.release_admission(&opened, now_ms).await?;
     state.delete_quarantine(&opened, now_ms).await?;
+    state.release_admission(&opened, now_ms).await?;
 
     Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
