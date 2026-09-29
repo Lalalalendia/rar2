@@ -11,6 +11,8 @@ on:
       - 'tools/corpus/pub_container_extract.py'
       - 'tools/corpus/test_pub_container_extract.py'
       - 'tools/corpus/materialize_corpus_1000.py'
+      - 'tools/corpus/profile_olepres_wmf.py'
+      - 'tools/corpus/test_profile_olepres_wmf.py'
       - 'tools/corpus/materialization_container_first_wave.csv'
       - 'tools/corpus/receipts/container-first-wave-425-2026-09-29.json'
       - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
@@ -106,9 +108,12 @@ jobs:
           python -m py_compile \
             tools/corpus/pub_container_extract.py \
             tools/corpus/test_pub_container_extract.py \
-            tools/corpus/materialize_corpus_1000.py
+            tools/corpus/materialize_corpus_1000.py \
+            tools/corpus/profile_olepres_wmf.py \
+            tools/corpus/test_profile_olepres_wmf.py
           python tools/corpus/test_pub_container_extract.py
           python tools/corpus/test_materialize_corpus_1000.py
+          python tools/corpus/test_profile_olepres_wmf.py
 
       - name: Build Reader 1050 Cargo cache key
         id: reader-1050-cache-key
@@ -291,6 +296,27 @@ jobs:
             --rar-ref "rar2:${GITHUB_SHA}" \
             --out out/reader1050 \
             --workers 8
+
+      - name: Census persisted OlePres WMF records
+        run: |
+          set -euo pipefail
+          python tools/corpus/profile_olepres_wmf.py \
+            --corpus-dir out/materialized/native \
+            --out out/reader1050/olepres-wmf-census.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("out/reader1050/olepres-wmf-census.json").read_text())
+          assert payload["corpus_file_count"] == 1050, payload
+          assert payload["olepres_stream_count"] >= payload["valid_wmf_count"], payload
+          print(json.dumps({
+              "olepres_stream_count": payload["olepres_stream_count"],
+              "valid_wmf_count": payload["valid_wmf_count"],
+              "wmf_error_counts": payload["wmf_error_counts"],
+              "function_set_profile_count": payload["function_set_profile_count"],
+          }, indent=2, sort_keys=True))
+          PY
 
       - name: Summarize source-free legacy residuals
         run: |
