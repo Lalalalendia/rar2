@@ -71,7 +71,6 @@ pub use ole_presentation::{
     LegacyOleCachedPresentation, OlePresentation, parse_cf_metafilepict_ole_presentation,
     read_legacy_ole_cached_presentations,
 };
-pub use wmf::{WmfMetafileInfo, validate_wmf_metafile};
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
     Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
@@ -116,6 +115,7 @@ pub use table_bridge::{
     PubTableLayoutMetricsSource, PubTableSource, PubTableStoryOwnershipSource, PubTableTextError,
     RAW_TYPE_TABLE, materialize_bounded_simple_table_cells,
 };
+pub use wmf::{WmfMetafileInfo, validate_wmf_metafile};
 
 pub const PUB_ADAPTER_ID: &str = "pub-rs";
 pub const PUB_FORMAT_PROFILE_ID: &str = "pub-mature-0x2c-v0.1";
