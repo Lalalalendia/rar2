@@ -1,0 +1,15 @@
+[package]
+name = "chaptera-desktop-open-worker"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+chaptera-desktop-open-protocol = { path = "../../crates/chaptera-desktop-open-protocol" }
+chaptera-untrusted-pub-scan = { path = "../../crates/chaptera-untrusted-pub-scan" }
+pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer", features = ["cmo-slot-compose"] }
+serde_json = "1"
