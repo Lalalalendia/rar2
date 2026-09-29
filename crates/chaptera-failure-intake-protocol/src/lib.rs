@@ -178,7 +178,11 @@ fn require_opaque_id(value: &str) -> Result<(), ProtocolError> {
 }
 
 fn require_sha256(value: &str) -> Result<(), ProtocolError> {
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
         return Err(ProtocolError::new("intake_server_sha256_invalid"));
     }
     Ok(())
@@ -294,6 +298,13 @@ mod tests {
         assert_eq!(
             wrong_policy.validate().unwrap_err().code,
             "intake_retention_policy_invalid"
+        );
+
+        let mut uppercase_hash = receipt.clone();
+        uppercase_hash.server_sha256 = "A".repeat(64);
+        assert_eq!(
+            uppercase_hash.validate().unwrap_err().code,
+            "intake_server_sha256_invalid"
         );
 
         let mut bad_hash = receipt;
