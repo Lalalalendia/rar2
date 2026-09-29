@@ -63,7 +63,9 @@ pub fn build_legacy_0x22_noquill_source_graph<R: Read + Seek>(
             if recovered
                 .root_entry_names
                 .iter()
-                .any(|name| name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher"))
+                .any(|name| {
+                    name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher")
+                })
             {
                 bail!(
                     "bounded root Contents recovery is forbidden when Quill or Escher is present"
