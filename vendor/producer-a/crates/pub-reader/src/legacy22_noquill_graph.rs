@@ -2,8 +2,7 @@ use super::{
     CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
     PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyOleSource,
     PubNodePayload, PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource, ROLE_DOCUMENT,
-    ROLE_NODE, ROLE_PAGE,
-    ROLE_STORY, derive_pub_id, source_ref,
+    ROLE_NODE, ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
@@ -841,7 +840,6 @@ mod tests {
         ));
     }
 
-
     #[test]
     fn legacy_ole_data_profile_is_exact_and_preserves_opaque_flag() {
         let mut chunk = vec![0_u8; LEGACY_OLE_DATA_LEN];
@@ -874,10 +872,10 @@ mod tests {
 
         for chunk_type in [
             LEGACY_TEXT_SHAPE_TYPE,
-            LEGACY_OLE_TYPE,   // OLE is admitted only through its bounded OleData profile
-            0x0002,            // image
-            0x0008,            // Quill-era text shape
-            0x000a,            // table
+            LEGACY_OLE_TYPE, // OLE is admitted only through its bounded OleData profile
+            0x0002,          // image
+            0x0008,          // Quill-era text shape
+            0x000a,          // table
             LEGACY_GROUP_TYPE, // group is admitted separately from simple geometry
             LEGACY_PAGE_TYPE,
             LEGACY_DOCUMENT_TYPE,
