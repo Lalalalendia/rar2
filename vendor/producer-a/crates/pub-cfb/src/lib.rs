@@ -498,7 +498,17 @@ mod tests {
 
         assert_eq!(
             paths,
-            vec!["/", "/Alpha", "/Alpha/first", "/Zoo", "/Zoo/last"]
+            vec![
+                "/",
+                "/Alpha",
+                "/Alpha/first",
+                "/Objects",
+                "/Objects/Object 73",
+                "/Objects/Object 73/\u{2}OlePres001",
+                "/Objects/Object 73/\u{2}OlePres002",
+                "/Zoo",
+                "/Zoo/last",
+            ]
         );
         assert_eq!(inventory.schema_version, CFB_INVENTORY_SCHEMA_VERSION);
     }
