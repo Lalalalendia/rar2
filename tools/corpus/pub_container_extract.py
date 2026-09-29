@@ -3,7 +3,8 @@
 
 Uses the system 7z implementation as the archive parser. It never executes
 archive members. Extraction is bounded by declared size, member count, depth,
-wall-clock timeout and path safety checks.
+wall-clock timeout and path safety checks. Optional materialization writes only
+hash-named Publisher-CFB members after classification.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from urllib.request import Request,urlopen
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import harvest_pub
 
-UA="rar-pub-container/1.0 (public format research)"
+UA="rar-pub-container/1.1 (public format research)"
 CONTAINER_EXT=(".zip",".cab",".7z",".rar",".iso",".tar",".tgz",".tar.gz",".gz")
 PUB_EXT=".pub"
 
@@ -74,6 +75,26 @@ def extract_member(archive:Path,name:str,out:Path,timeout:int,max_bytes:int):
     return size
 
 
+def _materialize_pub(data:bytes,sha:str,args)->str:
+    if args.materialize_dir is None:
+        return ""
+    args.materialize_dir.mkdir(parents=True,exist_ok=True)
+    target=args.materialize_dir/f"{sha}.pub"
+    if target.exists():
+        current=hashlib.sha256(target.read_bytes()).hexdigest()
+        if current!=sha:
+            raise ValueError(f"materialized collision for {sha}: found {current}")
+        return str(target)
+    tmp=target.with_suffix(".pub.tmp")
+    tmp.write_bytes(data)
+    current=hashlib.sha256(tmp.read_bytes()).hexdigest()
+    if current!=sha:
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"materialized hash mismatch for {sha}: found {current}")
+    os.replace(tmp,target)
+    return str(target)
+
+
 def inspect_archive(archive:Path,origin:dict,depth:int,args,rows:list,seen:set,td:Path):
     if depth>args.max_depth: return
     entries=list_7z(archive,args.command_timeout)
@@ -106,6 +127,9 @@ def inspect_archive(archive:Path,origin:dict,depth:int,args,rows:list,seen:set,t
             seen.add(lineage)
             if kind=="pub":
                 cls,hints=harvest_pub.classify(data)
+                materialized_path=""
+                if cls=="cfb_publisher_hint":
+                    materialized_path=_materialize_pub(data,sha,args)
                 rows.append({
                     **origin,
                     "row_kind":"container_member",
@@ -116,6 +140,7 @@ def inspect_archive(archive:Path,origin:dict,depth:int,args,rows:list,seen:set,t
                     "sha256":sha,
                     "classification":cls,
                     "publisher_hints":";".join(hints),
+                    "materialized_path":materialized_path,
                 })
             elif depth<args.max_depth:
                 child_origin={**origin,"parent_member":name,"parent_member_sha256":sha}
@@ -145,10 +170,23 @@ def write(rows,out:Path):
         w=csv.DictWriter(f,fieldnames=keys); w.writeheader(); w.writerows(rows)
 
 
+def _verify_expected_root(row:dict,meta:dict)->None:
+    expected_sha=(row.get("expected_root_sha256") or "").strip().casefold()
+    if expected_sha and meta["sha256"].casefold()!=expected_sha:
+        raise ValueError(f"root SHA-256 drift: expected {expected_sha}, got {meta['sha256']}")
+    expected_size=(row.get("expected_root_size_bytes") or "").strip()
+    if expected_size:
+        try: expected_size_i=int(expected_size)
+        except ValueError as exc: raise ValueError(f"invalid expected_root_size_bytes={expected_size!r}") from exc
+        if meta["size"]!=expected_size_i:
+            raise ValueError(f"root size drift: expected {expected_size_i}, got {meta['size']}")
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--seed",required=True)
     ap.add_argument("--out",type=Path,required=True)
+    ap.add_argument("--materialize-dir",type=Path)
     ap.add_argument("--max-containers",type=int,default=100)
     ap.add_argument("--max-container-bytes",type=int,default=300*1024*1024)
     ap.add_argument("--max-member-bytes",type=int,default=100*1024*1024)
@@ -160,6 +198,8 @@ def main():
     args=ap.parse_args()
 
     rows=[]; seen=set()
+    if args.materialize_dir is not None:
+        args.materialize_dir.mkdir(parents=True,exist_ok=True)
     seeds=[r for r in iter_seed(args.seed) if ext_kind(r.get("candidate_filename",""))=="container"][:args.max_containers]
     with tempfile.TemporaryDirectory(prefix="pub-container-") as tmp:
         td=Path(tmp)
@@ -169,6 +209,7 @@ def main():
             path=td/f"root_{i}{Path(urlparse(url).path).suffix or '.bin'}"
             try:
                 meta=fetch(url,path,args.timeout,args.max_container_bytes)
+                _verify_expected_root(row,meta)
                 origin={
                     "source_page":row.get("source_page",""),
                     "container_url":url,
@@ -188,11 +229,15 @@ def main():
             finally:
                 path.unlink(missing_ok=True)
     write(rows,args.out)
+    publisher_shas={r.get("sha256") for r in rows if r.get("classification")=="cfb_publisher_hint" and r.get("sha256")}
+    materialized_shas={p.stem.casefold() for p in (args.materialize_dir.glob("*.pub") if args.materialize_dir else [])}
     summary={
-        "schema":"rar-pub-container-v1",
+        "schema":"rar-pub-container-v2",
         "containers_attempted":len(seeds),
         "member_rows":sum(r.get("row_kind")=="container_member" for r in rows),
         "publisher_cfb_members":sum(r.get("classification")=="cfb_publisher_hint" for r in rows),
+        "publisher_cfb_unique_sha256":len(publisher_shas),
+        "materialized_pub_files":len(materialized_shas),
         "errors":sum(str(r.get("row_kind","")).endswith("error") for r in rows),
         "unique_member_sha256":len({r.get("sha256") for r in rows if r.get("sha256")}),
     }
