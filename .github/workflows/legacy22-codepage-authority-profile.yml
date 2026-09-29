@@ -35,6 +35,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
       - name: Install pinned CFB dependency
         run: python -m pip install --disable-pip-version-check olefile==0.47
 
@@ -53,6 +57,14 @@ jobs:
           assert s["non_ascii_text_file_count"] >= 50, s
           assert s["profile_error_count"] == 3, s
           PY
+
+      - name: Profile persisted character-run font slots for high bytes
+        run: |
+          set -euo pipefail
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader \
+            --bin legacy22_font_signal_profile -- \
+            working-corpus/pub-corpus/corpus/native/unclassified \
+            out/legacy22-codepage/font-signal.json
 
       - uses: actions/upload-artifact@v4
         with:
