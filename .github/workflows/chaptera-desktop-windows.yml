@@ -1,13 +1,12 @@
 name: Chaptera Editor Desktop Windows V0
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "Cargo.toml"
       - "apps/chaptera-desktop/**"
       - "crates/chaptera-scene-instance/**"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "vendor/producer-a/**"
       - "packages/product/editor-live-trial/**"
       - "packages/protocol/editor-agent-control/**"
       - "tools/package_editor_live_trial.py"
@@ -29,20 +28,8 @@ permissions:
   contents: read
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
 
   build-windows-editor:
-    needs: reader-consumer-admission
-    if: needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
