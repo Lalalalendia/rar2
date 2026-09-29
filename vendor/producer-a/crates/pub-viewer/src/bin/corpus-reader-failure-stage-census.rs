@@ -3,7 +3,8 @@ use pub_model::Sha256Digest;
 use pub_reader::{
     PubReaderRoute, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_source_graph,
-    classify_pub_family, resolve_pub_source_graph,
+    classify_pub_family, probe_mature_0x2c_source_graph_failure_stage,
+    resolve_pub_source_graph,
 };
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -52,7 +53,16 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
                     stage = "mature.resolve_graph".to_owned();
                     resolve_pub_source_graph(&source.graph).is_ok()
                 }
-                Err(_) => false,
+                Err(_) => {
+                    let substage = probe_mature_0x2c_source_graph_failure_stage(
+                        bytes,
+                        source_hash(bytes),
+                    )
+                    .map(|value| value.as_str())
+                    .unwrap_or("unclassified");
+                    stage = format!("mature.source_graph.{substage}");
+                    false
+                }
             }
         }
         PubReaderRoute::Legacy22Quill => {
