@@ -61,10 +61,6 @@ code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
   const params = new URLSearchParams(location.search);
   input.value = params.get("document_id") ?? "";
 
-  function idString(value) {
-    if (typeof value === "string") return value;
-    return JSON.stringify(value);
-  }
 
   function px(emu, scale) {
     return (Number(emu) / EMU_PER_CSS_PX) * scale;
@@ -75,59 +71,51 @@ code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
     return "rgb(" + value.map(Number).join(" ") + ")";
   }
 
-  function sceneFidelity(geometry) {
-    return (geometry.document.diagnostics ?? []).some((item) => item.severity === "fidelity_warning")
-      ? "partial"
-      : "supported";
-  }
-
   function render(payload) {
-    const geometry = payload.geometry;
-    const scene = geometry.scene;
-    const paintByNode = new Map((geometry.paints ?? []).map((paint) => [idString(paint.node_id), paint]));
-    const textByFrame = new Map();
-    for (const fragment of geometry.text_fragments ?? []) {
-      const key = idString(fragment.frame_id);
-      textByFrame.set(key, (textByFrame.get(key) ?? "") + fragment.text);
-    }
-
     pagesHost.replaceChildren();
-    for (const surface of scene.surfaces ?? []) {
-      const pageWidth = Number(surface.size.width) / EMU_PER_CSS_PX;
-      const pageHeight = Number(surface.size.height) / EMU_PER_CSS_PX;
+    for (const pageModel of payload.pages ?? []) {
+      const pageWidth = Number(pageModel.width_emu) / EMU_PER_CSS_PX;
       const scale = Math.min(1, MAX_PAGE_WIDTH / Math.max(1, pageWidth));
       const page = document.createElement("div");
       page.className = "page";
-      page.style.width = px(surface.size.width, scale) + "px";
-      page.style.height = px(surface.size.height, scale) + "px";
-      page.dataset.pageId = idString(surface.origin);
+      page.style.width = px(pageModel.width_emu, scale) + "px";
+      page.style.height = px(pageModel.height_emu, scale) + "px";
+      page.dataset.pageId = pageModel.page_id;
 
-      for (const node of scene.nodes ?? []) {
-        if (idString(node.parent_origin) !== idString(surface.origin)) continue;
-        const nodeId = idString(node.origin);
-        const paint = paintByNode.get(nodeId);
+      for (const node of payload.nodes ?? []) {
+        if (node.page_id !== pageModel.page_id) continue;
         const el = document.createElement("div");
         el.className = "node";
+        el.dataset.nodeId = node.node_id;
+        el.dataset.nodeKind = node.kind;
         el.style.left = px(node.bounds.x, scale) + "px";
         el.style.top = px(node.bounds.y, scale) + "px";
         el.style.width = Math.max(0, px(node.bounds.width, scale)) + "px";
         el.style.height = Math.max(0, px(node.bounds.height, scale)) + "px";
-        el.style.background = rgb(paint?.solid_fill_rgb, "rgba(120,120,120,.06)");
-        el.style.borderColor = rgb(paint?.solid_line?.rgb, "rgba(20,30,45,.18)");
-        if (paint?.solid_line?.width_emu) {
-          el.style.borderWidth = Math.max(.5, px(paint.solid_line.width_emu, scale)) + "px";
+        el.style.background = rgb(node.paint?.fill_rgb, "rgba(120,120,120,.06)");
+        el.style.borderColor = rgb(node.paint?.line?.rgb, "rgba(20,30,45,.18)");
+        if (node.paint?.line?.width_emu) {
+          el.style.borderWidth = Math.max(.5, px(node.paint.line.width_emu, scale)) + "px";
         }
-        const text = textByFrame.get(nodeId);
-        if (text) el.textContent = text;
+        const t = node.transform;
+        if (t) {
+          const tx = px(t.tx, scale);
+          const ty = px(t.ty, scale);
+          el.style.transformOrigin = "0 0";
+          el.style.transform =
+            "matrix(" + [t.a, t.b, t.c, t.d, tx, ty].map(Number).join(",") + ")";
+        }
+        if (node.text) el.textContent = node.text;
         page.appendChild(el);
       }
       pagesHost.appendChild(page);
     }
 
     document.querySelector("#revision").textContent = "Revision: " + payload.revision_id;
-    document.querySelector("#fidelity").textContent = "Fidelity: " + sceneFidelity(geometry);
+    document.querySelector("#fidelity").textContent =
+      "Fidelity: " + (payload.fidelity?.state ?? "unknown");
     document.querySelector("#diagnostics").textContent =
-      "Diagnostics: " + String((geometry.document.diagnostics ?? []).length + (scene.diagnostics ?? []).length);
+      "Diagnostics: " + String((payload.diagnostics ?? []).length);
     summary.hidden = false;
   }
 
