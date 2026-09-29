@@ -215,6 +215,11 @@ jobs:
               str(profile.get("trailing_len", "missing"))
               for profile in declared_profiles
           )
+          declared_validation_errors = Counter(
+              profile.get("validation_error_class")
+              or ("none" if profile.get("wmf_valid") is True else "unclassified")
+              for profile in declared_profiles
+          )
           declared_payload_hashes = [
               profile.get("payload_sha256")
               for profile in declared_profiles
@@ -273,6 +278,9 @@ jobs:
               ),
               "direct_declared_trailing_length_counts": dict(
                   declared_trailing_lengths.most_common()
+              ),
+              "direct_declared_validation_error_counts": dict(
+                  declared_validation_errors.most_common()
               ),
               "direct_declared_payload_reference_count": len(declared_payload_hashes),
               "direct_declared_unique_payload_sha256_count": len(set(declared_payload_hashes)),
