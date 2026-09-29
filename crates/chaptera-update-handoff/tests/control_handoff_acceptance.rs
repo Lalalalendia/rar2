@@ -24,20 +24,7 @@ fn seed_candidate(path: &Path, updater_bytes: &[u8]) {
 
 
 fn same_file_identity(left: &Path, right: &Path) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-
-        let left = fs::metadata(left).unwrap();
-        let right = fs::metadata(right).unwrap();
-        return left.volume_serial_number() == right.volume_serial_number()
-            && left.file_index() == right.file_index();
-    }
-
-    #[cfg(not(windows))]
-    {
-        fs::canonicalize(left).unwrap() == fs::canonicalize(right).unwrap()
-    }
+    same_file::is_same_file(left, right).unwrap()
 }
 
 fn wait_for_file(path: &Path) {
