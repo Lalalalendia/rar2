@@ -122,13 +122,17 @@ jobs:
             $sig = Get-AuthenticodeSignature -LiteralPath $Path
             if (-not $sig.SignerCertificate) { throw "missing signer certificate for $Path" }
             if ($sig.SignerCertificate.Thumbprint -ne $env:CHAPTERA_TEST_SIGN_THUMBPRINT) { throw "unexpected signer for $Path" }
-            if ($sig.Status -notin @("Valid", "NotTrusted")) {
+            $chainUntrusted = $sig.Status -in @("NotTrusted", "UnknownError") -and
+              $sig.StatusMessage -match "(?i)(root certificate.*not trusted|not trusted by the trust provider|untrusted root)"
+            if ($sig.Status -ne "Valid" -and -not $chainUntrusted) {
               throw "test signature integrity failed for ${Path}: $($sig.Status) $($sig.StatusMessage)"
             }
             return [ordered]@{
               path = $Path
               integrity_verified = $true
               trust_status = [string]$sig.Status
+              trust_message = [string]$sig.StatusMessage
+              public_trust_verified = ($sig.Status -eq "Valid")
               thumbprint = $sig.SignerCertificate.Thumbprint
             }
           }
