@@ -22,6 +22,8 @@ on:
       - "vendor/producer-a/crates/pub-viewer/**"
       - "tools/ci/reader_consumer_preflight.py"
       - "tools/ci/test_reader_consumer_preflight.py"
+      - "tools/ci/reader_shared_fanout.py"
+      - "tools/ci/test_reader_shared_fanout.py"
       - ".github/workflows/reader-shared-pr.yml"
       - ".github/workflows/reader-consumer-preflight.yml"
       - ".github/workflows/chaptera-reader-windows.yml"
@@ -55,75 +57,30 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Test Reader fanout classifier
+        run: python tools/ci/test_reader_shared_fanout.py
+
       - id: scope
         name: Classify changed Reader surfaces
-        shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          set -euo pipefail
           base="$BASE_SHA"
-          if [[ -z "$base" ]]; then
+          if [ -z "$base" ]; then
             base="$(git rev-parse "$HEAD_SHA^")"
           fi
-          mapfile -t paths < <(git diff --name-only "$base...$HEAD_SHA")
-          printf '%s\n' "${paths[@]}"
+          python tools/ci/reader_shared_fanout.py \
+            --base "$base" \
+            --head "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT" \
+            --receipt target/reader-shared-fanout/receipt.json
 
-          has() {
-            local pattern
-            for pattern in "$@"; do
-              for path in "${paths[@]}"; do
-                if [[ "$path" == $pattern ]]; then
-                  return 0
-                fi
-              done
-            done
-            return 1
-          }
-
-          reader_windows=false
-          editor_windows=false
-          visual_oracle=false
-          typography=false
-          corpus=false
-          android_render=false
-          web_acceptance=false
-
-          if has             "Cargo.toml" "Cargo.lock"             "apps/chaptera-desktop/src/render_backend.rs"             "apps/chaptera-desktop/src/main.rs"             "crates/chaptera-viewer-render-plan/"*             "vendor/producer-a/Cargo.toml" "vendor/producer-a/Cargo.lock"             "vendor/producer-a/crates/pub-core/"*             "vendor/producer-a/crates/pub-cfb/"*             "vendor/producer-a/crates/pub-contents/"*             "vendor/producer-a/crates/pub-escher/"*             "vendor/producer-a/crates/pub-model/"*             "vendor/producer-a/crates/pub-quill/"*             "vendor/producer-a/crates/pub-reader/"*             "vendor/producer-a/crates/pub-layout/"*             "vendor/producer-a/crates/pub-viewer/"*; then
-            reader_windows=true
-          fi
-
-          if has             "apps/chaptera-desktop/src/render_backend.rs"             "apps/chaptera-desktop/src/main.rs"             "crates/chaptera-viewer-render-plan/"*; then
-            editor_windows=true
-          fi
-
-          if has             "apps/chaptera-desktop/src/render_backend.rs"             "apps/chaptera-desktop/src/main.rs"             "crates/chaptera-viewer-render-plan/"*             "vendor/producer-a/crates/pub-reader/"*             "vendor/producer-a/crates/pub-viewer/"*; then
-            visual_oracle=true
-            corpus=true
-          fi
-
-          if has             "apps/chaptera-desktop/src/render_backend.rs"             "apps/chaptera-desktop/src/main.rs"             "crates/chaptera-viewer-render-plan/"*             "vendor/producer-a/crates/pub-quill/"*             "vendor/producer-a/crates/pub-reader/"*             "vendor/producer-a/crates/pub-viewer/"*; then
-            typography=true
-          fi
-
-          if has "crates/chaptera-viewer-render-plan/"*; then
-            android_render=true
-          fi
-
-          if has             "vendor/producer-a/crates/pub-reader/"*             "vendor/producer-a/crates/pub-viewer/"*; then
-            web_acceptance=true
-          fi
-
-          {
-            echo "reader_windows=$reader_windows"
-            echo "editor_windows=$editor_windows"
-            echo "visual_oracle=$visual_oracle"
-            echo "typography=$typography"
-            echo "corpus=$corpus"
-            echo "android_render=$android_render"
-            echo "web_acceptance=$web_acceptance"
-          } | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reader-shared-fanout-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/reader-shared-fanout/receipt.json
+          if-no-files-found: error
 
   tier-a:
     needs: classify
