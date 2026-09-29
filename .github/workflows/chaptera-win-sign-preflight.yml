@@ -73,10 +73,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          & certutil.exe -user -f -addstore Root $env:CHAPTERA_TEST_CERT_FILE
-          if ($LASTEXITCODE -ne 0) { throw "certutil Root import failed with code $LASTEXITCODE" }
-          & certutil.exe -user -f -addstore TrustedPublisher $env:CHAPTERA_TEST_CERT_FILE
-          if ($LASTEXITCODE -ne 0) { throw "certutil TrustedPublisher import failed with code $LASTEXITCODE" }
+          $root = Import-Certificate -FilePath $env:CHAPTERA_TEST_CERT_FILE -CertStoreLocation "Cert:\CurrentUser\Root"
+          if (-not $root -or $root.Thumbprint -ne $env:CHAPTERA_TEST_SIGN_THUMBPRINT) { throw "CurrentUser Root import failed or returned unexpected certificate" }
+          $publisher = Import-Certificate -FilePath $env:CHAPTERA_TEST_CERT_FILE -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher"
+          if (-not $publisher -or $publisher.Thumbprint -ne $env:CHAPTERA_TEST_SIGN_THUMBPRINT) { throw "CurrentUser TrustedPublisher import failed or returned unexpected certificate" }
 
       - name: Locate Windows SDK SignTool
         shell: pwsh
