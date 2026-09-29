@@ -200,8 +200,6 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
                 quill_failure_evidence: None,
                 mature_contents_serialization_revision,
                 mature_contents_story_count,
-            mature_contents_serialization_revision,
-            mature_contents_story_count,
             }
         }
     }
