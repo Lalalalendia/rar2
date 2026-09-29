@@ -53,3 +53,5 @@ jobs:
       - uses: actions/checkout@v5
       - name: Guard read-only surface and consent boundary
         run: python3 apps/cloud-reader/check_contract.py
+      - name: Test bounded Cloud Reader SVG renderer
+        run: node --test apps/cloud-reader/render-v1.test.mjs
