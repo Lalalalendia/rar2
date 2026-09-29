@@ -1,18 +1,37 @@
-name: Reader consumer preflight
+name: Reader Consumer Preflight V1
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
       - "apps/chaptera-desktop/src/render_backend.rs"
       - "apps/chaptera-desktop/src/main.rs"
       - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/crates/pub-core/**"
+      - "vendor/producer-a/crates/pub-cfb/**"
+      - "vendor/producer-a/crates/pub-contents/**"
+      - "vendor/producer-a/crates/pub-escher/**"
       - "vendor/producer-a/crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-quill/**"
       - "vendor/producer-a/crates/pub-reader/**"
       - "vendor/producer-a/crates/pub-layout/**"
       - "vendor/producer-a/crates/pub-viewer/**"
+      - "tools/ci/reader_consumer_preflight.py"
       - ".github/workflows/reader-consumer-preflight.yml"
+      - ".github/workflows/reader-consumer-admission.yml"
+      - ".github/workflows/chaptera-reader-windows.yml"
+      - ".github/workflows/chaptera-desktop-windows.yml"
+      - ".github/workflows/carlton-reader-visual-oracle.yml"
+      - ".github/workflows/reader-typography-golden.yml"
+      - ".github/workflows/reader-corpus-truth-v1.yml"
+      - ".github/workflows/mobile-reader-android-local-open.yml"
+      - ".github/workflows/mobile-reader-android-render.yml"
+      - ".github/workflows/chaptera-local-portable-windows.yml"
+      - ".github/workflows/web-acceptance-real-chromium.yml"
   workflow_dispatch:
 
 concurrency:
@@ -23,55 +42,44 @@ permissions:
   contents: read
 
 jobs:
-  rust-shared-seam:
+  tier-a:
+    name: Reader consumer Tier A
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
 
-      - name: Format desktop root seam
-        run: cargo fmt -p chaptera-desktop -- --check
-
-      - name: Format render-plan seam
-        run: cargo fmt --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml -- --check
-
-      - name: Format changed Rust files
+      - name: Run exact-head Reader seam preflight
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            base="origin/${{ github.base_ref }}"
-            mapfile -t changed_rust < <(git diff --name-only "$base"...HEAD -- '*.rs')
-          else
-            mapfile -t changed_rust < <(git diff --name-only HEAD^ HEAD -- '*.rs')
+          base="$BASE_SHA"
+          if [[ -z "$base" ]]; then
+            base="$(git rev-parse "$HEAD_SHA^")"
           fi
-          if (( ${#changed_rust[@]} == 0 )); then
-            echo "No changed Rust files."
-            exit 0
-          fi
-          rustfmt --edition 2024 --check "${changed_rust[@]}"
+          python tools/ci/reader_consumer_preflight.py \
+            --base "$base" \
+            --head "$HEAD_SHA" \
+            --receipt target/reader-consumer-preflight/receipt.json
 
-      - name: Check desktop root seam
-        run: cargo check -p chaptera-desktop --all-targets
+      - name: Print final preflight receipt
+        if: always()
+        run: cat target/reader-consumer-preflight/receipt.json
 
-      - name: Check render-plan seam
-        run: cargo check --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --all-targets --features projected-scene-instances
-
-      - name: Check vendor Reader seam
-        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer --all-targets
-
-      - name: Clippy shared Reader seam
-        run: |
-          cargo clippy -p chaptera-desktop --all-targets -- -D warnings
-          cargo clippy --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --all-targets --features projected-scene-instances -- -D warnings
-          cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer --all-targets -- -D warnings
-
-      - name: Test source-free semantic boundaries
-        run: |
-          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-layout
-          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --features cmo-slot-compose
-          cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --features projected-scene-instances
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-consumer-preflight-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/reader-consumer-preflight/receipt.json
+          if-no-files-found: error
