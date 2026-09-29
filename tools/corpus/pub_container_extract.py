@@ -34,18 +34,54 @@ def ext_kind(name:str)->str:
     return ""
 
 
-def fetch(url:str,path:Path,timeout:float,max_bytes:int)->dict:
-    req=Request(url,headers={"User-Agent":UA,"Accept":"*/*"})
-    total=0
-    h=hashlib.sha256()
-    with urlopen(req,timeout=timeout) as r,path.open("wb") as f:
-        while True:
-            chunk=r.read(1024*1024)
-            if not chunk: break
-            total+=len(chunk)
-            if total>max_bytes: raise ValueError("container exceeds max bytes")
-            h.update(chunk); f.write(chunk)
-        return {"final_url":r.geturl(),"content_type":r.headers.get("Content-Type",""),"size":total,"sha256":h.hexdigest()}
+def fetch(
+    url:str,
+    path:Path,
+    timeout:float,
+    max_bytes:int,
+    retries:int=3,
+    retry_delay:float=1.0,
+)->dict:
+    last_error:Exception|None=None
+    for attempt in range(retries+1):
+        path.unlink(missing_ok=True)
+        req=Request(url,headers={"User-Agent":UA,"Accept":"*/*"})
+        total=0
+        h=hashlib.sha256()
+        try:
+            with urlopen(req,timeout=timeout) as r,path.open("wb") as f:
+                while True:
+                    chunk=r.read(1024*1024)
+                    if not chunk: break
+                    total+=len(chunk)
+                    if total>max_bytes:
+                        raise ValueError("container exceeds max bytes")
+                    h.update(chunk); f.write(chunk)
+                return {
+                    "final_url":r.geturl(),
+                    "content_type":r.headers.get("Content-Type",""),
+                    "size":total,
+                    "sha256":h.hexdigest(),
+                    "fetch_attempt":attempt+1,
+                }
+        except ValueError:
+            path.unlink(missing_ok=True)
+            raise
+        except Exception as exc:
+            path.unlink(missing_ok=True)
+            last_error=exc
+            if attempt>=retries:
+                raise
+            delay=retry_delay*(2**attempt)
+            print(
+                f"retrying container fetch after {type(exc).__name__}: "
+                f"{url} (attempt {attempt+2}/{retries+1})",
+                file=sys.stderr,
+            )
+            if delay>0:
+                time.sleep(delay)
+    assert last_error is not None
+    raise last_error
 
 
 def list_7z(path:Path,timeout:int):
@@ -182,6 +218,32 @@ def _verify_expected_root(row:dict,meta:dict)->None:
             raise ValueError(f"root size drift: expected {expected_size_i}, got {meta['size']}")
 
 
+def _root_urls(row:dict)->list[str]:
+    urls=[]
+    for key in ("direct_url","fallback_url"):
+        url=(row.get(key) or "").strip()
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _fetch_verified_root(
+    row:dict,
+    path:Path,
+    timeout:float,
+    max_bytes:int,
+)->tuple[str,dict,list[str]]:
+    errors=[]
+    for url in _root_urls(row):
+        try:
+            meta=fetch(url,path,timeout,max_bytes)
+            _verify_expected_root(row,meta)
+            return url,meta,errors
+        except Exception as exc:
+            errors.append(f"{url}: {type(exc).__name__}: {exc}")
+    raise RuntimeError("all container URLs failed: "+" | ".join(errors))
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--seed",required=True)
@@ -204,15 +266,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="pub-container-") as tmp:
         td=Path(tmp)
         for i,row in enumerate(seeds):
-            url=(row.get("direct_url") or "").strip()
-            if not url: continue
-            path=td/f"root_{i}{Path(urlparse(url).path).suffix or '.bin'}"
+            urls=_root_urls(row)
+            if not urls: continue
+            primary_url=urls[0]
+            path=td/f"root_{i}{Path(urlparse(primary_url).path).suffix or '.bin'}"
             try:
-                meta=fetch(url,path,args.timeout,args.max_container_bytes)
-                _verify_expected_root(row,meta)
+                fetch_url,meta,prior_errors=_fetch_verified_root(
+                    row,path,args.timeout,args.max_container_bytes
+                )
                 origin={
                     "source_page":row.get("source_page",""),
-                    "container_url":url,
+                    "container_url":primary_url,
+                    "container_fetch_url":fetch_url,
+                    "container_fallback_used":fetch_url!=primary_url,
+                    "container_prior_fetch_errors":prior_errors,
                     "container_final_url":meta["final_url"],
                     "container_filename":row.get("candidate_filename",""),
                     "root_sha256":meta["sha256"],
@@ -222,7 +289,9 @@ def main():
                 inspect_archive(path,origin,0,args,rows,seen,td)
             except Exception as exc:
                 rows.append({
-                    "row_kind":"container_error","container_url":url,
+                    "row_kind":"container_error",
+                    "container_url":primary_url,
+                    "container_fallback_url":(row.get("fallback_url") or "").strip(),
                     "container_filename":row.get("candidate_filename",""),
                     "error":f"{type(exc).__name__}: {exc}"
                 })
