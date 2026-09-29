@@ -32,6 +32,8 @@ on:
       - ".github/workflows/reader-typography-golden.yml"
       - ".github/workflows/reader-corpus-truth-v1.yml"
       - ".github/workflows/mobile-reader-android-render.yml"
+      - ".github/workflows/mobile-reader-android-local-open.yml"
+      - ".github/workflows/chaptera-local-portable-windows.yml"
       - ".github/workflows/web-acceptance-real-chromium.yml"
   workflow_dispatch:
 
@@ -52,6 +54,8 @@ jobs:
       typography: ${{ steps.scope.outputs.typography }}
       corpus: ${{ steps.scope.outputs.corpus }}
       android_render: ${{ steps.scope.outputs.android_render }}
+      android_local: ${{ steps.scope.outputs.android_local }}
+      local_portable: ${{ steps.scope.outputs.local_portable }}
       web_acceptance: ${{ steps.scope.outputs.web_acceptance }}
     steps:
       - uses: actions/checkout@v5
@@ -115,6 +119,16 @@ jobs:
     needs: [classify, tier-a]
     if: needs.classify.outputs.android_render == 'true'
     uses: ./.github/workflows/mobile-reader-android-render.yml
+
+  android-local:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.android_local == 'true'
+    uses: ./.github/workflows/mobile-reader-android-local-open.yml
+
+  local-portable:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.local_portable == 'true'
+    uses: ./.github/workflows/chaptera-local-portable-windows.yml
 
   web-acceptance:
     needs: [classify, tier-a]
