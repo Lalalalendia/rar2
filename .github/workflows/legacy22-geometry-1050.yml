@@ -2,6 +2,13 @@ name: Legacy22 geometry 1050 research
 
 # Retrigger hosted census after research branch creation.
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/legacy22-geometry-1050.yml'
+      - 'vendor/producer-a/crates/pub-reader/src/bin/legacy22_geometry_profile.rs'
+      - 'vendor/producer-a/crates/pub-reader/**'
+      - 'vendor/producer-a/crates/pub-contents/**'
   push:
     branches:
       - research/legacy22-geometry-profile-1050-01
