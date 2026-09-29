@@ -779,6 +779,7 @@ mod tests {
         for chunk_type in [
             LEGACY_TEXT_SHAPE_TYPE,
             0x0002,            // image
+            0x0003,            // research-only unknown; do not admit without semantic evidence
             0x0008,            // Quill-era text shape
             0x000a,            // table
             LEGACY_GROUP_TYPE, // group is admitted separately from simple geometry
