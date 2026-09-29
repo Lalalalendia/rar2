@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
+RENDERER = (ROOT / "render-v1.mjs").read_text(encoding="utf-8")
 
 required = [
     "Open a Publisher (.PUB) file online",
@@ -13,6 +14,8 @@ required = [
     "research contribution are separate actions",
     "temporary service processing only",
     "read-only",
+    'renderReaderScene',
+    './render-v1.mjs',
 ]
 for needle in required:
     if needle not in HTML:
@@ -38,3 +41,33 @@ if 'body: file' not in HTML:
     raise SystemExit("guest upload must remain raw-body, not filename-bearing multipart")
 
 print("cloud-reader read-only/ephemeral-consent contract: ok")
+
+
+renderer_required = [
+    "chaptera.reader-scene.v1",
+    "inline_data_url",
+    "imagePaintGeometry",
+    "assertReaderSceneSourceNeutral",
+    'data-renderer',
+]
+for needle in renderer_required:
+    if needle not in RENDERER:
+        raise SystemExit(f"cloud-reader renderer missing required marker: {needle!r}")
+
+for needle in forbidden:
+    if needle in RENDERER:
+        raise SystemExit(
+            f"cloud-reader renderer contains forbidden authority/retention marker: {needle!r}"
+        )
+
+for needle in [
+    "raw_pub_bytes",
+    "source_path",
+    "filesystem_path",
+    "parser_record",
+    "stream_path",
+]:
+    if needle not in RENDERER:
+        raise SystemExit(
+            f"cloud-reader renderer source-neutral guard missing forbidden key: {needle!r}"
+        )
