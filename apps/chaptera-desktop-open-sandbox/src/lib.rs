@@ -356,31 +356,43 @@ mod platform {
         Ok(job)
     }
 
-    fn minimal_environment(_cwd: &Path) -> Vec<u16> {
-        // The contained worker is launched by exact lpApplicationName and does not
-        // perform shell/PATH lookup. Keep host path/search/temp authority out of
-        // the AppContainer environment and retain only the Windows root identity
-        // needed by the process/runtime itself.
-        let mut entries = ["SystemRoot", "WINDIR"]
-            .into_iter()
-            .filter_map(|key| std::env::var_os(key).map(|value| (key.to_owned(), value)))
-            .collect::<Vec<(String, OsString)>>();
-
+    fn encode_environment(
+        mut entries: Vec<(OsString, OsString)>,
+    ) -> Vec<u16> {
         entries.sort_by(|a, b| {
-            a.0.to_uppercase()
-                .cmp(&b.0.to_uppercase())
+            a.0.to_string_lossy()
+                .to_uppercase()
+                .cmp(&b.0.to_string_lossy().to_uppercase())
                 .then_with(|| a.0.cmp(&b.0))
         });
 
         let mut block = Vec::new();
         for (key, value) in entries {
-            block.extend(OsStr::new(&key).encode_wide());
+            block.extend(key.encode_wide());
             block.push(u16::from(b'='));
             block.extend(value.encode_wide());
             block.push(0);
         }
         block.push(0);
         block
+    }
+
+    fn minimal_environment(_cwd: &Path) -> Vec<u16> {
+        // The contained worker is launched by exact lpApplicationName and does not
+        // perform shell/PATH lookup. Keep host path/search/temp authority out of
+        // the AppContainer environment and retain only the Windows root identity
+        // needed by the process/runtime itself.
+        let entries = ["SystemRoot", "WINDIR"]
+            .into_iter()
+            .filter_map(|key| {
+                std::env::var_os(key).map(|value| (OsString::from(key), value))
+            })
+            .collect::<Vec<_>>();
+        encode_environment(entries)
+    }
+
+    fn full_parent_environment_for_diagnostic() -> Vec<u16> {
+        encode_environment(std::env::vars_os().collect())
     }
 
     fn derive_sid(profile_name: &str) -> Result<Sid> {
@@ -632,9 +644,54 @@ mod platform {
             )
         };
         if ok == 0 {
-            bail!("CreateProcessW failed closed: Win32 error {}", unsafe {
-                GetLastError()
-            });
+            let first_error = unsafe { GetLastError() };
+            if first_error == 203
+                && std::env::var_os("CHAPTERA_SANDBOX_DIAG_203").is_some()
+            {
+                // Diagnostic only: the probe executable is Chaptera-owned and no
+                // untrusted PUB bytes have been written yet. Retry once with the
+                // full parent environment to distinguish environment-block
+                // construction from deeper AppContainer/runner/attribute failure.
+                // Even if this retry launches, kill the Job immediately and fail
+                // the product launch; this can never become a production fallback.
+                let diagnostic_environment = full_parent_environment_for_diagnostic();
+                let mut diagnostic_command_line =
+                    wide(OsStr::new(&format!("\"{}\"", executable.display())));
+                let mut diagnostic_info: PROCESS_INFORMATION = unsafe { zeroed() };
+                let diagnostic_ok = unsafe {
+                    CreateProcessW(
+                        executable_w.as_ptr(),
+                        diagnostic_command_line.as_mut_ptr(),
+                        null(),
+                        null(),
+                        1,
+                        creation_flags,
+                        diagnostic_environment.as_ptr().cast(),
+                        cwd_w.as_ptr(),
+                        &startup.StartupInfo,
+                        &mut diagnostic_info,
+                    )
+                };
+                if diagnostic_ok != 0 {
+                    let diagnostic_process =
+                        Handle::new(diagnostic_info.hProcess, "diagnostic process handle")?;
+                    let diagnostic_thread =
+                        Handle::new(diagnostic_info.hThread, "diagnostic thread handle")?;
+                    drop(diagnostic_thread);
+                    unsafe {
+                        TerminateJobObject(job.raw(), 203);
+                        WaitForSingleObject(diagnostic_process.raw(), 5_000);
+                    }
+                    bail!(
+                        "CreateProcessW failed closed: Win32 error 203; diagnostic full-parent environment launched successfully"
+                    );
+                }
+                let diagnostic_error = unsafe { GetLastError() };
+                bail!(
+                    "CreateProcessW failed closed: Win32 error 203; diagnostic full-parent environment also failed: Win32 error {diagnostic_error}"
+                );
+            }
+            bail!("CreateProcessW failed closed: Win32 error {first_error}");
         }
 
         let process = Handle::new(process_info.hProcess, "process handle")?;
