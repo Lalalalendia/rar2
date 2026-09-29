@@ -111,6 +111,29 @@ jobs:
           Remove-Item Env:CHAPTERA_SANDBOX_DIAG_POLICY -ErrorAction SilentlyContinue
           exit 0
 
+      - name: Classify bootstrap environment and cwd
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
+          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
+
+          $cases = @(
+            @{ name = "full-env"; full_env = $true; no_cwd = $false },
+            @{ name = "no-cwd"; full_env = $false; no_cwd = $true },
+            @{ name = "full-env-no-cwd"; full_env = $true; no_cwd = $true }
+          )
+          foreach ($case in $cases) {
+            if ($case.full_env) { $env:CHAPTERA_SANDBOX_DIAG_FULL_ENV = "1" } else { Remove-Item Env:CHAPTERA_SANDBOX_DIAG_FULL_ENV -ErrorAction SilentlyContinue }
+            if ($case.no_cwd) { $env:CHAPTERA_SANDBOX_DIAG_NO_CWD = "1" } else { Remove-Item Env:CHAPTERA_SANDBOX_DIAG_NO_CWD -ErrorAction SilentlyContinue }
+            & $hostExe $probe
+            $code = $LASTEXITCODE
+            Write-Host "CHAPTERA_SANDBOX_ENV_RESULT case=$($case.name) exit=$code"
+          }
+          Remove-Item Env:CHAPTERA_SANDBOX_DIAG_FULL_ENV -ErrorAction SilentlyContinue
+          Remove-Item Env:CHAPTERA_SANDBOX_DIAG_NO_CWD -ErrorAction SilentlyContinue
+          exit 0
+
       - name: Prove strict containment starts minimal Rust bootstrap
         shell: pwsh
         run: |
