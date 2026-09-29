@@ -60,8 +60,7 @@ use pub_reader::{
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     derive_pub_page_id, materialize_bounded_simple_table_cells, rasterize_wmf_preview,
-    read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
@@ -957,10 +956,7 @@ fn legacy_image_preview_resource_id(
     Ok(ResourceId::from_canonical(canonical))
 }
 
-fn legacy_image_raster_hints(
-    width_emu: i64,
-    height_emu: i64,
-) -> Option<(u32, u32)> {
+fn legacy_image_raster_hints(width_emu: i64, height_emu: i64) -> Option<(u32, u32)> {
     let width = u64::try_from(width_emu).ok()?;
     let height = u64::try_from(height_emu).ok()?;
     if width == 0 || height == 0 {
@@ -971,9 +967,7 @@ fn legacy_image_raster_hints(
     let divisor = if max_dimension <= limit {
         1
     } else {
-        max_dimension
-            .checked_add(limit - 1)?
-            .checked_div(limit)?
+        max_dimension.checked_add(limit - 1)?.checked_div(limit)?
     };
     let width = u32::try_from((width / divisor).max(1)).ok()?;
     let height = u32::try_from((height / divisor).max(1)).ok()?;
@@ -1084,11 +1078,8 @@ fn viewer_legacy_image_preview_images(
                 continue;
             }
         };
-        let resource_id = match legacy_image_preview_resource_id(
-            source_hash,
-            image_object_id,
-            wmf,
-        ) {
+        let resource_id = match legacy_image_preview_resource_id(source_hash, image_object_id, wmf)
+        {
             Ok(resource_id) => resource_id,
             Err(_) => {
                 diagnostics.push(ViewerDiagnostic {
