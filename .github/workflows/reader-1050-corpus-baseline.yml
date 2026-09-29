@@ -401,6 +401,8 @@ jobs:
           ]
           totals = {name: 0 for name in metric_names}
           files_with = {name: 0 for name in metric_names}
+          raster_rejection_reason_counts = {}
+          raster_rejection_reason_file_counts = {}
           applicable_file_count = 0
           available_file_count = 0
           unavailable_file_count = 0
@@ -421,6 +423,20 @@ jobs:
                   totals[name] += value
                   if value > 0:
                       files_with[name] += 1
+
+              rejection_reasons = funnel.get("raster_rejection_reason_counts") or {}
+              assert isinstance(rejection_reasons, dict), rejection_reasons
+              for reason, value in rejection_reasons.items():
+                  assert isinstance(reason, str) and reason, reason
+                  value = int(value)
+                  assert value >= 0, (reason, value)
+                  raster_rejection_reason_counts[reason] = (
+                      raster_rejection_reason_counts.get(reason, 0) + value
+                  )
+                  if value > 0:
+                      raster_rejection_reason_file_counts[reason] = (
+                          raster_rejection_reason_file_counts.get(reason, 0) + 1
+                      )
 
               admitted = int(funnel.get("admitted_node_count") or 0)
               scan_success = int(funnel.get("scan_success_node_count") or 0)
@@ -447,6 +463,9 @@ jobs:
               assert scan_success + scan_failure == admitted, funnel
               assert selected == scan_success, funnel
               assert raster_accounted == raster_selected, funnel
+              assert sum(int(value) for value in rejection_reasons.values()) == int(
+                  funnel.get("raster_rejected_node_count") or 0
+              ), funnel
               assert preview_nodes <= int(funnel.get("raster_success_node_count") or 0), funnel
               assert preview_nodes + preview_unavailable == admitted, funnel
 
@@ -458,6 +477,12 @@ jobs:
               "unavailable_file_count": unavailable_file_count,
               "totals": totals,
               "files_with": files_with,
+              "raster_rejection_reason_counts": dict(
+                  sorted(raster_rejection_reason_counts.items())
+              ),
+              "raster_rejection_reason_file_counts": dict(
+                  sorted(raster_rejection_reason_file_counts.items())
+              ),
               "evidence_boundary": (
                   "source-free aggregate product-funnel receipt from the existing exact-1050 "
                   "Reader pass; no source paths, Object storage numbers, OlePres ordinals, "
