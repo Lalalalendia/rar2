@@ -1,0 +1,21 @@
+name: Native Windows WMF Region probe
+
+on:
+  push:
+    branches:
+      - research/legacy-ole-wmf-region-tail-332
+    paths:
+      - 'tools/windows/probe_wmf_region_native.py'
+      - '.github/workflows/wmf-region-native-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Probe native GDI WMF Region encoding
+        shell: pwsh
+        run: python tools/windows/probe_wmf_region_native.py
