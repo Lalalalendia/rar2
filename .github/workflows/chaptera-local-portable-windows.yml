@@ -1,27 +1,7 @@
 name: Chaptera Local Windows Portable V0
 
 on:
-  pull_request:
-    paths:
-      - "Start-Chaptera-Local.cmd"
-      - "tools/run_local_full_stack.py"
-      - "tools/run_local_real_editor.py"
-      - "tools/run_cloud_config_receipt.py"
-      - "tools/package_local_portable.py"
-      - "tools/adapt_viewer_scene_v1.py"
-      - "tools/resolved_graph_scene_bridge_v1.py"
-      - "tools/sample_newsletter_move_producer.py"
-      - "tools/scene_v1.py"
-      - "tools/validate_export_preview.py"
-      - "tools/verify_editable_export_geometry.py"
-      - "services/editor-api/**"
-      - "apps/web/**"
-      - "apps/chaptera-server/**"
-      - "packages/protocol/revision/v1/**"
-      - "packages/product/local-portable/**"
-      - "vendor/producer-a/**"
-      - "deploy/config/chaptera.prod.example.toml"
-      - ".github/workflows/chaptera-local-portable-windows.yml"
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
@@ -38,16 +18,6 @@ env:
   RUSTFLAGS: -C target-feature=+crt-static
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
 
   portable-surface:
     runs-on: ubuntu-latest
@@ -87,8 +57,8 @@ jobs:
           echo "present=$head_present" >> "$GITHUB_OUTPUT"
 
   build-portable:
-    needs: [portable-surface, reader-consumer-admission]
-    if: needs.portable-surface.outputs.present == 'true' && needs.reader-consumer-admission.outputs.admit == 'true'
+    needs: portable-surface
+    if: needs.portable-surface.outputs.present == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
