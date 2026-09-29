@@ -14,6 +14,7 @@ mod locale;
 mod product_smoke;
 mod reader_product_ui;
 mod render_backend;
+mod source_font;
 #[allow(dead_code)]
 mod supporter;
 #[allow(dead_code)]
@@ -28,7 +29,7 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderPlanErrorV1,
-    build_page_render_plan_with_text_layout_v1,
+    build_page_render_plan_with_text_layout_resolver_v1, build_page_render_plan_with_text_layout_v1,
 };
 use eframe::egui;
 use pub_interaction::{
@@ -110,6 +111,20 @@ fn build_desktop_page_render_plan(
     build_page_render_plan_with_text_layout_v1(visual, page_index, &desktop_text_font_resource())
 }
 
+fn build_desktop_page_render_plan_with_source_fonts(
+    visual: &ViewerGeometryDocument,
+    page_index: usize,
+    source_fonts: &source_font::DesktopSourceFontRegistry,
+) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
+    let fallback = desktop_text_font_resource();
+    build_page_render_plan_with_text_layout_resolver_v1(
+        visual,
+        page_index,
+        &fallback,
+        |fragment| source_fonts.resource_for_fragment(fragment),
+    )
+}
+
 fn text_layout_disposition_counts(plan: &PageRenderPlanV1) -> (usize, usize) {
     let mut shared = 0_usize;
     let mut fallback = 0_usize;
@@ -143,7 +158,7 @@ enum CanvasZoomMode {
     FitSelection,
 }
 
-const GEOMETRY_WARNING: &str = "Partial preview: bounded semantic text may be painted across proven explicit linked-frame chains. Proven source font sizes, including bounded FDPP→STSH1 inheritance where admitted, affect text sizing through the shared render plan; the current renderer still uses Chaptera's pinned fallback font face rather than claiming source-font availability. Exact embedded PNG/JPEG images and complete explicit shape-local solid fill/line state may also be painted. Other inherited/default styling beyond admitted font/size, Publisher-exact font metrics/reflow, image crop/fit, gradients/patterns, effects, and transforms are not faithfully painted yet.";
+const GEOMETRY_WARNING: &str = "Partial preview: bounded semantic text may be painted across proven explicit linked-frame chains. Proven source font sizes affect text sizing through the shared render plan. When one source family is authoritative for a complete fragment and an unambiguous same-family local Windows face exists, Chaptera may use that exact environment-resolved font file for shaping and paint; this is not a claim that the local file matches the original Publisher environment. Unresolved or ambiguous fonts stay on Chaptera's pinned fallback. Exact embedded PNG/JPEG images and persisted crop/Fit/Fill viewports may also be painted. Other unsupported styling, Publisher-exact substitution/reflow, gradients/patterns, effects, and transforms remain Partial.";
 const PREVIEW_TEXT_CLIP_WARNING: &str = "Text exceeds the height of at least one frame in the current desktop preview and is visibly clipped. Admitted single-frame homogeneous text uses shared resolved line breaks; other cases still use explicit backend fallback. This is preview-only evidence, not Publisher-native overset or exact reflow evidence.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -937,6 +952,10 @@ struct ViewerApp {
     source_revalidate_after: Option<Instant>,
     source_exact_revalidate_after: Option<Instant>,
     visual: Option<ViewerGeometryDocument>,
+    source_fonts: source_font::DesktopSourceFontRegistry,
+    source_fonts_install_attempted: bool,
+    source_fonts_active: bool,
+    source_font_install_error: Option<String>,
     selected_page: usize,
     page_frame_cache: BTreeMap<usize, Rc<CachedPageFrameWork>>,
     page_frame_cache_builds: u64,
@@ -996,6 +1015,10 @@ impl ViewerApp {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            source_fonts: source_font::DesktopSourceFontRegistry::new(),
+            source_fonts_install_attempted: false,
+            source_fonts_active: false,
+            source_font_install_error: None,
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
@@ -1379,6 +1402,9 @@ impl ViewerApp {
             .iter()
             .any(|story| !story.text.is_empty());
 
+        let mut source_fonts = source_font::DesktopSourceFontRegistry::new();
+        source_fonts.ensure_visual_fonts(&visual);
+
         self.source_path = Some(source_path);
         self.committed_source = Some(CommittedSourceState {
             generation,
@@ -1390,6 +1416,10 @@ impl ViewerApp {
         let now = Instant::now();
         self.source_revalidate_after = Some(now + SOURCE_REVALIDATE_INTERVAL);
         self.source_exact_revalidate_after = Some(now + SOURCE_EXACT_REVALIDATE_INTERVAL);
+        self.source_fonts = source_fonts;
+        self.source_fonts_install_attempted = false;
+        self.source_fonts_active = false;
+        self.source_font_install_error = None;
         self.visual = Some(visual);
         self.selected_page = 0;
         self.page_frame_cache.clear();
@@ -3858,8 +3888,16 @@ impl ViewerApp {
             .pages
             .get(page_index)
             .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
-        let render_plan = build_desktop_page_render_plan(visual, page_index)
-            .map_err(|error| error.to_string())?;
+        let render_plan = if self.source_fonts_active {
+            build_desktop_page_render_plan_with_source_fonts(
+                visual,
+                page_index,
+                &self.source_fonts,
+            )
+        } else {
+            build_desktop_page_render_plan(visual, page_index)
+        }
+        .map_err(|error| error.to_string())?;
         let page_id_text = page.id.as_canonical().to_string();
 
         let mut hit_entries = Vec::new();
@@ -3955,6 +3993,23 @@ impl ViewerApp {
     }
 
     fn show_canvas(&mut self, ui: &mut egui::Ui) {
+        if !self.source_fonts_install_attempted {
+            self.source_fonts_install_attempted = true;
+            let additional = self.source_fonts.egui_fonts();
+            match fallback_font::install_with_additional(ui.ctx(), &additional) {
+                Ok(()) => {
+                    self.source_fonts_active = true;
+                    self.source_font_install_error = None;
+                }
+                Err(error) => {
+                    self.source_fonts_active = false;
+                    self.source_font_install_error = Some(error);
+                    let _ = fallback_font::install(ui.ctx());
+                }
+            }
+            self.page_frame_cache.clear();
+        }
+
         self.ensure_image_textures(ui.ctx());
         self.preview_clipped_frames = 0;
         self.preview_clipped_story_keys.clear();
