@@ -153,8 +153,8 @@ jobs:
               for item in row.get("candidates") or []:
                   candidates.append({"source_sha256": row["source_sha256"], **item})
 
-          assert len(candidates) == 305, len(candidates)
-          assert len(affected) == 102, len(affected)
+          assert len(candidates) == 307, len(candidates)
+          assert len(affected) == 103, len(affected)
           assert all(
               int(item["child_parent_id"]) == int(item["parent_object_id"])
               for item in candidates
@@ -303,6 +303,7 @@ jobs:
           import olefile
 
           WORDART2 = "000212F0-0000-0000-C000-000000000046"
+          PERLOST_SHA = "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f"
           candidates = json.loads(Path("/tmp/raw0022-candidates.json").read_text())
           corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
           sha_to_path = {path.stem.lower(): path for path in corpus.glob("*.pub")}
@@ -438,11 +439,17 @@ jobs:
                           }
                       )
 
-          assert Counter(row["raw_flag"] for row in rows) == Counter({0: 41, 32768: 113})
+          recovery_only_rows = [
+              row for row in rows if row["source_sha256"] == PERLOST_SHA
+          ]
+          pair_selection_rows = [
+              row for row in rows if row["source_sha256"] != PERLOST_SHA
+          ]
+          assert Counter(row["raw_flag"] for row in pair_selection_rows) == Counter({0: 41, 32768: 113})
 
           exact_groups = defaultdict(lambda: defaultdict(list))
           profile_groups = defaultdict(lambda: defaultdict(list))
-          for row in rows:
+          for row in pair_selection_rows:
               exact_key = (
                   row["storage_clsid"],
                   row["presentation_profile_hash"],
@@ -483,6 +490,9 @@ jobs:
           summary = {
               "schema": "chaptera.legacy22-wordart-f-pair-selection.v1",
               "wordart_candidate_count": len(rows),
+              "pair_selection_candidate_count": len(pair_selection_rows),
+              "recovery_only_candidate_count": len(recovery_only_rows),
+              "recovery_only_source_sha256": PERLOST_SHA,
               "flag_counts": {
                   str(k): v for k, v in sorted(Counter(row["raw_flag"] for row in rows).items())
               },
@@ -497,7 +507,8 @@ jobs:
               ),
               "evidence_boundary": (
                   "source-safe fixture identities only; no PUB bytes, OLE stream bytes, "
-                  "strings or presentation payload are retained"
+                  "strings or presentation payload are retained; PERLOST recovery-only "
+                  "Objects are observed but excluded from F semantic pair authority"
               ),
           }
 
@@ -522,35 +533,77 @@ jobs:
           reader = summary["reader"]
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
-          assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
-          assert reader["opened_by_family"].get("0x22") == 226, reader["opened_by_family"]
+          assert reader["opened_by_family"].get("0x2c") == 386, reader["opened_by_family"]
+          assert reader["opened_by_family"].get("0x22") == 227, reader["opened_by_family"]
+
+          PERLOST_SHA = "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f"
 
           legacy_open = [
               row for row in rows
               if row.get("opened") is True and row.get("contents_family") == "0x22"
           ]
+          perlost_rows = [
+              row for row in rows if row.get("source_sha256") == PERLOST_SHA
+          ]
+          assert len(perlost_rows) == 1, len(perlost_rows)
+          perlost = perlost_rows[0]
+          assert perlost.get("opened") is True, perlost
+          assert perlost.get("contents_family") == "0x22", perlost
+          assert int(perlost.get("scene_node_count") or 0) > 0, perlost
+          assert int(perlost.get("story_frame_count") or 0) == 2, perlost
+          assert int(perlost.get("text_fragment_count") or 0) == 2, perlost
+          assert "viewer.text.legacy_encoding_unresolved" not in (perlost.get("diagnostic_codes") or []), perlost
+
+          legacy_existing = [
+              row for row in legacy_open if row.get("source_sha256") != PERLOST_SHA
+          ]
+          existing_with_scene = [
+              row for row in legacy_existing if int(row.get("scene_node_count") or 0) > 0
+          ]
+          existing_scene_nodes = sum(
+              int(row.get("scene_node_count") or 0) for row in legacy_existing
+          )
+          existing_story_frames = sum(
+              int(row.get("story_frame_count") or 0) for row in legacy_existing
+          )
+          existing_text_fragments = sum(
+              int(row.get("text_fragment_count") or 0) for row in legacy_existing
+          )
+          existing_unresolved_encoding_files = sum(
+              "viewer.text.legacy_encoding_unresolved" in (row.get("diagnostic_codes") or [])
+              for row in legacy_existing
+          )
+
+          raw_candidates = json.loads(Path("/tmp/raw0022-candidates.json").read_text())
+          perlost_candidates = [
+              item for item in raw_candidates if item.get("source_sha256") == PERLOST_SHA
+          ]
+
+          assert companion["candidate_count"] == 307, companion["candidate_count"]
+          assert len(perlost_candidates) == 2, len(perlost_candidates)
+          assert len(legacy_existing) == 226, len(legacy_existing)
+          assert len(existing_with_scene) == 217, len(existing_with_scene)
+          assert existing_scene_nodes == 2556, existing_scene_nodes
+          assert existing_story_frames == 1430, existing_story_frames
+          assert existing_text_fragments == 1383, existing_text_fragments
+          assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files
+
           legacy_with_scene = [
               row for row in legacy_open if int(row.get("scene_node_count") or 0) > 0
           ]
-          legacy_scene_nodes = sum(int(row.get("scene_node_count") or 0) for row in legacy_open)
-          legacy_story_frames = sum(int(row.get("story_frame_count") or 0) for row in legacy_open)
-          legacy_text_fragments = sum(int(row.get("text_fragment_count") or 0) for row in legacy_open)
-
+          legacy_scene_nodes = sum(
+              int(row.get("scene_node_count") or 0) for row in legacy_open
+          )
+          legacy_story_frames = sum(
+              int(row.get("story_frame_count") or 0) for row in legacy_open
+          )
+          legacy_text_fragments = sum(
+              int(row.get("text_fragment_count") or 0) for row in legacy_open
+          )
           unresolved_encoding_files = sum(
               "viewer.text.legacy_encoding_unresolved" in (row.get("diagnostic_codes") or [])
               for row in legacy_open
           )
-
-          assert companion["candidate_count"] == 305, companion["candidate_count"]
-          assert len(legacy_with_scene) == 217, len(legacy_with_scene)
-          # #160 admits the 305 authoritative PAGE OLE candidates. #93 then
-          # admits bounded non-degenerate raw0x0004 LINE endpoint geometry,
-          # raising the pinned-625 scene baseline from 2268 to 2556 without
-          # changing open/fail, Story, text, or encoding counts.
-          assert legacy_scene_nodes == 2556, legacy_scene_nodes
-          assert legacy_story_frames == 1430, legacy_story_frames
-          assert legacy_text_fragments == 1383, legacy_text_fragments
-          assert unresolved_encoding_files == 58, unresolved_encoding_files
 
           receipt = {
               "corpus_file_count": summary["corpus_file_count"],

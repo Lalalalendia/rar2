@@ -383,6 +383,16 @@ jobs:
 
           summary = json.loads(Path("out/reader1050/summary.json").read_text())
           materialized = json.loads(Path("out/materialized/summary.json").read_text())
+          rows = json.loads(Path("out/reader1050/reader-records.json").read_text())
+
+          PERLOST_SHA = "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f"
+          perlost_rows = [
+              row for row in rows if row.get("source_sha256") == PERLOST_SHA
+          ]
+          assert len(perlost_rows) == 1, len(perlost_rows)
+          perlost = perlost_rows[0]
+          assert perlost.get("opened") is True, perlost
+          assert perlost.get("contents_family") == "0x22", perlost
 
           assert summary["corpus_file_count"] == 1050, summary["corpus_file_count"]
           assert summary["structural_probe_error_count"] == 0, summary
@@ -393,10 +403,10 @@ jobs:
           assert materialized["rejections"] == 0, materialized
 
           reader = summary["reader"]
-          assert reader["opened_count"] == 1037, reader
-          assert reader["failed_count"] == 13, reader
-          assert reader["opened_by_family"] == {"0x22": 651, "0x2c": 386}, reader["opened_by_family"]
-          assert reader["failed_by_family"] == {"0x22": 2, "0x2c": 10, "unknown": 1}, reader["failed_by_family"]
+          assert reader["opened_count"] == 1038, reader
+          assert reader["failed_count"] == 12, reader
+          assert reader["opened_by_family"] == {"0x22": 652, "0x2c": 386}, reader["opened_by_family"]
+          assert reader["failed_by_family"] == {"0x22": 1, "0x2c": 10, "unknown": 1}, reader["failed_by_family"]
           assert reader["failure_signature_count"] == 12, reader["failure_signature_count"]
           assert summary["contents_family_physical_counts"] == {"0x22": 653, "0x2c": 396, "unknown": 1}, summary["contents_family_physical_counts"]
           assert summary["structural_cluster_count"] == 565, summary["structural_cluster_count"]
