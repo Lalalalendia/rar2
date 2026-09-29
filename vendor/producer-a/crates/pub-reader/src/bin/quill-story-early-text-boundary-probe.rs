@@ -46,6 +46,21 @@ struct BtePlcCandidate {
 }
 
 #[derive(Debug, Serialize)]
+struct BteCarrierProfile {
+    carrier_index: usize,
+    descriptor_length: u32,
+    plausible_count_prefix_count: usize,
+    data_size_4_prefix_count: usize,
+    count_and_data_size_4_prefix_count: usize,
+    exact_consumption_prefix_count: usize,
+    canonical_shape_prefix_count: usize,
+    prefix0_count: Option<u32>,
+    prefix0_data_size: Option<u32>,
+    prefix0_implied_count: Option<u32>,
+    prefix0_implied_count_matches_header: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct WitnessRow {
     source_sha256: String,
     byte_len: usize,
@@ -69,6 +84,8 @@ struct WitnessRow {
     fdpp_descriptor_lengths: Vec<u32>,
     fdpc_descriptor_lengths: Vec<u32>,
     descriptor_topology: BTreeMap<String, Vec<u32>>,
+    btep_profiles: Vec<BteCarrierProfile>,
+    btec_profiles: Vec<BteCarrierProfile>,
     btep_candidates: Vec<BtePlcCandidate>,
     btec_candidates: Vec<BtePlcCandidate>,
 }
@@ -232,6 +249,77 @@ fn format_ranges(descriptors: &[&Descriptor]) -> Vec<(u64, u64)> {
             Some((start, end))
         })
         .collect()
+}
+
+fn profile_bte_carriers(quill: &[u8], carriers: &[&Descriptor]) -> Result<Vec<BteCarrierProfile>> {
+    let mut out = Vec::with_capacity(carriers.len());
+
+    for (carrier_index, descriptor) in carriers.iter().enumerate() {
+        let payload = descriptor_range(quill, descriptor)?;
+        let max_prefix = payload.len().saturating_sub(20).min(64);
+
+        let mut plausible_count_prefix_count = 0usize;
+        let mut data_size_4_prefix_count = 0usize;
+        let mut count_and_data_size_4_prefix_count = 0usize;
+        let mut exact_consumption_prefix_count = 0usize;
+        let mut canonical_shape_prefix_count = 0usize;
+
+        for prefix in 0..=max_prefix {
+            let raw_count = u32_at(payload, prefix);
+            let raw_data_size = u32_at(payload, prefix + 4);
+            let count = raw_count
+                .and_then(|value| usize::try_from(value).ok())
+                .filter(|value| *value > 0 && *value <= 4096);
+
+            if count.is_some() {
+                plausible_count_prefix_count += 1;
+            }
+            if raw_data_size == Some(4) {
+                data_size_4_prefix_count += 1;
+            }
+            if count.is_some() && raw_data_size == Some(4) {
+                count_and_data_size_4_prefix_count += 1;
+            }
+
+            let exact_consumption = count.is_some_and(|count| {
+                prefix
+                    .checked_add(12)
+                    .and_then(|value| value.checked_add((count + 1).saturating_mul(4)))
+                    .and_then(|value| value.checked_add(count.saturating_mul(4)))
+                    == Some(payload.len())
+            });
+            if exact_consumption {
+                exact_consumption_prefix_count += 1;
+            }
+            if exact_consumption && raw_data_size == Some(4) {
+                canonical_shape_prefix_count += 1;
+            }
+        }
+
+        let prefix0_count = u32_at(payload, 0);
+        let prefix0_data_size = u32_at(payload, 4);
+        let prefix0_implied_count = payload
+            .len()
+            .checked_sub(16)
+            .filter(|remaining| remaining % 8 == 0)
+            .and_then(|remaining| u32::try_from(remaining / 8).ok());
+
+        out.push(BteCarrierProfile {
+            carrier_index,
+            descriptor_length: descriptor.data_length,
+            plausible_count_prefix_count,
+            data_size_4_prefix_count,
+            count_and_data_size_4_prefix_count,
+            exact_consumption_prefix_count,
+            canonical_shape_prefix_count,
+            prefix0_count,
+            prefix0_data_size,
+            prefix0_implied_count,
+            prefix0_implied_count_matches_header: prefix0_implied_count == prefix0_count,
+        });
+    }
+
+    Ok(out)
 }
 
 fn scan_bte_plc_candidates(
@@ -413,6 +501,8 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let expected_syid_len = 8u64 + 4u64 * u64::from(grounded_story_count);
     let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_story_count);
 
+    let btep_profiles = profile_bte_carriers(&quill, &btep)?;
+    let btec_profiles = profile_bte_carriers(&quill, &btec)?;
     let btep_candidates =
         scan_bte_plc_candidates(&quill, &btep, &fdpp, text, grounded_story_count)?;
     let btec_candidates =
@@ -442,6 +532,8 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         fdpp_descriptor_lengths: descriptor_lengths(&fdpp),
         fdpc_descriptor_lengths: descriptor_lengths(&fdpc),
         descriptor_topology: descriptor_topology(&descriptors),
+        btep_profiles,
+        btec_profiles,
         btep_candidates,
         btec_candidates,
     })
