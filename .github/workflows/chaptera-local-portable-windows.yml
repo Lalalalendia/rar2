@@ -21,7 +21,6 @@ on:
       - "packages/protocol/revision/v1/**"
       - "packages/product/local-portable/**"
       - "deploy/config/chaptera.prod.example.toml"
-      - ".github/workflows/chaptera-local-portable-windows.yml"
   workflow_dispatch:
 
 concurrency:
