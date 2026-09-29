@@ -11,7 +11,7 @@ use axum::{
     extract::{Extension, Path, State},
     http::{
         HeaderMap, HeaderValue, StatusCode,
-        header::{CONTENT_LENGTH, RETRY_AFTER},
+        header::{CACHE_CONTROL, CONTENT_LENGTH, RETRY_AFTER},
     },
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -180,11 +180,23 @@ struct GuestSceneResponse {
 
 const GUEST_PROTOCOL_V1: &str = "chaptera.reader-guest-session.v1";
 
+struct GuestJson<T>(T);
+
+impl<T: Serialize> IntoResponse for GuestJson<T> {
+    fn into_response(self) -> Response {
+        let mut response = Json(self.0).into_response();
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+    }
+}
+
 async fn issue_session(
     State(state): State<GuestReaderHttpState>,
     Extension(client_ip): Extension<ClientIp>,
     Json(body): Json<IssueGuestSessionBody>,
-) -> Result<Json<IssueGuestSessionResponse>, GuestReaderError> {
+) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
     let now_ms = now_ms()?;
     state.cleanup_expired(now_ms).await?;
     state
@@ -245,7 +257,7 @@ async fn issue_session(
         return Err(error);
     }
 
-    Ok(Json(IssueGuestSessionResponse {
+    Ok(GuestJson(IssueGuestSessionResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: session_id.clone(),
         access_token,
@@ -263,7 +275,7 @@ async fn put_content(
     Path(session_id): Path<String>,
     headers: HeaderMap,
     body: Body,
-) -> Result<Json<GuestUploadResponse>, GuestReaderError> {
+) -> Result<GuestJson<GuestUploadResponse>, GuestReaderError> {
     let now_ms = now_ms()?;
     state.cleanup_expired(now_ms).await?;
     state
@@ -318,7 +330,7 @@ async fn put_content(
         )
         .await?;
 
-    Ok(Json(GuestUploadResponse {
+    Ok(GuestJson(GuestUploadResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: stored.session_id,
         state: stored.state.as_str(),
@@ -331,7 +343,7 @@ async fn open_session(
     Extension(client_ip): Extension<ClientIp>,
     Path(session_id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<GuestOpenResponse>, GuestReaderError> {
+) -> Result<GuestJson<GuestOpenResponse>, GuestReaderError> {
     let now_ms = now_ms()?;
     state.cleanup_expired(now_ms).await?;
     state
@@ -401,7 +413,7 @@ async fn open_session(
                 .await?;
             state.release_admission(&rejected, now_ms).await?;
             state.delete_quarantine(&rejected, now_ms).await?;
-            return Ok(Json(GuestOpenResponse {
+            return Ok(GuestJson(GuestOpenResponse {
                 protocol_version: GUEST_PROTOCOL_V1,
                 session_id: rejected.session_id,
                 classification: "rejected".to_owned(),
@@ -464,7 +476,7 @@ async fn open_session(
         .await?;
     state.release_admission(&opened, now_ms).await?;
 
-    Ok(Json(GuestOpenResponse {
+    Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: opened.session_id,
         classification,
@@ -480,7 +492,7 @@ async fn get_scene(
     Extension(client_ip): Extension<ClientIp>,
     Path(session_id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<GuestSceneResponse>, GuestReaderError> {
+) -> Result<GuestJson<GuestSceneResponse>, GuestReaderError> {
     let now_ms = now_ms()?;
     state.cleanup_expired(now_ms).await?;
     state
@@ -501,7 +513,7 @@ async fn get_scene(
         .transpose()
         .map_err(|_| GuestReaderError::internal("guest_scene_corrupt"))?;
 
-    Ok(Json(GuestSceneResponse {
+    Ok(GuestJson(GuestSceneResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: session.session_id,
         classification: session
@@ -1055,7 +1067,7 @@ fn session_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<GuestReaderSession,
 
 fn open_response_from_stored(
     session: &GuestReaderSession,
-) -> Result<Json<GuestOpenResponse>, GuestReaderError> {
+) -> Result<GuestJson<GuestOpenResponse>, GuestReaderError> {
     let scene = session
         .scene_json
         .as_deref()
@@ -1069,7 +1081,7 @@ fn open_response_from_stored(
         Some("rejected") | None => "rejected",
         Some(_) => return Err(GuestReaderError::internal("guest_classification_invalid")),
     };
-    Ok(Json(GuestOpenResponse {
+    Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: session.session_id.clone(),
         classification: classification.to_owned(),
