@@ -1,0 +1,85 @@
+name: Reader Consumer Preflight V1
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/chaptera-desktop/src/render_backend.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/crates/pub-core/**"
+      - "vendor/producer-a/crates/pub-cfb/**"
+      - "vendor/producer-a/crates/pub-contents/**"
+      - "vendor/producer-a/crates/pub-escher/**"
+      - "vendor/producer-a/crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-quill/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-layout/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "tools/ci/reader_consumer_preflight.py"
+      - ".github/workflows/reader-consumer-preflight.yml"
+      - ".github/workflows/reader-consumer-admission.yml"
+      - ".github/workflows/chaptera-reader-windows.yml"
+      - ".github/workflows/chaptera-desktop-windows.yml"
+      - ".github/workflows/carlton-reader-visual-oracle.yml"
+      - ".github/workflows/reader-typography-golden.yml"
+      - ".github/workflows/reader-corpus-truth-v1.yml"
+      - ".github/workflows/mobile-reader-android-local-open.yml"
+      - ".github/workflows/mobile-reader-android-render.yml"
+      - ".github/workflows/chaptera-local-portable-windows.yml"
+      - ".github/workflows/web-acceptance-real-chromium.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  tier-a:
+    name: Reader consumer Tier A
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Run exact-head Reader seam preflight
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BASE_SHA"
+          if [[ -z "$base" ]]; then
+            base="$(git rev-parse "$HEAD_SHA^")"
+          fi
+          python tools/ci/reader_consumer_preflight.py \
+            --base "$base" \
+            --head "$HEAD_SHA" \
+            --receipt target/reader-consumer-preflight/receipt.json
+
+      - name: Print final preflight receipt
+        if: always()
+        run: cat target/reader-consumer-preflight/receipt.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-consumer-preflight-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/reader-consumer-preflight/receipt.json
+          if-no-files-found: error
