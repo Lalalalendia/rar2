@@ -553,9 +553,7 @@ mod tests {
 
         assert_eq!(
             parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk),
-            Err(StoryCatalogReadError::PhysicalEmptyChunkAmbiguousTail {
-                source: ambiguous
-            })
+            Err(StoryCatalogReadError::PhysicalEmptyChunkAmbiguousTail { source: ambiguous })
         );
     }
 
