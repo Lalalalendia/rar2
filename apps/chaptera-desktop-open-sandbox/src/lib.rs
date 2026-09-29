@@ -357,23 +357,15 @@ mod platform {
     }
 
     fn minimal_environment(_cwd: &Path) -> Vec<u16> {
-        let mut entries = ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "TEMP", "TMP"]
+        // The contained worker is launched by exact lpApplicationName and does not
+        // perform shell/PATH lookup. Keep host path/search/temp authority out of
+        // the AppContainer environment and retain only the Windows root identity
+        // needed by the process/runtime itself.
+        let mut entries = ["SystemRoot", "WINDIR"]
             .into_iter()
             .filter_map(|key| std::env::var_os(key).map(|value| (key.to_owned(), value)))
             .collect::<Vec<(String, OsString)>>();
 
-        if let Some(system_root) = std::env::var_os("SystemRoot") {
-            entries.push((
-                "PATH".to_owned(),
-                std::path::PathBuf::from(system_root)
-                    .join("System32")
-                    .into_os_string(),
-            ));
-        }
-
-        // `lpCurrentDirectory` is passed explicitly to CreateProcessW, so the
-        // legacy hidden `=X:` drive-current-directory variables are unnecessary here.
-        // Keeping them out also avoids malformed/manual environment-block edge cases.
         entries.sort_by(|a, b| {
             a.0.to_uppercase()
                 .cmp(&b.0.to_uppercase())
