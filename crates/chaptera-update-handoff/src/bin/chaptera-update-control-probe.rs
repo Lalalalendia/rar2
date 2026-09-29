@@ -28,6 +28,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let request = read_control_request(&request_path)?;
 
+    let expected_cwd = request_path
+        .parent()
+        .ok_or("control request path has no parent")?
+        .canonicalize()?;
+    let actual_cwd = std::env::current_dir()?.canonicalize()?;
+    if actual_cwd != expected_cwd {
+        return Err(format!(
+            "unexpected control working directory: expected {}, got {}",
+            expected_cwd.display(),
+            actual_cwd.display()
+        )
+        .into());
+    }
+    for forbidden in [
+        "PATH",
+        "PATHEXT",
+        "PYTHONPATH",
+        "RUSTFLAGS",
+        "CARGO_HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+    ] {
+        if std::env::var_os(forbidden).is_some() {
+            return Err(format!("forbidden inherited environment variable: {forbidden}").into());
+        }
+    }
+
     // This marker is written before blocking on the install lock so acceptance
     // can prove the child started but could not yet assume update ownership.
     fs::write(started_path(&request_path), b"started\n")?;
