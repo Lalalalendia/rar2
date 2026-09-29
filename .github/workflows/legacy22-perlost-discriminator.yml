@@ -351,9 +351,11 @@ jobs:
           p=Path("/tmp/perlost-report.json")
           d=json.loads(p.read_text())
           assert d["source_sha256"] == "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f", d
-          assert d["family"]["profile"] == "not_structured_publisher", d["family"]
-          assert d["family"]["route"] == "unsupported", d["family"]
+          assert d["family"]["profile"] == "legacy22_low_text", d["family"]
+          assert d["family"]["route"] == "legacy22_low_text", d["family"]
           assert "cfb_parse_failed" in d["family"]["reasons"], d["family"]
+          assert d["open"]["opened"] is True, d["open"]
+          assert d["open"]["viewer_page_count"] > 0, d["open"]
           cfb=Path("/tmp/perlost-cfb.txt").read_text()
           assert "PUB_CFB_ERROR=" in cfb, cfb
           ole=json.loads(Path("/tmp/perlost-olefile.json").read_text())
@@ -379,6 +381,8 @@ jobs:
           negative_reader=json.loads(Path("/tmp/opnhous-negative-reader.json").read_text())
           negative_cfb=json.loads(Path("/tmp/opnhous-negative-cfb.json").read_text())
           assert negative_reader["source_sha256"] == "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e", negative_reader
+          assert negative_reader["family"]["profile"] == "legacy22_low_text", negative_reader["family"]
+          assert negative_reader["family"]["route"] == "legacy22_low_text", negative_reader["family"]
           assert negative_reader["open"]["opened"] is False, negative_reader
           print(json.dumps({
               "reader":d,
