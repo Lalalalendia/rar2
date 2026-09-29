@@ -91,8 +91,8 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillTypographyValueSource, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    QuillMcldReadError, QuillScriptFontEntryDisposition, QuillTypographyValueSource,
+    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -224,6 +224,37 @@ pub struct PubSourceGraphBuild {
     pub diagnostics: Vec<PubBridgeDiagnostic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<PubTypographyRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub script_font_maps: Vec<PubScriptFontMap>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubScriptFontEntryDisposition {
+    Resolved,
+    UnresolvedSentinel,
+    InvalidFontOrdinal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubScriptFontEntry {
+    pub script_slot: u16,
+    pub source_font_index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_font_name: Option<String>,
+    pub disposition: PubScriptFontEntryDisposition,
+    pub source_ref: SourceRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubScriptFontMap {
+    pub story_id: StoryId,
+    pub story_utf16_start: u32,
+    pub story_utf16_end: u32,
+    pub story_scalar_start: u32,
+    pub story_scalar_end: u32,
+    pub entries: Vec<PubScriptFontEntry>,
+    pub source_ref: SourceRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2061,7 +2092,88 @@ pub fn build_mature_0x2c_from_streams(
     }
 
     let mut typography_runs = Vec::new();
+    let mut script_font_maps = Vec::new();
     if let Some(catalog) = typography_catalog {
+        for map in &catalog.script_font_maps {
+            let syid = map.story_syid.0;
+            let Some(story_id) = story_by_syid.get(&syid).copied() else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("script-font map references missing Story SYID {syid}"),
+                });
+                continue;
+            };
+            let Some(story) = graph.stories.get(&story_id) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("script-font map Story {story_id:?} is absent"),
+                });
+                continue;
+            };
+            let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                &story.text,
+                map.story_start_utf16,
+                map.story_end_utf16,
+            ) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!(
+                        "script-font map range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
+                        map.story_start_utf16, map.story_end_utf16
+                    ),
+                });
+                continue;
+            };
+
+            let object_key = quill_story_object_key(syid);
+            let entries = map
+                .entries
+                .iter()
+                .map(|entry| PubScriptFontEntry {
+                    script_slot: entry.script_slot,
+                    source_font_index: entry.font_index,
+                    source_font_name: entry.font_name.clone(),
+                    disposition: match entry.disposition {
+                        QuillScriptFontEntryDisposition::Resolved => {
+                            PubScriptFontEntryDisposition::Resolved
+                        }
+                        QuillScriptFontEntryDisposition::UnresolvedSentinel => {
+                            PubScriptFontEntryDisposition::UnresolvedSentinel
+                        }
+                        QuillScriptFontEntryDisposition::InvalidFontOrdinal => {
+                            PubScriptFontEntryDisposition::InvalidFontOrdinal
+                        }
+                    },
+                    source_ref: source_ref(
+                        &graph.source,
+                        &entry.source,
+                        Some(object_key.clone()),
+                        Some(format!(
+                            "FDPC/ScriptFonts/script-slot/{}",
+                            entry.script_slot
+                        )),
+                        SourceRole::Semantic,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ),
+                })
+                .collect::<Vec<_>>();
+
+            script_font_maps.push(PubScriptFontMap {
+                story_id,
+                story_utf16_start: map.story_start_utf16,
+                story_utf16_end: map.story_end_utf16,
+                story_scalar_start,
+                story_scalar_end,
+                entries,
+                source_ref: source_ref(
+                    &graph.source,
+                    &map.fdpc_style_source,
+                    Some(object_key),
+                    Some("FDPC/ScriptFonts".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            });
+        }
         if !catalog.effective_runs.is_empty() {
             for run in catalog.effective_runs {
                 let syid = run.story_syid.0;
@@ -2461,6 +2573,7 @@ pub fn build_mature_0x2c_from_streams(
         effective_pages,
         diagnostics,
         typography_runs,
+        script_font_maps,
     })
 }
 
@@ -3784,6 +3897,118 @@ mod tests {
         "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
             .parse()
             .expect("known SampleNewsletter SHA-256")
+    }
+
+    #[test]
+    #[ignore = "requires CHAPTERA_SCRIPT_FONT_MAP_FIXTURE and CHAPTERA_SCRIPT_FONT_MAP_OUT"]
+    fn exact_fonts_pub_preserves_script_font_map_without_scalar_promotion() {
+        let fixture = std::env::var_os("CHAPTERA_SCRIPT_FONT_MAP_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_SCRIPT_FONT_MAP_FIXTURE");
+        let output_dir = std::env::var_os("CHAPTERA_SCRIPT_FONT_MAP_OUT")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_SCRIPT_FONT_MAP_OUT");
+        std::fs::create_dir_all(&output_dir).expect("create script-font-map output");
+
+        let bytes = std::fs::read(&fixture).expect("read exact fonts.pub");
+        let exact_source_hash: Sha256Digest =
+            "8d50872a7d8ee6130b889efbe99275ee333747bc7777f3c5256a05f2c6d32048"
+                .parse()
+                .expect("known fonts.pub SHA-256");
+        let build =
+            build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), exact_source_hash)
+                .expect("build exact fonts.pub source graph");
+
+        assert!(
+            build.typography_runs.is_empty(),
+            "this preservation slice must not silently promote ScriptFonts into the legacy scalar typography path"
+        );
+        assert!(
+            !build.script_font_maps.is_empty(),
+            "exact fonts.pub must preserve at least one source script-font map"
+        );
+
+        let mut resolved_entries = 0_usize;
+        let mut unresolved_entries = 0_usize;
+        let mut invalid_entries = 0_usize;
+        let mut times_new_roman_slots = Vec::new();
+        let mut map_receipts = Vec::new();
+
+        for map in &build.script_font_maps {
+            let mut seen_slots = BTreeSet::new();
+            let entries = map
+                .entries
+                .iter()
+                .map(|entry| {
+                    assert!(
+                        seen_slots.insert(entry.script_slot),
+                        "one source ScriptFonts map must not repeat a raw script slot"
+                    );
+                    match entry.disposition {
+                        PubScriptFontEntryDisposition::Resolved => resolved_entries += 1,
+                        PubScriptFontEntryDisposition::UnresolvedSentinel => {
+                            unresolved_entries += 1
+                        }
+                        PubScriptFontEntryDisposition::InvalidFontOrdinal => invalid_entries += 1,
+                    }
+                    if entry.source_font_index == 0
+                        && entry.source_font_name.as_deref() == Some("Times New Roman")
+                    {
+                        times_new_roman_slots.push(entry.script_slot);
+                    }
+                    serde_json::json!({
+                        "script_slot": entry.script_slot,
+                        "source_font_index": entry.source_font_index,
+                        "source_font_name": entry.source_font_name,
+                        "disposition": entry.disposition,
+                    })
+                })
+                .collect::<Vec<_>>();
+            map_receipts.push(serde_json::json!({
+                "story_id": map.story_id,
+                "story_utf16_range": [map.story_utf16_start, map.story_utf16_end],
+                "story_scalar_range": [map.story_scalar_start, map.story_scalar_end],
+                "entries": entries,
+            }));
+        }
+
+        times_new_roman_slots.sort_unstable();
+        times_new_roman_slots.dedup();
+        assert!(
+            !times_new_roman_slots.is_empty(),
+            "exact fonts.pub must preserve at least one ScriptFonts slot resolving to FONT[0] Times New Roman"
+        );
+        assert_eq!(
+            invalid_entries, 0,
+            "exact positive must not invent out-of-range FONT ordinals"
+        );
+
+        let receipt = serde_json::json!({
+            "schema": "chaptera.viewer-script-font-map-exact-fixture.v1",
+            "source_pub_sha256": exact_source_hash,
+            "legacy_scalar_typography_run_count": build.typography_runs.len(),
+            "script_font_map_count": build.script_font_maps.len(),
+            "resolved_entry_count": resolved_entries,
+            "unresolved_entry_count": unresolved_entries,
+            "invalid_entry_count": invalid_entries,
+            "times_new_roman_font_ordinal": 0,
+            "times_new_roman_script_slots": times_new_roman_slots,
+            "maps": map_receipts,
+        });
+        std::fs::write(
+            output_dir.join("viewer-script-font-map-fonts-pub.json"),
+            serde_json::to_vec_pretty(&receipt).expect("serialize script-font-map receipt"),
+        )
+        .expect("write script-font-map receipt");
+
+        println!(
+            "script-font exact fixture: maps={} resolved={} unresolved={} invalid={} times_new_roman_slots={:?}",
+            build.script_font_maps.len(),
+            resolved_entries,
+            unresolved_entries,
+            invalid_entries,
+            receipt["times_new_roman_script_slots"],
+        );
     }
 
     #[test]
