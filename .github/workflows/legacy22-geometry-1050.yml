@@ -1,5 +1,6 @@
 name: Legacy22 geometry 1050 research
 
+# Retrigger hosted census after research branch creation.
 on:
   push:
     branches:
