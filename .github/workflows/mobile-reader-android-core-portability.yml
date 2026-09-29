@@ -1,13 +1,8 @@
 name: Mobile Reader Android core portability
 
 on:
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/mobile-reader-android-core-portability.yml"
-      - "vendor/producer-a/**"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "crates/chaptera-mobile-reader-core/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
