@@ -105,6 +105,10 @@ jobs:
               assert evidence["next_boundary_is_descriptor"] is True, evidence
               assert evidence["required_fits_before_next_boundary"] is False, evidence
               assert row["contents_story_demand"] is not None, row
+              demand_row = row["contents_story_demand"]
+              assert demand_row["catalog_text_ids_equal_live_field_27_set"] is True, demand_row
+              assert demand_row["catalog_text_id_count"] == row["contents_story_count"], row
+              assert demand_row["live_distinct_field_27_value_count"] == row["contents_story_count"], row
 
           story_counts = Counter(
               "none" if row["contents_story_count"] is None else str(row["contents_story_count"])
