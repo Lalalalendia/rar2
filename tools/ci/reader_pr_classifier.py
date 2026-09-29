@@ -85,6 +85,8 @@ def classify(paths: list[str], *, force_all: bool = False) -> dict[str, bool]:
             "android_render": True,
             "portable": True,
             "web_chromium": True,
+            "installer": True,
+            "updater": True,
         }
 
     shared_vendor = _prefix(paths, VENDOR_SHARED_PREFIXES)
@@ -254,6 +256,37 @@ def classify(paths: list[str], *, force_all: bool = False) -> dict[str, bool]:
         )
     )
 
+    installer = (
+        _prefix(paths, ("packages/product/reader-portable/",))
+        or _exact(
+            paths,
+            {
+                "installer/windows/chaptera-reader.iss",
+                ".github/workflows/chaptera-reader-installer.yml",
+            },
+        )
+    )
+
+    updater = (
+        _prefix(
+            paths,
+            (
+                "crates/chaptera-update-engine/",
+                "crates/chaptera-update-orchestrator/",
+                "crates/chaptera-update-trust/",
+                "crates/chaptera-update-handoff/",
+            ),
+        )
+        or _exact(
+            paths,
+            {
+                "installer/windows/chaptera-reader.iss",
+                ".github/workflows/chaptera-win-update-accept.yml",
+                ".github/workstream-scopes/chaptera-win-update-accept-01.md",
+            },
+        )
+    )
+
     return {
         "tier_a_required": tier_a_required,
         "reader_windows": reader_windows,
@@ -265,6 +298,8 @@ def classify(paths: list[str], *, force_all: bool = False) -> dict[str, bool]:
         "android_render": android_render,
         "portable": portable_scope,
         "web_chromium": web_chromium,
+        "installer": installer,
+        "updater": updater,
     }
 
 
