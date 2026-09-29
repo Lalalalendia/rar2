@@ -353,32 +353,32 @@ pub fn run_guest_scene_worker(
 
     let (classification, terminal_code, scene) =
         match open_pub_geometry(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(geometry) => {
-                let scene = from_viewer_geometry(
-                    session_id.to_owned(),
-                    expected_sha256.to_owned(),
-                    "guest:source".to_owned(),
-                    &geometry,
-                )
-                .map_err(|_| {
-                    GuestSceneWorkerError::new(
-                        "guest_scene_projection_failed",
-                        "source-neutral Reader scene projection failed",
-                    )
-                })?;
-                let classification = if scene.fidelity.state == "supported" {
-                    "supported"
-                } else {
-                    "partial"
-                };
-                let scene = serde_json::to_value(scene).map_err(|_| {
-                    GuestSceneWorkerError::new(
-                        "guest_scene_worker_output_failed",
-                        "Reader scene serialization failed",
-                    )
-                })?;
-                (classification.to_owned(), None, Some(scene))
-            }
+            Ok(geometry) => match from_viewer_geometry(
+                session_id.to_owned(),
+                expected_sha256.to_owned(),
+                "guest:source".to_owned(),
+                &geometry,
+            ) {
+                Ok(scene) => {
+                    let classification = if scene.fidelity.state == "supported" {
+                        "supported"
+                    } else {
+                        "partial"
+                    };
+                    let scene = serde_json::to_value(scene).map_err(|_| {
+                        GuestSceneWorkerError::new(
+                            "guest_scene_worker_output_failed",
+                            "Reader scene serialization failed",
+                        )
+                    })?;
+                    (classification.to_owned(), None, Some(scene))
+                }
+                Err(_) => (
+                    "unsupported".to_owned(),
+                    Some("reader_scene_projection_failed".to_owned()),
+                    None,
+                ),
+            },
             Err(_) => (
                 "unsupported".to_owned(),
                 Some("reader_scene_open_failed".to_owned()),
@@ -440,7 +440,12 @@ fn validate_receipt(
             }
         }
         "unsupported" => {
-            if receipt.scene.is_some() || receipt.terminal_code.as_deref() != Some("reader_scene_open_failed") {
+            if receipt.scene.is_some()
+                || !matches!(
+                    receipt.terminal_code.as_deref(),
+                    Some("reader_scene_open_failed" | "reader_scene_projection_failed")
+                )
+            {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
                     "unsupported receipt shape is invalid",
