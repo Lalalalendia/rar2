@@ -536,12 +536,7 @@ fn parse_stretch_dib(dib: &[u8], color_usage: u16) -> Result<PackedStretchDib<'_
     })
 }
 
-fn map_logical_point(
-    state: &PlaybackState,
-    canvas: &Canvas,
-    x: i32,
-    y: i32,
-) -> Result<(i32, i32)> {
+fn map_logical_point(state: &PlaybackState, canvas: &Canvas, x: i32, y: i32) -> Result<(i32, i32)> {
     if state.window_ext_x == 0 || state.window_ext_y == 0 {
         bail!("WMF window extent is zero");
     }
@@ -568,8 +563,8 @@ fn draw_stretch_dib(canvas: &mut Canvas, state: &PlaybackState, params: &[u8]) -
     if params.len() < STRETCHDIB_FIXED_PARAM_BYTES + BITMAPINFOHEADER_BYTES {
         bail!("WMF STRETCHDIB record is truncated");
     }
-    let raster_operation =
-        read_u32(params, 0).ok_or_else(|| anyhow!("WMF STRETCHDIB raster operation is truncated"))?;
+    let raster_operation = read_u32(params, 0)
+        .ok_or_else(|| anyhow!("WMF STRETCHDIB raster operation is truncated"))?;
     let color_usage =
         read_u16(params, 4).ok_or_else(|| anyhow!("WMF STRETCHDIB color usage is truncated"))?;
     let src_height =
@@ -580,10 +575,10 @@ fn draw_stretch_dib(canvas: &mut Canvas, state: &PlaybackState, params: &[u8]) -
         read_i16(params, 10).ok_or_else(|| anyhow!("WMF STRETCHDIB source y is truncated"))?;
     let src_x =
         read_i16(params, 12).ok_or_else(|| anyhow!("WMF STRETCHDIB source x is truncated"))?;
-    let dest_height =
-        read_i16(params, 14).ok_or_else(|| anyhow!("WMF STRETCHDIB destination height is truncated"))?;
-    let dest_width =
-        read_i16(params, 16).ok_or_else(|| anyhow!("WMF STRETCHDIB destination width is truncated"))?;
+    let dest_height = read_i16(params, 14)
+        .ok_or_else(|| anyhow!("WMF STRETCHDIB destination height is truncated"))?;
+    let dest_width = read_i16(params, 16)
+        .ok_or_else(|| anyhow!("WMF STRETCHDIB destination width is truncated"))?;
     let dest_y =
         read_i16(params, 18).ok_or_else(|| anyhow!("WMF STRETCHDIB destination y is truncated"))?;
     let dest_x =
@@ -604,8 +599,8 @@ fn draw_stretch_dib(canvas: &mut Canvas, state: &PlaybackState, params: &[u8]) -
     let src_y = usize::try_from(src_y).map_err(|_| anyhow!("WMF STRETCHDIB source y overflow"))?;
     let src_width =
         usize::try_from(src_width).map_err(|_| anyhow!("WMF STRETCHDIB source width overflow"))?;
-    let src_height =
-        usize::try_from(src_height).map_err(|_| anyhow!("WMF STRETCHDIB source height overflow"))?;
+    let src_height = usize::try_from(src_height)
+        .map_err(|_| anyhow!("WMF STRETCHDIB source height overflow"))?;
     if src_x
         .checked_add(src_width)
         .is_none_or(|right| right > dib.width)
@@ -653,8 +648,8 @@ fn draw_stretch_dib(canvas: &mut Canvas, state: &PlaybackState, params: &[u8]) -
     let mapped_width = f64::from(x1 - x0);
     let mapped_height = f64::from(y1 - y0);
     for y in draw_rect.top..draw_rect.bottom {
-        let ty = ((f64::from(y) + 0.5 - f64::from(y0)) / mapped_height)
-            .clamp(0.0, 1.0 - f64::EPSILON);
+        let ty =
+            ((f64::from(y) + 0.5 - f64::from(y0)) / mapped_height).clamp(0.0, 1.0 - f64::EPSILON);
         let source_top_row = ((ty * src_height as f64).floor() as usize).min(src_height - 1);
         let source_y = src_y + (src_height - 1 - source_top_row);
 
@@ -2081,8 +2076,7 @@ mod tests {
 
     #[test]
     fn stretchdib_honors_source_crop_and_clip() {
-        let mut bytes =
-            synthetic_stretch_dib(stretch_dib_params(dib24_2x2(), 1, 0, 1, 2));
+        let mut bytes = synthetic_stretch_dib(stretch_dib_params(dib24_2x2(), 1, 0, 1, 2));
         let mut clip = Vec::new();
         for value in [4_i16, 4, 0, 2] {
             clip.extend_from_slice(&value.to_le_bytes());
