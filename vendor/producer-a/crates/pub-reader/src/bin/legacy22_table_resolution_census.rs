@@ -53,7 +53,7 @@ fn reader_raw_0001_target_count(bytes: &[u8]) -> usize {
                     raw_type: Some(LEGACY_0X22_TABLE_CHUNK_TYPE),
                     reason,
                     ..
-                } if reason == "legacy_noquill_object_type_not_admitted_v1"
+                } if reason == "legacy_table_not_resolved_v1"
             )
         })
         .count()
