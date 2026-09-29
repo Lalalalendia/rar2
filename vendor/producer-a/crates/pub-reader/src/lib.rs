@@ -903,11 +903,10 @@ pub fn probe_mature_0x2c_source_graph_failure_stage(
     bytes: &[u8],
     source_hash: Sha256Digest,
 ) -> Option<PubMatureSourceGraphFailureStage> {
-    let contents =
-        match pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH) {
-            Ok(value) => value,
-            Err(_) => return Some(PubMatureSourceGraphFailureStage::ContentsStream),
-        };
+    let contents = match pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::ContentsStream),
+    };
     let quill = match pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM_PATH) {
         Ok(value) => value,
         Err(_) => return Some(PubMatureSourceGraphFailureStage::QuillStream),
@@ -939,14 +938,11 @@ pub fn probe_mature_0x2c_source_graph_failure_stage(
         Ok(value) => value,
         Err(_) => return Some(PubMatureSourceGraphFailureStage::StoryCatalogReference),
     };
-    let story_catalog_chunk = match chunk_for_reference(
-        contents_stream.clone(),
-        &contents,
-        story_catalog_reference,
-    ) {
-        Ok(value) => value,
-        Err(_) => return Some(PubMatureSourceGraphFailureStage::StoryCatalogChunk),
-    };
+    let story_catalog_chunk =
+        match chunk_for_reference(contents_stream.clone(), &contents, story_catalog_reference) {
+            Ok(value) => value,
+            Err(_) => return Some(PubMatureSourceGraphFailureStage::StoryCatalogChunk),
+        };
     if parse_confirmed_mature_story_catalog(&contents, &story_catalog_chunk).is_err() {
         return Some(PubMatureSourceGraphFailureStage::StoryCatalogParse);
     }
