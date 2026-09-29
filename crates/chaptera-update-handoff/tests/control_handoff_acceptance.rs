@@ -52,7 +52,10 @@ fn copied_u1_process_cannot_take_over_until_parent_releases_install_lock() {
         .begin_verified_candidate("tx-handoff", "2.0.0", &candidate, updater_rel)
         .unwrap();
     let handoff = prepare_control_handoff(&engine).unwrap();
-    assert_eq!(handoff.control_updater, control_updater);
+    assert!(
+        same_file_identity(&handoff.control_updater, &control_updater),
+        "prepared handoff and engine path must name the same copied U1 file across Windows path aliases"
+    );
 
     let started = started_path(&handoff.request_path);
     let receipt = receipt_path(&handoff.request_path);
