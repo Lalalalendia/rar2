@@ -136,6 +136,42 @@ jobs:
       - name: Test base-authority PR fanout classifier
         run: python tools/ci/test_reader_pr_fanout.py
 
+      - name: Enforce cancellation-responsive selective fanout
+        shell: bash
+        env:
+          CHECK_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          target="$(mktemp)"
+          trap 'rm -f "$target"' EXIT
+          git show "$CHECK_SHA:.github/workflows/reader-pr-ci.yml" > "$target"
+          python - "$target" <<'PY'
+          from pathlib import Path
+          import sys
+
+          workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+          fanout_conditions = [
+              line.strip()
+              for line in workflow.splitlines()
+              if "if:" in line
+              and "always()" in line
+              and "needs.classify.outputs." in line
+          ]
+          if not fanout_conditions:
+              raise SystemExit("reader-pr-ci cancellation guard: no selective fanout conditions found")
+          unsafe = [line for line in fanout_conditions if "!cancelled()" not in line]
+          if unsafe:
+              raise SystemExit(
+                  "reader-pr-ci cancellation guard: always() fanout must be cancellation-responsive:\n"
+                  + "\n".join(unsafe)
+              )
+          print(
+              "reader-pr-ci cancellation guard: "
+              f"{len(fanout_conditions)} selective fanout condition(s) include !cancelled()"
+          )
+          PY
+
+
       - name: Test PR-head fanout classifier in isolation
         if: ${{ github.event.pull_request.head.sha != '' }}
         shell: bash
@@ -188,25 +224,25 @@ jobs:
   reader-windows-smoke:
     name: Reader Windows shared-core smoke
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-reader-windows-smoke.yml
 
   reader-windows:
     name: Reader Windows product
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-reader-windows.yml
 
   editor-windows:
     name: Editor Windows product
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.editor_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.editor_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-desktop-windows.yml
 
   visual-oracle:
     name: Reader visual oracle
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/carlton-reader-visual-oracle.yml
     with:
       run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
@@ -215,53 +251,53 @@ jobs:
   typography-golden:
     name: Reader typography golden
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.typography_golden == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.typography_golden == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/reader-typography-golden.yml
 
   android-core:
     name: Android core portability
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.android_core == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.android_core == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/mobile-reader-android-core-portability.yml
 
   android-local-open:
     name: Android local open
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/mobile-reader-android-local-open.yml
 
   android-render:
     name: Android render
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/mobile-reader-android-render.yml
 
   web:
     name: Web real Chromium
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.web == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.web == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/web-acceptance-real-chromium.yml
 
   local-portable:
     name: Local portable Windows
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.local_portable == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.local_portable == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-local-portable-windows.yml
 
   installer:
     name: Reader installer
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.installer == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.installer == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-reader-installer.yml
 
   path-identity:
     name: Windows path identity
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.path_identity == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.path_identity == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-win-path-identity.yml
 
   update-accept:
     name: Windows update acceptance
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.update_accept == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.update_accept == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-win-update-accept.yml
