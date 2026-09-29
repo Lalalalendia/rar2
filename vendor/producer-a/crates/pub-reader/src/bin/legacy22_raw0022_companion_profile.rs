@@ -176,8 +176,22 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let contents = pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), CONTENTS_STREAM_PATH)
-        .context("read legacy Contents")?;
+    let contents = match pub_cfb::read_stream_reader(
+        Cursor::new(bytes.as_slice()),
+        CONTENTS_STREAM_PATH,
+    ) {
+        Ok(contents) => contents,
+        Err(strict_error) => pub_cfb::recover_root_regular_stream_reader(
+            Cursor::new(bytes.as_slice()),
+            CONTENTS_STREAM_PATH,
+        )
+        .with_context(|| {
+            format!(
+                "strict legacy Contents read failed ({strict_error}); bounded root Contents recovery failed"
+            )
+        })?
+        .bytes,
+    };
     let directory = parse_legacy_0x22_directory(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
         .context("parse legacy 0x22 directory")?;
 
