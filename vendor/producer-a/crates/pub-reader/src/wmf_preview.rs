@@ -1011,9 +1011,9 @@ pub fn rasterize_wmf_preview(
                         &state,
                         std::slice::from_ref(&points),
                         state.brush.color,
-                    );
+                    )?;
                 }
-                draw_polyline(&mut canvas, &state, &points, true);
+                draw_polyline(&mut canvas, &state, &points, true)?;
             }
             META_ESCAPE => validate_enhanced_metafile_escape(params)?,
             other => bail!("unsupported WMF record function 0x{other:04x}"),
