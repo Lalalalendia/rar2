@@ -951,6 +951,69 @@ pub fn probe_mature_0x2c_quill_story_failure_stage(bytes: &[u8]) -> Option<&'sta
     .map(|stage| stage.as_str())
 }
 
+
+/// Returns only the stable mature Contents Story-catalog error class.
+///
+/// Dynamic payloads such as offsets, counts and identities are deliberately
+/// discarded so corpus census can group failures without retaining source data
+/// or raw parser error text.
+pub fn probe_mature_0x2c_story_catalog_error_kind(bytes: &[u8]) -> Option<&'static str> {
+    let contents = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH).ok()?;
+    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let header = parse_0x2c_header(contents_stream.clone(), &contents).ok()?;
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header).ok()?;
+    let references = build_reference_index(&contents, &trailer.directory).ok()?;
+    let story_catalog_reference = unique_reference_by_raw_type(
+        &references,
+        CONTENTS_RAW_TYPE_STORY_CATALOG,
+        "Story catalog 0x65",
+    )
+    .ok()?;
+    let story_catalog_chunk =
+        chunk_for_reference(contents_stream, &contents, story_catalog_reference).ok()?;
+    let error = parse_confirmed_mature_story_catalog(&contents, &story_catalog_chunk).err()?;
+
+    Some(match error {
+        pub_contents::StoryCatalogReadError::Contents(error) => match error {
+            pub_contents::ContentsReadError::TooShort { .. } => "contents_too_short",
+            pub_contents::ContentsReadError::UnsupportedMagic(_) => "contents_unsupported_magic",
+            pub_contents::ContentsReadError::UnexpectedFamily { .. } => "contents_unexpected_family",
+            pub_contents::ContentsReadError::TrailerOffsetOutOfBounds { .. } => {
+                "contents_trailer_offset_out_of_bounds"
+            }
+        },
+        pub_contents::StoryCatalogReadError::Block(error) => match error {
+            pub_contents::BlockReadError::Contents(_) => "block_contents",
+            pub_contents::BlockReadError::UnsupportedType { .. } => "block_unsupported_type",
+            pub_contents::BlockReadError::InvalidDeclaredLength { .. } => {
+                "block_invalid_declared_length"
+            }
+            pub_contents::BlockReadError::LengthTooLarge { .. } => "block_length_too_large",
+        },
+        pub_contents::StoryCatalogReadError::SpanTooLarge { .. } => "span_too_large",
+        pub_contents::StoryCatalogReadError::MissingDeclaredCount => "missing_declared_count",
+        pub_contents::StoryCatalogReadError::DuplicateDeclaredCount => "duplicate_declared_count",
+        pub_contents::StoryCatalogReadError::InvalidDeclaredCount => "invalid_declared_count",
+        pub_contents::StoryCatalogReadError::MissingEntryArray => "missing_entry_array",
+        pub_contents::StoryCatalogReadError::DuplicateEntryArray => "duplicate_entry_array",
+        pub_contents::StoryCatalogReadError::InvalidEntryArray => "invalid_entry_array",
+        pub_contents::StoryCatalogReadError::UnexpectedEntryId { .. } => "unexpected_entry_id",
+        pub_contents::StoryCatalogReadError::InvalidEntryContainer { .. } => {
+            "invalid_entry_container"
+        }
+        pub_contents::StoryCatalogReadError::MissingTextId { .. } => "missing_text_id",
+        pub_contents::StoryCatalogReadError::DuplicateTextId { .. } => "duplicate_text_id",
+        pub_contents::StoryCatalogReadError::InvalidTextId { .. } => "invalid_text_id",
+        pub_contents::StoryCatalogReadError::MissingLayoutKey { .. } => "missing_layout_key",
+        pub_contents::StoryCatalogReadError::DuplicateLayoutKey { .. } => "duplicate_layout_key",
+        pub_contents::StoryCatalogReadError::InvalidLayoutKey { .. } => "invalid_layout_key",
+        pub_contents::StoryCatalogReadError::DuplicateTextIdentity { .. } => {
+            "duplicate_text_identity"
+        }
+        pub_contents::StoryCatalogReadError::EntryCountMismatch { .. } => "entry_count_mismatch",
+    })
+}
+
 /// Source-safe localization for a mature-0x2C source-graph build failure.
 ///
 /// This intentionally reports only a stable parser stage. It does not return
