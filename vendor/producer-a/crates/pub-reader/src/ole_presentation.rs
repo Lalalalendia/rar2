@@ -51,6 +51,65 @@ pub struct LegacyOleCachedPresentationScan {
     pub diagnostics: Vec<LegacyOleCachedPresentationDiagnostic>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyOleCachedPresentationSelection<'a> {
+    None,
+    Selected {
+        presentation: &'a LegacyOleCachedPresentation,
+        equivalent_candidate_count: usize,
+    },
+    Ambiguous {
+        candidate_count: usize,
+    },
+}
+
+fn equivalent_cached_presentation(
+    left: &LegacyOleCachedPresentation,
+    right: &LegacyOleCachedPresentation,
+) -> bool {
+    left.clipboard_format == right.clipboard_format
+        && left.aspect == right.aspect
+        && left.lindex == right.lindex
+        && left.advf == right.advf
+        && left.width == right.width
+        && left.height == right.height
+        && left.wmf == right.wmf
+        && left.data == right.data
+}
+
+/// Selects a cached presentation only when its visual payload is unambiguous.
+///
+/// Stream names and ordinals are storage identity, not display priority.
+/// Multiple valid candidates are admitted only when parsed presentation metadata
+/// and exact WMF bytes are equivalent. The selected reference borrows the scan
+/// and never copies the persisted payload.
+pub fn select_unambiguous_legacy_ole_cached_presentation(
+    scan: &LegacyOleCachedPresentationScan,
+) -> LegacyOleCachedPresentationSelection<'_> {
+    let Some(first) = scan
+        .presentations
+        .iter()
+        .min_by_key(|presentation| presentation.stream_ordinal)
+    else {
+        return LegacyOleCachedPresentationSelection::None;
+    };
+
+    if !scan
+        .presentations
+        .iter()
+        .all(|candidate| equivalent_cached_presentation(first, candidate))
+    {
+        return LegacyOleCachedPresentationSelection::Ambiguous {
+            candidate_count: scan.presentations.len(),
+        };
+    }
+
+    LegacyOleCachedPresentationSelection::Selected {
+        presentation: first,
+        equivalent_candidate_count: scan.presentations.len(),
+    }
+}
+
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
@@ -326,6 +385,50 @@ mod tests {
         assert_eq!(scan.presentations[0].stream_ordinal, 1);
         assert_eq!(scan.diagnostics.len(), 1);
         assert_eq!(scan.diagnostics[0].stream_name, "\u{2}OlePres002");
+    }
+
+    #[test]
+    fn selection_is_unique_or_metadata_and_wmf_equivalent_only() {
+        let valid = fixture(CF_METAFILEPICT, 4, &valid_wmf_payload());
+        let scan = scan_legacy_ole_cached_presentations(
+            cached_presentation_cfb(&[
+                ("\u{2}OlePres002", valid.clone()),
+                ("\u{2}OlePres001", valid),
+            ]),
+            73,
+        )
+        .expect("bounded scan");
+
+        match select_unambiguous_legacy_ole_cached_presentation(&scan) {
+            LegacyOleCachedPresentationSelection::Selected {
+                presentation,
+                equivalent_candidate_count,
+            } => {
+                assert_eq!(presentation.stream_ordinal, 1);
+                assert_eq!(equivalent_candidate_count, 2);
+            }
+            other => panic!("expected equivalent selection, got {other:?}"),
+        }
+
+        let mut distinct = fixture(CF_METAFILEPICT, 4, &valid_wmf_payload());
+        let width_offset = 8 + 4 + 16;
+        distinct[width_offset..width_offset + 4].copy_from_slice(&641_u32.to_le_bytes());
+        let scan = scan_legacy_ole_cached_presentations(
+            cached_presentation_cfb(&[
+                (
+                    "\u{2}OlePres001",
+                    fixture(CF_METAFILEPICT, 4, &valid_wmf_payload()),
+                ),
+                ("\u{2}OlePres002", distinct),
+            ]),
+            73,
+        )
+        .expect("bounded scan");
+
+        assert!(matches!(
+            select_unambiguous_legacy_ole_cached_presentation(&scan),
+            LegacyOleCachedPresentationSelection::Ambiguous { candidate_count: 2 }
+        ));
     }
 
     #[test]
