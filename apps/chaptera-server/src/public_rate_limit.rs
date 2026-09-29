@@ -53,10 +53,10 @@ impl PublicRatePolicy {
                 format!("{name}.window must be >0 and <=24 hours"),
             ));
         }
-        if self.burst == 0 || self.burst > 10_000 {
+        if self.burst == 0 || self.burst > self.requests_per_window {
             return Err(PublicRateLimitError::new(
                 "public_rate_policy_invalid",
-                format!("{name}.burst must be 1..=10000"),
+                format!("{name}.burst must be 1..=requests_per_window"),
             ));
         }
         self.interval_us()?;
@@ -119,10 +119,21 @@ impl PublicRateLimitConfig {
             .validate("reader_session_upload")?;
         self.reader_session_open.validate("reader_session_open")?;
         self.public_metadata.validate("public_metadata")?;
-        if self.retention.is_zero() || self.retention > Duration::from_secs(30 * 24 * 60 * 60) {
+        let longest_window = [
+            self.reader_session_create.window,
+            self.reader_session_upload.window,
+            self.reader_session_open.window,
+            self.public_metadata.window,
+        ]
+        .into_iter()
+        .max()
+        .expect("fixed public rate-limit policy set");
+        if self.retention < longest_window
+            || self.retention > Duration::from_secs(30 * 24 * 60 * 60)
+        {
             return Err(PublicRateLimitError::new(
                 "public_rate_config_invalid",
-                "retention must be >0 and <=30 days",
+                "retention must cover the longest policy window and be <=30 days",
             ));
         }
         if !(1..=10_000_000).contains(&self.max_entries) {
