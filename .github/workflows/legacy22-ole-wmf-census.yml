@@ -248,6 +248,7 @@ jobs:
               record_off = start + 18
               functions = []
               sizes = []
+              records = []
               eof_seen = False
               while record_off < declared_end:
                   if record_off + 6 > declared_end:
@@ -264,6 +265,7 @@ jobs:
                       )
                   functions.append(function)
                   sizes.append(size_words)
+                  records.append((function, data[record_off + 6:next_off]))
                   record_off = next_off
                   if function == 0x0000:
                       eof_seen = True
@@ -280,6 +282,7 @@ jobs:
                   "mt_no_parameters": mt_no_parameters,
                   "functions": functions,
                   "sizes": sizes,
+                  "records": records,
                   "eof_seen": eof_seen,
                   "declared_trailing_bytes": declared_end - record_off,
                   "payload_trailing_bytes": len(data) - declared_end,
@@ -309,6 +312,17 @@ jobs:
           unique_function_sets = Counter()
           max_record_words = 0
           max_record_function = None
+          pen_style_counts = Counter()
+          brush_style_counts = Counter()
+          polyfill_mode_counts = Counter()
+          map_mode_counts = Counter()
+          rop2_counts = Counter()
+          stretchblt_mode_counts = Counter()
+          relabs_counts = Counter()
+          escape_function_counts = Counter()
+          max_polygon_points = 0
+          max_polypolygon_polygons = 0
+          max_polypolygon_points = 0
           source_rows = []
 
           for path in paths:
@@ -371,6 +385,40 @@ jobs:
                               for fn in w["functions"]:
                                   function_counts[f"0x{fn:04X}"] += 1
                                   file_functions.add(fn)
+
+                              for fn, params in w["records"]:
+                                  if fn == 0x02FA and len(params) >= 10:
+                                      pen_style_counts[str(u16(params, 0))] += 1
+                                  elif fn == 0x02FC and len(params) >= 8:
+                                      brush_style_counts[str(u16(params, 0))] += 1
+                                  elif fn == 0x0106 and len(params) >= 2:
+                                      polyfill_mode_counts[str(u16(params, 0))] += 1
+                                  elif fn == 0x0103 and len(params) >= 2:
+                                      map_mode_counts[str(u16(params, 0))] += 1
+                                  elif fn == 0x0104 and len(params) >= 2:
+                                      rop2_counts[str(u16(params, 0))] += 1
+                                  elif fn == 0x0107 and len(params) >= 2:
+                                      stretchblt_mode_counts[str(u16(params, 0))] += 1
+                                  elif fn == 0x0105 and len(params) >= 2:
+                                      relabs_counts[str(u16(params, 0))] += 1
+                                  elif fn == 0x0626 and len(params) >= 2:
+                                      escape_function_counts[f"0x{u16(params, 0):04X}"] += 1
+                                  elif fn == 0x0324 and len(params) >= 2:
+                                      max_polygon_points = max(max_polygon_points, u16(params, 0))
+                                  elif fn == 0x0538 and len(params) >= 2:
+                                      polygon_count = u16(params, 0)
+                                      max_polypolygon_polygons = max(
+                                          max_polypolygon_polygons, polygon_count
+                                      )
+                                      counts_end = 2 + polygon_count * 2
+                                      if counts_end <= len(params):
+                                          total_points = sum(
+                                              u16(params, 2 + index * 2)
+                                              for index in range(polygon_count)
+                                          )
+                                          max_polypolygon_points = max(
+                                              max_polypolygon_points, total_points
+                                          )
                               if w["sizes"]:
                                   local_max = max(w["sizes"])
                                   if local_max > max_record_words:
@@ -439,6 +487,17 @@ jobs:
               "wmf_max_record_function": (
                   f"0x{max_record_function:04X}" if max_record_function is not None else None
               ),
+              "wmf_pen_style_counts": dict(pen_style_counts),
+              "wmf_brush_style_counts": dict(brush_style_counts),
+              "wmf_polyfill_mode_counts": dict(polyfill_mode_counts),
+              "wmf_map_mode_counts": dict(map_mode_counts),
+              "wmf_rop2_counts": dict(rop2_counts),
+              "wmf_stretchblt_mode_counts": dict(stretchblt_mode_counts),
+              "wmf_relabs_counts": dict(relabs_counts),
+              "wmf_escape_function_counts": dict(escape_function_counts),
+              "wmf_max_polygon_points": max_polygon_points,
+              "wmf_max_polypolygon_polygons": max_polypolygon_polygons,
+              "wmf_max_polypolygon_points": max_polypolygon_points,
               "source_rows": source_rows,
           }
 
