@@ -260,6 +260,10 @@ pub enum QuillStoryFailureEvidence {
         strs_early_u32_syid_match_offsets: Vec<u8>,
         strs_early_u16_sum_text_match_offsets: Vec<u8>,
         strs_early_u16_syid_match_offsets: Vec<u8>,
+        syid_chunk_all_ff: Option<bool>,
+        syid_ids_region_all_ff: Option<bool>,
+        strs_chunk_all_ff: Option<bool>,
+        strs_records_region_from_22_all_ff: Option<bool>,
         strs_count_matches: Option<bool>,
         text_descriptor_length: u32,
     },
@@ -274,6 +278,20 @@ pub enum QuillStoryFailureEvidence {
         syid_declared_count: u32,
         story_count_matches: bool,
     },
+}
+
+fn descriptor_region_all_ff(
+    bytes: &[u8],
+    descriptor: &QuillChunkDescriptor,
+    relative_start: usize,
+) -> Option<bool> {
+    let (start, len) = chunk_range(bytes, descriptor).ok()?;
+    if relative_start > len {
+        return None;
+    }
+    let region_start = start.checked_add(relative_start)?;
+    let end = start.checked_add(len)?;
+    Some(bytes.get(region_start..end)?.iter().all(|byte| *byte == 0xff))
 }
 
 fn descriptor_u32_at(
@@ -503,6 +521,11 @@ fn probe_syid_id_array_evidence(
     let strs_header_word2 = descriptor_u32_at(bytes, strs_descriptor, 8);
     let early_strs =
         probe_early_strs_records(bytes, syid_descriptor, strs_descriptor, text_descriptor);
+    let syid_chunk_all_ff = descriptor_region_all_ff(bytes, syid_descriptor, 0);
+    let syid_ids_region_all_ff = descriptor_region_all_ff(bytes, syid_descriptor, 8);
+    let strs_chunk_all_ff = descriptor_region_all_ff(bytes, strs_descriptor, 0);
+    let strs_records_region_from_22_all_ff =
+        descriptor_region_all_ff(bytes, strs_descriptor, 22);
 
     Some(QuillStoryFailureEvidence::SyidIdArray {
         declared_count: count,
@@ -522,6 +545,10 @@ fn probe_syid_id_array_evidence(
         strs_early_u32_syid_match_offsets: early_strs.u32_syid_match_offsets,
         strs_early_u16_sum_text_match_offsets: early_strs.u16_sum_text_match_offsets,
         strs_early_u16_syid_match_offsets: early_strs.u16_syid_match_offsets,
+        syid_chunk_all_ff,
+        syid_ids_region_all_ff,
+        strs_chunk_all_ff,
+        strs_records_region_from_22_all_ff,
         strs_count_matches: strs_declared_count.map(|value| value == count),
         text_descriptor_length: text_descriptor.data_length.value,
     })
