@@ -22,6 +22,8 @@ SCOPES = (
     "local_portable",
     "installer",
     "path_identity",
+    "update_accept",
+    "lifecycle_soak",
 )
 
 
@@ -89,9 +91,7 @@ READER_WINDOWS = READER_SHARED + (
 EDITOR_WINDOWS = (
     "Cargo.toml",
     "Cargo.lock",
-    "apps/chaptera-desktop/**",
     "crates/chaptera-scene-instance/**",
-    "crates/chaptera-viewer-render-plan/**",
     "packages/product/editor-live-trial/**",
     "packages/protocol/editor-agent-control/**",
     "packages/product/desktop-suite/**",
@@ -129,8 +129,6 @@ TYPOGRAPHY_GOLDEN = (
 )
 
 CORPUS_TRUTH = (
-    "apps/chaptera-desktop/**",
-    "vendor/producer-a/crates/pub-viewer/**",
     "vendor/producer-a/crates/pub-reader/**",
     "tools/reader_corpus_manifest_v1.json",
     "tools/run_reader_corpus_matrix_v1.py",
@@ -141,7 +139,6 @@ ANDROID = (
     "apps/chaptera-mobile-android/**",
     "crates/chaptera-mobile-reader-core/**",
     "crates/chaptera-mobile-reader-jni/**",
-    "crates/chaptera-viewer-render-plan/**",
     ".github/workflows/mobile-reader-android-local-open.yml",
     ".github/workflows/mobile-reader-android-render.yml",
 )
@@ -181,10 +178,6 @@ LOCAL_PORTABLE = (
 )
 
 INSTALLER = (
-    "apps/chaptera-desktop/Cargo.toml",
-    "apps/chaptera-desktop/src/diagnostic_sweep.rs",
-    "apps/chaptera-desktop/src/reader_first_run.rs",
-    "apps/chaptera-desktop/src/main.rs",
     "packages/product/reader-portable/**",
     "installer/windows/chaptera-reader.iss",
     ".github/workflows/chaptera-reader-installer.yml",
@@ -197,6 +190,34 @@ PATH_IDENTITY = (
     "apps/chaptera-rescue/**",
     ".github/workflows/chaptera-win-path-identity.yml",
 )
+
+UPDATE_ACCEPT = (
+    "crates/chaptera-update-engine/**",
+    "crates/chaptera-update-orchestrator/**",
+    "crates/chaptera-update-trust/**",
+    "crates/chaptera-update-handoff/**",
+    "apps/chaptera-desktop/src/main.rs",
+    "installer/windows/chaptera-reader.iss",
+    ".github/workflows/chaptera-win-update-accept.yml",
+    ".github/workstream-scopes/chaptera-win-update-accept-01.md",
+)
+
+LIFECYCLE_SOAK = (
+    "tools/chaptera-win-lifecycle-soak.ps1",
+    "crates/chaptera-update-engine/**",
+    "crates/chaptera-update-orchestrator/**",
+    "crates/chaptera-update-trust/**",
+    "installer/windows/chaptera-reader.iss",
+    ".github/workflows/chaptera-win-lifecycle-soak.yml",
+    ".github/workstream-scopes/chaptera-win-lifecycle-soak-01.md",
+)
+
+SHARED_DESKTOP_FILES = {
+    "apps/chaptera-desktop/src/main.rs",
+    "apps/chaptera-desktop/src/render_backend.rs",
+    "apps/chaptera-desktop/src/diagnostic_sweep.rs",
+    "apps/chaptera-desktop/src/reader_first_run.rs",
+}
 
 
 def classify(paths: list[str]) -> dict[str, bool]:
@@ -212,11 +233,22 @@ def classify(paths: list[str]) -> dict[str, bool]:
         "local_portable": LOCAL_PORTABLE,
         "installer": INSTALLER,
         "path_identity": PATH_IDENTITY,
+        "update_accept": UPDATE_ACCEPT,
+        "lifecycle_soak": LIFECYCLE_SOAK,
     }
-    return {
+    result = {
         scope: any(matches(path, patterns) for path in paths)
         for scope, patterns in mapping.items()
     }
+    # Full Editor Windows acceptance is product-surface validation, not a tax on
+    # shared Reader/render plumbing. Shared desktop seams stay covered by Tier A.
+    if any(
+        path.startswith("apps/chaptera-desktop/")
+        and path not in SHARED_DESKTOP_FILES
+        for path in paths
+    ):
+        result["editor_windows"] = True
+    return result
 
 
 def main() -> int:
