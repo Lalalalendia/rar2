@@ -108,29 +108,29 @@ impl DesktopSourceFontRegistry {
             return false;
         }
 
-        let families = [fontdb::Family::Name(family)];
-        let query = fontdb::Query {
-            families: &families,
-            weight: fontdb::Weight::NORMAL,
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-        let Some(id) = self.database.query(&query) else {
+        let matching_faces = self
+            .database
+            .faces()
+            .filter(|info| {
+                info.weight == fontdb::Weight::NORMAL
+                    && info.stretch == fontdb::Stretch::Normal
+                    && info.style == fontdb::Style::Normal
+                    && info
+                        .families
+                        .iter()
+                        .any(|(name, _)| normalize_family(name) == key)
+            })
+            .map(|info| info.id)
+            .collect::<Vec<_>>();
+        let [id] = matching_faces.as_slice() else {
             self.unavailable.insert(key);
             return false;
         };
+        let id = *id;
         let Some(info) = self.database.face(id) else {
             self.unavailable.insert(key);
             return false;
         };
-        if !info
-            .families
-            .iter()
-            .any(|(name, _)| normalize_family(name) == key)
-        {
-            self.unavailable.insert(key);
-            return false;
-        }
         let resolved_family = info
             .families
             .first()
