@@ -121,10 +121,11 @@ pub use reference::{
     parse_confirmed_chunk_reference,
 };
 pub use story_catalog::{
-    CONTENTS_RAW_TYPE_STORY_CATALOG, MatureStoryCatalog, MatureStoryCatalogEntry,
-    STORY_CATALOG_DECLARED_COUNT_ID, STORY_CATALOG_ENTRY_ARRAY_ID,
-    STORY_CATALOG_ENTRY_LAYOUT_KEY_ID, STORY_CATALOG_ENTRY_TEXT_ID, StoryCatalogReadError,
-    parse_confirmed_mature_story_catalog,
+    CONTENTS_RAW_TYPE_STORY_CATALOG, MatureEmptyStoryCatalogVariant, MatureStoryCatalog,
+    MatureStoryCatalogEntry, STORY_CATALOG_DECLARED_COUNT_ID, STORY_CATALOG_ENTRY_ARRAY_ID,
+    STORY_CATALOG_ENTRY_LAYOUT_KEY_ID, STORY_CATALOG_ENTRY_TEXT_ID,
+    StoryCatalogCardinalityAuthority, StoryCatalogReadError,
+    parse_bounded_empty_mature_story_catalog_variant, parse_confirmed_mature_story_catalog,
 };
 pub use trailer::{
     Contents0x2cTrailerRoot, TRAILER_DIRECTORY_ID, TRAILER_MAX_ORDINAL_ID, TRAILER_SLOT_COUNT_ID,
