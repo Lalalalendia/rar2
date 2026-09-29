@@ -8817,6 +8817,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut candidate_counts = serde_json::Map::new();
+        let mut source_resource_fallback_reasons = BTreeMap::<String, u64>::new();
         candidate_counts.insert("text_fragments".to_owned(), 0_u64.into());
         candidate_counts.insert("source_resource_fragments".to_owned(), 0_u64.into());
         candidate_counts.insert("source_shared_resolved".to_owned(), 0_u64.into());
@@ -8847,6 +8848,14 @@ mod tests {
                 let Some(source_layout) = source_text.layout.as_ref() else {
                     continue;
                 };
+                if registry.resource_for_fragment(source_text).is_some()
+                    && let chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback { reason } =
+                        &source_layout.disposition
+                {
+                    *source_resource_fallback_reasons
+                        .entry(reason.code().to_owned())
+                        .or_insert(0) += 1;
+                }
                 let chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved {
                     font_resource_id,
                     font_fingerprint_sha256,
@@ -8971,9 +8980,11 @@ mod tests {
 
         let receipt = selected.unwrap_or_else(|| {
             panic!(
-                "SampleNewsletter has no joint source-font/fallback SharedResolved witness; resolved_families={} candidate_counts={}",
+                "SampleNewsletter has no joint source-font/fallback SharedResolved witness; resolved_families={} candidate_counts={} source_resource_fallback_reasons={}",
                 serde_json::to_string(&resolved_families).expect("serialize resolved families"),
-                serde_json::Value::Object(candidate_counts)
+                serde_json::Value::Object(candidate_counts),
+                serde_json::to_string(&source_resource_fallback_reasons)
+                    .expect("serialize source-resource fallback reasons")
             )
         });
         assert_eq!(
