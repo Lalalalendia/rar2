@@ -18,6 +18,7 @@ on:
       - "crates/chaptera-update-engine/**"
       - "crates/chaptera-update-handoff/**"
       - "crates/chaptera-update-orchestrator/**"
+      - "crates/chaptera-update-trust/**"
       - "crates/chaptera-viewer-render-plan/**"
       - "crates/pub-presentation-profile/**"
       - "vendor/producer-a/**"
@@ -61,6 +62,7 @@ on:
       - "tools/run_cloud_config_receipt.py"
       - "tools/package_local_portable.py"
       - "tools/scene_v1.py"
+      - "tools/chaptera-win-lifecycle-soak.ps1"
       - "tools/validate_export_preview.py"
       - ".github/workflows/reader-pr-ci.yml"
       - ".github/workflows/reader-consumer-preflight.yml"
@@ -75,6 +77,10 @@ on:
       - ".github/workflows/web-acceptance-real-chromium.yml"
       - ".github/workflows/chaptera-reader-installer.yml"
       - ".github/workflows/chaptera-win-path-identity.yml"
+      - ".github/workflows/chaptera-win-update-accept.yml"
+      - ".github/workflows/chaptera-win-lifecycle-soak.yml"
+      - ".github/workstream-scopes/chaptera-win-update-accept-01.md"
+      - ".github/workstream-scopes/chaptera-win-lifecycle-soak-01.md"
   workflow_dispatch:
 
 concurrency:
@@ -100,6 +106,8 @@ jobs:
       local_portable: ${{ steps.scope.outputs.local_portable }}
       installer: ${{ steps.scope.outputs.installer }}
       path_identity: ${{ steps.scope.outputs.path_identity }}
+      update_accept: ${{ steps.scope.outputs.update_accept }}
+      lifecycle_soak: ${{ steps.scope.outputs.lifecycle_soak }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -204,3 +212,17 @@ jobs:
     needs: [classify, tier-a]
     if: ${{ always() && needs.classify.outputs.path_identity == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-win-path-identity.yml
+
+  update-accept:
+    name: Windows update acceptance
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.update_accept == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-win-update-accept.yml
+
+  lifecycle-soak:
+    name: Windows lifecycle soak
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.lifecycle_soak == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-win-lifecycle-soak.yml
+    with:
+      cycles: "3"
