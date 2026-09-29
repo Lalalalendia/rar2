@@ -66,8 +66,8 @@ jobs:
           set -euo pipefail
           mkdir -p out/xver-pair
           BIN="${CARGO_TARGET_DIR}/release/legacy22_raw0022_companion_profile"
-          "$BIN" apache-poi/test-data/publisher/Sample98.pub out/xver-pair/Sample98.raw0022.json
-          "$BIN" apache-poi/test-data/publisher/Sample2000.pub out/xver-pair/Sample2000.raw0022.json
+          "$BIN" apache-poi/test-data/publisher/Sample98.pub out/xver-pair/Sample98.raw0022.json --raw-legacy22
+          "$BIN" apache-poi/test-data/publisher/Sample2000.pub out/xver-pair/Sample2000.raw0022.json --raw-legacy22
 
       - name: Join legacy OleData candidates to mature CFB topology
         run: |
