@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/**"
       - "tools/ci/check_workflow_yaml_syntax.rb"
+      - "tools/ci/test_reader_residual_fanout.py"
   workflow_dispatch:
 
 concurrency:
@@ -21,3 +22,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Parse every workflow YAML
         run: ruby tools/ci/check_workflow_yaml_syntax.rb
+      - name: Guard narrowed Reader workflow fanout
+        run: python tools/ci/test_reader_residual_fanout.py
