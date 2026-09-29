@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   assertReaderSceneSourceNeutral,
-  imagePaintGeometry
+  imagePaintGeometry,
+  tableCellPaintGeometry
 } from "./render-v1.mjs";
 
 test("image crop maps the normalized source window onto the destination frame", () => {
@@ -51,5 +52,21 @@ test("renderer input rejects parser/private source carriers recursively", () => 
   assert.throws(
     () => assertReaderSceneSourceNeutral({ nodes: [{ parser_record: { stream_path: "Contents" } }] }),
     /forbidden source field/
+  );
+});
+
+
+test("table cell geometry preserves authoritative page-space bounds", () => {
+  assert.deepEqual(
+    tableCellPaintGeometry({
+      cell_id: "cell-1",
+      bounds: { x: 12700, y: 25400, width: 38100, height: 50800 }
+    }),
+    { x: 12700, y: 25400, width: 38100, height: 50800 }
+  );
+  assert.equal(tableCellPaintGeometry({ bounds: null }), null);
+  assert.equal(
+    tableCellPaintGeometry({ bounds: { x: 0, y: 0, width: 0, height: 100 } }),
+    null
   );
 });
