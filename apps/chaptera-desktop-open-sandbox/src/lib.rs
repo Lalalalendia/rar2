@@ -69,7 +69,6 @@ mod platform {
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::FromRawHandle;
-    use std::path::{Component, Prefix};
     use std::ptr::{null, null_mut};
     use std::thread;
     use windows_sys::Win32::Foundation::{
