@@ -252,10 +252,7 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
     let validation = validate_wmf_metafile(payload);
     let (wmf_valid, validation_error_class) = match &validation {
         Ok(_) => (true, None),
-        Err(error) => (
-            false,
-            Some(wmf_validation_error_class(&error.to_string())),
-        ),
+        Err(error) => (false, Some(wmf_validation_error_class(&error.to_string()))),
     };
     json!({
         "length_present": true,
