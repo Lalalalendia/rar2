@@ -16,6 +16,7 @@ pub struct OlePresentation<'a> {
     pub width: u32,
     pub height: u32,
     pub data: &'a [u8],
+    pub reserved2_present: bool,
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
@@ -76,12 +77,15 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
     let data_end = data_offset
         .checked_add(data_size)
         .ok_or_else(|| anyhow::anyhow!("OLE presentation data range overflow"))?;
-    let reserved2_end = data_end
-        .checked_add(METAFILE_RESERVED2_LEN)
-        .ok_or_else(|| anyhow::anyhow!("OLE presentation trailer overflow"))?;
-    if reserved2_end > bytes.len() {
-        bail!("truncated CF_METAFILEPICT OLE presentation");
-    }
+    let trailing = bytes
+        .len()
+        .checked_sub(data_end)
+        .ok_or_else(|| anyhow::anyhow!("OLE presentation data exceeds stream"))?;
+    let reserved2_present = match trailing {
+        0 => false,
+        METAFILE_RESERVED2_LEN => true,
+        other => bail!("unsupported CF_METAFILEPICT trailing byte count {other}"),
+    };
 
     let data = &bytes[data_offset..data_end];
     if data.len() < 18 {
@@ -96,6 +100,7 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
         width,
         height,
         data,
+        reserved2_present,
     })
 }
 
@@ -135,6 +140,7 @@ mod tests {
         assert_eq!(parsed.width, 640);
         assert_eq!(parsed.height, 480);
         assert_eq!(parsed.data, payload);
+        assert!(parsed.reserved2_present);
     }
 
     #[test]
@@ -145,6 +151,12 @@ mod tests {
         let mut bytes = fixture(CF_METAFILEPICT, 4, &payload);
         bytes.truncate(bytes.len() - 1);
         assert!(parse_cf_metafilepict_ole_presentation(&bytes).is_err());
+
+        let mut without_reserved2 = fixture(CF_METAFILEPICT, 4, &payload);
+        without_reserved2.truncate(without_reserved2.len() - METAFILE_RESERVED2_LEN);
+        let parsed =
+            parse_cf_metafilepict_ole_presentation(&without_reserved2).expect("legacy omission");
+        assert!(!parsed.reserved2_present);
     }
 
     #[test]
