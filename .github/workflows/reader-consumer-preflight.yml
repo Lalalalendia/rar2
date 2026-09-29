@@ -36,9 +36,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/reader-tier-a
-          key: ${{ runner.os }}-rust-1.94.1-reader-tier-a-${{ hashFiles('Cargo.lock', 'vendor/producer-a/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-1.94.1-reader-tier-a-${{ hashFiles('Cargo.lock', 'vendor/producer-a/Cargo.lock') }}-${{ github.event.pull_request.head.sha || github.sha }}
           restore-keys: |
-            ${{ runner.os }}-rust-1.94.1-reader-tier-a-
+            ${{ runner.os }}-rust-1.94.1-reader-tier-a-${{ hashFiles('Cargo.lock', 'vendor/producer-a/Cargo.lock') }}-
 
       - name: Report Reader Tier A Cargo cache
         run: echo "cache-hit=${{ steps.tier-a-cargo-cache.outputs.cache-hit }}"
