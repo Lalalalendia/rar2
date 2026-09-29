@@ -67,6 +67,7 @@ fn frame(
             image_slot: None,
             explicit_image_crop: None,
             explicit_paint: PubExplicitShapePaintSource::default(),
+            effective_paint: None,
             story_frame: Some(PubResolvedStoryFrame {
                 story_id: Some(story_id()),
                 ordinal,
