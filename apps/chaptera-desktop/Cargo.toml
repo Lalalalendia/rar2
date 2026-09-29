@@ -28,7 +28,6 @@ chaptera-text-interaction-adapter = { path = "../../crates/chaptera-text-interac
 chaptera-text-input-adapter = { path = "../../crates/chaptera-text-input-adapter" }
 chaptera-desktop-shaped-flow-runtime = { path = "../../crates/chaptera-desktop-shaped-flow-runtime" }
 chaptera-desktop-open-protocol = { path = "../../crates/chaptera-desktop-open-protocol" }
-chaptera-desktop-open-sandbox = { path = "../chaptera-desktop-open-sandbox" }
 chaptera-untrusted-pub-scan = { path = "../../crates/chaptera-untrusted-pub-scan" }
 eframe = { version = "=0.31.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "persistence"] }
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
