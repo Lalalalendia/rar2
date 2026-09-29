@@ -5,8 +5,8 @@ name: Reader 1050 failure stage census
 # workflow only when the census question is ready to be measured.
 on:
   workflow_dispatch:
-  # One-shot hosted measurement for the current discriminator head.
-  # Remove this push arm after the exact-1050 receipt is captured.
+  # Final one-shot hosted measurement for STRS framing + field0x27 demand.
+  # Remove this push arm after this exact-1050 receipt is captured.
   push:
     branches:
       - reader/failure-stage-census-1050
