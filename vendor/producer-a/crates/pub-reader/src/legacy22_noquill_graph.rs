@@ -11,7 +11,7 @@ use pub_contents::{
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
-    Affine2D, AuthorityClass, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
+    Affine2D, AuthorityClass, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
     Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceRole,
     Story, StoryId,
 };
@@ -22,6 +22,8 @@ const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
 const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0000;
 const LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES: [u16; 4] = [0x0004, 0x0005, 0x0006, 0x0007];
+const LEGACY_GROUP_TYPE: u16 = 0x000f;
+const LEGACY_GROUP_MAX_DEPTH: usize = 100;
 const LEGACY_LIST_HEADER_SIZE: usize = 10;
 const LEGACY_LIST_U16_RECORD_SIZE: u16 = 2;
 const LEGACY_DOCUMENT_WIDTH_OFFSET: usize = 0x14;
@@ -255,108 +257,24 @@ pub fn build_legacy_0x22_noquill_from_contents(
             .get(page_id)
             .expect("verified page must be in SourceGraph")
             .clone();
+        let mut group_stack = BTreeSet::new();
 
         for (child_object_id, _) in child_list.ids {
-            let Some(child_entry) = directory.entry_by_object_id(child_object_id) else {
-                diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
-                    object_id: u32::from(child_object_id),
-                    raw_type: None,
-                    reason: "page_child_missing_from_directory".into(),
-                });
-                continue;
-            };
-            if child_entry.parent_id != *page_object_id {
-                diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
-                    object_id: u32::from(child_object_id),
-                    raw_type: Some(child_entry.chunk_type),
-                    reason: "page_child_parent_mismatch".into(),
-                });
-                continue;
-            }
-            let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
-            if !is_text_shape && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type) {
-                diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
-                    object_id: u32::from(child_object_id),
-                    raw_type: Some(child_entry.chunk_type),
-                    reason: "legacy_noquill_object_type_not_admitted_v1".into(),
-                });
-                continue;
-            }
-
-            let chunk = chunk_bytes(contents, child_entry)?;
-            let Some(bounds) = legacy_shape_bounds(&page, chunk) else {
-                diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
-                    object_id: u32::from(child_object_id),
-                    raw_type: Some(child_entry.chunk_type),
-                    reason: "invalid_or_incomplete_geometry".into(),
-                });
-                continue;
-            };
-
-            let node_id = derive_legacy_node_id(&source_hash, child_object_id)?;
-            let story_id = if is_text_shape {
-                story_by_owner.get(&child_object_id).copied()
-            } else {
-                None
-            };
-            let source_refs = vec![
-                source_ref(
-                    &graph.source,
-                    &child_entry.entry_source,
-                    Some(format!("contents/0x22/object/{child_object_id}")),
-                    Some("directory_entry".into()),
-                    SourceRole::Relation,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ),
-                source_ref(
-                    &graph.source,
-                    &RawSpan {
-                        stream: contents_stream.clone(),
-                        offset: child_entry.chunk_source.offset + LEGACY_SHAPE_XS_OFFSET as u64,
-                        len: 16,
-                    },
-                    Some(format!("contents/0x22/object/{child_object_id}")),
-                    Some("legacy_center_origin_geometry".into()),
-                    SourceRole::Projection,
-                    AuthorityClass::Authoritative,
-                    ReadConfidence::Exact,
-                ),
-            ];
-
-            graph.nodes.insert(
-                node_id,
-                Node {
-                    kind: NodeKind::Shape,
-                    header: NodeHeader {
-                        id: node_id,
-                        parent_id: page_id.into_canonical(),
-                        bounds,
-                        transform: Affine2D::identity(),
-                        source_refs,
-                        extensions: Vec::new(),
-                    },
-                    payload: PubNodePayload {
-                        contents_seq_num: u32::from(child_object_id),
-                        officeart_shape_type: None,
-                        officeart_spid: None,
-                        image_slot: None,
-                        explicit_image_crop: None,
-                        explicit_paint: PubExplicitShapePaintSource::default(),
-                        story_frame: story_id.map(|story_id| PubStoryFrameSource {
-                            text_id: u32::from(child_object_id),
-                            story_id: Some(story_id),
-                            explicit_ordinal: None,
-                            previous_seq_num: None,
-                            previous_frame: None,
-                            next_seq_num: None,
-                            next_frame: None,
-                        }),
-                        table_story: None,
-                        table: None,
-                    },
-                },
-            );
+            materialize_legacy_noquill_child(
+                &mut graph,
+                &source_hash,
+                contents,
+                &contents_stream,
+                &directory,
+                &page,
+                *page_object_id,
+                page_id.into_canonical(),
+                child_object_id,
+                &story_by_owner,
+                &mut diagnostics,
+                &mut group_stack,
+                0,
+            )?;
         }
     }
 
@@ -372,6 +290,173 @@ pub fn build_legacy_0x22_noquill_from_contents(
         diagnostics,
         typography_runs: Vec::new(),
     })
+}
+
+fn materialize_legacy_noquill_child(
+    graph: &mut PubSourceGraph,
+    source_hash: &Sha256Digest,
+    contents: &[u8],
+    contents_stream: &StreamPath,
+    directory: &Legacy0x22Directory,
+    page: &Page,
+    parent_object_id: u16,
+    parent_id: CanonicalId,
+    child_object_id: u16,
+    story_by_owner: &BTreeMap<u16, StoryId>,
+    diagnostics: &mut Vec<PubBridgeDiagnostic>,
+    group_stack: &mut BTreeSet<u16>,
+    group_depth: usize,
+) -> Result<()> {
+    let Some(child_entry) = directory.entry_by_object_id(child_object_id) else {
+        diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+            object_id: u32::from(child_object_id),
+            raw_type: None,
+            reason: "page_child_missing_from_directory".into(),
+        });
+        return Ok(());
+    };
+    if child_entry.parent_id != parent_object_id {
+        diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+            object_id: u32::from(child_object_id),
+            raw_type: Some(child_entry.chunk_type),
+            reason: "page_child_parent_mismatch".into(),
+        });
+        return Ok(());
+    }
+
+    let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
+    let is_group = child_entry.chunk_type == LEGACY_GROUP_TYPE;
+    if !is_text_shape
+        && !is_group
+        && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type)
+    {
+        diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+            object_id: u32::from(child_object_id),
+            raw_type: Some(child_entry.chunk_type),
+            reason: "legacy_noquill_object_type_not_admitted_v1".into(),
+        });
+        return Ok(());
+    }
+
+    if is_group {
+        if group_depth >= LEGACY_GROUP_MAX_DEPTH || !group_stack.insert(child_object_id) {
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(child_object_id),
+                raw_type: Some(child_entry.chunk_type),
+                reason: "legacy_group_cycle_or_depth_limit".into(),
+            });
+            return Ok(());
+        }
+    }
+
+    let chunk = chunk_bytes(contents, child_entry)?;
+    let Some(bounds) = legacy_shape_bounds(page, chunk) else {
+        diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+            object_id: u32::from(child_object_id),
+            raw_type: Some(child_entry.chunk_type),
+            reason: "invalid_or_incomplete_geometry".into(),
+        });
+        if is_group {
+            group_stack.remove(&child_object_id);
+        }
+        return Ok(());
+    };
+
+    let node_id = derive_legacy_node_id(source_hash, child_object_id)?;
+    let story_id = if is_text_shape {
+        story_by_owner.get(&child_object_id).copied()
+    } else {
+        None
+    };
+    let source_refs = vec![
+        source_ref(
+            &graph.source,
+            &child_entry.entry_source,
+            Some(format!("contents/0x22/object/{child_object_id}")),
+            Some("directory_entry".into()),
+            SourceRole::Relation,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ),
+        source_ref(
+            &graph.source,
+            &RawSpan {
+                stream: contents_stream.clone(),
+                offset: child_entry.chunk_source.offset + LEGACY_SHAPE_XS_OFFSET as u64,
+                len: 16,
+            },
+            Some(format!("contents/0x22/object/{child_object_id}")),
+            Some("legacy_center_origin_geometry".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ),
+    ];
+
+    graph.nodes.insert(
+        node_id,
+        Node {
+            kind: if is_group {
+                NodeKind::Group
+            } else {
+                NodeKind::Shape
+            },
+            header: NodeHeader {
+                id: node_id,
+                parent_id,
+                bounds,
+                transform: Affine2D::identity(),
+                source_refs,
+                extensions: Vec::new(),
+            },
+            payload: PubNodePayload {
+                contents_seq_num: u32::from(child_object_id),
+                officeart_shape_type: None,
+                officeart_spid: None,
+                image_slot: None,
+                explicit_image_crop: None,
+                explicit_paint: PubExplicitShapePaintSource::default(),
+                story_frame: story_id.map(|story_id| PubStoryFrameSource {
+                    text_id: u32::from(child_object_id),
+                    story_id: Some(story_id),
+                    explicit_ordinal: None,
+                    previous_seq_num: None,
+                    previous_frame: None,
+                    next_seq_num: None,
+                    next_frame: None,
+                }),
+                table_story: None,
+                table: None,
+            },
+        },
+    );
+
+    if is_group {
+        let child_ids = directory
+            .entries_by_parent_id(child_object_id)
+            .map(|entry| entry.object_id)
+            .collect::<Vec<_>>();
+        for nested_object_id in child_ids {
+            materialize_legacy_noquill_child(
+                graph,
+                source_hash,
+                contents,
+                contents_stream,
+                directory,
+                page,
+                child_object_id,
+                node_id.into_canonical(),
+                nested_object_id,
+                story_by_owner,
+                diagnostics,
+                group_stack,
+                group_depth + 1,
+            )?;
+        }
+        group_stack.remove(&child_object_id);
+    }
+
+    Ok(())
 }
 
 fn materialize_unowned_text_story(
@@ -697,11 +782,19 @@ mod tests {
             0x0002, // image
             0x0008, // Quill-era text shape
             0x000a, // table
-            0x000f, // group
+            LEGACY_GROUP_TYPE, // group is admitted separately from simple geometry
             LEGACY_PAGE_TYPE,
             LEGACY_DOCUMENT_TYPE,
         ] {
             assert!(!is_legacy_simple_geometry_shape_type(chunk_type));
         }
+    }
+
+
+    #[test]
+    fn group_admission_is_separate_and_bounded() {
+        assert_eq!(LEGACY_GROUP_TYPE, 0x000f);
+        assert!(!is_legacy_simple_geometry_shape_type(LEGACY_GROUP_TYPE));
+        assert_eq!(LEGACY_GROUP_MAX_DEPTH, 100);
     }
 }
