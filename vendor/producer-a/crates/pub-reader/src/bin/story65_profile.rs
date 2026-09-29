@@ -1,14 +1,13 @@
 use anyhow::{Context, Result};
 use pub_cfb::read_stream_path;
 use pub_contents::{
-    detect_family, parse_0x2c_header, parse_confirmed_0x2c_chunk,
-    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
-    parse_confirmed_mature_story_catalog, Contents0x2cChunkReference, ContentsFamily,
-    RawContentsBlock, RawContentsBlockBody, StoryCatalogReadError,
-    CONTENTS_RAW_TYPE_STORY_CATALOG,
+    CONTENTS_RAW_TYPE_STORY_CATALOG, Contents0x2cChunkReference, ContentsFamily, RawContentsBlock,
+    RawContentsBlockBody, StoryCatalogReadError, detect_family, parse_0x2c_header,
+    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    parse_confirmed_mature_story_catalog,
 };
 use pub_core::StreamPath;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{env, fs, path::PathBuf};
 
@@ -168,12 +167,12 @@ fn main() -> Result<()> {
 
     let mut catalogs = Vec::new();
     for seq_num in 0..trailer.directory.slots.len() {
-        let reference = match parse_confirmed_chunk_reference(&contents, &trailer.directory, seq_num)
-        {
-            Ok(Some(reference)) => reference,
-            Ok(None) => continue,
-            Err(_) => continue,
-        };
+        let reference =
+            match parse_confirmed_chunk_reference(&contents, &trailer.directory, seq_num) {
+                Ok(Some(reference)) => reference,
+                Ok(None) => continue,
+                Err(_) => continue,
+            };
         if one_raw_type(&reference) != Some(CONTENTS_RAW_TYPE_STORY_CATALOG) {
             continue;
         }
