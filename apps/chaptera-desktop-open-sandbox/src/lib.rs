@@ -99,7 +99,7 @@ mod platform {
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION,
         ProcessChildProcessPolicy, ProcessExtensionPointDisablePolicy,
         ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, STARTF_USESTDHANDLES,
-        STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+        STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
     };
     use windows_sys::Win32::System::WindowsProgramming::{
         PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
