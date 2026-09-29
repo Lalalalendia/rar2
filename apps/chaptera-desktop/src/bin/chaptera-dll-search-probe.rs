@@ -20,7 +20,7 @@ mod windows_probe {
     }
 
     pub fn run() -> Result<(), String> {
-        windows_dll_search::install_process_policy()
+        crate::windows_dll_search::install_process_policy()
             .map_err(|error| format!("install DLL search policy: {error}"))?;
 
         let mut args = std::env::args_os().skip(1);
