@@ -107,7 +107,7 @@ mod platform {
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+        CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
         DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
         GetProcessMitigationPolicy, InitializeProcThreadAttributeList, OpenProcessToken,
         PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
@@ -788,7 +788,7 @@ mod platform {
 
         let mut process_info: PROCESS_INFORMATION = unsafe { zeroed() };
         let creation_flags =
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS;
         let ok = unsafe {
             CreateProcessW(
                 executable_w.as_ptr(),
