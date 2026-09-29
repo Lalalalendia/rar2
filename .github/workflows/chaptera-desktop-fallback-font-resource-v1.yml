@@ -8,7 +8,9 @@ on:
     paths:
       - "Cargo.toml"
       - "crates/chaptera-desktop-fallback-font-resource/**"
-      - "apps/chaptera-desktop/**"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/fallback_font.rs"
       - "packages/product/editor-live-trial/**"
       - "tools/package_editor_live_trial.py"
       - "tools/test_package_editor_live_trial.py"
