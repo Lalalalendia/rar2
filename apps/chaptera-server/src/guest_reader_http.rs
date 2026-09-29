@@ -367,7 +367,10 @@ async fn open_session(
         .authorized_session(&session_id, &headers, now_ms)
         .await?;
     match session.state {
-        GuestSessionState::Opened => return open_response_from_stored(&session),
+        GuestSessionState::Opened => {
+            state.delete_quarantine(&session, now_ms).await?;
+            return open_response_from_stored(&session);
+        }
         GuestSessionState::Rejected => return open_response_from_stored(&session),
         GuestSessionState::Opening => {
             return Err(GuestReaderError::conflict("guest_open_in_progress"));
@@ -502,6 +505,7 @@ async fn open_session(
         )
         .await?;
     state.release_admission(&opened, now_ms).await?;
+    state.delete_quarantine(&opened, now_ms).await?;
 
     Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
@@ -1457,6 +1461,44 @@ mod tests {
             store.get(&session.session_id).await.unwrap().unwrap().state,
             GuestSessionState::Issued
         );
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn opened_session_keeps_exact_storage_identity_until_quarantine_delete_receipt() {
+        let path = migrated_path("opened-storage-identity").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let session = session(1_000);
+        store.insert(&session).await.unwrap();
+        store
+            .mark_stored(&session.session_id, 1024, "generation-1", "etag-1", 1_001)
+            .await
+            .unwrap();
+        store
+            .claim_open(&session.session_id, 1_002)
+            .await
+            .unwrap();
+        let opened = store
+            .finish_opened(
+                &session.session_id,
+                "supported",
+                &"a".repeat(64),
+                Some(br#"{"protocol_version":"chaptera.reader-scene.v1"}"#),
+                None,
+                1_003,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(opened.state, GuestSessionState::Opened);
+        assert_eq!(opened.storage_generation.as_deref(), Some("generation-1"));
+        assert_eq!(opened.object_etag.as_deref(), Some("etag-1"));
+        assert_eq!(opened.observed_byte_len, Some(1024));
+        assert_eq!(opened.quarantine_deleted_at_ms, None);
 
         store.close().await;
         let _ = fs::remove_file(path);
