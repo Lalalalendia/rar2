@@ -602,11 +602,7 @@ mod platform {
             | MITIGATION_EXTENSION_POINT_DISABLE_ALWAYS_ON;
         let (lpac_policy, mitigation_policy, require_strict_mitigations) =
             match diagnostic_policy.as_deref() {
-                Some("lpac-base") => (
-                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
-                    0,
-                    false,
-                ),
+                Some("lpac-base") => (PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT, 0, false),
                 Some("appcontainer-strict") => (0, strict_mitigation_policy, true),
                 Some("appcontainer-base") => (0, 0, false),
                 Some("lpac-no-win32k") => (
