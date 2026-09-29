@@ -12,7 +12,6 @@ on:
       - "packages/product/desktop-suite/**"
       - "tools/package_reader_portable.py"
       - "tools/test_package_reader_portable.py"
-      - ".github/workflows/chaptera-reader-windows.yml"
   workflow_dispatch:
 
 concurrency:
