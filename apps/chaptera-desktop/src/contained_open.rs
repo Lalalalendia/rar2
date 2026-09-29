@@ -6,13 +6,15 @@ use chaptera_desktop_open_protocol::{
     SourceIdentityV1, decode_control_json, decode_frames, encode_control_json, encode_frames,
     validate_response_source, validate_success_frames,
 };
+use chaptera_process_launch::{BoundProgram, current_environment_allowlist};
 use chaptera_untrusted_pub_scan::{DEFAULT_MAX_FILE_BYTES, SECURITY_PROFILE_V1};
 use pub_reader::PubResolvedGraph;
 use pub_viewer::ViewerGeometryDocument;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 
 const MAX_IMAGE_BLOBS_V1: u32 = 1024;
@@ -43,26 +45,50 @@ fn response_limits() -> FrameLimitsV1 {
     }
 }
 
-fn sibling_sandbox_host_path() -> Result<PathBuf, String> {
+fn sibling_sandbox_host() -> Result<BoundProgram, String> {
     let current = std::env::current_exe()
         .map_err(|error| format!("resolve current desktop executable: {error}"))?;
     let directory = current
         .parent()
         .ok_or_else(|| "desktop executable has no parent directory".to_owned())?;
     let host = directory.join("chaptera-desktop-open-sandbox-host.exe");
-    if !host.is_file() {
-        return Err("contained PUB sandbox host is unavailable".to_owned());
-    }
-    Ok(host)
+    BoundProgram::bind(&host, directory)
+        .map_err(|error| format!("bind contained PUB sandbox host: {error}"))
+}
+
+fn sandbox_host_environment() -> Result<Vec<(OsString, OsString)>, String> {
+    let mut environment = current_environment_allowlist(&[
+        "SystemRoot",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "LOCALAPPDATA",
+    ]);
+    let system_root = environment
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("SystemRoot"))
+        .map(|(_, value)| PathBuf::from(value))
+        .ok_or_else(|| "SystemRoot is unavailable for sandbox host launch".to_owned())?;
+    let system32 = system_root.join("System32");
+    environment.push((OsString::from("PATH"), system32.clone().into_os_string()));
+    environment.push((
+        OsString::from("ComSpec"),
+        system32.join("cmd.exe").into_os_string(),
+    ));
+    environment.push((
+        OsString::from("PATHEXT"),
+        OsString::from(".COM;.EXE;.BAT;.CMD"),
+    ));
+    Ok(environment)
 }
 
 pub fn open_admitted_source(bytes: &[u8]) -> Result<ContainedOpenBundle, String> {
-    let host = sibling_sandbox_host_path()?;
+    let host = sibling_sandbox_host()?;
     open_admitted_source_with_host(host, bytes)
 }
 
 fn open_admitted_source_with_host(
-    host: PathBuf,
+    host: BoundProgram,
     bytes: &[u8],
 ) -> Result<ContainedOpenBundle, String> {
     let source = SourceIdentityV1::from_bytes(bytes);
@@ -90,7 +116,10 @@ fn open_admitted_source_with_host(
     )
     .map_err(|error| format!("frame contained-open request: {error}"))?;
 
-    let mut child = Command::new(&host)
+    let mut command = host
+        .command(sandbox_host_environment()?)
+        .map_err(|error| format!("prepare contained PUB sandbox host: {error}"))?;
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
