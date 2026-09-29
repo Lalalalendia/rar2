@@ -219,6 +219,18 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         )
 
     if desktop:
+        # Shared Reader/Viewer changes only need to prove the two shipped desktop
+        # binary feature surfaces compile. --all-targets pulls desktop
+        # dev/test-only dependencies and is reserved for directly owned desktop
+        # source or root workspace changes.
+        desktop_all_targets = desktop_source_changed or any(
+            p in {"Cargo.toml", "Cargo.lock"} for p in paths
+        )
+        desktop_target_args = (
+            ["--all-targets"]
+            if desktop_all_targets
+            else ["--bin", "chaptera-editor"]
+        )
         commands.extend(
             [
                 {
@@ -230,7 +242,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "chaptera-desktop",
                         "--features",
                         "reader-only",
-                        "--all-targets",
+                        *desktop_target_args,
                     ],
                 },
                 {
@@ -240,7 +252,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "check",
                         "-p",
                         "chaptera-desktop",
-                        "--all-targets",
+                        *desktop_target_args,
                     ],
                 },
             ]
