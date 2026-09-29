@@ -26,6 +26,7 @@ env:
 
 jobs:
   replay:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: Replay 625 strict PUB
     runs-on: ubuntu-latest
     timeout-minutes: 60
