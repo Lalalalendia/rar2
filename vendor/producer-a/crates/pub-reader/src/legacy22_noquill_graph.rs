@@ -55,10 +55,10 @@ struct LegacyImageWmfProfile {
 }
 
 
-pub fn read_legacy_0x22_image_wmf<R: Read + Seek>(
+pub fn read_legacy_0x22_image_wmfs<R: Read + Seek>(
     mut reader: R,
-    image_object_id: u16,
-) -> Result<Vec<u8>> {
+    image_object_ids: &[u16],
+) -> Result<BTreeMap<u16, Vec<u8>>> {
     reader.seek(SeekFrom::Start(0))?;
     let mut pub_bytes = Vec::new();
     reader.read_to_end(&mut pub_bytes)?;
@@ -90,9 +90,30 @@ pub fn read_legacy_0x22_image_wmf<R: Read + Seek>(
     let stream = StreamPath(CONTENTS_STREAM_PATH.into());
     let directory = parse_legacy_0x22_directory(stream, &contents)
         .context("parse legacy no-Quill 0x22 Contents directory")?;
-    let profile = legacy_image_wmf_profile(&contents, &directory, image_object_id)
-        .context("legacy IMAGE has no admitted direct native WMF payload")?;
-    Ok(profile.normalized_bytes)
+    let mut images = BTreeMap::new();
+    for image_object_id in image_object_ids {
+        if images.contains_key(image_object_id) {
+            continue;
+        }
+        let profile = legacy_image_wmf_profile(&contents, &directory, *image_object_id)
+            .with_context(|| {
+                format!(
+                    "legacy IMAGE object {image_object_id} has no admitted direct native WMF payload"
+                )
+            })?;
+        images.insert(*image_object_id, profile.normalized_bytes);
+    }
+    Ok(images)
+}
+
+pub fn read_legacy_0x22_image_wmf<R: Read + Seek>(
+    reader: R,
+    image_object_id: u16,
+) -> Result<Vec<u8>> {
+    let mut images = read_legacy_0x22_image_wmfs(reader, &[image_object_id])?;
+    images
+        .remove(&image_object_id)
+        .context("legacy IMAGE batch result omitted requested object")
 }
 
 pub fn build_legacy_0x22_noquill_source_graph<R: Read + Seek>(
