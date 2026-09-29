@@ -1,0 +1,15 @@
+name: CONTROL Reader Tier A cache probe
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/CI_TIER_A_CACHE_PROBE.md"
+      - ".github/workflows/reader-tier-a-cache-probe.yml"
+      - ".github/workflows/reader-consumer-preflight.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  tier-a:
+    uses: ./.github/workflows/reader-consumer-preflight.yml
