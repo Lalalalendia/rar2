@@ -55,7 +55,7 @@ const PS_NULL: u16 = 5;
 const PS_INSIDEFRAME: u16 = 6;
 const BS_SOLID: u16 = 0;
 const BS_NULL: u16 = 1;
-const BS_DIBPATTERN: u16 = 5;
+const BS_DIBPATTERNPT: u16 = 5;
 const DIB_RGB_COLORS: u16 = 0;
 const BI_RGB: u32 = 0;
 const LEGACY_PATTERN_DIB_BYTES: usize = 96;
@@ -319,7 +319,7 @@ fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
         read_u16(params, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush style is truncated"))?;
     let color_usage = read_u16(params, 2)
         .ok_or_else(|| anyhow!("WMF DIB pattern brush color usage is truncated"))?;
-    if style != BS_DIBPATTERN || color_usage != DIB_RGB_COLORS {
+    if style != BS_DIBPATTERNPT || color_usage != DIB_RGB_COLORS {
         bail!("unsupported WMF DIB pattern brush profile");
     }
 
@@ -1270,7 +1270,7 @@ mod tests {
         records.extend(record(META_SETWINDOWEXT, &window));
 
         let mut pattern = Vec::new();
-        pattern.extend_from_slice(&BS_DIBPATTERN.to_le_bytes());
+        pattern.extend_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
         pattern.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
         pattern.extend_from_slice(&40_u32.to_le_bytes());
         pattern.extend_from_slice(&8_i32.to_le_bytes());
@@ -1335,9 +1335,39 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_positive_height_pattern_rows_from_bottom_up_dib() {
+        let mut params = Vec::new();
+        params.extend_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
+        params.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        params.extend_from_slice(&40_u32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&BI_RGB.to_le_bytes());
+        params.extend_from_slice(&32_u32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&2_u32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&[0, 0, 0, 0]);
+        params.extend_from_slice(&[0, 0, 255, 0]);
+        params.extend_from_slice(&[0_u8; 16]);
+        for row in [0x01_u8, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] {
+            params.extend_from_slice(&[row, 0, 0, 0]);
+        }
+
+        let brush = parse_legacy_pattern_brush(&params).expect("bottom-up pattern brush");
+        assert_eq!(
+            brush.pattern.expect("pattern").rows,
+            [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]
+        );
+    }
+
+    #[test]
     fn rejects_pattern_brush_outside_proven_dib_profile() {
         let mut params = vec![0_u8; 100];
-        params[0..2].copy_from_slice(&BS_DIBPATTERN.to_le_bytes());
+        params[0..2].copy_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
         params[2..4].copy_from_slice(&DIB_RGB_COLORS.to_le_bytes());
         params[4..8].copy_from_slice(&40_u32.to_le_bytes());
         params[8..12].copy_from_slice(&9_i32.to_le_bytes());
