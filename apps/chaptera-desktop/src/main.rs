@@ -19,6 +19,8 @@ mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
 mod text_session;
+#[cfg(target_os = "windows")]
+mod windows_dll_search;
 
 use chaptera_scene_instance::{
     GeometrySyncPolicyV1, ObjectMutationKindV1, SceneInstanceV1, admit_object_mutation_v1,
@@ -428,6 +430,12 @@ fn direct_scene_instance(
 }
 
 fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "windows")]
+    if let Err(error) = windows_dll_search::install_process_policy() {
+        eprintln!("failed to establish safe DLL search policy: {error}");
+        std::process::exit(2);
+    }
+
     let mut args = std::env::args_os().skip(1);
     let first_arg = args.next();
 
