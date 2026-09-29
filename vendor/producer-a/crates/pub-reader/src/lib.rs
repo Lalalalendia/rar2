@@ -68,7 +68,7 @@ pub use legacy22_noquill_graph::{
     build_legacy_0x22_noquill_from_contents, build_legacy_0x22_noquill_source_graph,
 };
 pub use ole_presentation::{OlePresentation, parse_cf_metafilepict_ole_presentation};
-pub use wmf_preview::{WmfPreviewRgba, rasterize_wmf_preview};
+pub use wmf_preview::{rasterize_wmf_preview, WmfPreviewRgba};
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
     Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
