@@ -207,7 +207,8 @@ fn admitted_single_family(fragment: &RenderTextFragmentV1) -> Option<&str> {
         cursor = run.scalar_end;
     }
 
-    (cursor == fragment.scalar_end).then_some(family?).flatten()
+    let family = family?;
+    (cursor == fragment.scalar_end).then_some(family)
 }
 
 #[cfg(test)]
