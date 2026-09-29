@@ -66,6 +66,157 @@ def text_range(contents: bytes):
     return start, end
 
 
+def printable_candidates(data: bytes) -> list[str]:
+    out = []
+    current = bytearray()
+    for b in data:
+        if 0x20 <= b <= 0x7e:
+            current.append(b)
+        else:
+            if len(current) >= 3:
+                out.append(current.decode("ascii"))
+            current.clear()
+    if len(current) >= 3:
+        out.append(current.decode("ascii"))
+    return out[:8]
+
+
+def utf16le_candidates(data: bytes) -> list[str]:
+    out = []
+    for parity in (0, 1):
+        buf = bytearray()
+        i = parity
+        while i + 1 < len(data):
+            a, b = data[i], data[i + 1]
+            if b == 0 and 0x20 <= a <= 0x7e:
+                buf.extend((a, b))
+            else:
+                if len(buf) >= 6:
+                    out.append(buf.decode("utf-16le", errors="strict"))
+                buf.clear()
+            i += 2
+        if len(buf) >= 6:
+            out.append(buf.decode("utf-16le", errors="strict"))
+    return out[:8]
+
+
+def legacy_directory(contents: bytes):
+    trailer = int.from_bytes(contents[0x16:0x1a], "little")
+    if trailer + 2 > len(contents):
+        raise ValueError("directory_trailer_oob")
+    count = int.from_bytes(contents[trailer:trailer + 2], "little")
+    entries = []
+    for index in range(count):
+        off = trailer + 2 + index * 10
+        if off + 10 > len(contents):
+            raise ValueError("directory_entry_oob")
+        object_id = int.from_bytes(contents[off + 2:off + 4], "little")
+        parent_id = int.from_bytes(contents[off + 4:off + 6], "little")
+        chunk_offset = int.from_bytes(contents[off + 6:off + 10], "little")
+        if chunk_offset + 2 > len(contents):
+            raise ValueError("directory_chunk_oob")
+        chunk_type = int.from_bytes(contents[chunk_offset:chunk_offset + 2], "little")
+        entries.append({
+            "index": index,
+            "object_id": object_id,
+            "parent_id": parent_id,
+            "chunk_offset": chunk_offset,
+            "chunk_type": chunk_type,
+        })
+    distinct = sorted({e["chunk_offset"] for e in entries} | {trailer})
+    for entry in entries:
+        starts = [x for x in distinct if x > entry["chunk_offset"]]
+        entry["chunk_end"] = starts[0] if starts else trailer
+    return entries
+
+
+def parse_font_pointer_list(contents: bytes):
+    rows = []
+    for entry in legacy_directory(contents):
+        if entry["chunk_type"] != 0x001e:
+            continue
+        chunk = contents[entry["chunk_offset"]:entry["chunk_end"]]
+        if len(chunk) < 4:
+            continue
+        decal = chunk[3]
+        if decal == 0 or decal >= len(chunk):
+            rows.append({
+                "directory_index": entry["index"],
+                "object_id": entry["object_id"],
+                "status": "no_payload",
+                "chunk_len": len(chunk),
+            })
+            continue
+        data = chunk[decal:]
+        if len(data) < 10:
+            rows.append({
+                "directory_index": entry["index"],
+                "object_id": entry["object_id"],
+                "status": "short_payload",
+                "chunk_len": len(chunk),
+                "payload_len": len(data),
+            })
+            continue
+        a = int.from_bytes(data[0:2], "little")
+        b = int.from_bytes(data[2:4], "little")
+        ptr_size = 4 if a > b or a == 0 else 2
+        read = lambda off: int.from_bytes(data[off:off + ptr_size], "little")
+        if len(data) < ptr_size * 3 + 2 + ptr_size:
+            continue
+        n = read(0)
+        nmax = read(ptr_size)
+        last_ptr = read(ptr_size * 2)
+        off = ptr_size * 3
+        f0 = int.from_bytes(data[off:off + 2], "little", signed=True)
+        off += 2
+        f1 = int.from_bytes(data[off:off + ptr_size], "little", signed=True)
+        off += ptr_size
+        ptr_base = off
+        if n > 4096 or ptr_base + ptr_size * (n + 1) > len(data):
+            rows.append({
+                "directory_index": entry["index"],
+                "object_id": entry["object_id"],
+                "status": "pointer_bounds",
+                "n": n,
+                "nmax": nmax,
+                "last_ptr": last_ptr,
+                "payload_len": len(data),
+            })
+            continue
+        ptrs = [read(ptr_base + i * ptr_size) for i in range(n + 1)]
+        records = []
+        for i in range(n):
+            lo = ptr_base + ptrs[i]
+            hi = ptr_base + ptrs[i + 1]
+            if hi <= lo or hi > len(data):
+                records.append({"ordinal": i, "status": "invalid_bounds", "lo": lo, "hi": hi})
+                continue
+            rec = data[lo:hi]
+            records.append({
+                "ordinal": i,
+                "byte_len": len(rec),
+                "sha256": sha256_bytes(rec),
+                "ascii_candidates": printable_candidates(rec),
+                "utf16le_candidates": utf16le_candidates(rec),
+                "head_hex": rec[:32].hex(),
+            })
+        rows.append({
+            "directory_index": entry["index"],
+            "object_id": entry["object_id"],
+            "status": "ok",
+            "chunk_len": len(chunk),
+            "payload_len": len(data),
+            "ptr_size": ptr_size,
+            "n": n,
+            "nmax": nmax,
+            "last_ptr": last_ptr,
+            "f0": f0,
+            "f1": f1,
+            "records": records,
+        })
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", type=Path, required=True)
@@ -106,6 +257,7 @@ def main() -> int:
                     "high_byte_sha256": sha256(bytes(high)) if high else None,
                     "summary_codepage": codepage_from_property_set(ole, SUMMARY),
                     "document_summary_codepage": codepage_from_property_set(ole, DOCSUMMARY),
+                    "font_pointer_lists": parse_font_pointer_list(contents),
                 })
                 rows.append(row)
         except Exception as exc:
