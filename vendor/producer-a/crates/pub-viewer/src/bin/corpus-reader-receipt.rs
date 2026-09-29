@@ -55,6 +55,220 @@ fn legacy_object_residual_census(
         .collect())
 }
 
+#[derive(Clone, Debug)]
+enum ProbeObject {
+    Pen,
+    Brush,
+    PatternBrush(String),
+    Region(String),
+}
+
+fn probe_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let raw = bytes.get(offset..offset.checked_add(2)?)?;
+    Some(u16::from_le_bytes([raw[0], raw[1]]))
+}
+
+fn probe_i16(bytes: &[u8], offset: usize) -> Option<i16> {
+    probe_u16(bytes, offset).map(|value| i16::from_le_bytes(value.to_le_bytes()))
+}
+
+fn probe_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let raw = bytes.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn probe_i32(bytes: &[u8], offset: usize) -> Option<i32> {
+    probe_u32(bytes, offset).map(|value| i32::from_le_bytes(value.to_le_bytes()))
+}
+
+fn allocate_probe_object(
+    objects: &mut [Option<ProbeObject>],
+    object: ProbeObject,
+) -> Option<usize> {
+    let index = objects.iter().position(Option::is_none)?;
+    objects[index] = Some(object);
+    Some(index)
+}
+
+fn pattern_profile(params: &[u8]) -> String {
+    let style = probe_u16(params, 0);
+    let usage = probe_u16(params, 2);
+    let header_size = probe_u32(params, 4);
+    let width = probe_i32(params, 8);
+    let height = probe_i32(params, 12);
+    let planes = probe_u16(params, 16);
+    let bit_count = probe_u16(params, 18);
+    let compression = probe_u32(params, 20);
+    format!(
+        "len={};style={:?};usage={:?};dib_header={:?};w={:?};h={:?};planes={:?};bpp={:?};compression={:?}",
+        params.len(),
+        style,
+        usage,
+        header_size,
+        width,
+        height,
+        planes,
+        bit_count,
+        compression
+    )
+}
+
+fn region_profile(params: &[u8]) -> String {
+    format!(
+        "len={};object_type={:?};region_size={:?};scan_count={:?};max_scan={:?}",
+        params.len(),
+        probe_i16(params, 2),
+        probe_i16(params, 8),
+        probe_i16(params, 10),
+        probe_i16(params, 12)
+    )
+}
+
+fn profile_wmf_object_semantics(bytes: &[u8]) -> Value {
+    const META_EOF: u16 = 0x0000;
+    const META_SELECTCLIPREGION: u16 = 0x012c;
+    const META_SELECTOBJECT: u16 = 0x012d;
+    const META_DIBCREATEPATTERNBRUSH: u16 = 0x0142;
+    const META_DELETEOBJECT: u16 = 0x01f0;
+    const META_CREATEPENINDIRECT: u16 = 0x02fa;
+    const META_CREATEBRUSHINDIRECT: u16 = 0x02fc;
+    const META_POLYGON: u16 = 0x0324;
+    const META_POLYLINE: u16 = 0x0325;
+    const META_RECTANGLE: u16 = 0x041b;
+    const META_POLYPOLYGON: u16 = 0x0538;
+    const META_CREATEREGION: u16 = 0x06ff;
+
+    let Some(object_count) = probe_u16(bytes, 10).map(usize::from) else {
+        return json!({"available": false});
+    };
+    if bytes.len() < 18 || object_count > 4096 {
+        return json!({"available": false});
+    }
+
+    let mut objects = vec![None; object_count];
+    let mut pattern_profiles = BTreeMap::<String, usize>::new();
+    let mut region_profiles = BTreeMap::<String, usize>::new();
+    let mut region_next_record_counts = BTreeMap::<String, usize>::new();
+    let mut pattern_fill_record_counts = BTreeMap::<String, usize>::new();
+    let mut pattern_selected_count = 0usize;
+    let mut region_selected_count = 0usize;
+    let mut region_selectclip_same_slot_count = 0usize;
+    let mut region_deleted_after_select_count = 0usize;
+    let mut pending_region_next = false;
+    let mut selected_region_slots = BTreeSet::<usize>::new();
+    let mut active_pattern = false;
+
+    let mut offset = 18usize;
+    while offset < bytes.len() {
+        let Some(record_words) = probe_u32(bytes, offset) else {
+            break;
+        };
+        let Some(function) = probe_u16(bytes, offset + 4) else {
+            break;
+        };
+        if record_words < 3 {
+            break;
+        }
+        let Some(record_len) = usize::try_from(record_words.checked_mul(2).unwrap_or(0)).ok() else {
+            break;
+        };
+        let Some(next) = offset.checked_add(record_len) else {
+            break;
+        };
+        if next > bytes.len() || offset + 6 > next {
+            break;
+        }
+        let params = &bytes[offset + 6..next];
+
+        if pending_region_next {
+            *region_next_record_counts
+                .entry(format!("0x{function:04x}"))
+                .or_default() += 1;
+            pending_region_next = false;
+        }
+
+        match function {
+            META_EOF => break,
+            META_CREATEPENINDIRECT => {
+                let _ = allocate_probe_object(&mut objects, ProbeObject::Pen);
+            }
+            META_CREATEBRUSHINDIRECT => {
+                let _ = allocate_probe_object(&mut objects, ProbeObject::Brush);
+            }
+            META_DIBCREATEPATTERNBRUSH => {
+                let profile = pattern_profile(params);
+                let _ = allocate_probe_object(
+                    &mut objects,
+                    ProbeObject::PatternBrush(profile),
+                );
+            }
+            META_CREATEREGION => {
+                let profile = region_profile(params);
+                let _ = allocate_probe_object(&mut objects, ProbeObject::Region(profile));
+            }
+            META_DELETEOBJECT => {
+                if let Some(index) = probe_u16(params, 0).map(usize::from) {
+                    if selected_region_slots.remove(&index) {
+                        region_deleted_after_select_count += 1;
+                    }
+                    if let Some(slot) = objects.get_mut(index) {
+                        *slot = None;
+                    }
+                }
+            }
+            META_SELECTOBJECT => {
+                if let Some(index) = probe_u16(params, 0).map(usize::from) {
+                    match objects.get(index).and_then(|object| object.as_ref()) {
+                        Some(ProbeObject::Brush) => active_pattern = false,
+                        Some(ProbeObject::PatternBrush(profile)) => {
+                            active_pattern = true;
+                            pattern_selected_count += 1;
+                            *pattern_profiles.entry(profile.clone()).or_default() += 1;
+                        }
+                        Some(ProbeObject::Region(profile)) => {
+                            region_selected_count += 1;
+                            selected_region_slots.insert(index);
+                            *region_profiles.entry(profile.clone()).or_default() += 1;
+                            pending_region_next = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            META_SELECTCLIPREGION => {
+                if let Some(index) = probe_u16(params, 0).map(usize::from) {
+                    if matches!(
+                        objects.get(index).and_then(|object| object.as_ref()),
+                        Some(ProbeObject::Region(_))
+                    ) {
+                        region_selectclip_same_slot_count += 1;
+                    }
+                }
+            }
+            META_POLYGON | META_POLYPOLYGON | META_RECTANGLE if active_pattern => {
+                *pattern_fill_record_counts
+                    .entry(format!("0x{function:04x}"))
+                    .or_default() += 1;
+            }
+            META_POLYLINE => {}
+            _ => {}
+        }
+        offset = next;
+    }
+
+    json!({
+        "available": true,
+        "pattern_selected_count": pattern_selected_count,
+        "pattern_profiles": pattern_profiles,
+        "pattern_fill_record_counts": pattern_fill_record_counts,
+        "region_selected_count": region_selected_count,
+        "region_profiles": region_profiles,
+        "region_next_record_counts": region_next_record_counts,
+        "region_selectclip_same_slot_count": region_selectclip_same_slot_count,
+        "region_deleted_after_select_count": region_deleted_after_select_count,
+    })
+}
+
 fn raster_rejection_detail(error: &anyhow::Error) -> String {
     let message = error.to_string();
     if let Some(code) = message.strip_prefix("unsupported WMF record function ") {
@@ -207,6 +421,7 @@ fn legacy_ole_preview_funnel(
     let mut raster_rejected_node_count = 0usize;
     let mut raster_rejection_class_counts = BTreeMap::<String, usize>::new();
     let mut raster_rejection_detail_counts = BTreeMap::<String, usize>::new();
+    let mut object_semantic_profiles = Vec::<Value>::new();
 
     for (storage_number, node_ids) in &uses_by_storage {
         let node_count = node_ids.len();
@@ -243,6 +458,8 @@ fn legacy_ole_preview_funnel(
                 presentation
             }
         };
+
+        object_semantic_profiles.push(profile_wmf_object_semantics(&selected.data));
 
         match rasterize_wmf_preview(&selected.data, selected.width, selected.height) {
             Ok(_) => raster_success_node_count += node_count,
@@ -293,6 +510,7 @@ fn legacy_ole_preview_funnel(
         "raster_rejected_node_count": raster_rejected_node_count,
         "raster_rejection_class_counts": raster_rejection_class_counts,
         "raster_rejection_detail_counts": raster_rejection_detail_counts,
+        "object_semantic_profiles": object_semantic_profiles,
         "viewer_preview_resource_count": viewer_preview_resource_count,
         "viewer_preview_node_count": viewer_preview_node_count,
         "viewer_preview_unavailable_node_count": admitted_node_count.saturating_sub(viewer_preview_node_count),
