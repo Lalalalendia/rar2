@@ -463,7 +463,7 @@ fn sqlite_error(error: impl fmt::Display) -> PublicRateLimitError {
 mod tests {
     use std::{
         fs,
-        net::{IpAddr, Ipv4Addr, Ipv6Addr},
+        net::{IpAddr, Ipv4Addr},
         sync::atomic::{AtomicU64, Ordering},
     };
 
