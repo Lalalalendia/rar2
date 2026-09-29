@@ -62,31 +62,44 @@ impl FailureClassificationV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct IntakeCapabilityRequestV1 {
+pub struct IntakeConsentRequestV1 {
     pub protocol_version: String,
-    pub classification: FailureClassificationV1,
     pub consent_version: String,
-    pub failure_code: String,
 }
 
-impl IntakeCapabilityRequestV1 {
+impl IntakeConsentRequestV1 {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         if self.protocol_version != INTAKE_PROTOCOL_V1 {
             return Err(ProtocolError::new("intake_protocol_version_invalid"));
         }
+        if self.consent_version != CONSENT_VERSION_V1 {
+            return Err(ProtocolError::new("intake_consent_version_invalid"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerIntakeEvidenceV1 {
+    pub classification: FailureClassificationV1,
+    pub failure_code: String,
+}
+
+impl ServerIntakeEvidenceV1 {
+    pub fn validate_and_authorize(
+        &self,
+        consent: &IntakeConsentRequestV1,
+    ) -> Result<(), ProtocolError> {
+        consent.validate()?;
         self.classification.validate()?;
         if !self.classification.class.exact_file_intake_eligible() {
             return Err(ProtocolError::new("intake_class_ineligible"));
-        }
-        if self.consent_version != CONSENT_VERSION_V1 {
-            return Err(ProtocolError::new("intake_consent_version_invalid"));
         }
         require_stable_token(
             &self.failure_code,
             MAX_FAILURE_CODE_BYTES,
             "intake_failure_code_invalid",
-        )?;
-        Ok(())
+        )
     }
 }
 
@@ -201,11 +214,16 @@ mod tests {
         }
     }
 
-    fn request(class: FailureClassV1) -> IntakeCapabilityRequestV1 {
-        IntakeCapabilityRequestV1 {
+    fn consent() -> IntakeConsentRequestV1 {
+        IntakeConsentRequestV1 {
             protocol_version: INTAKE_PROTOCOL_V1.to_owned(),
-            classification: classification(class),
             consent_version: CONSENT_VERSION_V1.to_owned(),
+        }
+    }
+
+    fn evidence(class: FailureClassV1) -> ServerIntakeEvidenceV1 {
+        ServerIntakeEvidenceV1 {
+            classification: classification(class),
             failure_code: "reader_scene_open_failed".to_owned(),
         }
     }
@@ -216,7 +234,9 @@ mod tests {
             FailureClassV1::PubHighValue,
             FailureClassV1::PubDamaged,
         ] {
-            request(class).validate().expect("eligible class");
+            evidence(class)
+                .validate_and_authorize(&consent())
+                .expect("eligible class");
         }
 
         for class in [
@@ -226,7 +246,10 @@ mod tests {
             FailureClassV1::SuspiciousPolyglot,
         ] {
             assert_eq!(
-                request(class).validate().unwrap_err().code,
+                evidence(class)
+                    .validate_and_authorize(&consent())
+                    .unwrap_err()
+                    .code,
                 "intake_class_ineligible"
             );
         }
@@ -234,19 +257,26 @@ mod tests {
 
     #[test]
     fn consent_version_is_exact_and_mandatory() {
-        let mut value = request(FailureClassV1::PubDamaged);
+        let mut value = consent();
         value.consent_version = "chaptera-intake-consent-v0".to_owned();
         assert_eq!(
-            value.validate().unwrap_err().code,
+            evidence(FailureClassV1::PubDamaged)
+                .validate_and_authorize(&value)
+                .unwrap_err()
+                .code,
             "intake_consent_version_invalid"
         );
     }
 
     #[test]
-    fn request_wire_has_no_client_file_identity_or_raw_bytes() {
-        let value = serde_json::to_value(request(FailureClassV1::PubHighValue)).unwrap();
+    fn consent_wire_contains_no_client_claim_about_file_or_eligibility() {
+        let value = serde_json::to_value(consent()).unwrap();
         let object = value.as_object().unwrap();
+        assert_eq!(object.len(), 2);
         for forbidden in [
+            "classification",
+            "class",
+            "failure_code",
             "filename",
             "path",
             "sha256",
@@ -256,10 +286,6 @@ mod tests {
             "storage_key",
         ] {
             assert!(!object.contains_key(forbidden));
-        }
-        let encoded = serde_json::to_string(&value).unwrap();
-        for forbidden in ["filename", "client_sha256", "object_url", "storage_key"] {
-            assert!(!encoded.contains(forbidden));
         }
     }
 
@@ -319,16 +345,9 @@ mod tests {
     fn unknown_wire_fields_are_rejected() {
         let raw = r#"{
             "protocol_version":"chaptera.intake-capability-request.v1",
-            "classification":{
-                "protocol_version":"chaptera.failure-classifier.v1",
-                "class":"PUB_HIGH_VALUE",
-                "confidence":"high",
-                "reason_flags":["publisher_contents_present"]
-            },
             "consent_version":"chaptera-intake-consent-v1",
-            "failure_code":"reader_scene_open_failed",
-            "filename":"secret.pub"
+            "class":"PUB_HIGH_VALUE"
         }"#;
-        assert!(serde_json::from_str::<IntakeCapabilityRequestV1>(raw).is_err());
+        assert!(serde_json::from_str::<IntakeConsentRequestV1>(raw).is_err());
     }
 }
