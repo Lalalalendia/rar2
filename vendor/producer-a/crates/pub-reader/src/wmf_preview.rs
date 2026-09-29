@@ -56,6 +56,12 @@ const PS_NULL: u16 = 5;
 const PS_INSIDEFRAME: u16 = 6;
 const BS_SOLID: u16 = 0;
 const BS_NULL: u16 = 1;
+const BS_DIBPATTERN: u16 = 5;
+const DIB_RGB_COLORS: u16 = 0;
+const BI_RGB: u32 = 0;
+const LEGACY_PATTERN_DIB_BYTES: usize = 96;
+const LEGACY_PATTERN_SIDE: usize = 8;
+const LEGACY_PATTERN_ROW_BYTES: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WmfPreviewRgba {
@@ -79,9 +85,33 @@ struct Pen {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PatternBrush8x8 {
+    colors: [Color; 2],
+    rows: [u8; LEGACY_PATTERN_SIDE],
+}
+
+impl PatternBrush8x8 {
+    fn color_at(self, x: i32, y: i32) -> Color {
+        let x = usize::try_from(x).unwrap_or(0) % LEGACY_PATTERN_SIDE;
+        let y = usize::try_from(y).unwrap_or(0) % LEGACY_PATTERN_SIDE;
+        let bit = (self.rows[y] >> (7 - x)) & 1;
+        self.colors[usize::from(bit)]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Brush {
     style: u16,
     color: Color,
+    pattern: Option<PatternBrush8x8>,
+}
+
+impl Brush {
+    fn color_at(self, x: i32, y: i32) -> Color {
+        self.pattern
+            .map(|pattern| pattern.color_at(x, y))
+            .unwrap_or(self.color)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +187,7 @@ impl PlaybackState {
                     g: 255,
                     b: 255,
                 },
+                pattern: None,
             },
         }
     }
@@ -222,7 +253,7 @@ impl Canvas {
         self.rgba[index..index + 4].copy_from_slice(&[color.r, color.g, color.b, 255]);
     }
 
-    fn span(&mut self, clip: RectPx, y: i32, x0: i32, x1: i32, color: Color) -> Result<()> {
+    fn span_brush(&mut self, clip: RectPx, y: i32, x0: i32, x1: i32, brush: Brush) -> Result<()> {
         if y < clip.top || y >= clip.bottom || y < 0 || y >= self.height as i32 {
             return Ok(());
         }
@@ -235,7 +266,7 @@ impl Canvas {
             .map_err(|_| anyhow!("WMF span work does not fit u64"))?;
         self.charge_work(pixel_count)?;
         for x in start..=end {
-            self.set(clip, x, y, color);
+            self.set(clip, x, y, brush.color_at(x, y));
         }
         Ok(())
     }
@@ -250,6 +281,11 @@ fn read_i16(bytes: &[u8], offset: usize) -> Option<i16> {
     read_u16(bytes, offset).map(|value| i16::from_le_bytes(value.to_le_bytes()))
 }
 
+fn read_i32(bytes: &[u8], offset: usize) -> Option<i32> {
+    let raw = bytes.get(offset..offset.checked_add(4)?)?;
+    Some(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
@@ -261,6 +297,88 @@ fn color_ref(value: u32) -> Color {
         g: ((value >> 8) & 0xff) as u8,
         b: ((value >> 16) & 0xff) as u8,
     }
+}
+
+fn rgb_quad(bytes: &[u8], offset: usize) -> Result<Color> {
+    let raw = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| anyhow!("WMF pattern brush RGBQUAD is truncated"))?;
+    if raw[3] != 0 {
+        bail!("WMF pattern brush RGBQUAD reserved byte is nonzero");
+    }
+    Ok(Color {
+        r: raw[2],
+        g: raw[1],
+        b: raw[0],
+    })
+}
+
+fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
+    if params.len() != 4 + LEGACY_PATTERN_DIB_BYTES {
+        bail!("unsupported WMF DIB pattern brush payload length");
+    }
+    let style =
+        read_u16(params, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush style is truncated"))?;
+    let color_usage = read_u16(params, 2)
+        .ok_or_else(|| anyhow!("WMF DIB pattern brush color usage is truncated"))?;
+    if style != BS_DIBPATTERNPT || color_usage != DIB_RGB_COLORS {
+        bail!("unsupported WMF DIB pattern brush profile");
+    }
+
+    let dib = &params[4..];
+    let header_size =
+        read_u32(dib, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush header is truncated"))?;
+    let width =
+        read_i32(dib, 4).ok_or_else(|| anyhow!("WMF DIB pattern brush width is truncated"))?;
+    let height =
+        read_i32(dib, 8).ok_or_else(|| anyhow!("WMF DIB pattern brush height is truncated"))?;
+    let planes =
+        read_u16(dib, 12).ok_or_else(|| anyhow!("WMF DIB pattern brush planes are truncated"))?;
+    let bit_count =
+        read_u16(dib, 14).ok_or_else(|| anyhow!("WMF DIB pattern brush bit count is truncated"))?;
+    let compression = read_u32(dib, 16)
+        .ok_or_else(|| anyhow!("WMF DIB pattern brush compression is truncated"))?;
+    let image_size = read_u32(dib, 20)
+        .ok_or_else(|| anyhow!("WMF DIB pattern brush image size is truncated"))?;
+    let colors_used = read_u32(dib, 32)
+        .ok_or_else(|| anyhow!("WMF DIB pattern brush color count is truncated"))?;
+
+    if header_size != 40
+        || width != 8
+        || height != 8
+        || planes != 1
+        || bit_count != 1
+        || compression != BI_RGB
+        || !matches!(image_size, 0 | 32)
+        || colors_used != 2
+    {
+        bail!("unsupported WMF DIB pattern brush bitmap profile");
+    }
+
+    let colors = [rgb_quad(dib, 40)?, rgb_quad(dib, 44)?];
+    let bitmap_bytes = LEGACY_PATTERN_SIDE * LEGACY_PATTERN_ROW_BYTES;
+    let bitmap_offset = dib
+        .len()
+        .checked_sub(bitmap_bytes)
+        .ok_or_else(|| anyhow!("WMF DIB pattern brush bitmap is truncated"))?;
+    if bitmap_offset < 48 {
+        bail!("WMF DIB pattern brush overlaps its color table");
+    }
+
+    let mut rows = [0_u8; LEGACY_PATTERN_SIDE];
+    for (top_row, row) in rows.iter_mut().enumerate() {
+        let source_row = LEGACY_PATTERN_SIDE - 1 - top_row;
+        let offset = bitmap_offset + source_row * LEGACY_PATTERN_ROW_BYTES;
+        *row = *dib
+            .get(offset)
+            .ok_or_else(|| anyhow!("WMF DIB pattern brush scanline is truncated"))?;
+    }
+
+    Ok(Brush {
+        style,
+        color: colors[0],
+        pattern: Some(PatternBrush8x8 { colors, rows }),
+    })
 }
 
 fn bounded_output_size(width_hint: u32, height_hint: u32) -> Result<(u32, u32)> {
@@ -494,12 +612,7 @@ fn draw_polyline(
     Ok(())
 }
 
-fn fill_rings(
-    canvas: &mut Canvas,
-    state: &PlaybackState,
-    rings: &[Vec<(i32, i32)>],
-    color: Color,
-) -> Result<()> {
+fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32)>]) -> Result<()> {
     let Some(min_y) = rings
         .iter()
         .flat_map(|ring| ring.iter().map(|point| point.1))
@@ -552,7 +665,7 @@ fn fill_rings(
                 for pair in crossings.chunks_exact(2) {
                     let x0 = pair[0].0.ceil() as i32;
                     let x1 = pair[1].0.floor() as i32;
-                    canvas.span(state.clip, y, x0, x1, color)?;
+                    canvas.span_brush(state.clip, y, x0, x1, state.brush)?;
                 }
             }
             WINDING => {
@@ -565,12 +678,12 @@ fn fill_rings(
                         start = Some(x);
                     } else if before != 0 && winding == 0 {
                         if let Some(from) = start.take() {
-                            canvas.span(
+                            canvas.span_brush(
                                 state.clip,
                                 y,
                                 from.ceil() as i32,
                                 x.floor() as i32,
-                                color,
+                                state.brush,
                             )?;
                         }
                     }
@@ -587,67 +700,6 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
         bail!("WMF object table is full");
     };
     *slot = Some(object);
-    Ok(())
-}
-
-fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
-    // Exact-1050 evidence for the seven Publisher Region compatibility objects:
-    // 42-byte payload, ObjectType=6, RegionSize=42, one scan, maxScan=2.
-    // The one scan is structurally valid (Count=Count2=2) and the corpus profile
-    // carries an additional bounded eight-byte tail that is playback-inert here.
-    if params.len() != 42 {
-        bail!(
-            "unsupported WMF Region compatibility payload length {}",
-            params.len()
-        );
-    }
-
-    let object_type =
-        read_i16(params, 2).ok_or_else(|| anyhow!("WMF Region ObjectType is truncated"))?;
-    let region_size = read_i16(params, 8).ok_or_else(|| anyhow!("WMF RegionSize is truncated"))?;
-    let scan_count =
-        read_i16(params, 10).ok_or_else(|| anyhow!("WMF Region ScanCount is truncated"))?;
-    let max_scan =
-        read_i16(params, 12).ok_or_else(|| anyhow!("WMF Region maxScan is truncated"))?;
-    if object_type != 6 || region_size != 42 || scan_count != 1 || max_scan != 2 {
-        bail!(
-            "unsupported WMF Region compatibility profile type={object_type} size={region_size} scans={scan_count} max_scan={max_scan}"
-        );
-    }
-
-    // BoundingRectangle is present in the fixed Region header. Values are not
-    // interpreted because this compatibility object never becomes the active
-    // clipping region in the admitted sequence.
-    for offset in [14usize, 16, 18, 20] {
-        read_i16(params, offset)
-            .ok_or_else(|| anyhow!("WMF Region bounding rectangle is truncated"))?;
-    }
-
-    let count =
-        read_u16(params, 22).ok_or_else(|| anyhow!("WMF Region Scan Count is truncated"))?;
-    let top = read_u16(params, 24).ok_or_else(|| anyhow!("WMF Region Scan Top is truncated"))?;
-    let bottom =
-        read_u16(params, 26).ok_or_else(|| anyhow!("WMF Region Scan Bottom is truncated"))?;
-    if count != 2 {
-        bail!("unsupported WMF Region scan coordinate count {count}");
-    }
-    let _left = read_u16(params, 28).ok_or_else(|| anyhow!("WMF Region Scan left is truncated"))?;
-    let _right =
-        read_u16(params, 30).ok_or_else(|| anyhow!("WMF Region Scan right is truncated"))?;
-    let count2 =
-        read_u16(params, 32).ok_or_else(|| anyhow!("WMF Region Scan Count2 is truncated"))?;
-    if count2 != count {
-        bail!("WMF Region Scan Count2 does not match Count");
-    }
-    if bottom < top {
-        bail!("WMF Region scan vertical bounds are inverted");
-    }
-
-    // Exact corpus profile has an eight-byte compatibility tail. Keep it
-    // bounded but opaque because Region geometry is not activated in this slice.
-    if params.len() - 34 != 8 {
-        bail!("unsupported WMF Region compatibility tail length");
-    }
     Ok(())
 }
 
@@ -1014,11 +1066,13 @@ pub fn rasterize_wmf_preview(
                 let brush = Brush {
                     style,
                     color: color_ref(read_u32(params, 2).unwrap()),
+                    pattern: None,
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
             }
             META_DIBCREATEPATTERNBRUSH => {
-                allocate_object(&mut objects, GdiObject::Unsupported)?;
+                let brush = parse_legacy_pattern_brush(params)?;
+                allocate_object(&mut objects, GdiObject::Brush(brush))?;
             }
             META_CREATEREGION => {
                 validate_region_compatibility_object(params)?;
@@ -1066,12 +1120,7 @@ pub fn rasterize_wmf_preview(
                 let points = map_points(&state, &canvas, &logical)?;
                 if function == META_POLYGON {
                     if state.brush.style != BS_NULL && points.len() >= 3 {
-                        fill_rings(
-                            &mut canvas,
-                            &state,
-                            std::slice::from_ref(&points),
-                            state.brush.color,
-                        )?;
+                        fill_rings(&mut canvas, &state, std::slice::from_ref(&points))?;
                     }
                     draw_polyline(&mut canvas, &state, &points, true)?;
                 } else {
@@ -1121,7 +1170,7 @@ pub fn rasterize_wmf_preview(
                     cursor = end;
                 }
                 if state.brush.style != BS_NULL {
-                    fill_rings(&mut canvas, &state, &rings, state.brush.color)?;
+                    fill_rings(&mut canvas, &state, &rings)?;
                 }
                 for ring in &rings {
                     draw_polyline(&mut canvas, &state, ring, true)?;
@@ -1139,12 +1188,7 @@ pub fn rasterize_wmf_preview(
                 let logical = [(left, top), (right, top), (right, bottom), (left, bottom)];
                 let points = map_points(&state, &canvas, &logical)?;
                 if state.brush.style != BS_NULL {
-                    fill_rings(
-                        &mut canvas,
-                        &state,
-                        std::slice::from_ref(&points),
-                        state.brush.color,
-                    )?;
+                    fill_rings(&mut canvas, &state, std::slice::from_ref(&points))?;
                 }
                 draw_polyline(&mut canvas, &state, &points, true)?;
             }
@@ -1280,6 +1324,123 @@ mod tests {
         bytes.extend_from_slice(&0_u16.to_le_bytes());
         bytes.extend(records);
         bytes
+    }
+
+    fn synthetic_pattern_polygon() -> Vec<u8> {
+        let mut records = Vec::<u8>::new();
+        let mut window = Vec::new();
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        records.extend(record(META_SETWINDOWEXT, &window));
+
+        let mut pattern = Vec::new();
+        pattern.extend_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
+        pattern.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        pattern.extend_from_slice(&40_u32.to_le_bytes());
+        pattern.extend_from_slice(&8_i32.to_le_bytes());
+        pattern.extend_from_slice(&8_i32.to_le_bytes());
+        pattern.extend_from_slice(&1_u16.to_le_bytes());
+        pattern.extend_from_slice(&1_u16.to_le_bytes());
+        pattern.extend_from_slice(&BI_RGB.to_le_bytes());
+        pattern.extend_from_slice(&0_u32.to_le_bytes());
+        pattern.extend_from_slice(&0_i32.to_le_bytes());
+        pattern.extend_from_slice(&0_i32.to_le_bytes());
+        pattern.extend_from_slice(&2_u32.to_le_bytes());
+        pattern.extend_from_slice(&0_u32.to_le_bytes());
+        pattern.extend_from_slice(&[0, 0, 0, 0]);
+        pattern.extend_from_slice(&[0, 0, 255, 0]);
+        pattern.extend_from_slice(&[0_u8; 16]);
+        for _ in 0..8 {
+            pattern.extend_from_slice(&[0b1010_1010, 0, 0, 0]);
+        }
+        assert_eq!(pattern.len(), 100);
+        records.extend(record(META_DIBCREATEPATTERNBRUSH, &pattern));
+
+        let mut pen = Vec::new();
+        pen.extend_from_slice(&PS_NULL.to_le_bytes());
+        pen.extend_from_slice(&1_i16.to_le_bytes());
+        pen.extend_from_slice(&0_i16.to_le_bytes());
+        pen.extend_from_slice(&0_u32.to_le_bytes());
+        records.extend(record(META_CREATEPENINDIRECT, &pen));
+
+        records.extend(record(META_SELECTOBJECT, &0_u16.to_le_bytes()));
+        records.extend(record(META_SELECTOBJECT, &1_u16.to_le_bytes()));
+
+        let mut polygon = Vec::new();
+        polygon.extend_from_slice(&4_u16.to_le_bytes());
+        for (x, y) in [(20_i16, 20_i16), (80, 20), (80, 80), (20, 80)] {
+            polygon.extend_from_slice(&x.to_le_bytes());
+            polygon.extend_from_slice(&y.to_le_bytes());
+        }
+        records.extend(record(META_POLYGON, &polygon));
+        records.extend(record(META_EOF, &[]));
+
+        let total_len = 18 + records.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&53_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
+    #[test]
+    fn rasterizes_bounded_8x8_monochrome_dib_pattern_brush() {
+        let image = rasterize_wmf_preview(&synthetic_pattern_polygon(), 100, 100)
+            .expect("bounded pattern brush");
+        let red = ((50 * 100 + 50) * 4) as usize;
+        let black = ((50 * 100 + 51) * 4) as usize;
+        assert_eq!(&image.rgba[red..red + 4], &[255, 0, 0, 255]);
+        assert_eq!(&image.rgba[black..black + 4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn normalizes_positive_height_pattern_rows_from_bottom_up_dib() {
+        let mut params = Vec::new();
+        params.extend_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
+        params.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        params.extend_from_slice(&40_u32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&BI_RGB.to_le_bytes());
+        params.extend_from_slice(&32_u32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&2_u32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&[0, 0, 0, 0]);
+        params.extend_from_slice(&[0, 0, 255, 0]);
+        params.extend_from_slice(&[0_u8; 16]);
+        for row in [0x01_u8, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80] {
+            params.extend_from_slice(&[row, 0, 0, 0]);
+        }
+
+        let brush = parse_legacy_pattern_brush(&params).expect("bottom-up pattern brush");
+        assert_eq!(
+            brush.pattern.expect("pattern").rows,
+            [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]
+        );
+    }
+
+    #[test]
+    fn rejects_pattern_brush_outside_proven_dib_profile() {
+        let mut params = vec![0_u8; 100];
+        params[0..2].copy_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
+        params[2..4].copy_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        params[4..8].copy_from_slice(&40_u32.to_le_bytes());
+        params[8..12].copy_from_slice(&9_i32.to_le_bytes());
+        params[12..16].copy_from_slice(&8_i32.to_le_bytes());
+        params[16..18].copy_from_slice(&1_u16.to_le_bytes());
+        params[18..20].copy_from_slice(&1_u16.to_le_bytes());
+        params[20..24].copy_from_slice(&BI_RGB.to_le_bytes());
+        params[36..40].copy_from_slice(&2_u32.to_le_bytes());
+        assert!(parse_legacy_pattern_brush(&params).is_err());
     }
 
     #[test]
