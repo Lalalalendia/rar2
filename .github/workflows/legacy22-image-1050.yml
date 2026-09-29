@@ -1,0 +1,220 @@
+name: Legacy22 image 1050 research
+
+on:
+  push:
+    branches:
+      - research/legacy22-image0002-01
+    paths:
+      - '.github/workflows/legacy22-image-1050.yml'
+      - 'vendor/producer-a/crates/pub-reader/src/bin/legacy22_image0002_profile.rs'
+      - 'vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs'
+      - 'vendor/producer-a/crates/pub-reader/src/wmf.rs'
+      - 'vendor/producer-a/crates/pub-contents/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: legacy22-image-1050-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+
+      - name: Restore research Cargo target
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: legacy22-image-1050-${{ runner.os }}-${{ hashFiles('vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/pub-reader/src/**/*.rs', 'vendor/producer-a/crates/pub-contents/src/**/*.rs') }}
+          restore-keys: |
+            legacy22-image-1050-${{ runner.os }}-
+
+      - name: Build image profiler
+        run: |
+          set -euo pipefail
+          rustfmt --check --edition 2021 vendor/producer-a/crates/pub-reader/src/bin/legacy22_image0002_profile.rs
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin legacy22_image0002_profile
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --release --bin legacy22_image0002_profile
+
+      - name: Verify corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          assert len(paths) == 1050, len(paths)
+          digest = hashlib.sha256(
+              "".join(p.stem.casefold() + "\n" for p in paths).encode("ascii")
+          ).hexdigest()
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          PY
+
+      - name: Run raw0x0002 image census
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from collections import Counter
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          corpus = Path("out/pinned1050/materialized/native")
+          paths = sorted(corpus.glob("*.pub"))
+          exe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "legacy22_image0002_profile"
+
+          def profile(path, out_dir):
+              target = out_dir / f"{path.stem}.json"
+              cp = subprocess.run(
+                  [str(exe), str(path), str(target)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=45,
+                  check=False,
+              )
+              if cp.returncode != 0:
+                  raise RuntimeError(f"{path.name}: rc={cp.returncode}: {cp.stderr[-2000:]}")
+              return json.loads(target.read_text())
+
+          rows = []
+          with tempfile.TemporaryDirectory(prefix="legacy22-image-1050-") as td:
+              out_dir = Path(td)
+              with ThreadPoolExecutor(max_workers=16) as pool:
+                  futures = {pool.submit(profile, p, out_dir): p for p in paths}
+                  for future in as_completed(futures):
+                      rows.append(future.result())
+
+          eligible = [r for r in rows if r.get("eligible_reader_open") is True]
+          images = [
+              {"source_sha256": row["source_sha256"], **item}
+              for row in eligible
+              for item in (row.get("images") or [])
+          ]
+
+          def count_true(field):
+              return sum(item.get(field) is True for item in images)
+
+          parent_types = Counter(item.get("parent_raw_type") or "none" for item in images)
+          chunk_lengths = Counter(str(item.get("chunk_len")) for item in images)
+          child_profiles = Counter(
+              ",".join(sorted(item.get("child_raw_types") or [])) or "none"
+              for item in images
+          )
+          native_types = Counter(item.get("native_target_raw_type") or "none" for item in images)
+          native_wmf_offsets = Counter(
+              ",".join(str(v) for v in item.get("native_wmf_valid_offsets") or []) or "none"
+              for item in images
+          )
+          repl_types = Counter(
+              item.get("replacement_target_raw_type") or
+              ("zero_or_missing" if not item.get("replacement_ref") else "missing_target")
+              for item in images
+          )
+          native_payload_hashes = [
+              h
+              for item in images
+              for h in (item.get("native_wmf_payload_sha256") or [])
+          ]
+          replacement_payload_hashes = [
+              repl.get("payload_sha256")
+              for item in images
+              if (repl := item.get("replacement")) and repl.get("payload_sha256")
+          ]
+
+          native_len_match = 0
+          for item in images:
+              n = item.get("native_len_after_0x10")
+              if n is None:
+                  continue
+              if item.get("native_len_u32_at_0x08") == n and item.get("native_len_u32_at_0x0c") == n:
+                  native_len_match += 1
+
+          summary = {
+              "schema": "chaptera.legacy22-image0002-census.v1",
+              "corpus_file_count": len(paths),
+              "eligible_noquill_reader_file_count": len(eligible),
+              "physical_raw0002_count": sum(int(r.get("physical_image_count") or 0) for r in eligible),
+              "reachable_raw0002_count": len(images),
+              "reachable_raw0002_file_count": len({i["source_sha256"] for i in images}),
+              "geometry_carrier_present_count": sum(
+                  (i.get("geometry") or {}).get("carrier_present") is True for i in images
+              ),
+              "geometry_positive_rect_count": sum(
+                  (i.get("geometry") or {}).get("positive_rect") is True for i in images
+              ),
+              "geometry_nondegenerate_count": sum(
+                  (i.get("geometry") or {}).get("nondegenerate") is True for i in images
+              ),
+              "parent_raw_type_counts": dict(parent_types.most_common()),
+              "chunk_length_counts": dict(chunk_lengths.most_common()),
+              "child_raw_type_profile_counts": dict(child_profiles.most_common()),
+              "native_ref_present_count": sum(i.get("native_ref") not in (None, 0) for i in images),
+              "native_target_raw_type_counts": dict(native_types.most_common()),
+              "native_target_parent_match_count": count_true("native_target_parent_matches"),
+              "native_wmf_valid_offset_profile_counts": dict(native_wmf_offsets.most_common()),
+              "native_duplicated_length_matches_payload_after_0x10_count": native_len_match,
+              "native_wmf_payload_reference_count": len(native_payload_hashes),
+              "native_wmf_unique_payload_sha256_count": len(set(native_payload_hashes)),
+              "replacement_ref_nonzero_count": sum(i.get("replacement_ref") not in (None, 0) for i in images),
+              "replacement_target_raw_type_counts": dict(repl_types.most_common()),
+              "replacement_target_parent_match_count": count_true("replacement_target_parent_matches"),
+              "replacement_gif89a_count": sum(
+                  (i.get("replacement") or {}).get("gif89a") is True for i in images
+              ),
+              "replacement_exact_length_count": sum(
+                  (i.get("replacement") or {}).get("lengths_equal_payload") is True for i in images
+              ),
+              "replacement_payload_reference_count": len(replacement_payload_hashes),
+              "replacement_unique_payload_sha256_count": len(set(replacement_payload_hashes)),
+              "filename_companion_owner_count": sum(
+                  int(i.get("filename_child_count") or 0) > 0 for i in images
+              ),
+              "filename_companion_record_count": sum(
+                  int(i.get("filename_child_count") or 0) for i in images
+              ),
+              "evidence_boundary": (
+                  "source-safe structural census only; no filename strings or image bytes retained; "
+                  "no Reader admission change"
+              ),
+          }
+
+          Path("out").mkdir(exist_ok=True)
+          Path("out/legacy22-image-1050.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy22-image-1050-${{ github.run_id }}
+          path: out/legacy22-image-1050.json
+          retention-days: 90
