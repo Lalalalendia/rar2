@@ -1676,6 +1676,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "The current publication color scheme could not be resolved safely; scheme-indexed shape colors remain unavailable.",
         ),
+        AmbiguousOfficeArtDggDefaults { .. } => (
+            "viewer.paint.dgg_defaults_ambiguous",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "Document-wide OfficeArt drawing-group defaults are ambiguous; affected effective paint remains unresolved.",
+        ),
     };
 
     ViewerDiagnostic {
@@ -2278,6 +2283,7 @@ mod tests {
                         image_slot: None,
                         explicit_image_crop: None,
                         explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
+                        effective_paint: None,
                         story_frame: Some(PubResolvedStoryFrame {
                             story_id: Some(story_id),
                             ordinal: 0,
@@ -2435,6 +2441,7 @@ mod tests {
                 image_slot: None,
                 explicit_image_crop: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
+                effective_paint: None,
                 story_frame: Some(PubResolvedStoryFrame {
                     story_id: Some(story_id),
                     ordinal: 0,
