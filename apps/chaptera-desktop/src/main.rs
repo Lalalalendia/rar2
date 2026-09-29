@@ -914,13 +914,24 @@ fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<
 
 fn smoke_check(path: &Path) -> Result<(), String> {
     let admitted = chaptera_suite_handoff::AdmittedSource::open(path)?;
-    smoke_check_bytes(admitted.bytes())
+
+    #[cfg(target_os = "windows")]
+    let visual = contained_open::open_admitted_source(admitted.bytes())?.visual;
+
+    #[cfg(not(target_os = "windows"))]
+    let visual = diagnostic_sweep::open_for_product(admitted.bytes())
+        .map_err(|error| format!("open PUB bytes: {error}"))?;
+
+    validate_smoke_visual(&visual)
 }
 
 fn smoke_check_bytes(bytes: &[u8]) -> Result<(), String> {
     let visual = diagnostic_sweep::open_for_product(bytes)
         .map_err(|error| format!("open PUB bytes: {error}"))?;
+    validate_smoke_visual(&visual)
+}
 
+fn validate_smoke_visual(visual: &ViewerGeometryDocument) -> Result<(), String> {
     if visual.document.pages.is_empty() {
         return Err("document has no Viewer pages".to_owned());
     }
