@@ -1,6 +1,12 @@
 name: Legacy22 cross-version pair mine
 
 on:
+  push:
+    branches:
+      - "research/legacy22-xver-pair-mine-01"
+    paths:
+      - ".github/workflows/legacy22-xver-pair-mine.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/legacy22_raw0022_companion_profile.rs"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
