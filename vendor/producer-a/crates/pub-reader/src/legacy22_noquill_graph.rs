@@ -292,6 +292,9 @@ pub fn build_legacy_0x22_noquill_from_contents(
     })
 }
 
+// Recursive legacy materialization carries the bounded source, page, identity, and
+// diagnostic state explicitly so nested GROUP traversal cannot silently widen it.
+#[allow(clippy::too_many_arguments)]
 fn materialize_legacy_noquill_child(
     graph: &mut PubSourceGraph,
     source_hash: &Sha256Digest,
@@ -336,15 +339,15 @@ fn materialize_legacy_noquill_child(
         return Ok(());
     }
 
-    if is_group {
-        if group_depth >= LEGACY_GROUP_MAX_DEPTH || !group_stack.insert(child_object_id) {
-            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
-                object_id: u32::from(child_object_id),
-                raw_type: Some(child_entry.chunk_type),
-                reason: "legacy_group_cycle_or_depth_limit".into(),
-            });
-            return Ok(());
-        }
+    if is_group
+        && (group_depth >= LEGACY_GROUP_MAX_DEPTH || !group_stack.insert(child_object_id))
+    {
+        diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+            object_id: u32::from(child_object_id),
+            raw_type: Some(child_entry.chunk_type),
+            reason: "legacy_group_cycle_or_depth_limit".into(),
+        });
+        return Ok(());
     }
 
     let chunk = chunk_bytes(contents, child_entry)?;
