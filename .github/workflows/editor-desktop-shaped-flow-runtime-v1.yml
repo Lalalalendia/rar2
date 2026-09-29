@@ -7,6 +7,7 @@ on:
       - "crates/chaptera-caret-layout-feed/**"
       - "crates/chaptera-text-caret-map-adapter/**"
       - "vendor/producer-a/crates/pub-viewer/**"
+      - "!vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
       - "vendor/producer-a/crates/pub-layout/**"
       - ".github/workflows/editor-desktop-shaped-flow-runtime-v1.yml"
   workflow_dispatch:

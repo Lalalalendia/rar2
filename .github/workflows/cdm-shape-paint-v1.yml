@@ -9,6 +9,7 @@ on:
       - "crates/pub-paint-bridge/**"
       - "vendor/producer-a/crates/pub-reader/**"
       - "vendor/producer-a/crates/pub-viewer/**"
+      - "!vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
       - ".github/workflows/cdm-shape-paint-v1.yml"
   workflow_dispatch:
 
