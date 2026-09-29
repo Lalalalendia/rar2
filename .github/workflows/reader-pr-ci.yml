@@ -111,8 +111,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # CI control-plane authority comes from the base branch so already-open
+          # PR heads do not need to contain newly introduced classifier scripts.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           fetch-depth: 0
+
+      - name: Fetch PR head for diff classification
+        if: ${{ github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
 
       - name: Test PR fanout classifier
         run: python tools/ci/test_reader_pr_fanout.py
