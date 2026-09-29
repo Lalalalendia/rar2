@@ -767,7 +767,6 @@ mod tests {
         assert_eq!(bytes, b"12");
     }
 
-
     fn corrupt_first_minifat_entry(mut bytes: Vec<u8>) -> Vec<u8> {
         let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
         let sector_len = 1usize << sector_shift;
