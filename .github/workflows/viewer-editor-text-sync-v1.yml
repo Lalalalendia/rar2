@@ -1,10 +1,6 @@
 name: VIEWER-EDITOR-TEXT-SYNC-01
 
 on:
-  pull_request:
-    paths:
-      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
-      - ".github/workflows/viewer-editor-text-sync-v1.yml"
   push:
     branches:
       - viewer-editor-text-projection-sync-01

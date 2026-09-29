@@ -21,7 +21,18 @@ on:
       - "crates/chaptera-update-trust/**"
       - "crates/chaptera-viewer-render-plan/**"
       - "crates/pub-presentation-profile/**"
-      - "vendor/producer-a/**"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/crates/pub-core/**"
+      - "vendor/producer-a/crates/pub-cfb/**"
+      - "vendor/producer-a/crates/pub-contents/**"
+      - "vendor/producer-a/crates/pub-escher/**"
+      - "vendor/producer-a/crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-quill/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-layout/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-editor/**"
       - "packages/product/reader-portable/**"
       - "packages/product/editor-live-trial/**"
       - "packages/product/desktop-suite/**"
@@ -36,6 +47,7 @@ on:
       - "tools/ci/test_reader_consumer_preflight.py"
       - "tools/ci/reader_pr_fanout.py"
       - "tools/ci/test_reader_pr_fanout.py"
+      - "tools/reader_active_content_guard.py"
       - "tools/package_reader_portable.py"
       - "tools/test_package_reader_portable.py"
       - "tools/package_editor_live_trial.py"
@@ -48,8 +60,6 @@ on:
       - "tools/acquire_carlton_march_pair.py"
       - "tools/pdf_reference_diff_v1.py"
       - "tools/reader_reference_pdf_raster_v1.py"
-      - "tools/reader_corpus_manifest_v1.json"
-      - "tools/run_reader_corpus_matrix_v1.py"
       - "tools/run_web_editor_real_acceptance.mjs"
       - "tools/sample_newsletter_move_producer.py"
       - "tools/resolved_graph_scene_bridge_v1.py"
@@ -62,7 +72,6 @@ on:
       - "tools/run_cloud_config_receipt.py"
       - "tools/package_local_portable.py"
       - "tools/scene_v1.py"
-      - "tools/chaptera-win-lifecycle-soak.ps1"
       - "tools/validate_export_preview.py"
       - ".github/workflows/reader-pr-ci.yml"
       - ".github/workflows/reader-consumer-preflight.yml"
@@ -70,17 +79,15 @@ on:
       - ".github/workflows/chaptera-desktop-windows.yml"
       - ".github/workflows/chaptera-local-portable-windows.yml"
       - ".github/workflows/carlton-reader-visual-oracle.yml"
+      - ".github/workflows/mobile-reader-android-core-portability.yml"
       - ".github/workflows/mobile-reader-android-local-open.yml"
       - ".github/workflows/mobile-reader-android-render.yml"
-      - ".github/workflows/reader-corpus-truth-v1.yml"
       - ".github/workflows/reader-typography-golden.yml"
       - ".github/workflows/web-acceptance-real-chromium.yml"
       - ".github/workflows/chaptera-reader-installer.yml"
       - ".github/workflows/chaptera-win-path-identity.yml"
       - ".github/workflows/chaptera-win-update-accept.yml"
-      - ".github/workflows/chaptera-win-lifecycle-soak.yml"
       - ".github/workstream-scopes/chaptera-win-update-accept-01.md"
-      - ".github/workstream-scopes/chaptera-win-lifecycle-soak-01.md"
   workflow_dispatch:
 
 concurrency:
@@ -100,14 +107,13 @@ jobs:
       editor_windows: ${{ steps.scope.outputs.editor_windows }}
       visual_oracle: ${{ steps.scope.outputs.visual_oracle }}
       typography_golden: ${{ steps.scope.outputs.typography_golden }}
-      corpus_truth: ${{ steps.scope.outputs.corpus_truth }}
+      android_core: ${{ steps.scope.outputs.android_core }}
       android: ${{ steps.scope.outputs.android }}
       web: ${{ steps.scope.outputs.web }}
       local_portable: ${{ steps.scope.outputs.local_portable }}
       installer: ${{ steps.scope.outputs.installer }}
       path_identity: ${{ steps.scope.outputs.path_identity }}
       update_accept: ${{ steps.scope.outputs.update_accept }}
-      lifecycle_soak: ${{ steps.scope.outputs.lifecycle_soak }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -180,11 +186,11 @@ jobs:
     if: ${{ always() && needs.classify.outputs.typography_golden == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/reader-typography-golden.yml
 
-  corpus-truth:
-    name: Reader corpus truth
+  android-core:
+    name: Android core portability
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.corpus_truth == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
-    uses: ./.github/workflows/reader-corpus-truth-v1.yml
+    if: ${{ always() && needs.classify.outputs.android_core == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/mobile-reader-android-core-portability.yml
 
   android-local-open:
     name: Android local open
@@ -227,11 +233,3 @@ jobs:
     needs: [classify, tier-a]
     if: ${{ always() && needs.classify.outputs.update_accept == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-win-update-accept.yml
-
-  lifecycle-soak:
-    name: Windows lifecycle soak
-    needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.lifecycle_soak == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
-    uses: ./.github/workflows/chaptera-win-lifecycle-soak.yml
-    with:
-      cycles: "3"

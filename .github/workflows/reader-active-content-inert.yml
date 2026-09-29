@@ -1,14 +1,6 @@
 name: Reader active-content inertness V1
 
 on:
-  pull_request:
-    paths:
-      - "apps/chaptera-desktop/**"
-      - "vendor/producer-a/crates/pub-viewer/**"
-      - "vendor/producer-a/crates/pub-editor/**"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "tools/reader_active_content_guard.py"
-      - ".github/workflows/reader-active-content-inert.yml"
   workflow_dispatch:
 
 concurrency:
