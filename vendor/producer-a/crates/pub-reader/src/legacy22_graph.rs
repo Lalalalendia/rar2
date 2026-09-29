@@ -18,6 +18,7 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 
 const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
+const LEGACY_PAGE_LIST_SPECIAL_TYPE: u16 = 0x0041;
 const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0008;
 const LEGACY_LIST_HEADER_SIZE: usize = 10;
 const LEGACY_LIST_U16_RECORD_SIZE: u16 = 2;
@@ -119,6 +120,7 @@ pub fn build_legacy_0x22_quill_from_streams(
     let mut pages = BTreeMap::new();
     let mut page_object_to_id = BTreeMap::new();
     let mut seen_pages = BTreeSet::new();
+    let mut diagnostics = Vec::new();
 
     for (page_object_id, _) in &document_page_list.ids {
         if !seen_pages.insert(*page_object_id) {
@@ -129,9 +131,16 @@ pub fn build_legacy_0x22_quill_from_streams(
             .with_context(|| {
                 format!("legacy DOCUMENT PageList references missing object {page_object_id}")
             })?;
+        if entry.chunk_type == LEGACY_PAGE_LIST_SPECIAL_TYPE {
+            diagnostics.push(PubBridgeDiagnostic::PageListSpecialEntry {
+                handle: u32::from(*page_object_id),
+                raw_type: entry.chunk_type,
+            });
+            continue;
+        }
         if entry.chunk_type != LEGACY_PAGE_TYPE {
             bail!(
-                "legacy DOCUMENT PageList object {} has type {:#06x}, expected PAGE 0x0014",
+                "legacy DOCUMENT PageList object {} has type {:#06x}, expected PAGE 0x0014 or admitted special 0x0041",
                 page_object_id,
                 entry.chunk_type
             );
@@ -211,7 +220,6 @@ pub fn build_legacy_0x22_quill_from_streams(
         story_by_syid.insert(syid, story_id);
     }
 
-    let mut diagnostics = Vec::new();
     for (page_object_id, page_id) in &page_object_to_id {
         let page_entry = directory
             .entry_by_object_id(*page_object_id)
