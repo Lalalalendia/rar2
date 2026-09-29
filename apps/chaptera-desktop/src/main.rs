@@ -3997,6 +3997,12 @@ impl ViewerApp {
                 }
             }
             self.page_frame_cache.clear();
+
+            // egui applies FontDefinitions at the next pass boundary. Do not
+            // build or paint a render plan that names a newly registered
+            // source-font family in the same pass that calls set_fonts.
+            ui.ctx().request_repaint();
+            return;
         }
 
         self.ensure_image_textures(ui.ctx());
