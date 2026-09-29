@@ -1853,9 +1853,9 @@ pub fn build_mature_0x2c_from_streams(
             })
             .collect(),
         Err(StoryCatalogReadError::MissingDeclaredCount) => {
-            let _derived_empty =
+            let _physical_empty =
                 parse_bounded_empty_mature_story_catalog_variant(contents, &story_catalog_chunk)
-                    .context("parse bounded derived-empty Story catalog 0x65 variant")?;
+                    .context("parse bounded physical-empty Story catalog 0x65 variant")?;
 
             let mut referenced_story_ids = BTreeSet::new();
             for reference in references.values() {
@@ -1872,7 +1872,7 @@ pub fn build_mature_0x2c_from_streams(
             }
             if !referenced_story_ids.is_empty() {
                 bail!(
-                    "derived-empty Story catalog 0x65 conflicts with live Story references: {:?}",
+                    "physical-empty Story catalog 0x65 conflicts with live Story references: {:?}",
                     referenced_story_ids
                 );
             }
