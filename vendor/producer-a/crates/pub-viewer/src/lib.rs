@@ -49,8 +49,7 @@ use pub_reader::{
     PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload, PubSourceGraphBuild,
     analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph,
-    derive_pub_page_id, resolve_pub_source_graph,
+    build_mature_0x2c_source_graph, derive_pub_page_id, resolve_pub_source_graph,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -3180,8 +3179,16 @@ mod legacy22_noquill_exact_product_tests {
             visual.document.source.format_version.as_deref(),
             Some("0x22-noquill")
         );
-        assert_eq!(visual.document.pages.len(), 4, "authoritative Publisher97 page list");
-        assert_eq!(visual.scene.surfaces.len(), 4, "one surface per admitted page");
+        assert_eq!(
+            visual.document.pages.len(),
+            4,
+            "authoritative Publisher97 page list"
+        );
+        assert_eq!(
+            visual.scene.surfaces.len(),
+            4,
+            "one surface per admitted page"
+        );
         assert!(!visual.scene.nodes.is_empty(), "grounded legacy geometry");
         assert!(
             !visual.document.search_text("OPEN HOUSE").is_empty(),
@@ -3195,7 +3202,10 @@ mod legacy22_noquill_exact_product_tests {
             !visual.document.search_text("street address").is_empty(),
             "third grounded literal must be searchable"
         );
-        assert_eq!(visual.document.fidelity_status(), ViewerFidelityStatus::Partial);
+        assert_eq!(
+            visual.document.fidelity_status(),
+            ViewerFidelityStatus::Partial
+        );
 
         let after = fs::read(&path).expect("re-read exact OPNHOUS fixture");
         assert_eq!(after, before, "Reader path mutated source PUB");
