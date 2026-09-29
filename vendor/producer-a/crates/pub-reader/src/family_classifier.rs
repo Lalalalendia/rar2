@@ -112,22 +112,7 @@ pub struct PubFamilyClassification {
 pub fn classify_pub_family(bytes: &[u8]) -> PubFamilyClassification {
     let inventory = match pub_cfb::inspect_reader(Cursor::new(bytes)) {
         Ok(inventory) => inventory,
-        Err(_) => {
-            return PubFamilyClassification {
-                family: None,
-                profile: PubFamilyProfile::NotStructuredPublisher,
-                route: PubReaderRoute::Unsupported,
-                confidence: PubFamilyConfidence::Low,
-                contents_magic: None,
-                serialization_revision: None,
-                legacy_content_version: None,
-                legacy_secondary_fingerprint: None,
-                has_quill: false,
-                has_escher: false,
-                has_escher_delay: false,
-                reasons: vec![PubFamilyReason::CfbParseFailed],
-            };
-        }
+        Err(_) => return classify_recoverable_legacy_low_text(bytes),
     };
 
     let has_path = |path: &str| inventory.entries.iter().any(|entry| entry.path == path);
@@ -286,6 +271,79 @@ pub fn classify_pub_family(bytes: &[u8]) -> PubFamilyClassification {
                 reasons,
             }
         }
+    }
+}
+
+fn classify_recoverable_legacy_low_text(bytes: &[u8]) -> PubFamilyClassification {
+    let recovered = match pub_cfb::recover_root_regular_stream_reader(
+        Cursor::new(bytes),
+        CONTENTS_STREAM_PATH,
+    ) {
+        Ok(recovered) => recovered,
+        Err(_) => return cfb_parse_failed_classification(),
+    };
+
+    let has_quill = recovered
+        .root_entry_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("Quill"));
+    let has_escher = recovered
+        .root_entry_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("Escher"));
+
+    // The recovery seam is intentionally limited to the old no-Quill family.
+    // If either complex root carrier exists, retain the strict CFB failure
+    // rather than silently bypassing validation for Quill/Escher content.
+    if has_quill || has_escher {
+        return cfb_parse_failed_classification();
+    }
+
+    let contents_magic = recovered
+        .bytes
+        .get(..4)
+        .map(|magic| [magic[0], magic[1], magic[2], magic[3]]);
+    if pub_contents::detect_family(&recovered.bytes) != Ok(ContentsFamily::Family0x22) {
+        return cfb_parse_failed_classification();
+    }
+
+    PubFamilyClassification {
+        family: Some(ContentsFamily::Family0x22),
+        profile: PubFamilyProfile::Legacy22LowText,
+        route: PubReaderRoute::Legacy22LowText,
+        confidence: PubFamilyConfidence::Medium,
+        contents_magic,
+        serialization_revision: None,
+        legacy_content_version: read_u16_le_at(&recovered.bytes, 0x04),
+        legacy_secondary_fingerprint: read_u16_le_at(&recovered.bytes, 0x0c),
+        has_quill: false,
+        has_escher: false,
+        has_escher_delay: false,
+        reasons: vec![
+            PubFamilyReason::CfbContainer,
+            PubFamilyReason::CfbParseFailed,
+            PubFamilyReason::ContentsStream,
+            PubFamilyReason::ContentsFamily0x22,
+            PubFamilyReason::QuillAbsent,
+            PubFamilyReason::EscherAbsent,
+        ],
+    }
+}
+
+fn cfb_parse_failed_classification() -> PubFamilyClassification {
+    PubFamilyClassification {
+        family: None,
+        profile: PubFamilyProfile::NotStructuredPublisher,
+        route: PubReaderRoute::Unsupported,
+        confidence: PubFamilyConfidence::Low,
+        contents_magic: None,
+        serialization_revision: None,
+        legacy_content_version: None,
+        legacy_secondary_fingerprint: None,
+        has_quill: false,
+        has_escher: false,
+        has_escher_delay: false,
+        reasons: vec![PubFamilyReason::CfbParseFailed],
     }
 }
 
@@ -457,6 +515,66 @@ mod tests {
         assert_eq!(classified.legacy_secondary_fingerprint, Some(0x0088));
         assert!(!classified.has_quill);
         assert!(!classified.has_escher);
+    }
+
+    fn malformed_minifat_legacy_fixture(with_quill: bool) -> Vec<u8> {
+        let mut contents = contents(pub_contents::CONTENTS_0X22_MAGIC, 136, 0x0088);
+        contents.resize(5_000, 0);
+
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("create recovery fixture");
+        compound
+            .create_stream(CONTENTS_STREAM_PATH)
+            .expect("create regular Contents")
+            .write_all(&contents)
+            .expect("write regular Contents");
+        compound
+            .create_storage("/Objects")
+            .expect("create Objects");
+        compound
+            .create_stream("/Objects/damaged")
+            .expect("create damaged mini stream")
+            .write_all(b"small")
+            .expect("write damaged mini stream");
+        if with_quill {
+            compound.create_storage("/Quill").expect("create Quill");
+            compound
+                .create_storage("/Quill/QuillSub")
+                .expect("create QuillSub");
+            compound
+                .create_stream(QUILL_STREAM_PATH)
+                .expect("create Quill stream")
+                .write_all(b"q")
+                .expect("write Quill");
+        }
+        compound.flush().expect("flush recovery fixture");
+        let mut bytes = compound.into_inner().into_inner();
+
+        let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
+        let sector_len = 1usize << sector_shift;
+        let minifat_sector = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
+        let offset = (minifat_sector as usize + 1) * sector_len;
+        bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn malformed_minifat_can_recover_only_bounded_legacy_low_text() {
+        let classified = classify_pub_family(&malformed_minifat_legacy_fixture(false));
+        assert_eq!(classified.family, Some(ContentsFamily::Family0x22));
+        assert_eq!(classified.profile, PubFamilyProfile::Legacy22LowText);
+        assert_eq!(classified.route, PubReaderRoute::Legacy22LowText);
+        assert_eq!(classified.confidence, PubFamilyConfidence::Medium);
+        assert_eq!(classified.legacy_content_version, Some(136));
+        assert!(classified.reasons.contains(&PubFamilyReason::CfbParseFailed));
+    }
+
+    #[test]
+    fn malformed_minifat_with_quill_stays_fail_closed() {
+        let classified = classify_pub_family(&malformed_minifat_legacy_fixture(true));
+        assert_eq!(classified.profile, PubFamilyProfile::NotStructuredPublisher);
+        assert_eq!(classified.route, PubReaderRoute::Unsupported);
+        assert!(classified.reasons.contains(&PubFamilyReason::CfbParseFailed));
     }
 
     #[test]
