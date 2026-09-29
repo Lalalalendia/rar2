@@ -372,19 +372,9 @@ mod platform {
             ));
         }
 
-        if let Some(Component::Prefix(prefix)) = cwd.components().next() {
-            let drive = match prefix.kind() {
-                Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => Some(letter),
-                _ => None,
-            };
-            if let Some(letter) = drive {
-                entries.push((
-                    format!("={}:", (letter as char).to_ascii_uppercase()),
-                    cwd.as_os_str().to_os_string(),
-                ));
-            }
-        }
-
+        // `lpCurrentDirectory` is passed explicitly to CreateProcessW, so the
+        // legacy hidden `=X:` drive-current-directory variables are unnecessary here.
+        // Keeping them out also avoids malformed/manual environment-block edge cases.
         entries.sort_by(|a, b| {
             a.0.to_uppercase()
                 .cmp(&b.0.to_uppercase())
