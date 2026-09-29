@@ -21,10 +21,8 @@ use tokio::{
 };
 
 use crate::{
-    blob_store::BlobStoreService,
-    guest_intake_classifier::guest_failure_intake_evidence,
-    reader_scene_v1::from_viewer_geometry,
-    source_ingress_security::SourceSecurityScannerConfig,
+    blob_store::BlobStoreService, guest_intake_classifier::guest_failure_intake_evidence,
+    reader_scene_v1::from_viewer_geometry, source_ingress_security::SourceSecurityScannerConfig,
 };
 
 pub const GUEST_SCENE_WORKER_V1: &str = "chaptera.reader-guest-scene-worker.v1";
@@ -384,12 +382,9 @@ pub fn run_guest_scene_worker(
             ),
         };
 
-    let failure_classification = guest_failure_intake_evidence(
-        &source_bytes,
-        &classification,
-        terminal_code.as_deref(),
-    )
-    .map(|evidence| evidence.classification);
+    let failure_classification =
+        guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
+            .map(|evidence| evidence.classification);
 
     let receipt = GuestSceneWorkerReceiptV1 {
         protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
@@ -457,12 +452,13 @@ fn validate_receipt(
                     "unsupported receipt shape is invalid",
                 ));
             }
-            let failure_classification = receipt.failure_classification.as_ref().ok_or_else(|| {
-                GuestSceneWorkerError::new(
-                    "guest_scene_receipt_invalid",
-                    "unsupported receipt is missing server failure classification",
-                )
-            })?;
+            let failure_classification =
+                receipt.failure_classification.as_ref().ok_or_else(|| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_receipt_invalid",
+                        "unsupported receipt is missing server failure classification",
+                    )
+                })?;
             failure_classification.validate().map_err(|_| {
                 GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
