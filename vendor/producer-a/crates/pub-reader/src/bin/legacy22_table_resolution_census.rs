@@ -4,6 +4,8 @@ use pub_contents::{
     Legacy0x22TableCatalogReadError, Legacy0x22TableTextReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
 };
 use pub_core::StreamPath;
+use pub_model::Sha256Digest;
+use pub_reader::{build_legacy_0x22_noquill_source_graph, PubBridgeDiagnostic};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -18,14 +20,43 @@ const CONTENTS_STREAM_PATH: &str = "/Contents";
 struct ErrorAggregate {
     file_count: usize,
     raw_0001_count: usize,
+    reader_target_file_count: usize,
+    reader_target_residual_count: usize,
     detail_counts: BTreeMap<String, usize>,
     raw_0001_per_file_counts: BTreeMap<usize, usize>,
+    reader_target_per_file_counts: BTreeMap<usize, usize>,
     example_source_sha256: Vec<String>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn source_hash(bytes: &[u8]) -> Sha256Digest {
+    Sha256Digest::from_bytes(Sha256::digest(bytes).into())
+}
+
+fn reader_raw_0001_target_count(bytes: &[u8]) -> usize {
+    let Ok(build) =
+        build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash(bytes))
+    else {
+        return 0;
+    };
+    build
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic,
+                PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                    raw_type: Some(LEGACY_0X22_TABLE_CHUNK_TYPE),
+                    reason,
+                    ..
+                } if reason == "legacy_noquill_object_type_not_admitted_v1"
+            )
+        })
+        .count()
 }
 
 fn text_error_kind(error: &Legacy0x22TableTextReadError) -> &'static str {
@@ -134,6 +165,10 @@ fn main() -> Result<()> {
     let mut files_with_raw_0001 = 0usize;
     let mut raw_0001_physical_count = 0usize;
     let mut resolver_ok_files = 0usize;
+    let mut resolver_ok_reader_target_files = 0usize;
+    let mut resolver_ok_reader_target_residual_count = 0usize;
+    let mut reader_target_files = 0usize;
+    let mut reader_target_residual_count = 0usize;
     let mut resolved_table_count = 0usize;
     let mut placeholder_chunk_count = 0usize;
     let mut cfb_contents_unavailable = 0usize;
@@ -171,6 +206,11 @@ fn main() -> Result<()> {
 
         files_with_raw_0001 += 1;
         raw_0001_physical_count += raw_0001_count;
+        let reader_target_count = reader_raw_0001_target_count(&bytes);
+        reader_target_residual_count += reader_target_count;
+        if reader_target_count > 0 {
+            reader_target_files += 1;
+        }
 
         match parse_legacy_0x22_resolved_tables(
             StreamPath(CONTENTS_STREAM_PATH.into()),
@@ -178,6 +218,10 @@ fn main() -> Result<()> {
         ) {
             Ok(catalog) => {
                 resolver_ok_files += 1;
+                if reader_target_count > 0 {
+                    resolver_ok_reader_target_files += 1;
+                    resolver_ok_reader_target_residual_count += reader_target_count;
+                }
                 resolved_table_count += catalog.tables.len();
                 placeholder_chunk_count += catalog.placeholder_chunk_indices.len();
             }
@@ -186,9 +230,17 @@ fn main() -> Result<()> {
                 let aggregate = errors.entry(kind).or_default();
                 aggregate.file_count += 1;
                 aggregate.raw_0001_count += raw_0001_count;
+                if reader_target_count > 0 {
+                    aggregate.reader_target_file_count += 1;
+                    aggregate.reader_target_residual_count += reader_target_count;
+                }
                 *aggregate
                     .raw_0001_per_file_counts
                     .entry(raw_0001_count)
+                    .or_default() += 1;
+                *aggregate
+                    .reader_target_per_file_counts
+                    .entry(reader_target_count)
                     .or_default() += 1;
                 if let Some(detail) = table_error_detail(&error) {
                     *aggregate.detail_counts.entry(detail).or_default() += 1;
@@ -212,8 +264,11 @@ fn main() -> Result<()> {
                 "kind": kind,
                 "file_count": aggregate.file_count,
                 "raw_0001_physical_count": aggregate.raw_0001_count,
+                "reader_target_file_count": aggregate.reader_target_file_count,
+                "reader_target_residual_count": aggregate.reader_target_residual_count,
                 "detail_counts": aggregate.detail_counts,
                 "raw_0001_per_file_counts": aggregate.raw_0001_per_file_counts,
+                "reader_target_per_file_counts": aggregate.reader_target_per_file_counts,
                 "example_source_sha256": aggregate.example_source_sha256,
             })
         })
@@ -226,6 +281,10 @@ fn main() -> Result<()> {
         "files_with_raw_0001": files_with_raw_0001,
         "raw_0001_physical_count": raw_0001_physical_count,
         "resolver_ok_files": resolver_ok_files,
+        "resolver_ok_reader_target_files": resolver_ok_reader_target_files,
+        "resolver_ok_reader_target_residual_count": resolver_ok_reader_target_residual_count,
+        "reader_target_files": reader_target_files,
+        "reader_target_residual_count": reader_target_residual_count,
         "resolved_table_count": resolved_table_count,
         "placeholder_chunk_count": placeholder_chunk_count,
         "resolver_error_files": error_file_count,
