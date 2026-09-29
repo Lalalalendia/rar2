@@ -332,7 +332,7 @@ async fn put_content(
     let metadata = create_result.map_err(map_blob_error)?;
     pump_result?;
 
-    let stored = state
+    let stored = match state
         .sessions
         .mark_stored(
             &session.session_id,
@@ -341,7 +341,23 @@ async fn put_content(
             &metadata.etag,
             now_ms,
         )
-        .await?;
+        .await
+    {
+        Ok(stored) => stored,
+        Err(error) => {
+            let _ = state
+                .blob_store
+                .delete_quarantine_exact(
+                    GUEST_SERVICE_TENANT_ID,
+                    &session.upload_id,
+                    &metadata.storage_generation,
+                    &metadata.etag,
+                    metadata.byte_len,
+                )
+                .await;
+            return Err(error);
+        }
+    };
 
     Ok(GuestJson(GuestUploadResponse {
         protocol_version: GUEST_PROTOCOL_V1,
