@@ -1,15 +1,10 @@
 name: Reader typography golden SampleNewsletter
 
 on:
+  workflow_call:
   workflow_dispatch:
   pull_request:
     paths:
-      - "vendor/producer-a/crates/pub-quill/**"
-      - "vendor/producer-a/crates/pub-reader/**"
-      - "vendor/producer-a/crates/pub-viewer/**"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "apps/chaptera-desktop/src/render_backend.rs"
-      - "apps/chaptera-desktop/src/main.rs"
       - ".github/workflows/reader-typography-golden.yml"
 
 concurrency:
@@ -20,21 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
 
-  # The Producer A receipt workflow may update the branch once; this job renders only the settled head.
   golden:
-    needs: reader-consumer-admission
-    if: needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
