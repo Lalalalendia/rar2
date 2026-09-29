@@ -208,6 +208,7 @@ jobs:
           # reparsing the same CFB files. Compare OleData.V (+0x0A) against exact
           # /Objects/Object N roots and correlate F (+0x0E) with matched-root topology.
           import re
+          import olefile
 
           fingerprints = json.loads(
               Path("out/legacy625/fingerprints.json").read_text()
@@ -217,6 +218,7 @@ jobs:
               for row in fingerprints
               if row.get("sha256")
           }
+          sha_to_path = {path.stem.lower(): path for path in paths}
 
           cfb_join = {
               "candidate_count": len(candidates),
@@ -234,6 +236,8 @@ jobs:
               "v_matched_root_has_ole_stream": 0,
               "v_matched_root_has_compobj": 0,
               "v_matched_root_has_contents": 0,
+              "v_matched_root_ole_header_present": 0,
+              "v_matched_root_ole_header_missing": 0,
               "files_v_set_equals_object_root_set": 0,
               "files_v_set_subset_object_root_set": 0,
               "files_object_root_set_subset_v_set": 0,
@@ -249,6 +253,13 @@ jobs:
           f_by_revision = Counter()
           candidate_file_revisions = Counter()
           candidate_instance_revisions = Counter()
+          ole_stream_version_counts = Counter()
+          ole_stream_flags_counts = Counter()
+          ole_stream_update_option_counts = Counter()
+          f_by_ole_stream_presence = Counter()
+          f_by_ole_stream_flags = Counter()
+          f_by_ole_stream_update_option = Counter()
+          f_by_ole_stream_flags_update = Counter()
           topology_by_sha = {}
           logical_groups = defaultdict(list)
 
@@ -274,6 +285,7 @@ jobs:
               logical_groups[logical_identity].append(source_sha)
 
               object_features = defaultdict(set)
+              ole_stream_parts_by_object = {}
               object_numbers = set()
               olepres_numbers = set()
               any_numbers = set()
@@ -304,6 +316,13 @@ jobs:
                               normalized = folded.lstrip("\x00\x01\x02")
                               if normalized == "ole":
                                   object_features[object_number].add("ole")
+                                  previous = ole_stream_parts_by_object.get(object_number)
+                                  if previous is not None and previous != parts:
+                                      raise RuntimeError(
+                                          f"{source_sha}: multiple distinct \\x01Ole streams "
+                                          f"under Object {object_number}"
+                                      )
+                                  ole_stream_parts_by_object[object_number] = parts
                               if "compobj" in folded:
                                   object_features[object_number].add("compobj")
                               if normalized == "contents":
@@ -318,11 +337,46 @@ jobs:
                       for numeric in re.finditer(r"\d+", component):
                           any_numbers.add(int(numeric.group(0)))
 
+              ole_headers = {}
+              if ole_stream_parts_by_object:
+                  source_path = sha_to_path.get(source_sha)
+                  if source_path is None:
+                      raise RuntimeError(
+                          f"{source_sha}: candidate source is missing from pinned corpus paths"
+                      )
+                  try:
+                      with olefile.OleFileIO(str(source_path)) as ole:
+                          for object_number, parts in sorted(
+                              ole_stream_parts_by_object.items()
+                          ):
+                              raw_header = ole.openstream(parts).read(12)
+                              if len(raw_header) < 12:
+                                  raise RuntimeError(
+                                      f"Object {object_number} \\x01Ole stream is shorter than "
+                                      f"the 12-byte standard header: {len(raw_header)}"
+                                  )
+                              ole_headers[object_number] = {
+                                  "version": int.from_bytes(
+                                      raw_header[0:4], "little", signed=False
+                                  ),
+                                  "flags": int.from_bytes(
+                                      raw_header[4:8], "little", signed=False
+                                  ),
+                                  "update_option": int.from_bytes(
+                                      raw_header[8:12], "little", signed=False
+                                  ),
+                              }
+                  except Exception as exc:
+                      raise RuntimeError(
+                          f"{source_sha}: failed to read bounded \\x01Ole headers: {exc}"
+                      ) from exc
+
               topology_by_sha[source_sha] = {
                   "object_numbers": object_numbers,
                   "olepres_numbers": olepres_numbers,
                   "any_numbers": any_numbers,
                   "object_features": object_features,
+                  "ole_headers": ole_headers,
                   "revision": revision,
               }
 
@@ -366,6 +420,7 @@ jobs:
               olepres_numbers = topology["olepres_numbers"]
               any_numbers = topology["any_numbers"]
               object_features = topology["object_features"]
+              ole_headers = topology["ole_headers"]
 
               v_values[str(v)] += 1
               candidate_instance_revisions[revision] += 1
@@ -390,6 +445,27 @@ jobs:
                       cfb_join["v_matched_root_has_compobj"] += 1
                   if "contents" in features:
                       cfb_join["v_matched_root_has_contents"] += 1
+
+                  ole_header = ole_headers.get(v)
+                  if ole_header is None:
+                      cfb_join["v_matched_root_ole_header_missing"] += 1
+                      f_by_ole_stream_presence[(str(f), "missing")] += 1
+                  else:
+                      cfb_join["v_matched_root_ole_header_present"] += 1
+                      f_by_ole_stream_presence[(str(f), "present")] += 1
+                      version = str(ole_header["version"])
+                      flags = str(ole_header["flags"])
+                      update_option = str(ole_header["update_option"])
+                      ole_stream_version_counts[version] += 1
+                      ole_stream_flags_counts[flags] += 1
+                      ole_stream_update_option_counts[update_option] += 1
+                      f_by_ole_stream_flags[(str(f), flags)] += 1
+                      f_by_ole_stream_update_option[
+                          (str(f), update_option)
+                      ] += 1
+                      f_by_ole_stream_flags_update[
+                          (str(f), flags, update_option)
+                      ] += 1
 
               if v + 1 in object_numbers:
                   cfb_join["v_plus_1_in_object_storage_number"] += 1
@@ -438,6 +514,42 @@ jobs:
           cfb_join["f_by_revision_counts"] = {
               f"{revision}:{f}": count
               for (revision, f), count in sorted(f_by_revision.items())
+          }
+          cfb_join["ole_stream_version_counts"] = dict(
+              sorted(
+                  ole_stream_version_counts.items(),
+                  key=lambda item: int(item[0]),
+              )
+          )
+          cfb_join["ole_stream_flags_counts"] = dict(
+              sorted(
+                  ole_stream_flags_counts.items(),
+                  key=lambda item: int(item[0]),
+              )
+          )
+          cfb_join["ole_stream_update_option_counts"] = dict(
+              sorted(
+                  ole_stream_update_option_counts.items(),
+                  key=lambda item: int(item[0]),
+              )
+          )
+          cfb_join["f_by_ole_stream_presence_counts"] = {
+              f"{f}:{presence}": count
+              for (f, presence), count in sorted(f_by_ole_stream_presence.items())
+          }
+          cfb_join["f_by_ole_stream_flags_counts"] = {
+              f"{f}:{flags}": count
+              for (f, flags), count in sorted(f_by_ole_stream_flags.items())
+          }
+          cfb_join["f_by_ole_stream_update_option_counts"] = {
+              f"{f}:{update}": count
+              for (f, update), count
+              in sorted(f_by_ole_stream_update_option.items())
+          }
+          cfb_join["f_by_ole_stream_flags_update_counts"] = {
+              f"{f}:{flags}:{update}": count
+              for (f, flags, update), count
+              in sorted(f_by_ole_stream_flags_update.items())
           }
           cfb_join["candidate_file_logical_identity_count"] = len(logical_groups)
           cfb_join["candidate_file_duplicate_logical_group_count"] = sum(
