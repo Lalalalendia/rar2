@@ -47,6 +47,10 @@ jobs:
       - name: Build Reader-only desktop source
         run: cargo build -p chaptera-desktop --release --features reader-only
 
+      - name: Stage contained desktop-open runtime
+        shell: pwsh
+        run: ./tools/windows/build_desktop_open_runtime.ps1 -Destination "target/release"
+
       - name: Stage canonical Reader executable
         shell: pwsh
         run: |
@@ -267,7 +271,7 @@ jobs:
 
       - name: Build portable Chaptera Reader ZIP
         run: |
-          python tools/package_reader_portable.py --reader-exe target/release/chaptera-reader.exe --output-zip target/release/Chaptera-Reader-Windows-x86_64.zip --manifest target/release/Chaptera-Reader.package.json
+          python tools/package_reader_portable.py --reader-exe target/release/chaptera-reader.exe --runtime-dir target/release --output-zip target/release/Chaptera-Reader-Windows-x86_64.zip --manifest target/release/Chaptera-Reader.package.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -310,7 +314,13 @@ jobs:
           if (Test-Path (Join-Path $clean "Cargo.toml")) { throw "Reader ZIP leaked a Cargo checkout" }
 
           $entries = Get-ChildItem -File $clean | Select-Object -ExpandProperty Name
-          $expected = @("Chaptera-Reader.exe", "README.md")
+          $expected = @(
+            "Chaptera-Reader.exe",
+            "README.md",
+            "chaptera-desktop-open-worker.exe",
+            "chaptera-desktop-open-sandbox-host.exe",
+            "chaptera-desktop-open-runtime.json"
+          )
           if ((Compare-Object ($entries | Sort-Object) ($expected | Sort-Object)).Count -ne 0) {
             throw "Reader ZIP contains unexpected entries: $($entries -join ', ')"
           }
