@@ -84,6 +84,7 @@ fn text_frame(
             officeart_shape_type: Some(202),
             officeart_spid: Some(100 + ordinal),
             image_slot: None,
+            legacy_ole: None,
             explicit_image_crop: None,
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
