@@ -7,6 +7,7 @@ on:
       - main
       - corpus/reader-1050-baseline
       - research/legacy-ole-wmf-special-object-census-01
+      - research/legacy-ole-wmf-region-tail-332
     paths:
       - '.github/workflows/reader-1050-corpus-baseline.yml'
       - 'tools/corpus/pub_container_extract.py'
