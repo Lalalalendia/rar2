@@ -312,6 +312,9 @@ jobs:
           unique_function_sets = Counter()
           max_record_words = 0
           max_record_function = None
+          wmf_payload_trailing_bytes_counts = Counter()
+          wmf_payload_trailing_nonzero_counts = Counter()
+          wmf_payload_trailing_hex_samples = Counter()
           pen_style_counts = Counter()
           brush_style_counts = Counter()
           polyfill_mode_counts = Counter()
@@ -380,6 +383,16 @@ jobs:
                               header_type_counts[str(w["mt_type"])] += 1
                               header_version_counts[f"0x{w['mt_version']:04X}"] += 1
                               record_count_distribution[str(len(w["functions"]))] += 1
+                              trailing_len = int(w["payload_trailing_bytes"])
+                              wmf_payload_trailing_bytes_counts[str(trailing_len)] += 1
+                              declared_end = len(p["data"]) - trailing_len
+                              trailing = p["data"][declared_end:]
+                              nonzero = sum(byte != 0 for byte in trailing)
+                              wmf_payload_trailing_nonzero_counts[
+                                  f"{trailing_len}:{nonzero}"
+                              ] += 1
+                              if trailing_len <= 64:
+                                  wmf_payload_trailing_hex_samples[trailing.hex()] += 1
                               fnset = tuple(sorted(set(w["functions"])))
                               unique_function_sets[",".join(f"0x{x:04X}" for x in fnset)] += 1
                               for fn in w["functions"]:
@@ -484,6 +497,16 @@ jobs:
                   for key, count in unique_function_sets.most_common()
               ],
               "wmf_max_record_words": max_record_words,
+              "wmf_payload_trailing_bytes_counts": dict(
+                  sorted(wmf_payload_trailing_bytes_counts.items(), key=lambda kv: int(kv[0]))
+              ),
+              "wmf_payload_trailing_nonzero_counts": dict(
+                  wmf_payload_trailing_nonzero_counts
+              ),
+              "wmf_payload_trailing_hex_samples": [
+                  {"hex": key, "count": count}
+                  for key, count in wmf_payload_trailing_hex_samples.most_common(20)
+              ],
               "wmf_max_record_function": (
                   f"0x{max_record_function:04X}" if max_record_function is not None else None
               ),
