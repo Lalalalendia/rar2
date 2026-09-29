@@ -123,8 +123,13 @@ jobs:
         with:
           # CI control-plane authority comes from the base branch so already-open
           # PR heads do not need to contain newly introduced classifier scripts.
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
           fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve current base authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Fetch PR head for diff classification
         if: ${{ github.event.pull_request.head.sha != '' }}
@@ -139,7 +144,7 @@ jobs:
       - name: Enforce cancellation-responsive selective fanout
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
@@ -184,7 +189,7 @@ jobs:
         shell: bash
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
         run: |
           set -euo pipefail
           changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
@@ -202,7 +207,7 @@ jobs:
         name: Classify changed paths once
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
