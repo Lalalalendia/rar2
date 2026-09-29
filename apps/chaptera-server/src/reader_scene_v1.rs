@@ -116,6 +116,14 @@ pub fn from_viewer_geometry(
     revision_id: String,
     geometry: &ViewerGeometryDocument,
 ) -> Result<ReaderSceneV1, String> {
+    let viewer_source_hash =
+        serialized_string(&geometry.document.source.source_hash, "Viewer source hash")?;
+    if viewer_source_hash != source_hash {
+        return Err(format!(
+            "Viewer source hash {viewer_source_hash} differs from durable source authority {source_hash}"
+        ));
+    }
+
     let mut pages = Vec::with_capacity(geometry.document.pages.len());
     let mut page_ids = HashSet::new();
     for page in &geometry.document.pages {
@@ -143,7 +151,10 @@ pub fn from_viewer_geometry(
     for node in &geometry.scene.nodes {
         let node_id = serialized_string(&node.origin, "node id")?;
         let parent_id = serialized_string(&node.parent_origin, "node parent id")?;
-        if parent_by_node.insert(node_id.clone(), parent_id.clone()).is_some() {
+        if parent_by_node
+            .insert(node_id.clone(), parent_id.clone())
+            .is_some()
+        {
             return Err(format!("duplicate Viewer node id {node_id}"));
         }
         let bounds = rect_from_serialized(&node.bounds)?;
@@ -313,7 +324,10 @@ pub fn from_viewer_geometry(
     if kind_by_node.values().any(|kind| *kind == "unknown") {
         reasons.push("node_kind_partial");
     }
-    if !diagnostics.is_empty() {
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == "warning")
+    {
         reasons.push("viewer_fidelity_warnings");
     }
 
@@ -325,7 +339,11 @@ pub fn from_viewer_geometry(
         scene_authority: "server_viewer_projection",
         stacking_fidelity: "unknown",
         fidelity: ReaderFidelityV1 {
-            state: if reasons.is_empty() { "supported" } else { "partial" },
+            state: if reasons.is_empty() {
+                "supported"
+            } else {
+                "partial"
+            },
             reasons,
         },
         pages,
