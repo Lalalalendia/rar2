@@ -1,0 +1,118 @@
+name: Reader scheme-color fixture intake
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.pub.gz.b64"
+      - "vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.fixture.json"
+      - "vendor/producer-a/crates/pub-reader/src/bin/scheme_color_oracle_receipt.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/paint_bridge_parity.rs"
+      - ".github/workflows/reader-scheme-color-fixture-intake.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.pub.gz.b64"
+      - "vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.fixture.json"
+      - "vendor/producer-a/crates/pub-reader/src/bin/scheme_color_oracle_receipt.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/paint_bridge_parity.rs"
+      - ".github/workflows/reader-scheme-color-fixture-intake.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Restore exact color1 PUB bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/scheme-color-fixture
+          python - <<'PY'
+          import base64, gzip, hashlib, json
+          from pathlib import Path
+
+          fixture = Path("vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.pub.gz.b64")
+          manifest = json.loads(Path("vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.fixture.json").read_text())
+          packed = base64.b64decode(fixture.read_text().strip(), validate=True)
+          assert hashlib.sha256(packed).hexdigest() == manifest["gzip_sha256"]
+          assert len(packed) == manifest["gzip_byte_len"]
+          data = gzip.decompress(packed)
+          assert hashlib.sha256(data).hexdigest() == manifest["source_sha256"]
+          assert len(data) == manifest["source_byte_len"]
+          Path("target/scheme-color-fixture/color1.pub").write_bytes(data)
+          PY
+
+      - name: Emit raw scheme-color receipt
+        run: |
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin scheme_color_oracle_receipt             -- target/scheme-color-fixture/color1.pub                target/scheme-color-fixture/raw-receipt.json
+
+      - name: Validate pinned scheme grammar
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("vendor/producer-a/crates/pub-reader/tests/fixtures")
+          manifest = json.loads((root / "color1-0f85b2b6.fixture.json").read_text())
+          receipt = json.loads(Path("target/scheme-color-fixture/raw-receipt.json").read_text())
+
+          expected = manifest["expected_scheme"]
+          assert receipt["source_sha256"] == manifest["source_sha256"]
+          assert receipt["byte_len"] == manifest["source_byte_len"]
+          assert receipt["oplsccm"]["name"] == expected["name"]
+          assert receipt["oplsccm"]["declared_count"] == expected["declared_count"]
+
+          slots = receipt["oplsccm"]["slots"]
+          assert [slot["ordinal"] for slot in slots] == expected["ordinals"]
+          assert [slot["rgb"] for slot in slots] == expected["raw_slot_rgb"]
+
+          fills = receipt["officeart"]["scheme_fills"]
+          assert len(fills) == 8, fills
+          assert [fill["scheme_ordinal"] for fill in fills] == expected["ordinals"], fills
+          PY
+
+      - name: Exercise real Reader Viewer open path
+        run: |
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --bin corpus-reader-receipt             -- target/scheme-color-fixture/color1.pub                target/scheme-color-fixture/reader-receipt.json
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --bin paint_bridge_parity             -- target/scheme-color-fixture/color1.pub
+
+      - name: Validate Reader product receipt
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.fixture.json").read_text())
+          reader = json.loads(Path("target/scheme-color-fixture/reader-receipt.json").read_text())
+          assert reader["source_sha256"] == manifest["source_sha256"]
+          assert reader["opened"] is True, reader
+          assert reader["paint_node_count"] >= 8, reader
+          assert reader["solid_fill_count"] >= 8, reader
+          PY
+
+      - name: Print receipts
+        if: always()
+        run: |
+          cat target/scheme-color-fixture/raw-receipt.json || true
+          cat target/scheme-color-fixture/reader-receipt.json || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-scheme-color-fixture-${{ github.sha }}
+          path: |
+            target/scheme-color-fixture/raw-receipt.json
+            target/scheme-color-fixture/reader-receipt.json
+          if-no-files-found: warn
