@@ -326,6 +326,8 @@ jobs:
           max_polygon_points = 0
           max_polypolygon_polygons = 0
           max_polypolygon_points = 0
+          root_profiles = defaultdict(lambda: {"streams": 0, "valid": 0, "empty": 0, "malformed": 0})
+          root_valid_ordinals = defaultdict(list)
           source_rows = []
 
           for path in paths:
@@ -353,7 +355,11 @@ jobs:
 
                           total_olepres += 1
                           file_presentations += 1
-                          active_object_roots_seen.add((path.stem.lower(), object_number))
+                          root_key = (path.stem.lower(), object_number)
+                          active_object_roots_seen.add(root_key)
+                          root_profiles[root_key]["streams"] += 1
+                          ordinal_match = re.search(r"(\d{3})$", parts[-1])
+                          stream_ordinal = int(ordinal_match.group(1)) if ordinal_match else None
                           try:
                               raw = ole.openstream(parts).read(MAX_STREAM + 1)
                               if len(raw) > MAX_STREAM:
@@ -371,14 +377,22 @@ jobs:
                                   presentation_short_data_counts[str(p["size"])] += 1
                           except Exception as exc:
                               parse_errors[type(exc).__name__ + ":" + str(exc)] += 1
+                              root_profiles[root_key]["malformed"] += 1
                               continue
 
                           if p["format"] != 3:
+                              root_profiles[root_key]["malformed"] += 1
+                              continue
+                          if p["size"] < 18:
+                              root_profiles[root_key]["empty"] += 1
                               continue
 
                           try:
                               w = parse_wmf(p["data"])
                               wmf_parsed += 1
+                              root_profiles[root_key]["valid"] += 1
+                              if stream_ordinal is not None:
+                                  root_valid_ordinals[root_key].append(stream_ordinal)
                               placeable_counts[str(w["placeable"]).lower()] += 1
                               header_type_counts[str(w["mt_type"])] += 1
                               header_version_counts[f"0x{w['mt_version']:04X}"] += 1
@@ -439,6 +453,7 @@ jobs:
                                       max_record_function = w["functions"][w["sizes"].index(local_max)]
                           except Exception as exc:
                               wmf_errors[type(exc).__name__ + ":" + str(exc)] += 1
+                              root_profiles[root_key]["malformed"] += 1
 
               except Exception as exc:
                   parse_errors["file:" + type(exc).__name__ + ":" + str(exc)] += 1
@@ -451,6 +466,28 @@ jobs:
                       "olepres_count": file_presentations,
                       "wmf_function_ids": [f"0x{x:04X}" for x in sorted(file_functions)],
                   })
+
+          root_profile_counts = Counter()
+          roots_with_valid = 0
+          roots_without_valid = 0
+          roots_with_mixed_valid_invalid = 0
+          roots_with_multiple_streams = 0
+          valid_ordinal_counts = Counter()
+          for root_key in sorted(active_object_roots_seen):
+              profile = root_profiles[root_key]
+              if profile["streams"] > 1:
+                  roots_with_multiple_streams += 1
+              if profile["valid"] > 0:
+                  roots_with_valid += 1
+              else:
+                  roots_without_valid += 1
+              if profile["valid"] > 0 and (profile["empty"] > 0 or profile["malformed"] > 0):
+                  roots_with_mixed_valid_invalid += 1
+              root_profile_counts[
+                  f"streams={profile['streams']};valid={profile['valid']};empty={profile['empty']};malformed={profile['malformed']}"
+              ] += 1
+              for ordinal in root_valid_ordinals[root_key]:
+                  valid_ordinal_counts[f"{ordinal:03d}"] += 1
 
           named_function_counts = []
           for key, count in function_counts.most_common():
@@ -468,6 +505,12 @@ jobs:
               "active_ole_object_count": active_object_count,
               "active_ole_object_roots_seen": len(active_object_roots_seen),
               "olepres_stream_count": total_olepres,
+              "root_profile_counts": dict(root_profile_counts.most_common()),
+              "roots_with_multiple_streams": roots_with_multiple_streams,
+              "roots_with_valid_wmf": roots_with_valid,
+              "roots_without_valid_wmf": roots_without_valid,
+              "roots_with_mixed_valid_invalid": roots_with_mixed_valid_invalid,
+              "valid_stream_ordinal_counts": dict(valid_ordinal_counts.most_common()),
               "parsed_presentation_count": parsed_presentations,
               "presentation_parse_errors": dict(parse_errors.most_common()),
               "marker_counts": dict(marker_counts),
