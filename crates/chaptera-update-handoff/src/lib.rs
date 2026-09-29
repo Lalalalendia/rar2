@@ -361,3 +361,47 @@ fn sync_parent(path: &Path) -> Result<()> {
 fn sync_parent(_path: &Path) -> Result<()> {
     Ok(())
 }
+
+#[cfg(test)]
+mod launch_policy_tests {
+    use super::*;
+
+    #[test]
+    fn control_environment_clears_hostile_resolution_and_tooling_variables() {
+        let mut command = Command::new("chaptera-control-probe");
+        command
+            .env("PATH", "C:\\attacker")
+            .env("PATHEXT", ".EXE;.BAT")
+            .env("PYTHONPATH", "C:\\attacker\\python")
+            .env("RUSTFLAGS", "-C linker=C:\\attacker\\link.exe")
+            .env("CARGO_HOME", "C:\\attacker\\cargo")
+            .env("HTTPS_PROXY", "http://127.0.0.1:9")
+            .env("CHAPTERA_HOSTILE_PARENT", "present");
+
+        apply_control_environment(&mut command);
+
+        let environment = command
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        for forbidden in [
+            "PATH",
+            "PATHEXT",
+            "PYTHONPATH",
+            "RUSTFLAGS",
+            "CARGO_HOME",
+            "HTTPS_PROXY",
+            "CHAPTERA_HOSTILE_PARENT",
+        ] {
+            assert!(
+                !environment.contains_key(std::ffi::OsStr::new(forbidden)),
+                "{forbidden} must not survive env_clear"
+            );
+        }
+        assert!(environment.keys().all(|key| CONTROL_ENV_ALLOWLIST
+            .iter()
+            .any(|allowed| key == std::ffi::OsStr::new(allowed))));
+    }
+}
+
