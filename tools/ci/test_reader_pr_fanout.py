@@ -21,7 +21,7 @@ def main():
     assert_scope(
         ["vendor/producer-a/crates/pub-contents/src/palette.rs"],
         tier_a=True,
-        reader_windows=False,
+        reader_windows=True,
         editor_windows=False,
         android_core=True,
         android=False,
@@ -33,7 +33,7 @@ def main():
     assert_scope(
         ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
         tier_a=True,
-        reader_windows=False,
+        reader_windows=True,
         visual_oracle=True,
         typography_golden=True,
         android_core=True,
@@ -44,7 +44,7 @@ def main():
     assert_scope(
         ["crates/chaptera-viewer-render-plan/src/lib.rs"],
         tier_a=True,
-        reader_windows=False,
+        reader_windows=True,
         editor_windows=False,
         visual_oracle=True,
         typography_golden=True,
@@ -88,7 +88,7 @@ def main():
         ["crates/chaptera-update-orchestrator/src/lib.rs"],
         tier_a=False,
         update_accept=True,
-        reader_windows=False,
+        reader_windows=True,
         installer=False,
     )
     assert_scope(
