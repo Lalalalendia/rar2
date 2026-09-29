@@ -564,7 +564,11 @@ mod tests {
             16,
         )
         .expect_err("count limit должен быть fail-closed");
-        assert!(count_error.to_string().contains("слишком много matching streams"));
+        assert!(
+            count_error
+                .to_string()
+                .contains("слишком много matching streams")
+        );
 
         let size_error = read_direct_child_streams_with_prefix_reader(
             synthetic_cfb(),
