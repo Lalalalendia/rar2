@@ -1,6 +1,8 @@
 use super::*;
 use pub_contents::{CONTENTS_RAW_TYPE_CELLS, MatureCellCoordinates, parse_confirmed_mature_cells};
-use pub_model::{RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId};
+use pub_model::{
+    RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId,
+};
 use pub_quill::{QuillMcldChunk, QuillStoryCatalog, bounded_mcld_table_metrics};
 
 pub const RAW_TYPE_TABLE: u16 = 0x10;
@@ -909,8 +911,8 @@ mod tests {
             source_refs: Vec::new(),
         };
 
-        let cells = materialize_bounded_simple_table_cells(&table, &story)
-            .expect("bounded table cell");
+        let cells =
+            materialize_bounded_simple_table_cells(&table, &story).expect("bounded table cell");
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].id, cell_id);
         assert_eq!(cells[0].text, "A");
