@@ -28,6 +28,8 @@ const NATIVE_REF: usize = 0x72;
 const REPL_REF: usize = 0x8a;
 const GIF_PAYLOAD: usize = 0x10;
 const WMF_OFFSETS: [usize; 5] = [0x08, 0x0c, 0x10, 0x14, 0x18];
+const WMF_PLACEABLE_KEY: u32 = 0x9ac6_cdd7;
+const WMF_PLACEABLE_HEADER_BYTES: usize = 22;
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -214,6 +216,63 @@ fn wmf_validation_error_class(message: &str) -> &'static str {
     }
 }
 
+fn wmf_bounded_prefix_profile(payload: &[u8]) -> Value {
+    let placeable = read_u32(payload, 0) == Some(WMF_PLACEABLE_KEY);
+    let header_offset = if placeable {
+        WMF_PLACEABLE_HEADER_BYTES
+    } else {
+        0
+    };
+    let Some(declared_words) = read_u32(payload, header_offset + 6) else {
+        return json!({
+            "available": false,
+            "placeable": placeable,
+            "prefix_fits_payload": false,
+            "prefix_valid": false,
+        });
+    };
+    let Ok(declared_bytes) = usize::try_from(declared_words) else {
+        return json!({
+            "available": true,
+            "placeable": placeable,
+            "prefix_fits_payload": false,
+            "prefix_valid": false,
+        });
+    };
+    let Some(prefix_end) = header_offset.checked_add(declared_bytes.saturating_mul(2)) else {
+        return json!({
+            "available": true,
+            "placeable": placeable,
+            "prefix_fits_payload": false,
+            "prefix_valid": false,
+        });
+    };
+    let Some(prefix) = payload.get(..prefix_end) else {
+        return json!({
+            "available": true,
+            "placeable": placeable,
+            "prefix_fits_payload": false,
+            "prefix_valid": false,
+            "internal_declared_prefix_len": prefix_end,
+        });
+    };
+    let validation = validate_wmf_metafile(prefix);
+    let (prefix_valid, validation_error_class) = match &validation {
+        Ok(_) => (true, None),
+        Err(error) => (false, Some(wmf_validation_error_class(&error.to_string()))),
+    };
+    json!({
+        "available": true,
+        "placeable": placeable,
+        "prefix_fits_payload": true,
+        "prefix_valid": prefix_valid,
+        "internal_declared_prefix_len": prefix_end,
+        "suffix_len": payload.len() - prefix_end,
+        "validation_error_class": validation_error_class,
+        "prefix_sha256": prefix_valid.then(|| sha256_hex(prefix)),
+    })
+}
+
 fn wmf_declared_profile(chunk: &[u8]) -> Value {
     let Some(declared_u32) = read_u32(chunk, 0x04) else {
         return json!({
@@ -254,6 +313,7 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
         Ok(_) => (true, None),
         Err(error) => (false, Some(wmf_validation_error_class(&error.to_string()))),
     };
+    let wmf_prefix = wmf_bounded_prefix_profile(payload);
     json!({
         "length_present": true,
         "declared_len": declared_len,
@@ -263,6 +323,7 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
         "wmf_valid": wmf_valid,
         "validation_error_class": validation_error_class,
         "payload_sha256": wmf_valid.then(|| sha256_hex(payload)),
+        "wmf_prefix": wmf_prefix,
     })
 }
 
