@@ -5,6 +5,8 @@ on:
     paths:
       - "apps/cloud-reader/**"
       - "apps/chaptera-server/src/product_api_http.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/lib.rs"
       - "apps/chaptera-server/Cargo.toml"
       - ".github/workflows/cloud-reader-v0.yml"
   push:
@@ -12,6 +14,8 @@ on:
     paths:
       - "apps/cloud-reader/**"
       - "apps/chaptera-server/src/product_api_http.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/lib.rs"
       - "apps/chaptera-server/Cargo.toml"
       - ".github/workflows/cloud-reader-v0.yml"
 
