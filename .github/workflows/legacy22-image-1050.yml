@@ -129,34 +129,43 @@ jobs:
               ",".join(sorted(item.get("child_raw_types") or [])) or "none"
               for item in images
           )
-          native_types = Counter(item.get("native_target_raw_type") or "none" for item in images)
-          native_wmf_offsets = Counter(
-              ",".join(str(v) for v in item.get("native_wmf_valid_offsets") or []) or "none"
+          field_native_types = Counter(
+              item.get("field_native_target_raw_type") or "none" for item in images
+          )
+          direct_native_presence = Counter(
+              "0x0021" if item.get("direct_native_object_id") is not None else "none"
               for item in images
           )
-          repl_types = Counter(
-              item.get("replacement_target_raw_type") or
-              ("zero_or_missing" if not item.get("replacement_ref") else "missing_target")
+          direct_native_wmf_offsets = Counter(
+              ",".join(str(v) for v in item.get("direct_native_wmf_valid_offsets") or []) or "none"
               for item in images
           )
-          native_payload_hashes = [
+          field_repl_types = Counter(
+              item.get("field_replacement_target_raw_type") or
+              ("zero_or_missing" if item.get("field_replacement_ref_at_0x8a") in (None, 0) else "missing_target")
+              for item in images
+          )
+          direct_native_payload_hashes = [
               h
               for item in images
-              for h in (item.get("native_wmf_payload_sha256") or [])
+              for h in (item.get("direct_native_wmf_payload_sha256") or [])
           ]
           replacement_payload_hashes = [
               repl.get("payload_sha256")
               for item in images
-              if (repl := item.get("replacement")) and repl.get("payload_sha256")
+              if (repl := item.get("field_replacement")) and repl.get("payload_sha256")
           ]
 
-          native_len_match = 0
+          direct_native_len_match = 0
           for item in images:
-              n = item.get("native_len_after_0x10")
+              n = item.get("direct_native_len_after_0x10")
               if n is None:
                   continue
-              if item.get("native_len_u32_at_0x08") == n and item.get("native_len_u32_at_0x0c") == n:
-                  native_len_match += 1
+              if (
+                  item.get("direct_native_len_u32_at_0x08") == n
+                  and item.get("direct_native_len_u32_at_0x0c") == n
+              ):
+                  direct_native_len_match += 1
 
           summary = {
               "schema": "chaptera.legacy22-image0002-census.v1",
@@ -177,24 +186,32 @@ jobs:
               "parent_raw_type_counts": dict(parent_types.most_common()),
               "chunk_length_counts": dict(chunk_lengths.most_common()),
               "child_raw_type_profile_counts": dict(child_profiles.most_common()),
-              "native_ref_present_count": sum(i.get("native_ref") not in (None, 0) for i in images),
-              "native_target_raw_type_counts": dict(native_types.most_common()),
-              "native_target_parent_match_count": count_true("native_target_parent_matches"),
-              "native_wmf_valid_offset_profile_counts": dict(native_wmf_offsets.most_common()),
-              "native_duplicated_length_matches_payload_after_0x10_count": native_len_match,
-              "native_wmf_payload_reference_count": len(native_payload_hashes),
-              "native_wmf_unique_payload_sha256_count": len(set(native_payload_hashes)),
-              "replacement_ref_nonzero_count": sum(i.get("replacement_ref") not in (None, 0) for i in images),
-              "replacement_target_raw_type_counts": dict(repl_types.most_common()),
-              "replacement_target_parent_match_count": count_true("replacement_target_parent_matches"),
-              "replacement_gif89a_count": sum(
-                  (i.get("replacement") or {}).get("gif89a") is True for i in images
+              "field_native_ref_nonzero_count": sum(
+                  i.get("field_native_ref_at_0x72") not in (None, 0) for i in images
               ),
-              "replacement_exact_length_count": sum(
-                  (i.get("replacement") or {}).get("lengths_equal_payload") is True for i in images
+              "field_native_target_raw_type_counts": dict(field_native_types.most_common()),
+              "direct_native_target_raw_type_counts": dict(direct_native_presence.most_common()),
+              "direct_native_wmf_valid_offset_profile_counts": dict(
+                  direct_native_wmf_offsets.most_common()
               ),
-              "replacement_payload_reference_count": len(replacement_payload_hashes),
-              "replacement_unique_payload_sha256_count": len(set(replacement_payload_hashes)),
+              "direct_native_duplicated_length_matches_payload_after_0x10_count": direct_native_len_match,
+              "direct_native_wmf_payload_reference_count": len(direct_native_payload_hashes),
+              "direct_native_wmf_unique_payload_sha256_count": len(set(direct_native_payload_hashes)),
+              "field_replacement_ref_nonzero_count": sum(
+                  i.get("field_replacement_ref_at_0x8a") not in (None, 0) for i in images
+              ),
+              "field_replacement_target_raw_type_counts": dict(field_repl_types.most_common()),
+              "field_replacement_target_parent_match_count": count_true(
+                  "field_replacement_target_parent_matches"
+              ),
+              "field_replacement_gif89a_count": sum(
+                  (i.get("field_replacement") or {}).get("gif89a") is True for i in images
+              ),
+              "field_replacement_exact_length_count": sum(
+                  (i.get("field_replacement") or {}).get("lengths_equal_payload") is True for i in images
+              ),
+              "field_replacement_payload_reference_count": len(replacement_payload_hashes),
+              "field_replacement_unique_payload_sha256_count": len(set(replacement_payload_hashes)),
               "filename_companion_owner_count": sum(
                   int(i.get("filename_child_count") or 0) > 0 for i in images
               ),
