@@ -358,7 +358,15 @@ mod platform {
     }
 
     fn minimal_environment(cwd: &Path) -> Vec<u16> {
-        let mut entries = ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "TEMP", "TMP"]
+        let mut entries = [
+            "SystemRoot",
+            "WINDIR",
+            "ComSpec",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+            "PATH",
+        ]
             .into_iter()
             .filter_map(|key| std::env::var_os(key).map(|value| (key.to_owned(), value)))
             .collect::<Vec<(String, OsString)>>();
