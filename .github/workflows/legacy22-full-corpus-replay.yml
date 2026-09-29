@@ -103,8 +103,8 @@ jobs:
               for row in legacy_open
           )
 
-          assert len(legacy_with_scene) == 195, len(legacy_with_scene)
-          assert legacy_scene_nodes == 1837, legacy_scene_nodes
+          assert len(legacy_with_scene) == 215, len(legacy_with_scene)
+          assert legacy_scene_nodes == 1963, legacy_scene_nodes
           assert legacy_story_frames == 1430, legacy_story_frames
           assert legacy_text_fragments == 1383, legacy_text_fragments
           assert unresolved_encoding_files == 58, unresolved_encoding_files
