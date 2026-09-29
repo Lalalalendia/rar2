@@ -2108,9 +2108,11 @@ pub fn build_mature_0x2c_from_streams(
                 });
                 continue;
             };
-            let Some((story_scalar_start, story_scalar_end)) =
-                utf16_range_to_scalar_range(&story.text, map.story_start_utf16, map.story_end_utf16)
-            else {
+            let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                &story.text,
+                map.story_start_utf16,
+                map.story_end_utf16,
+            ) else {
                 diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
                     reason: format!(
                         "script-font map range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
@@ -2143,7 +2145,10 @@ pub fn build_mature_0x2c_from_streams(
                         &graph.source,
                         &entry.source,
                         Some(object_key.clone()),
-                        Some(format!("FDPC/ScriptFonts/script-slot/{}", entry.script_slot)),
+                        Some(format!(
+                            "FDPC/ScriptFonts/script-slot/{}",
+                            entry.script_slot
+                        )),
                         SourceRole::Semantic,
                         AuthorityClass::Authoritative,
                         ReadConfidence::Exact,
@@ -3910,11 +3915,9 @@ mod tests {
             "8d50872a7d8ee6130b889efbe99275ee333747bc7777f3c5256a05f2c6d32048"
                 .parse()
                 .expect("known fonts.pub SHA-256");
-        let build = build_mature_0x2c_source_graph(
-            Cursor::new(bytes.as_slice()),
-            exact_source_hash,
-        )
-        .expect("build exact fonts.pub source graph");
+        let build =
+            build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), exact_source_hash)
+                .expect("build exact fonts.pub source graph");
 
         assert!(
             build.typography_runs.is_empty(),
