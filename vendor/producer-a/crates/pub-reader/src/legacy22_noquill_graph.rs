@@ -369,7 +369,7 @@ fn materialize_legacy_noquill_child(
     }
 
     let chunk = chunk_bytes(contents, child_entry)?;
-    let Some(bounds) = legacy_shape_bounds(page, chunk) else {
+    let Some(bounds) = legacy_shape_bounds(page, chunk, child_entry.chunk_type) else {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
             object_id: u32::from(child_object_id),
             raw_type: Some(child_entry.chunk_type),
@@ -700,18 +700,43 @@ fn is_legacy_simple_geometry_shape_type(chunk_type: u16) -> bool {
     LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES.contains(&chunk_type)
 }
 
-fn legacy_shape_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
+fn legacy_shape_bounds(page: &Page, chunk: &[u8], chunk_type: u16) -> Option<RectEmu> {
     let xs = i64::from(read_i32(chunk, LEGACY_SHAPE_XS_OFFSET)?);
     let ys = i64::from(read_i32(chunk, LEGACY_SHAPE_YS_OFFSET)?);
     let xe = i64::from(read_i32(chunk, LEGACY_SHAPE_XE_OFFSET)?);
     let ye = i64::from(read_i32(chunk, LEGACY_SHAPE_YE_OFFSET)?);
-    let width = xe.checked_sub(xs)?;
-    let height = ye.checked_sub(ys)?;
-    if width <= 0 || height <= 0 {
-        return None;
-    }
-    let x = page.size.width.get().checked_div(2)?.checked_add(xs)?;
-    let y = page.size.height.get().checked_div(2)?.checked_add(ys)?;
+    let delta_x = xe.checked_sub(xs)?;
+    let delta_y = ye.checked_sub(ys)?;
+
+    let (origin_x, origin_y, width, height) = if chunk_type == 0x0004 {
+        if delta_x == 0 && delta_y == 0 {
+            return None;
+        }
+        (
+            xs.min(xe),
+            ys.min(ye),
+            delta_x.checked_abs()?,
+            delta_y.checked_abs()?,
+        )
+    } else {
+        if delta_x <= 0 || delta_y <= 0 {
+            return None;
+        }
+        (xs, ys, delta_x, delta_y)
+    };
+
+    let x = page
+        .size
+        .width
+        .get()
+        .checked_div(2)?
+        .checked_add(origin_x)?;
+    let y = page
+        .size
+        .height
+        .get()
+        .checked_div(2)?
+        .checked_add(origin_y)?;
     Some(RectEmu::new(
         LengthEmu::new(x),
         LengthEmu::new(y),
@@ -838,6 +863,79 @@ mod tests {
                 high_byte_count: 1,
             } if source.offset == 0x120 && source.len == 3
         ));
+    }
+
+    #[test]
+    fn legacy_line_bounds_admit_axis_aligned_and_reversed_endpoints() {
+        let page_id = PageId::from_canonical(pub_model::CanonicalId::from_bytes([7; 16]));
+        let page = Page {
+            id: page_id,
+            size: Size2D::new(LengthEmu::new(10_000), LengthEmu::new(8_000)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+
+        let mut horizontal = vec![0_u8; 0x20];
+        horizontal[LEGACY_SHAPE_XS_OFFSET..LEGACY_SHAPE_XS_OFFSET + 4]
+            .copy_from_slice(&(-1_000_i32).to_le_bytes());
+        horizontal[LEGACY_SHAPE_YS_OFFSET..LEGACY_SHAPE_YS_OFFSET + 4]
+            .copy_from_slice(&(500_i32).to_le_bytes());
+        horizontal[LEGACY_SHAPE_XE_OFFSET..LEGACY_SHAPE_XE_OFFSET + 4]
+            .copy_from_slice(&(2_000_i32).to_le_bytes());
+        horizontal[LEGACY_SHAPE_YE_OFFSET..LEGACY_SHAPE_YE_OFFSET + 4]
+            .copy_from_slice(&(500_i32).to_le_bytes());
+
+        let bounds = legacy_shape_bounds(&page, &horizontal, 0x0004).expect("horizontal line");
+        assert_eq!(bounds.x.get(), 4_000);
+        assert_eq!(bounds.y.get(), 4_500);
+        assert_eq!(bounds.width.get(), 3_000);
+        assert_eq!(bounds.height.get(), 0);
+
+        let mut reversed = horizontal.clone();
+        reversed[LEGACY_SHAPE_XS_OFFSET..LEGACY_SHAPE_XS_OFFSET + 4]
+            .copy_from_slice(&(2_000_i32).to_le_bytes());
+        reversed[LEGACY_SHAPE_YS_OFFSET..LEGACY_SHAPE_YS_OFFSET + 4]
+            .copy_from_slice(&(1_500_i32).to_le_bytes());
+        reversed[LEGACY_SHAPE_XE_OFFSET..LEGACY_SHAPE_XE_OFFSET + 4]
+            .copy_from_slice(&(-1_000_i32).to_le_bytes());
+        reversed[LEGACY_SHAPE_YE_OFFSET..LEGACY_SHAPE_YE_OFFSET + 4]
+            .copy_from_slice(&(500_i32).to_le_bytes());
+
+        let bounds = legacy_shape_bounds(&page, &reversed, 0x0004).expect("reversed line");
+        assert_eq!(bounds.x.get(), 4_000);
+        assert_eq!(bounds.y.get(), 4_500);
+        assert_eq!(bounds.width.get(), 3_000);
+        assert_eq!(bounds.height.get(), 1_000);
+    }
+
+    #[test]
+    fn legacy_line_bounds_reject_point_and_other_shapes_keep_rectangle_gate() {
+        let page_id = PageId::from_canonical(pub_model::CanonicalId::from_bytes([8; 16]));
+        let page = Page {
+            id: page_id,
+            size: Size2D::new(LengthEmu::new(10_000), LengthEmu::new(8_000)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+
+        let mut chunk = vec![0_u8; 0x20];
+        for offset in [
+            LEGACY_SHAPE_XS_OFFSET,
+            LEGACY_SHAPE_YS_OFFSET,
+            LEGACY_SHAPE_XE_OFFSET,
+            LEGACY_SHAPE_YE_OFFSET,
+        ] {
+            chunk[offset..offset + 4].copy_from_slice(&(500_i32).to_le_bytes());
+        }
+        assert!(legacy_shape_bounds(&page, &chunk, 0x0004).is_none());
+
+        chunk[LEGACY_SHAPE_XE_OFFSET..LEGACY_SHAPE_XE_OFFSET + 4]
+            .copy_from_slice(&(1_500_i32).to_le_bytes());
+        assert!(legacy_shape_bounds(&page, &chunk, 0x0005).is_none());
     }
 
     #[test]
