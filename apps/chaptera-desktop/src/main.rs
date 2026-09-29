@@ -6,6 +6,8 @@
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
 mod acceptance;
 mod agent;
+#[cfg(target_os = "windows")]
+mod contained_open;
 mod diagnostic_sweep;
 mod fallback_font;
 mod image_decode_adapter;
@@ -1331,6 +1333,21 @@ impl ViewerApp {
             .then_some(stamp_after)
             .flatten();
 
+        #[cfg(target_os = "windows")]
+        let contained = contained_open::open_admitted_source(bytes).map_err(|error| {
+            ViewerLoadFailure {
+                kind: ViewerLoadFailureKind::Unsupported,
+                attempted_path: Some(path.clone()),
+                message: format!("Could not open {} in the Windows parser sandbox: {error}", path.display()),
+                classification: Some(classify_failure_candidate(bytes)),
+                diagnostic_json: None,
+            }
+        })?;
+
+        #[cfg(target_os = "windows")]
+        let visual = contained.visual;
+
+        #[cfg(not(target_os = "windows"))]
         let visual =
             diagnostic_sweep::open_for_product(bytes).map_err(|error| ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
@@ -1343,8 +1360,18 @@ impl ViewerApp {
         let (editor, editor_load_error, project_status) = if reader_only_mode() {
             (None, None, None)
         } else {
-            let source_hash = visual.document.source.source_hash;
-            match pub_editor::open_mature_0x2c_editor(bytes, source_hash) {
+            #[cfg(target_os = "windows")]
+            let editor_result = pub_editor::EditorSession::new(contained.graph)
+                .map_err(|error| error.to_string());
+
+            #[cfg(not(target_os = "windows"))]
+            let editor_result = {
+                let source_hash = visual.document.source.source_hash;
+                pub_editor::open_mature_0x2c_editor(bytes, source_hash)
+                    .map_err(|error| error.to_string())
+            };
+
+            match editor_result {
                 Ok(mut editor) => {
                     let project_status = match load_editor_project_sidecar(&path, &mut editor) {
                         Ok(Some((sidecar, operation_count))) => Some(format!(
@@ -1356,7 +1383,7 @@ impl ViewerApp {
                     };
                     (Some(editor), None, project_status)
                 }
-                Err(error) => (None, Some(error.to_string()), None),
+                Err(error) => (None, Some(error), None),
             }
         };
 
