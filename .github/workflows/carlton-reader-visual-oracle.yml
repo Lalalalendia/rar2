@@ -9,7 +9,6 @@ on:
       - "tools/acquire_carlton_march_pair.py"
       - "tools/pdf_reference_diff_v1.py"
       - "tools/reader_reference_pdf_raster_v1.py"
-      - ".github/workflows/carlton-reader-visual-oracle.yml"
 
 concurrency:
   group: ${{ github.workflow_ref }}-${{ github.event.pull_request.number || github.run_id }}
