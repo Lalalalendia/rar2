@@ -19,6 +19,7 @@ pub enum FailureClassV1 {
     PubPossible,
     ArchiveWithPub,
     NotPub,
+    #[serde(rename = "SUSPICIOUS/POLYGLOT")]
     SuspiciousPolyglot,
 }
 
@@ -299,7 +300,7 @@ mod tests {
             (FailureClassV1::NotPub, "\"NOT_PUB\""),
             (
                 FailureClassV1::SuspiciousPolyglot,
-                "\"SUSPICIOUS_POLYGLOT\"",
+                "\"SUSPICIOUS/POLYGLOT\"",
             ),
         ];
         for (class, expected) in cases {
