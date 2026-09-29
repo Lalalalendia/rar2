@@ -192,10 +192,14 @@ impl std::error::Error for QuillStoryReadError {}
 #[serde(rename_all = "snake_case")]
 pub enum QuillStoryFailureStage {
     DescriptorList,
+    DescriptorNodeHeader,
+    DescriptorArray,
     RequiredSyidDescriptor,
     RequiredStrsDescriptor,
     RequiredTextDescriptor,
     SyidChunk,
+    SyidHeader,
+    SyidIdArray,
     StrsChunk,
     TextChunk,
     StoryCount,
@@ -209,10 +213,14 @@ impl QuillStoryFailureStage {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DescriptorList => "descriptor_list",
+            Self::DescriptorNodeHeader => "descriptor_node_header",
+            Self::DescriptorArray => "descriptor_array",
             Self::RequiredSyidDescriptor => "required_syid_descriptor",
             Self::RequiredStrsDescriptor => "required_strs_descriptor",
             Self::RequiredTextDescriptor => "required_text_descriptor",
             Self::SyidChunk => "syid_chunk",
+            Self::SyidHeader => "syid_header",
+            Self::SyidIdArray => "syid_id_array",
             Self::StrsChunk => "strs_chunk",
             Self::TextChunk => "text_chunk",
             Self::StoryCount => "story_count",
@@ -222,6 +230,65 @@ impl QuillStoryFailureStage {
             Self::ToknChunks => "tokn_chunks",
         }
     }
+}
+
+fn probe_descriptor_list_too_short_stage(bytes: &[u8]) -> QuillStoryFailureStage {
+    let mut current = QUILL_DESCRIPTOR_LIST_ROOT_OFFSET;
+    let mut seen = BTreeSet::new();
+
+    while current != QUILL_DESCRIPTOR_LIST_END {
+        let Ok(start) = usize::try_from(current) else {
+            return QuillStoryFailureStage::DescriptorList;
+        };
+        if start >= bytes.len() || !seen.insert(current) {
+            return QuillStoryFailureStage::DescriptorList;
+        }
+
+        let available = &bytes[start..];
+        if available.len() < 8 {
+            return QuillStoryFailureStage::DescriptorNodeHeader;
+        }
+        let count = u16::from_le_bytes([available[2], available[3]]);
+        let descriptor_bytes = usize::from(count).checked_mul(QUILL_DESCRIPTOR_SIZE);
+        let Some(descriptor_bytes) = descriptor_bytes else {
+            return QuillStoryFailureStage::DescriptorArray;
+        };
+        if available.len() - 8 < descriptor_bytes {
+            return QuillStoryFailureStage::DescriptorArray;
+        }
+
+        current = u32::from_le_bytes([available[4], available[5], available[6], available[7]]);
+    }
+
+    QuillStoryFailureStage::DescriptorList
+}
+
+fn probe_syid_too_short_stage(
+    bytes: &[u8],
+    descriptor: &QuillChunkDescriptor,
+) -> QuillStoryFailureStage {
+    let Ok((start, len)) = chunk_range(bytes, descriptor) else {
+        return QuillStoryFailureStage::SyidChunk;
+    };
+    if len < 8 {
+        return QuillStoryFailureStage::SyidHeader;
+    }
+
+    let Some(chunk) = bytes.get(start..start + len) else {
+        return QuillStoryFailureStage::SyidChunk;
+    };
+    let count = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+    let Some(required) = usize::try_from(count)
+        .ok()
+        .and_then(|count| count.checked_mul(4))
+    else {
+        return QuillStoryFailureStage::SyidIdArray;
+    };
+    if len - 8 < required {
+        return QuillStoryFailureStage::SyidIdArray;
+    }
+
+    QuillStoryFailureStage::SyidChunk
 }
 
 /// Source-safe localization of the first failing grounded Quill story-catalog stage.
@@ -235,6 +302,9 @@ pub fn probe_confirmed_story_catalog_failure_stage(
 ) -> Option<QuillStoryFailureStage> {
     let descriptor_nodes = match parse_descriptor_nodes(stream.clone(), bytes) {
         Ok(value) => value,
+        Err(QuillStoryReadError::TooShort { .. }) => {
+            return Some(probe_descriptor_list_too_short_stage(bytes));
+        }
         Err(_) => return Some(QuillStoryFailureStage::DescriptorList),
     };
     let descriptors = descriptor_nodes
@@ -256,6 +326,9 @@ pub fn probe_confirmed_story_catalog_failure_stage(
 
     let syid = match parse_syid(stream.clone(), bytes, syid_descriptor) {
         Ok(value) => value,
+        Err(QuillStoryReadError::TooShort { .. }) => {
+            return Some(probe_syid_too_short_stage(bytes, syid_descriptor));
+        }
         Err(_) => return Some(QuillStoryFailureStage::SyidChunk),
     };
     let strs = match parse_strs(stream.clone(), bytes, strs_descriptor) {
