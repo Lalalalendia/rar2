@@ -27,6 +27,7 @@ pub mod product_export_http;
 pub mod project_persistence_sqlite;
 pub mod quota_admission;
 pub mod quota_store;
+pub mod reader_scene_v1;
 pub mod revision_materializer;
 pub mod runtime_error;
 pub mod runtime_readiness;
