@@ -271,7 +271,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         let guest_cleanup_state = guest_state.clone();
                         tokio::spawn(async move {
                             let mut interval = tokio::time::interval(Duration::from_secs(30));
-                            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                            interval
+                                .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                             loop {
                                 interval.tick().await;
                                 if let Err(error) =
