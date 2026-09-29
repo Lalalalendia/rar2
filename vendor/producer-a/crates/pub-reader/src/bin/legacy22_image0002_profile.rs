@@ -265,24 +265,34 @@ fn main() -> Result<()> {
             .entry_by_object_id(image.parent_id)
             .map(|entry| entry.chunk_type);
 
-        let native_ref = read_u16(chunk, NATIVE_REF);
-        let native_entry = native_ref.and_then(|id| directory.entry_by_object_id(id));
-        let native_chunk = native_entry.and_then(|entry| chunk_bytes(&contents, entry));
-        let native_wmf_offsets = native_chunk.map(wmf_payload_offsets).unwrap_or_default();
-        let native_payload_hashes = native_chunk
+        let field_native_ref = read_u16(chunk, NATIVE_REF);
+        let field_native_entry = field_native_ref.and_then(|id| directory.entry_by_object_id(id));
+
+        let direct_image_data = directory
+            .entries_by_parent_id(image.object_id)
+            .filter(|entry| entry.chunk_type == RAW_IMAGE_DATA)
+            .collect::<Vec<_>>();
+        let direct_native_entry = (direct_image_data.len() == 1).then_some(direct_image_data[0]);
+        let direct_native_chunk =
+            direct_native_entry.and_then(|entry| chunk_bytes(&contents, entry));
+        let direct_native_wmf_offsets = direct_native_chunk
+            .map(wmf_payload_offsets)
+            .unwrap_or_default();
+        let direct_native_payload_hashes = direct_native_chunk
             .map(|chunk| {
-                native_wmf_offsets
+                direct_native_wmf_offsets
                     .iter()
                     .filter_map(|offset| chunk.get(*offset..).map(sha256_hex))
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
 
-        let repl_ref = read_u16(chunk, REPL_REF);
-        let repl_entry = repl_ref
+        let field_repl_ref = read_u16(chunk, REPL_REF);
+        let field_repl_entry = field_repl_ref
             .filter(|id| *id != 0)
             .and_then(|id| directory.entry_by_object_id(id));
-        let repl_chunk = repl_entry.and_then(|entry| chunk_bytes(&contents, entry));
+        let field_repl_chunk =
+            field_repl_entry.and_then(|entry| chunk_bytes(&contents, entry));
 
         let child_types = directory
             .entries_by_parent_id(image.object_id)
@@ -302,22 +312,26 @@ fn main() -> Result<()> {
             "geometry": geometry(chunk),
             "child_raw_types": child_types,
             "filename_child_count": filename_children,
-            "native_ref": native_ref,
-            "native_target_raw_type": native_entry.map(|entry| format!("0x{:04x}", entry.chunk_type)),
-            "native_target_parent_matches": native_entry
-                .is_some_and(|entry| entry.parent_id == image.object_id),
-            "native_target_chunk_len": native_chunk.map(|chunk| chunk.len()),
-            "native_wmf_valid_offsets": native_wmf_offsets,
-            "native_wmf_payload_sha256": native_payload_hashes,
-            "native_len_u32_at_0x08": native_chunk.and_then(|chunk| read_u32(chunk, 0x08)),
-            "native_len_u32_at_0x0c": native_chunk.and_then(|chunk| read_u32(chunk, 0x0c)),
-            "native_len_after_0x10": native_chunk
+            "field_native_ref_at_0x72": field_native_ref,
+            "field_native_target_raw_type": field_native_entry
+                .map(|entry| format!("0x{:04x}", entry.chunk_type)),
+            "direct_image_data_child_count": direct_image_data.len(),
+            "direct_native_object_id": direct_native_entry.map(|entry| entry.object_id),
+            "direct_native_chunk_len": direct_native_chunk.map(|chunk| chunk.len()),
+            "direct_native_wmf_valid_offsets": direct_native_wmf_offsets,
+            "direct_native_wmf_payload_sha256": direct_native_payload_hashes,
+            "direct_native_len_u32_at_0x08": direct_native_chunk
+                .and_then(|chunk| read_u32(chunk, 0x08)),
+            "direct_native_len_u32_at_0x0c": direct_native_chunk
+                .and_then(|chunk| read_u32(chunk, 0x0c)),
+            "direct_native_len_after_0x10": direct_native_chunk
                 .and_then(|chunk| chunk.len().checked_sub(0x10)),
-            "replacement_ref": repl_ref,
-            "replacement_target_raw_type": repl_entry.map(|entry| format!("0x{:04x}", entry.chunk_type)),
-            "replacement_target_parent_matches": repl_entry
+            "field_replacement_ref_at_0x8a": field_repl_ref,
+            "field_replacement_target_raw_type": field_repl_entry
+                .map(|entry| format!("0x{:04x}", entry.chunk_type)),
+            "field_replacement_target_parent_matches": field_repl_entry
                 .is_some_and(|entry| entry.parent_id == image.object_id),
-            "replacement": repl_chunk.map(gif_profile),
+            "field_replacement": field_repl_chunk.map(gif_profile),
         }));
     }
 
