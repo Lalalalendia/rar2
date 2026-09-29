@@ -483,10 +483,7 @@ fn alternate_axis_count_profile(
 )> {
     let column_count = read_u16(bytes, chunk + LEGACY_TABLE_ALT_COLUMN_COUNT_OFFSET)?;
     let row_count = read_u16(bytes, chunk + LEGACY_TABLE_ALT_ROW_COUNT_OFFSET)?;
-    if column_count == 0
-        || row_count == 0
-        || column_count.checked_add(row_count)? != count
-    {
+    if column_count == 0 || row_count == 0 || column_count.checked_add(row_count)? != count {
         return None;
     }
 
@@ -693,13 +690,12 @@ pub fn parse_legacy_0x22_table_catalog(
         };
 
         let historical_required = column_count.saturating_add(row_count);
-        let alternate = if (column_count == 0 && row_count == 0 && count != 0)
-            || count < historical_required
-        {
-            alternate_axis_count_profile(&axis_reader, bytes, chunk, count)
-        } else {
-            None
-        };
+        let alternate =
+            if (column_count == 0 && row_count == 0 && count != 0) || count < historical_required {
+                alternate_axis_count_profile(&axis_reader, bytes, chunk, count)
+            } else {
+                None
+            };
 
         let (
             layout_profile,
