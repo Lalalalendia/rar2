@@ -81,7 +81,9 @@
   "provenance": {
     "received_from_user": "2026-09-29",
     "previous_manual_receipt_sha256": "760085b2cf274ebc06ac353fcabc812935b8425fb65fe7a27f444f07958767ca",
-    "note": "This upload is a distinct byte-level revision and must not silently replace the previous manual receipt."
+    "note": "This upload is a distinct byte-level revision and must not silently replace the previous manual receipt.",
+    "story65_main_merge_sha": "1c3d974180dbe3a3503b5a4ee8cf96532030d46e",
+    "story65_owner_pr": "Lalalalendia/rar2#283"
   },
   "current_reader_expectation": {
     "opened": true,
