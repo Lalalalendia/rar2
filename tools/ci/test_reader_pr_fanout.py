@@ -21,7 +21,8 @@ def main():
     assert_scope(
         ["vendor/producer-a/crates/pub-contents/src/palette.rs"],
         tier_a=True,
-        reader_windows=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
         editor_windows=False,
         android_core=True,
         android=False,
@@ -33,7 +34,8 @@ def main():
     assert_scope(
         ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
         tier_a=True,
-        reader_windows=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
         visual_oracle=True,
         typography_golden=True,
         android_core=True,
@@ -44,7 +46,8 @@ def main():
     assert_scope(
         ["crates/chaptera-viewer-render-plan/src/lib.rs"],
         tier_a=True,
-        reader_windows=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
         editor_windows=False,
         visual_oracle=True,
         typography_golden=True,
@@ -56,6 +59,7 @@ def main():
         tier_a=False,
         android_core=False,
         android=True,
+        reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
         web=False,
@@ -67,6 +71,7 @@ def main():
         local_portable=True,
         android_core=False,
         android=False,
+        reader_windows_smoke=False,
         reader_windows=False,
     )
     assert_scope(
@@ -74,12 +79,14 @@ def main():
         tier_a=False,
         installer=True,
         update_accept=True,
+        reader_windows_smoke=False,
         reader_windows=False,
     )
     assert_scope(
         ["apps/chaptera-desktop/src/text_session.rs"],
         tier_a=True,
         editor_windows=True,
+        reader_windows_smoke=False,
         reader_windows=False,
         android_core=False,
         android=False,
@@ -88,12 +95,14 @@ def main():
         ["crates/chaptera-update-orchestrator/src/lib.rs"],
         tier_a=False,
         update_accept=True,
+        reader_windows_smoke=False,
         reader_windows=True,
         installer=False,
     )
     assert_scope(
         ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
         tier_a=True,
+        reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
         android_core=False,
@@ -101,18 +110,21 @@ def main():
     assert_scope(
         ["apps/chaptera-desktop/src/reader_product_ui.rs"],
         tier_a=True,
+        reader_windows_smoke=False,
         reader_windows=True,
         editor_windows=False,
     )
     assert_scope(
         ["apps/chaptera-desktop/src/fallback_font.rs"],
         tier_a=True,
+        reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
     )
     assert_scope(
         ["vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"],
         tier_a=False,
+        reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
         visual_oracle=False,
@@ -126,8 +138,18 @@ def main():
         update_accept=False,
     )
     assert_scope(
+        [
+            "vendor/producer-a/crates/pub-reader/src/lib.rs",
+            "packages/product/reader-portable/v1/README.md",
+        ],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=True,
+    )
+    assert_scope(
         ["docs/notes.md"],
         tier_a=False,
+        reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
         visual_oracle=False,
