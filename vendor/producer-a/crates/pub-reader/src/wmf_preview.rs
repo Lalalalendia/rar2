@@ -44,6 +44,10 @@ const ABSOLUTE: u16 = 1;
 const ALTERNATE: u16 = 1;
 const WINDING: u16 = 2;
 const META_ESCAPE_ENHANCED_METAFILE: u16 = 0x000f;
+const WMFC_COMMENT_IDENTIFIER: u32 = 0x4346_4d57;
+const WMFC_COMMENT_TYPE: u32 = 1;
+const MAX_EMBEDDED_EMF_BYTES: usize = MAX_WMF_BYTES;
+const MAX_EMBEDDED_EMF_CHUNK_BYTES: usize = 8192;
 
 const PS_SOLID: u16 = 0;
 const PS_NULL: u16 = 5;
@@ -630,33 +634,79 @@ fn validate_enhanced_metafile_escape(params: &[u8]) -> Result<()> {
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF escape byte count is truncated"))?,
     );
     if byte_count > params.len().saturating_sub(4) {
-        bail!("WMF enhanced-metafile escape payload is truncated");
+        bail!("WMF MFCOMMENT payload is truncated");
     }
-    if byte_count < 34 {
-        bail!("WMF enhanced-metafile escape payload is too short");
-    }
+
     let body = &params[4..4 + byte_count];
-    let identifier =
-        read_u32(body, 0).ok_or_else(|| anyhow!("WMF EMF comment identifier is truncated"))?;
+    let Some(identifier) = read_u32(body, 0) else {
+        // MFCOMMENT is also a carrier for opaque private comment data. A payload
+        // shorter than the standard WMFC magic has no rendering semantics here.
+        return Ok(());
+    };
+    if identifier != WMFC_COMMENT_IDENTIFIER {
+        // Non-WMFC MFCOMMENT payloads are opaque private data. They are bounded
+        // by the enclosing WMF record and ByteCount and are never executed.
+        return Ok(());
+    }
+
+    if body.len() < 34 {
+        bail!("WMF embedded-EMF comment header is truncated");
+    }
     let comment_type =
         read_u32(body, 4).ok_or_else(|| anyhow!("WMF EMF comment type is truncated"))?;
-    if identifier != 0x4346_4d57 || comment_type != 1 {
-        bail!("unsupported WMF escape comment payload");
+    if comment_type != WMFC_COMMENT_TYPE {
+        bail!("unsupported WMF WMFC comment type {comment_type}");
     }
+
+    let flags = read_u32(body, 14).ok_or_else(|| anyhow!("WMF EMF flags are truncated"))?;
+    if flags != 0 {
+        bail!("WMF embedded-EMF comment flags must be zero");
+    }
+    let comment_record_count = usize::try_from(
+        read_u32(body, 18).ok_or_else(|| anyhow!("WMF EMF comment record count is truncated"))?,
+    )
+    .map_err(|_| anyhow!("WMF EMF comment record count overflow"))?;
+    if comment_record_count == 0 || comment_record_count > MAX_RECORDS {
+        bail!("WMF embedded-EMF comment record count is out of bounds");
+    }
+
     let current_record_size = usize::try_from(
         read_u32(body, 22).ok_or_else(|| anyhow!("WMF EMF current record size is truncated"))?,
     )
     .map_err(|_| anyhow!("WMF EMF current record size overflow"))?;
-    if current_record_size > 8192 {
+    if current_record_size > MAX_EMBEDDED_EMF_CHUNK_BYTES {
         bail!("WMF embedded EMF segment exceeds bounded record size");
     }
-    let segment_size = usize::try_from(
-        read_u32(body, 30).ok_or_else(|| anyhow!("WMF EMF segment size is truncated"))?,
+    let remaining_bytes = usize::try_from(
+        read_u32(body, 26).ok_or_else(|| anyhow!("WMF EMF remaining size is truncated"))?,
     )
-    .map_err(|_| anyhow!("WMF EMF segment size overflow"))?;
-    if segment_size != current_record_size || 34 + segment_size > body.len() {
+    .map_err(|_| anyhow!("WMF EMF remaining size overflow"))?;
+    let total_emf_size = usize::try_from(
+        read_u32(body, 30).ok_or_else(|| anyhow!("WMF EMF total size is truncated"))?,
+    )
+    .map_err(|_| anyhow!("WMF EMF total size overflow"))?;
+    if total_emf_size > MAX_EMBEDDED_EMF_BYTES {
+        bail!("WMF embedded EMF total size exceeds bounded limit");
+    }
+
+    let local_body_size = 34usize
+        .checked_add(current_record_size)
+        .ok_or_else(|| anyhow!("WMF embedded EMF local size overflow"))?;
+    if local_body_size != body.len() {
         bail!("WMF embedded EMF segment length mismatch");
     }
+    let current_plus_remaining = current_record_size
+        .checked_add(remaining_bytes)
+        .ok_or_else(|| anyhow!("WMF embedded EMF remaining-size overflow"))?;
+    if current_record_size > total_emf_size
+        || remaining_bytes > total_emf_size
+        || current_plus_remaining > total_emf_size
+    {
+        bail!("WMF embedded EMF chunk accounting is inconsistent");
+    }
+
+    // The embedded EMF data stays opaque. WMF fallback records are the only
+    // drawing instructions executed by this bounded rasterizer.
     Ok(())
 }
 
@@ -1039,6 +1089,18 @@ mod tests {
         bytes
     }
 
+    fn insert_record_before_eof(bytes: &mut Vec<u8>, extra: Vec<u8>) {
+        let eof = bytes.len() - 6;
+        let extra_words = u32::try_from(extra.len() / 2).expect("record words");
+        bytes.splice(eof..eof, extra);
+        let words = u32::try_from(bytes.len() / 2).expect("WMF words");
+        bytes[6..10].copy_from_slice(&words.to_le_bytes());
+        let max_record_words = read_u32(bytes, 12).expect("MaxRecord");
+        if extra_words > max_record_words {
+            bytes[12..16].copy_from_slice(&extra_words.to_le_bytes());
+        }
+    }
+
     fn synthetic_polygon() -> Vec<u8> {
         let mut records = Vec::<u8>::new();
         let mut window = Vec::new();
@@ -1099,6 +1161,66 @@ mod tests {
         let mut bytes = synthetic_polygon();
         bytes[10..12].copy_from_slice(&0_u16.to_le_bytes());
         assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn ignores_bounded_private_mfcomment_and_uses_wmf_fallback() {
+        let mut bytes = synthetic_polygon();
+        let mut params = Vec::new();
+        params.extend_from_slice(&META_ESCAPE_ENHANCED_METAFILE.to_le_bytes());
+        params.extend_from_slice(&6_u16.to_le_bytes());
+        params.extend_from_slice(b"PUB123");
+        insert_record_before_eof(&mut bytes, record(META_ESCAPE, &params));
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("private comment ignored");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn accepts_bounded_multichunk_wmfc_metadata_without_emf_execution() {
+        let mut bytes = synthetic_polygon();
+        let current = [1_u8, 2, 3, 4];
+        let mut body = Vec::new();
+        body.extend_from_slice(&WMFC_COMMENT_IDENTIFIER.to_le_bytes());
+        body.extend_from_slice(&WMFC_COMMENT_TYPE.to_le_bytes());
+        body.extend_from_slice(&0x0001_0000_u32.to_le_bytes());
+        body.extend_from_slice(&0_u16.to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(&2_u32.to_le_bytes());
+        body.extend_from_slice(&u32::try_from(current.len()).unwrap().to_le_bytes());
+        body.extend_from_slice(&8_u32.to_le_bytes());
+        body.extend_from_slice(&12_u32.to_le_bytes());
+        body.extend_from_slice(&current);
+
+        let mut params = Vec::new();
+        params.extend_from_slice(&META_ESCAPE_ENHANCED_METAFILE.to_le_bytes());
+        params.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        params.extend_from_slice(&body);
+        insert_record_before_eof(&mut bytes, record(META_ESCAPE, &params));
+
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_ok());
+    }
+
+    #[test]
+    fn rejects_malformed_wmfc_comment_metadata() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&WMFC_COMMENT_IDENTIFIER.to_le_bytes());
+        body.extend_from_slice(&WMFC_COMMENT_TYPE.to_le_bytes());
+        body.extend_from_slice(&0x0001_0000_u32.to_le_bytes());
+        body.extend_from_slice(&0_u16.to_le_bytes());
+        body.extend_from_slice(&1_u32.to_le_bytes());
+        body.extend_from_slice(&1_u32.to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+
+        let mut params = Vec::new();
+        params.extend_from_slice(&META_ESCAPE_ENHANCED_METAFILE.to_le_bytes());
+        params.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        params.extend_from_slice(&body);
+
+        assert!(validate_enhanced_metafile_escape(&params).is_err());
     }
 
     #[test]
