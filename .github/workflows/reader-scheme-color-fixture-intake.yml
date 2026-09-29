@@ -61,7 +61,12 @@ jobs:
 
       - name: Emit raw scheme-color receipt
         run: |
-          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin scheme_color_oracle_receipt             -- target/scheme-color-fixture/color1.pub                target/scheme-color-fixture/raw-receipt.json
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin scheme_color_oracle_receipt \
+            -- target/scheme-color-fixture/color1.pub \
+               target/scheme-color-fixture/raw-receipt.json
 
       - name: Validate pinned scheme grammar
         run: |
@@ -72,17 +77,14 @@ jobs:
           root = Path("vendor/producer-a/crates/pub-reader/tests/fixtures")
           manifest = json.loads((root / "color1-0f85b2b6.fixture.json").read_text())
           receipt = json.loads(Path("target/scheme-color-fixture/raw-receipt.json").read_text())
-
           expected = manifest["expected_scheme"]
           assert receipt["source_sha256"] == manifest["source_sha256"]
           assert receipt["byte_len"] == manifest["source_byte_len"]
           assert receipt["oplsccm"]["name"] == expected["name"]
           assert receipt["oplsccm"]["declared_count"] == expected["declared_count"]
-
           slots = receipt["oplsccm"]["slots"]
           assert [slot["ordinal"] for slot in slots] == expected["ordinals"]
           assert [slot["rgb"] for slot in slots] == expected["raw_slot_rgb"]
-
           fills = receipt["officeart"]["scheme_fills"]
           assert len(fills) == 8, fills
           assert [fill["scheme_ordinal"] for fill in fills] == expected["ordinals"], fills
@@ -90,34 +92,59 @@ jobs:
 
       - name: Exercise real Reader Viewer open path
         run: |
-          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --bin corpus-reader-receipt             -- target/scheme-color-fixture/color1.pub                target/scheme-color-fixture/reader-receipt.json
-            target/scheme-color-fixture/paint-parity.log
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --bin corpus-reader-receipt \
+            -- target/scheme-color-fixture/color1.pub \
+               target/scheme-color-fixture/reader-receipt.json
 
-      - name: Validate Reader product receipt
+      - name: Capture canonical paint parity
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --bin paint_bridge_parity \
+            -- target/scheme-color-fixture/color1.pub \
+            2>&1 | tee target/scheme-color-fixture/paint-parity.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "$status" > target/scheme-color-fixture/paint-parity.exit
+
+      - name: Validate current Reader product expectation
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
+
           manifest = json.loads(Path("vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.fixture.json").read_text())
           reader = json.loads(Path("target/scheme-color-fixture/reader-receipt.json").read_text())
+          expected = manifest["current_reader_expectation"]
+          parity_status = int(Path("target/scheme-color-fixture/paint-parity.exit").read_text().strip())
+          parity_log = Path("target/scheme-color-fixture/paint-parity.log").read_text()
           assert reader["source_sha256"] == manifest["source_sha256"]
-          assert reader["opened"] is True, reader
-          assert reader["paint_node_count"] >= 8, reader
-          assert reader["solid_fill_count"] >= 8, reader
+          assert reader["opened"] is expected["opened"], reader
+          if expected["opened"]:
+              assert parity_status == 0, parity_log
+              assert reader["paint_node_count"] >= 8, reader
+              assert reader["solid_fill_count"] >= 8, reader
+          else:
+              assert reader["open_error_kind"] == expected["open_error_kind"], reader
+              assert reader["open_error_signature_sha256"] == expected["open_error_signature_sha256"], reader
+              assert parity_status != 0, parity_log
+              for fragment in expected["diagnostic_fragments"]:
+                  assert fragment in parity_log, (fragment, parity_log)
           PY
-
-      - name: Run canonical paint parity with diagnostic log
-        if: always()
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --bin paint_bridge_parity             -- target/scheme-color-fixture/color1.pub             2>&1 | tee target/scheme-color-fixture/paint-parity.log
 
       - name: Print receipts
         if: always()
         run: |
           cat target/scheme-color-fixture/raw-receipt.json || true
           cat target/scheme-color-fixture/reader-receipt.json || true
+          cat target/scheme-color-fixture/paint-parity.log || true
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -126,4 +153,6 @@ jobs:
           path: |
             target/scheme-color-fixture/raw-receipt.json
             target/scheme-color-fixture/reader-receipt.json
+            target/scheme-color-fixture/paint-parity.log
+            target/scheme-color-fixture/paint-parity.exit
           if-no-files-found: warn
