@@ -1,6 +1,7 @@
 name: Chaptera Local Windows Portable V0
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - "Start-Chaptera-Local.cmd"
@@ -19,7 +20,6 @@ on:
       - "apps/chaptera-server/**"
       - "packages/protocol/revision/v1/**"
       - "packages/product/local-portable/**"
-      - "vendor/producer-a/**"
       - "deploy/config/chaptera.prod.example.toml"
       - ".github/workflows/chaptera-local-portable-windows.yml"
   workflow_dispatch:
@@ -38,16 +38,6 @@ env:
   RUSTFLAGS: -C target-feature=+crt-static
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
 
   portable-surface:
     runs-on: ubuntu-latest
