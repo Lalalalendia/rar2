@@ -74,6 +74,10 @@ jobs:
       - name: Build Chaptera desktop release
         run: cargo build -p chaptera-desktop --release
 
+      - name: Stage contained desktop-open runtime
+        shell: pwsh
+        run: ./tools/windows/build_desktop_open_runtime.ps1 -Destination "target/release"
+
       - name: Verify executable
         shell: pwsh
         run: |
@@ -148,7 +152,7 @@ jobs:
       - name: Build portable Chaptera Editor ZIP
         shell: pwsh
         run: |
-          python tools/package_editor_live_trial.py --editor-exe target/release/chaptera-editor.exe --output-zip target/release/Chaptera-Editor-Windows-x86_64.zip --binary-entry Chaptera-Editor.exe --manifest target/release/Chaptera-Editor.package.json
+          python tools/package_editor_live_trial.py --editor-exe target/release/chaptera-editor.exe --runtime-dir target/release --output-zip target/release/Chaptera-Editor-Windows-x86_64.zip --binary-entry Chaptera-Editor.exe --manifest target/release/Chaptera-Editor.package.json
 
       - name: Run real packaged-product smoke and receipt
         shell: pwsh
@@ -168,6 +172,9 @@ jobs:
           name: chaptera-editor-windows-x86_64
           path: |
             target/release/chaptera-editor.exe
+            target/release/chaptera-desktop-open-worker.exe
+            target/release/chaptera-desktop-open-sandbox-host.exe
+            target/release/chaptera-desktop-open-runtime.json
             target/release/chaptera-editor.desktop-build.json
             target/release/editor-desktop-vertical.real.json
             target/release/Chaptera-Editor-Windows-x86_64.zip
@@ -208,6 +215,15 @@ jobs:
           if (-not (Test-Path $exe)) { throw "portable ZIP did not contain Chaptera-Editor.exe" }
           $catalogPath = Join-Path $clean "agent-control-v1.catalog.json"
           if (-not (Test-Path $catalogPath)) { throw "portable ZIP did not contain Agent V1 catalog" }
+          foreach ($runtimeName in @(
+            "chaptera-desktop-open-worker.exe",
+            "chaptera-desktop-open-sandbox-host.exe",
+            "chaptera-desktop-open-runtime.json"
+          )) {
+            if (-not (Test-Path (Join-Path $clean $runtimeName))) {
+              throw "portable Editor containment runtime missing: $runtimeName"
+            }
+          }
           if (Test-Path (Join-Path $clean "Cargo.toml")) { throw "portable ZIP leaked a Cargo checkout" }
 
           try {
