@@ -588,4 +588,4 @@ mod tests {
     }
 }
 
-// CI selective-fanout measurement probe; no runtime behavior change.
+// CI selective-fanout measurement probe v2; no runtime behavior change.
