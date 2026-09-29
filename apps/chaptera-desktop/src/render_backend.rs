@@ -728,3 +728,4 @@ mod tests {
         );
     }
 }
+// CI measurement replay: inherited Desktop clippy debt must not block changed-line admission.
