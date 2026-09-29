@@ -522,7 +522,8 @@ jobs:
           reader = summary["reader"]
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
-          assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
+          # STORY65-VARIANT-01 admits seven additional mature 0x2c files while legacy depth is unchanged.
+          assert reader["opened_by_family"].get("0x2c") == 386, reader["opened_by_family"]
           assert reader["opened_by_family"].get("0x22") == 226, reader["opened_by_family"]
 
           legacy_open = [
