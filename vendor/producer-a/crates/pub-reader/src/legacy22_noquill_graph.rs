@@ -559,7 +559,7 @@ fn materialize_legacy_noquill_child(
             kind: if is_group {
                 NodeKind::Group
             } else if is_legacy_image {
-                NodeKind::Image
+                NodeKind::ImageFrame
             } else if is_legacy_ole {
                 NodeKind::Unsupported
             } else if is_table {
