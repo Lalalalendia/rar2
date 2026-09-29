@@ -4,7 +4,6 @@ on:
   workflow_call:
   pull_request:
     paths:
-      - ".github/workflows/web-acceptance-real-chromium.yml"
       - "services/editor-api/web_real_acceptance_service.py"
       - "tools/run_web_editor_real_acceptance.mjs"
       - "apps/web/editor-shell-http-harness.html"
