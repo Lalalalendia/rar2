@@ -3591,3 +3591,6 @@ mod tests {
         assert_ne!(node.into_canonical(), story.into_canonical());
     }
 }
+
+#[cfg(test)]
+const READER_TIER_A_NEGATIVE_CONTROL:u8=0;
