@@ -134,6 +134,7 @@ VISUAL_ORACLE = (
     "tools/acquire_carlton_march_pair.py",
     "tools/pdf_reference_diff_v1.py",
     "tools/reader_reference_pdf_raster_v1.py",
+    "tools/reader_page_role_observation.py",
     ".github/workflows/carlton-reader-visual-oracle.yml",
 )
 
