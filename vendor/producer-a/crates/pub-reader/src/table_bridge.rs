@@ -855,6 +855,69 @@ mod tests {
     }
 
     #[test]
+    fn materialized_cell_preserves_exact_source_bounds() {
+        let story_id = StoryId::from_canonical(CanonicalId::from_bytes([9; 16]));
+        let cell_id = table_cell_id(4);
+        let bounds = RectEmu::new(
+            LengthEmu::new(100),
+            LengthEmu::new(200),
+            LengthEmu::new(300),
+            LengthEmu::new(400),
+        );
+        let source_cell = PubTableCellSource {
+            id: cell_id,
+            stored_record_index: 0,
+            coordinates: Some(PubTableCellCoordinates {
+                start_row: 0,
+                end_row: 0,
+                start_column: 0,
+                end_column: 0,
+            }),
+            utf16_start: 0,
+            utf16_end: 1,
+            bounds: Some(bounds),
+            source_refs: Vec::new(),
+        };
+        let simple_table = SimpleRectangularTable::new(
+            1,
+            1,
+            vec![SimpleTableCell {
+                id: cell_id,
+                address: TableCellAddress { row: 0, column: 0 },
+            }],
+        )
+        .expect("one-cell table");
+        let table = PubTableSource {
+            text_id: 1,
+            story_id: Some(story_id),
+            rows: 1,
+            columns: 1,
+            cells_seq_num: None,
+            tcd_story_ordinal: None,
+            cells: vec![source_cell],
+            simple_table: Some(simple_table),
+            layout_metrics: None,
+            source_refs: Vec::new(),
+        };
+        let story = Story {
+            id: story_id,
+            text: "A".into(),
+            paragraphs: Vec::new(),
+            runs: Vec::new(),
+            fields: Vec::new(),
+            hyperlinks: Vec::new(),
+            source_refs: Vec::new(),
+        };
+
+        let cells = materialize_bounded_simple_table_cells(&table, &story)
+            .expect("bounded table cell");
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].id, cell_id);
+        assert_eq!(cells[0].text, "A");
+        assert_eq!(cells[0].bounds, Some(bounds));
+    }
+
+    #[test]
     fn spanning_cell_is_not_flattened_to_simple_subset() {
         let cells = vec![PubTableCellSource {
             id: table_cell_id(0),
