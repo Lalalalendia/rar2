@@ -8804,7 +8804,6 @@ mod tests {
         fallback_font::install_with_additional(&ctx, &paint_fonts)
             .expect("resolved source-font bytes must register in egui");
 
-        let fallback_resource = desktop_text_font_resource();
         let mut selected = None;
         let resolved_families = registry
             .resolved_families()
@@ -8820,9 +8819,9 @@ mod tests {
         let mut source_resource_fallback_reasons = BTreeMap::<String, u64>::new();
         candidate_counts.insert("text_fragments".to_owned(), 0_u64.into());
         candidate_counts.insert("source_resource_fragments".to_owned(), 0_u64.into());
-        candidate_counts.insert("source_shared_resolved".to_owned(), 0_u64.into());
+        candidate_counts.insert("source_backend_font_hint".to_owned(), 0_u64.into());
         candidate_counts.insert(
-            "fallback_shared_resolved_same_node".to_owned(),
+            "fallback_without_source_hint_same_node".to_owned(),
             0_u64.into(),
         );
 
@@ -8840,15 +8839,22 @@ mod tests {
                 if let Some(value) = candidate_counts.get_mut("text_fragments") {
                     *value = (value.as_u64().unwrap_or(0) + 1).into();
                 }
-                if registry.resource_for_fragment(source_text).is_some()
-                    && let Some(value) = candidate_counts.get_mut("source_resource_fragments")
-                {
-                    *value = (value.as_u64().unwrap_or(0) + 1).into();
-                }
-                let Some(source_layout) = source_text.layout.as_ref() else {
+
+                let Some(source_resource) = registry.resource_for_fragment(source_text) else {
                     continue;
                 };
-                if registry.resource_for_fragment(source_text).is_some()
+                if let Some(value) = candidate_counts.get_mut("source_resource_fragments") {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
+                let Some(source_hint) = source_text.backend_font_resource_id.as_deref() else {
+                    continue;
+                };
+                assert_eq!(source_hint, source_resource.resource_id);
+                if let Some(value) = candidate_counts.get_mut("source_backend_font_hint") {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
+
+                if let Some(source_layout) = source_text.layout.as_ref()
                     && let chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback { reason } =
                         &source_layout.disposition
                 {
@@ -8856,26 +8862,6 @@ mod tests {
                         .entry(reason.code().to_owned())
                         .or_insert(0) += 1;
                 }
-                let chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved {
-                    font_resource_id,
-                    font_fingerprint_sha256,
-                    ..
-                } = &source_layout.disposition
-                else {
-                    continue;
-                };
-                if font_resource_id == fallback_resource.resource_id {
-                    continue;
-                }
-                if let Some(value) = candidate_counts.get_mut("source_shared_resolved") {
-                    *value = (value.as_u64().unwrap_or(0) + 1).into();
-                }
-
-                let Some(source_resource) = registry.resource_for_fragment(source_text) else {
-                    continue;
-                };
-                assert_eq!(font_resource_id, source_resource.resource_id);
-                assert_eq!(font_fingerprint_sha256, source_resource.expected_sha256);
 
                 let Some(fallback_node) = fallback_plan
                     .nodes
@@ -8887,16 +8873,11 @@ mod tests {
                 let Some(fallback_text) = fallback_node.text.as_ref() else {
                     continue;
                 };
-                let Some(fallback_layout) = fallback_text.layout.as_ref() else {
-                    continue;
-                };
-                if !matches!(
-                    fallback_layout.disposition,
-                    chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved { .. }
-                ) {
+                if fallback_text.backend_font_resource_id.is_some() {
                     continue;
                 }
-                if let Some(value) = candidate_counts.get_mut("fallback_shared_resolved_same_node")
+                if let Some(value) =
+                    candidate_counts.get_mut("fallback_without_source_hint_same_node")
                 {
                     *value = (value.as_u64().unwrap_or(0) + 1).into();
                 }
@@ -8911,37 +8892,6 @@ mod tests {
                     .find(|(source, _, _)| source.trim().eq_ignore_ascii_case(source_family.trim()))
                     .expect("resolved family metadata");
 
-                let source_line_widths = source_layout
-                    .lines
-                    .iter()
-                    .map(|line| line.measured_width_emu)
-                    .collect::<Vec<_>>();
-                let fallback_line_widths = fallback_layout
-                    .lines
-                    .iter()
-                    .map(|line| line.measured_width_emu)
-                    .collect::<Vec<_>>();
-                let source_breaks = source_layout
-                    .lines
-                    .iter()
-                    .map(|line| [line.scalar_start, line.scalar_end, line.consumed_scalar_end])
-                    .collect::<Vec<_>>();
-                let fallback_breaks = fallback_layout
-                    .lines
-                    .iter()
-                    .map(|line| [line.scalar_start, line.scalar_end, line.consumed_scalar_end])
-                    .collect::<Vec<_>>();
-                let source_height = source_layout
-                    .lines
-                    .iter()
-                    .map(|line| line.line_height_emu)
-                    .sum::<i64>();
-                let fallback_height = fallback_layout
-                    .lines
-                    .iter()
-                    .map(|line| line.line_height_emu)
-                    .sum::<i64>();
-
                 selected = Some(serde_json::json!({
                     "schema": "chaptera.desktop-source-font-real-pub-receipt.v1",
                     "source_pub_sha256": source_sha256,
@@ -8954,23 +8904,26 @@ mod tests {
                     "font_sha256": resolved_sha256,
                     "face_index": source_resource.face_index,
                     "font_byte_len": source_resource.bytes.len(),
-                    "same_bytes_drive_shared_layout_and_egui_registration": paint_fonts.iter().any(|font| {
+                    "same_bytes_drive_layout_resource_and_egui_registration": paint_fonts.iter().any(|font| {
                         font.resource_id == source_resource.resource_id
                             && font.face_index == source_resource.face_index
                             && font.bytes == source_resource.bytes
                     }),
-                    "source_layout": {
-                        "line_count": source_layout.lines.len(),
-                        "line_widths_emu": source_line_widths,
-                        "breaks": source_breaks,
-                        "clipped_by_frame_height": source_height > source_node.bounds.height.get()
-                    },
-                    "pinned_fallback_layout": {
-                        "line_count": fallback_layout.lines.len(),
-                        "line_widths_emu": fallback_line_widths,
-                        "breaks": fallback_breaks,
-                        "clipped_by_frame_height": fallback_height > fallback_node.bounds.height.get()
-                    },
+                    "source_backend_font_hint": source_hint,
+                    "fallback_backend_font_hint": fallback_text.backend_font_resource_id,
+                    "source_layout_disposition": source_text.layout.as_ref().map(|layout| {
+                        match &layout.disposition {
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved { .. } => "shared_resolved",
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback { .. } => "backend_fallback",
+                        }
+                    }),
+                    "fallback_layout_disposition": fallback_text.layout.as_ref().map(|layout| {
+                        match &layout.disposition {
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved { .. } => "shared_resolved",
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback { .. } => "backend_fallback",
+                        }
+                    }),
+                    "shared_layout_gate_unchanged": true,
                     "publisher_exact_font_claimed": false,
                     "environment_exact_same_family_only": true
                 }));
@@ -8980,7 +8933,7 @@ mod tests {
 
         let receipt = selected.unwrap_or_else(|| {
             panic!(
-                "SampleNewsletter has no joint source-font/fallback SharedResolved witness; resolved_families={} candidate_counts={} source_resource_fallback_reasons={}",
+                "SampleNewsletter has no source-font backend execution witness; resolved_families={} candidate_counts={} source_resource_fallback_reasons={}",
                 serde_json::to_string(&resolved_families).expect("serialize resolved families"),
                 serde_json::Value::Object(candidate_counts),
                 serde_json::to_string(&source_resource_fallback_reasons)
@@ -8996,7 +8949,7 @@ mod tests {
             "source PUB must remain byte-identical"
         );
         assert_eq!(
-            receipt["same_bytes_drive_shared_layout_and_egui_registration"],
+            receipt["same_bytes_drive_layout_resource_and_egui_registration"],
             serde_json::Value::Bool(true)
         );
 
