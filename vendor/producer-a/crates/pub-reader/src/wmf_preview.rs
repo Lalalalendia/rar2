@@ -20,6 +20,7 @@ const META_SETRELABS: u16 = 0x0105;
 const META_SETPOLYFILLMODE: u16 = 0x0106;
 const META_SETSTRETCHBLTMODE: u16 = 0x0107;
 const META_RESTOREDC: u16 = 0x0127;
+const META_SELECTCLIPREGION: u16 = 0x012c;
 const META_SELECTOBJECT: u16 = 0x012d;
 const META_SETTEXTALIGN: u16 = 0x012e;
 const META_DIBCREATEPATTERNBRUSH: u16 = 0x0142;
@@ -87,6 +88,7 @@ struct Brush {
 enum GdiObject {
     Pen(Pen),
     Brush(Brush),
+    RegionCompatibility,
     Unsupported,
 }
 
@@ -588,6 +590,67 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
     Ok(())
 }
 
+fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
+    // Exact-1050 evidence for the seven Publisher Region compatibility objects:
+    // 42-byte payload, ObjectType=6, RegionSize=42, one scan, maxScan=2.
+    // The one scan is structurally valid (Count=Count2=2) and the corpus profile
+    // carries an additional bounded eight-byte tail that is playback-inert here.
+    if params.len() != 42 {
+        bail!(
+            "unsupported WMF Region compatibility payload length {}",
+            params.len()
+        );
+    }
+
+    let object_type =
+        read_i16(params, 2).ok_or_else(|| anyhow!("WMF Region ObjectType is truncated"))?;
+    let region_size = read_i16(params, 8).ok_or_else(|| anyhow!("WMF RegionSize is truncated"))?;
+    let scan_count =
+        read_i16(params, 10).ok_or_else(|| anyhow!("WMF Region ScanCount is truncated"))?;
+    let max_scan =
+        read_i16(params, 12).ok_or_else(|| anyhow!("WMF Region maxScan is truncated"))?;
+    if object_type != 6 || region_size != 42 || scan_count != 1 || max_scan != 2 {
+        bail!(
+            "unsupported WMF Region compatibility profile type={object_type} size={region_size} scans={scan_count} max_scan={max_scan}"
+        );
+    }
+
+    // BoundingRectangle is present in the fixed Region header. Values are not
+    // interpreted because this compatibility object never becomes the active
+    // clipping region in the admitted sequence.
+    for offset in [14usize, 16, 18, 20] {
+        read_i16(params, offset)
+            .ok_or_else(|| anyhow!("WMF Region bounding rectangle is truncated"))?;
+    }
+
+    let count =
+        read_u16(params, 22).ok_or_else(|| anyhow!("WMF Region Scan Count is truncated"))?;
+    let top = read_u16(params, 24).ok_or_else(|| anyhow!("WMF Region Scan Top is truncated"))?;
+    let bottom =
+        read_u16(params, 26).ok_or_else(|| anyhow!("WMF Region Scan Bottom is truncated"))?;
+    if count != 2 {
+        bail!("unsupported WMF Region scan coordinate count {count}");
+    }
+    let _left = read_u16(params, 28).ok_or_else(|| anyhow!("WMF Region Scan left is truncated"))?;
+    let _right =
+        read_u16(params, 30).ok_or_else(|| anyhow!("WMF Region Scan right is truncated"))?;
+    let count2 =
+        read_u16(params, 32).ok_or_else(|| anyhow!("WMF Region Scan Count2 is truncated"))?;
+    if count2 != count {
+        bail!("WMF Region Scan Count2 does not match Count");
+    }
+    if bottom < top {
+        bail!("WMF Region scan vertical bounds are inverted");
+    }
+
+    // Exact corpus profile has an eight-byte compatibility tail. Keep it
+    // bounded but opaque because Region geometry is not activated in this slice.
+    if params.len() - 34 != 8 {
+        bail!("unsupported WMF Region compatibility tail length");
+    }
+    Ok(())
+}
+
 fn parse_points(params: &[u8], count: usize, offset: usize) -> Result<Vec<(i16, i16)>> {
     if count > MAX_POINTS_PER_RECORD {
         bail!("WMF point count exceeds bounded limit");
@@ -765,6 +828,7 @@ pub fn rasterize_wmf_preview(
     let mut offset = 18usize;
     let mut records = 0usize;
     let mut eof_seen = false;
+    let mut pending_region_compat_cliprect = false;
 
     while offset < declared_len {
         records += 1;
@@ -794,6 +858,15 @@ pub fn rasterize_wmf_preview(
             bail!("WMF record 0x{function:04x} exceeds declared metafile size");
         }
         let params = &bytes[offset + 6..next];
+
+        if pending_region_compat_cliprect {
+            if function != META_INTERSECTCLIPRECT {
+                bail!(
+                    "WMF Region compatibility SELECTOBJECT is not followed by META_INTERSECTCLIPRECT"
+                );
+            }
+            pending_region_compat_cliprect = false;
+        }
 
         match function {
             META_EOF => {
@@ -944,8 +1017,12 @@ pub fn rasterize_wmf_preview(
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
             }
-            META_DIBCREATEPATTERNBRUSH | META_CREATEREGION => {
+            META_DIBCREATEPATTERNBRUSH => {
                 allocate_object(&mut objects, GdiObject::Unsupported)?;
+            }
+            META_CREATEREGION => {
+                validate_region_compatibility_object(params)?;
+                allocate_object(&mut objects, GdiObject::RegionCompatibility)?;
             }
             META_DELETEOBJECT => {
                 let index = usize::from(
@@ -967,10 +1044,16 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
+                    GdiObject::RegionCompatibility => {
+                        pending_region_compat_cliprect = true;
+                    }
                     GdiObject::Unsupported => {
                         bail!("WMF selects an unsupported graphics object");
                     }
                 }
+            }
+            META_SELECTCLIPREGION => {
+                bail!("WMF META_SELECTCLIPREGION remains unsupported");
             }
             META_POLYGON | META_POLYLINE => {
                 let count = usize::from(
@@ -1109,6 +1192,51 @@ mod tests {
         }
     }
 
+    fn insert_record_before_function(bytes: &mut Vec<u8>, target: u16, extra: Vec<u8>) {
+        let mut offset = 18usize;
+        let mut insert_at = None;
+        while offset + 6 <= bytes.len() {
+            let words = read_u32(bytes, offset).expect("record size");
+            let function = read_u16(bytes, offset + 4).expect("record function");
+            if function == target {
+                insert_at = Some(offset);
+                break;
+            }
+            offset += usize::try_from(words * 2).expect("record bytes");
+        }
+        let insert_at = insert_at.expect("target record");
+        let extra_words = u32::try_from(extra.len() / 2).expect("record words");
+        bytes.splice(insert_at..insert_at, extra);
+        let words = u32::try_from(bytes.len() / 2).expect("WMF words");
+        bytes[6..10].copy_from_slice(&words.to_le_bytes());
+        let max_record_words = read_u32(bytes, 12).expect("MaxRecord");
+        if extra_words > max_record_words {
+            bytes[12..16].copy_from_slice(&extra_words.to_le_bytes());
+        }
+    }
+
+    fn region_compatibility_params() -> Vec<u8> {
+        let mut params = Vec::new();
+        params.extend_from_slice(&0_i16.to_le_bytes()); // nextInChain: ignored
+        params.extend_from_slice(&6_i16.to_le_bytes()); // ObjectType
+        params.extend_from_slice(&0x02f6_u32.to_le_bytes()); // ObjectCount: ignored
+        params.extend_from_slice(&42_i16.to_le_bytes()); // RegionSize
+        params.extend_from_slice(&1_i16.to_le_bytes()); // ScanCount
+        params.extend_from_slice(&2_i16.to_le_bytes()); // maxScan
+        for value in [25_i16, 25, 75, 75] {
+            params.extend_from_slice(&value.to_le_bytes());
+        }
+        params.extend_from_slice(&2_u16.to_le_bytes()); // Count
+        params.extend_from_slice(&25_u16.to_le_bytes()); // Top
+        params.extend_from_slice(&75_u16.to_le_bytes()); // Bottom
+        params.extend_from_slice(&25_u16.to_le_bytes()); // Left
+        params.extend_from_slice(&75_u16.to_le_bytes()); // Right
+        params.extend_from_slice(&2_u16.to_le_bytes()); // Count2
+        params.extend_from_slice(&[0_u8; 8]); // corpus-proven bounded compatibility tail
+        assert_eq!(params.len(), 42);
+        params
+    }
+
     fn synthetic_polygon() -> Vec<u8> {
         let mut records = Vec::<u8>::new();
         let mut window = Vec::new();
@@ -1162,6 +1290,88 @@ mod tests {
         assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
         let corner = ((5 * 100 + 5) * 4) as usize;
         assert_eq!(&image.rgba[corner..corner + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn accepts_bounded_region_select_only_before_explicit_clip_rect() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_CREATEREGION, &region_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+
+        let mut clip = Vec::new();
+        for value in [60_i16, 60, 40, 40] {
+            clip.extend_from_slice(&value.to_le_bytes());
+        }
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_INTERSECTCLIPRECT, &clip),
+        );
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("region compatibility");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+        let clipped = ((30 * 100 + 30) * 4) as usize;
+        assert_eq!(
+            &image.rgba[clipped..clipped + 4],
+            &[0, 0, 0, 0],
+            "explicit INTERSECTCLIPRECT, not Region SELECTOBJECT, supplies clipping"
+        );
+    }
+
+    #[test]
+    fn rejects_region_select_without_immediate_explicit_clip_rect() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_CREATEREGION, &region_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn rejects_region_outside_exact_bounded_compatibility_profile() {
+        let mut params = region_compatibility_params();
+        params[2..4].copy_from_slice(&5_i16.to_le_bytes());
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_CREATEREGION, &params));
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn keeps_selectclipregion_fail_closed() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_CREATEREGION, &region_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTCLIPREGION, &2_u16.to_le_bytes()),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
