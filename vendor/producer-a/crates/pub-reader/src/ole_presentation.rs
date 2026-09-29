@@ -229,7 +229,9 @@ mod tests {
     fn cached_presentation_cfb(streams: &[(&str, Vec<u8>)]) -> Cursor<Vec<u8>> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("create test CFB");
-        compound.create_storage("/Objects").expect("Objects storage");
+        compound
+            .create_storage("/Objects")
+            .expect("Objects storage");
         compound
             .create_storage("/Objects/Object 73")
             .expect("Object 73 storage");
@@ -315,10 +317,7 @@ mod tests {
         let valid = fixture(CF_METAFILEPICT, 4, &valid_wmf_payload());
         let malformed = fixture(CF_METAFILEPICT, 4, &[0x06_u8; 18]);
         let scan = scan_legacy_ole_cached_presentations(
-            cached_presentation_cfb(&[
-                ("\u{2}OlePres001", valid),
-                ("\u{2}OlePres002", malformed),
-            ]),
+            cached_presentation_cfb(&[("\u{2}OlePres001", valid), ("\u{2}OlePres002", malformed)]),
             73,
         )
         .expect("bounded scan");
