@@ -688,6 +688,10 @@ impl GuestReaderHttpState {
         Ok(())
     }
 
+    pub async fn cleanup_expired_sessions(&self) -> Result<(), GuestReaderError> {
+        self.cleanup_expired(now_ms()?).await
+    }
+
     async fn cleanup_expired(&self, now_ms: i64) -> Result<(), GuestReaderError> {
         let expired = self.sessions.expired_pending(now_ms, CLEANUP_BATCH).await?;
         for session in expired {
