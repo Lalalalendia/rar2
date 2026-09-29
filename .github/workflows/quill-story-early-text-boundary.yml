@@ -111,6 +111,7 @@ jobs:
                       "btec_descriptor_lengths": row["btec_descriptor_lengths"],
                       "fdpp_descriptor_lengths": row["fdpp_descriptor_lengths"],
                       "fdpc_descriptor_lengths": row["fdpc_descriptor_lengths"],
+                      "descriptor_topology": row["descriptor_topology"],
                       "btep_candidates": row["btep_candidates"],
                       "btec_candidates": row["btec_candidates"],
                   }
