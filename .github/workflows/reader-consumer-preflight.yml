@@ -7,6 +7,9 @@ on:
     branches:
       - main
     paths:
+      - ".github/workflows/reader-consumer-preflight.yml"
+      - "tools/ci/reader_consumer_preflight.py"
+      - "tools/ci/test_reader_consumer_preflight.py"
       - "Cargo.toml"
       - "Cargo.lock"
       - "apps/chaptera-desktop/**"
