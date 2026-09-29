@@ -98,6 +98,14 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         render_plan = True
         desktop = True
 
+    # Shared Reader/Viewer changes must prove product integration cheaply in
+    # Tier A so they do not need full Editor Windows / Android acceptance.
+    if affected or render_plan:
+        desktop = True
+    mobile_reader = render_plan or bool(
+        affected & {"pub-reader", "pub-layout", "pub-viewer"}
+    )
+
     for path in paths:
         if path.startswith("crates/chaptera-viewer-render-plan/") and path.endswith(".rs"):
             changed_rust.append(path)
@@ -262,7 +270,30 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "warnings",
                     ],
                 },
+                {
+                    "id": "desktop-editor-check",
+                    "argv": [
+                        "cargo",
+                        "check",
+                        "-p",
+                        "chaptera-desktop",
+                        "--all-targets",
+                    ],
+                },
             ]
+        )
+
+    if mobile_reader:
+        commands.append(
+            {
+                "id": "mobile-reader-core-check",
+                "argv": [
+                    "cargo",
+                    "check",
+                    "--manifest-path",
+                    "crates/chaptera-mobile-reader-core/Cargo.toml",
+                ],
+            }
         )
 
     return {
@@ -270,6 +301,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         "affected_vendor_packages": packages,
         "render_plan": render_plan,
         "desktop_reader_integration": desktop,
+        "mobile_reader_integration": mobile_reader,
         "commands": commands,
     }
 

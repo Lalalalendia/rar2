@@ -1,0 +1,228 @@
+name: Reader PR selective CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/chaptera-desktop/**"
+      - "apps/chaptera-mobile-android/**"
+      - "apps/chaptera-rescue/**"
+      - "apps/chaptera-server/**"
+      - "apps/web/**"
+      - "crates/chaptera-mobile-reader-core/**"
+      - "crates/chaptera-mobile-reader-jni/**"
+      - "crates/chaptera-scene-instance/**"
+      - "crates/chaptera-suite-handoff/**"
+      - "crates/chaptera-update-engine/**"
+      - "crates/chaptera-update-handoff/**"
+      - "crates/chaptera-update-orchestrator/**"
+      - "crates/chaptera-update-trust/**"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "crates/pub-presentation-profile/**"
+      - "vendor/producer-a/**"
+      - "packages/product/reader-portable/**"
+      - "packages/product/editor-live-trial/**"
+      - "packages/product/desktop-suite/**"
+      - "packages/product/local-portable/**"
+      - "packages/protocol/editor-agent-control/**"
+      - "packages/protocol/revision/v1/**"
+      - "installer/windows/chaptera-reader.iss"
+      - "services/editor-api/**"
+      - "deploy/config/chaptera.prod.example.toml"
+      - "Start-Chaptera-Local.cmd"
+      - "tools/ci/reader_consumer_preflight.py"
+      - "tools/ci/test_reader_consumer_preflight.py"
+      - "tools/ci/reader_pr_fanout.py"
+      - "tools/ci/test_reader_pr_fanout.py"
+      - "tools/package_reader_portable.py"
+      - "tools/test_package_reader_portable.py"
+      - "tools/package_editor_live_trial.py"
+      - "tools/build_editor_live_trial_package_receipt.py"
+      - "tools/validate_editor_live_trial_package_receipt.py"
+      - "tools/run_editor_live_trial_package_smoke.py"
+      - "tools/validate_editor_desktop_ux_snapshots.py"
+      - "tools/run_local_editor_desktop_vertical.py"
+      - "tools/validate_chaptera_desktop_suite_manifest.py"
+      - "tools/acquire_carlton_march_pair.py"
+      - "tools/pdf_reference_diff_v1.py"
+      - "tools/reader_reference_pdf_raster_v1.py"
+      - "tools/reader_corpus_manifest_v1.json"
+      - "tools/run_reader_corpus_matrix_v1.py"
+      - "tools/run_web_editor_real_acceptance.mjs"
+      - "tools/sample_newsletter_move_producer.py"
+      - "tools/resolved_graph_scene_bridge_v1.py"
+      - "tools/adapt_viewer_scene_v1.py"
+      - "tools/validate_browser_acceptance_receipt.py"
+      - "tools/validate_web_acceptance_preflight.py"
+      - "tools/verify_editable_export_geometry.py"
+      - "tools/run_local_full_stack.py"
+      - "tools/run_local_real_editor.py"
+      - "tools/run_cloud_config_receipt.py"
+      - "tools/package_local_portable.py"
+      - "tools/scene_v1.py"
+      - "tools/chaptera-win-lifecycle-soak.ps1"
+      - "tools/validate_export_preview.py"
+      - ".github/workflows/reader-pr-ci.yml"
+      - ".github/workflows/reader-consumer-preflight.yml"
+      - ".github/workflows/chaptera-reader-windows.yml"
+      - ".github/workflows/chaptera-desktop-windows.yml"
+      - ".github/workflows/chaptera-local-portable-windows.yml"
+      - ".github/workflows/carlton-reader-visual-oracle.yml"
+      - ".github/workflows/mobile-reader-android-local-open.yml"
+      - ".github/workflows/mobile-reader-android-render.yml"
+      - ".github/workflows/reader-corpus-truth-v1.yml"
+      - ".github/workflows/reader-typography-golden.yml"
+      - ".github/workflows/web-acceptance-real-chromium.yml"
+      - ".github/workflows/chaptera-reader-installer.yml"
+      - ".github/workflows/chaptera-win-path-identity.yml"
+      - ".github/workflows/chaptera-win-update-accept.yml"
+      - ".github/workflows/chaptera-win-lifecycle-soak.yml"
+      - ".github/workstream-scopes/chaptera-win-update-accept-01.md"
+      - ".github/workstream-scopes/chaptera-win-lifecycle-soak-01.md"
+  workflow_dispatch:
+
+concurrency:
+  group: reader-pr-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    name: Classify PR CI scope
+    runs-on: ubuntu-latest
+    outputs:
+      tier_a: ${{ steps.scope.outputs.tier_a }}
+      reader_windows: ${{ steps.scope.outputs.reader_windows }}
+      editor_windows: ${{ steps.scope.outputs.editor_windows }}
+      visual_oracle: ${{ steps.scope.outputs.visual_oracle }}
+      typography_golden: ${{ steps.scope.outputs.typography_golden }}
+      corpus_truth: ${{ steps.scope.outputs.corpus_truth }}
+      android: ${{ steps.scope.outputs.android }}
+      web: ${{ steps.scope.outputs.web }}
+      local_portable: ${{ steps.scope.outputs.local_portable }}
+      installer: ${{ steps.scope.outputs.installer }}
+      path_identity: ${{ steps.scope.outputs.path_identity }}
+      update_accept: ${{ steps.scope.outputs.update_accept }}
+      lifecycle_soak: ${{ steps.scope.outputs.lifecycle_soak }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Test PR fanout classifier
+        run: python tools/ci/test_reader_pr_fanout.py
+
+      - id: scope
+        name: Classify changed paths once
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BASE_SHA"
+          if [[ -z "$base" ]]; then
+            base="$(git rev-parse "$HEAD_SHA^")"
+          fi
+          python tools/ci/reader_pr_fanout.py \
+            --base "$base" \
+            --head "$HEAD_SHA" \
+            --receipt target/reader-pr-ci/fanout.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reader-pr-fanout-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/reader-pr-ci/fanout.json
+          if-no-files-found: error
+
+  tier-a:
+    name: Reader consumer Tier A
+    needs: classify
+    if: needs.classify.outputs.tier_a == 'true'
+    uses: ./.github/workflows/reader-consumer-preflight.yml
+
+  reader-windows:
+    name: Reader Windows product
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-windows.yml
+
+  editor-windows:
+    name: Editor Windows product
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.editor_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-desktop-windows.yml
+
+  visual-oracle:
+    name: Reader visual oracle
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/carlton-reader-visual-oracle.yml
+
+  typography-golden:
+    name: Reader typography golden
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.typography_golden == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/reader-typography-golden.yml
+
+  corpus-truth:
+    name: Reader corpus truth
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.corpus_truth == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/reader-corpus-truth-v1.yml
+
+  android-local-open:
+    name: Android local open
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/mobile-reader-android-local-open.yml
+
+  android-render:
+    name: Android render
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/mobile-reader-android-render.yml
+
+  web:
+    name: Web real Chromium
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.web == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/web-acceptance-real-chromium.yml
+
+  local-portable:
+    name: Local portable Windows
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.local_portable == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-local-portable-windows.yml
+
+  installer:
+    name: Reader installer
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.installer == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-installer.yml
+
+  path-identity:
+    name: Windows path identity
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.path_identity == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-win-path-identity.yml
+
+  update-accept:
+    name: Windows update acceptance
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.update_accept == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-win-update-accept.yml
+
+  lifecycle-soak:
+    name: Windows lifecycle soak
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.lifecycle_soak == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-win-lifecycle-soak.yml
+    with:
+      cycles: "3"

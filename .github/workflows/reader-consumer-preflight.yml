@@ -1,43 +1,8 @@
 name: Reader Consumer Preflight V1
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "apps/chaptera-desktop/src/render_backend.rs"
-      - "apps/chaptera-desktop/src/main.rs"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "vendor/producer-a/Cargo.toml"
-      - "vendor/producer-a/Cargo.lock"
-      - "vendor/producer-a/crates/pub-core/**"
-      - "vendor/producer-a/crates/pub-cfb/**"
-      - "vendor/producer-a/crates/pub-contents/**"
-      - "vendor/producer-a/crates/pub-escher/**"
-      - "vendor/producer-a/crates/pub-model/**"
-      - "vendor/producer-a/crates/pub-quill/**"
-      - "vendor/producer-a/crates/pub-reader/**"
-      - "vendor/producer-a/crates/pub-layout/**"
-      - "vendor/producer-a/crates/pub-viewer/**"
-      - "tools/ci/reader_consumer_preflight.py"
-      - "tools/ci/test_reader_consumer_preflight.py"
-      - ".github/workflows/reader-consumer-preflight.yml"
-      - ".github/workflows/reader-consumer-admission.yml"
-      - ".github/workflows/chaptera-reader-windows.yml"
-      - ".github/workflows/chaptera-desktop-windows.yml"
-      - ".github/workflows/carlton-reader-visual-oracle.yml"
-      - ".github/workflows/reader-typography-golden.yml"
-      - ".github/workflows/reader-corpus-truth-v1.yml"
-      - ".github/workflows/mobile-reader-android-local-open.yml"
-      - ".github/workflows/mobile-reader-android-render.yml"
-      - ".github/workflows/chaptera-local-portable-windows.yml"
-      - ".github/workflows/web-acceptance-real-chromium.yml"
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

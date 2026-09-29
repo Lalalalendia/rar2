@@ -1,26 +1,19 @@
 name: Chaptera Windows lifecycle soak
 
 on:
-  pull_request:
-    paths:
-      - "tools/chaptera-win-lifecycle-soak.ps1"
-      - "crates/chaptera-update-orchestrator/**"
-      - "crates/chaptera-update-engine/**"
-      - "crates/chaptera-update-trust/**"
-      - "installer/windows/chaptera-reader.iss"
-      - "apps/chaptera-desktop/**"
-      - ".github/workflows/chaptera-win-lifecycle-soak.yml"
-      - ".github/workstream-scopes/chaptera-win-lifecycle-soak-01.md"
+  workflow_call:
+    inputs:
+      cycles:
+        description: "Lifecycle cycles"
+        required: false
+        type: string
+        default: "3"
   workflow_dispatch:
     inputs:
       cycles:
         description: "Lifecycle cycles"
         required: false
         default: "10"
-
-concurrency:
-  group: chaptera-win-lifecycle-soak-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read

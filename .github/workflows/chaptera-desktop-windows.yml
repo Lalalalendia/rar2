@@ -1,48 +1,14 @@
 name: Chaptera Editor Desktop Windows V0
 
 on:
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "apps/chaptera-desktop/**"
-      - "crates/chaptera-scene-instance/**"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "vendor/producer-a/**"
-      - "packages/product/editor-live-trial/**"
-      - "packages/protocol/editor-agent-control/**"
-      - "tools/package_editor_live_trial.py"
-      - "tools/build_editor_live_trial_package_receipt.py"
-      - "tools/validate_editor_live_trial_package_receipt.py"
-      - "tools/run_editor_live_trial_package_smoke.py"
-      - "tools/validate_editor_desktop_ux_snapshots.py"
-      - "tools/run_local_editor_desktop_vertical.py"
-      - ".github/workflows/chaptera-desktop-windows.yml"
-      - "packages/product/desktop-suite/**"
-      - "tools/validate_chaptera_desktop_suite_manifest.py"
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
-
   build-windows-editor:
-    needs: reader-consumer-admission
-    if: needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

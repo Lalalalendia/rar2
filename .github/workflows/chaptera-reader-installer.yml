@@ -1,20 +1,11 @@
 name: Chaptera Reader Windows installer V1
 
 on:
-  pull_request:
-    paths:
-      - "apps/chaptera-desktop/**"
-      - "packages/product/reader-portable/**"
-      - "installer/windows/chaptera-reader.iss"
-      - ".github/workflows/chaptera-reader-installer.yml"
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: chaptera-reader-installer-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   NEWSLETTER_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf

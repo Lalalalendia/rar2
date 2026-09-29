@@ -1,43 +1,14 @@
 name: WEB-ACCEPTANCE-01 real Chromium closure
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/web-acceptance-real-chromium.yml"
-      - "services/editor-api/web_real_acceptance_service.py"
-      - "tools/run_web_editor_real_acceptance.mjs"
-      - "apps/web/editor-shell-http-harness.html"
-      - "vendor/producer-a/**"
-      - "tools/sample_newsletter_move_producer.py"
-      - "tools/resolved_graph_scene_bridge_v1.py"
-      - "tools/adapt_viewer_scene_v1.py"
-      - "tools/validate_browser_acceptance_receipt.py"
-      - "tools/validate_web_acceptance_preflight.py"
-      - "tools/verify_editable_export_geometry.py"
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
-
   real-chromium:
-    needs: reader-consumer-admission
-    if: needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
