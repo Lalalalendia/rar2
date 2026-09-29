@@ -81,10 +81,8 @@ impl DesktopSourceFontRegistry {
             resource_id: &font.resource_id,
             expected_sha256: &font.sha256,
             face_index: font.face_index,
-            default_font_size_emu:
-                chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
-            default_line_height_emu:
-                chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
+            default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
+            default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
             bytes: &font.bytes,
         })
     }
