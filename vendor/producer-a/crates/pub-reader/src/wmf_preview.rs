@@ -56,7 +56,7 @@ const PS_NULL: u16 = 5;
 const PS_INSIDEFRAME: u16 = 6;
 const BS_SOLID: u16 = 0;
 const BS_NULL: u16 = 1;
-const BS_DIBPATTERN: u16 = 5;
+const BS_DIBPATTERNPT: u16 = 5;
 const DIB_RGB_COLORS: u16 = 0;
 const BI_RGB: u32 = 0;
 const LEGACY_PATTERN_DIB_BYTES: usize = 96;
@@ -700,6 +700,67 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
         bail!("WMF object table is full");
     };
     *slot = Some(object);
+    Ok(())
+}
+
+fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
+    // Exact-1050 evidence for the seven Publisher Region compatibility objects:
+    // 42-byte payload, ObjectType=6, RegionSize=42, one scan, maxScan=2.
+    // The one scan is structurally valid (Count=Count2=2) and the corpus profile
+    // carries an additional bounded eight-byte tail that is playback-inert here.
+    if params.len() != 42 {
+        bail!(
+            "unsupported WMF Region compatibility payload length {}",
+            params.len()
+        );
+    }
+
+    let object_type =
+        read_i16(params, 2).ok_or_else(|| anyhow!("WMF Region ObjectType is truncated"))?;
+    let region_size = read_i16(params, 8).ok_or_else(|| anyhow!("WMF RegionSize is truncated"))?;
+    let scan_count =
+        read_i16(params, 10).ok_or_else(|| anyhow!("WMF Region ScanCount is truncated"))?;
+    let max_scan =
+        read_i16(params, 12).ok_or_else(|| anyhow!("WMF Region maxScan is truncated"))?;
+    if object_type != 6 || region_size != 42 || scan_count != 1 || max_scan != 2 {
+        bail!(
+            "unsupported WMF Region compatibility profile type={object_type} size={region_size} scans={scan_count} max_scan={max_scan}"
+        );
+    }
+
+    // BoundingRectangle is present in the fixed Region header. Values are not
+    // interpreted because this compatibility object never becomes the active
+    // clipping region in the admitted sequence.
+    for offset in [14usize, 16, 18, 20] {
+        read_i16(params, offset)
+            .ok_or_else(|| anyhow!("WMF Region bounding rectangle is truncated"))?;
+    }
+
+    let count =
+        read_u16(params, 22).ok_or_else(|| anyhow!("WMF Region Scan Count is truncated"))?;
+    let top = read_u16(params, 24).ok_or_else(|| anyhow!("WMF Region Scan Top is truncated"))?;
+    let bottom =
+        read_u16(params, 26).ok_or_else(|| anyhow!("WMF Region Scan Bottom is truncated"))?;
+    if count != 2 {
+        bail!("unsupported WMF Region scan coordinate count {count}");
+    }
+    let _left = read_u16(params, 28).ok_or_else(|| anyhow!("WMF Region Scan left is truncated"))?;
+    let _right =
+        read_u16(params, 30).ok_or_else(|| anyhow!("WMF Region Scan right is truncated"))?;
+    let count2 =
+        read_u16(params, 32).ok_or_else(|| anyhow!("WMF Region Scan Count2 is truncated"))?;
+    if count2 != count {
+        bail!("WMF Region Scan Count2 does not match Count");
+    }
+    if bottom < top {
+        bail!("WMF Region scan vertical bounds are inverted");
+    }
+
+    // Exact corpus profile has an eight-byte compatibility tail. Keep it
+    // bounded but opaque because Region geometry is not activated in this slice.
+    if params.len() - 34 != 8 {
+        bail!("unsupported WMF Region compatibility tail length");
+    }
     Ok(())
 }
 
