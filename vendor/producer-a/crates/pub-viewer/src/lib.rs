@@ -1313,7 +1313,7 @@ fn open_legacy_0x22_noquill_bundle(
         .map(|page| page.id)
         .collect::<Vec<_>>();
     let authoring =
-        bounded_authoring_slice_from_resolved_pages(&resolved.graph, &effective_page_ids)?;
+        bounded_legacy_noquill_authoring_slice_from_resolved_pages(&resolved.graph, &effective_page_ids)?;
     let projection = project_bounded(authoring);
 
     document
@@ -2216,6 +2216,70 @@ pub fn bounded_authoring_slice_from_resolved(
     graph: &PubResolvedGraph,
 ) -> Result<BoundedAuthoringSlice> {
     bounded_authoring_slice_from_resolved_pages(graph, &graph.document.pages)
+}
+
+fn legacy_noquill_image_page(
+    graph: &PubResolvedGraph,
+    node: &Node<PubResolvedNodePayload>,
+    selected_pages: &BTreeSet<PageId>,
+) -> Option<PageId> {
+    if node.kind != NodeKind::ImageFrame {
+        return None;
+    }
+
+    let mut current = node.header.parent_id;
+    let mut seen = BTreeSet::new();
+    loop {
+        if !seen.insert(current) {
+            return None;
+        }
+
+        let page_id = PageId::from_canonical(current);
+        if graph.pages.contains_key(&page_id) {
+            return selected_pages.contains(&page_id).then_some(page_id);
+        }
+
+        let parent = graph.nodes.get(&NodeId::from_canonical(current))?;
+        if parent.kind != NodeKind::Group {
+            return None;
+        }
+        current = parent.header.parent_id;
+    }
+}
+
+fn bounded_legacy_noquill_authoring_slice_from_resolved_pages(
+    graph: &PubResolvedGraph,
+    page_ids: &[PageId],
+) -> Result<BoundedAuthoringSlice> {
+    let mut authoring = bounded_authoring_slice_from_resolved_pages(graph, page_ids)?;
+    let selected_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
+    let mut projected_ids = authoring
+        .node_geometry
+        .iter()
+        .map(|node| node.node_id)
+        .collect::<BTreeSet<_>>();
+
+    for node in graph.nodes.values() {
+        if projected_ids.contains(&node.header.id) {
+            continue;
+        }
+        let Some(page_id) = legacy_noquill_image_page(graph, node, &selected_pages) else {
+            continue;
+        };
+
+        authoring.node_geometry.push(BoundedNodeGeometryInput {
+            node_id: node.header.id,
+            parent_origin: page_id.into_canonical(),
+            bounds: node.header.bounds,
+            transform: node.header.transform.clone(),
+        });
+        projected_ids.insert(node.header.id);
+    }
+
+    authoring
+        .node_geometry
+        .sort_by_key(|node| node.node_id);
+    Ok(authoring)
 }
 
 fn bounded_authoring_slice_from_resolved_pages(
@@ -3214,6 +3278,84 @@ mod tests {
             styles: BTreeMap::new(),
             extensions: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn grouped_legacy_image_projects_to_page_surface_without_mutating_graph_parent() {
+        let mut graph = resolved_graph_fixture();
+        let page_id = graph.document.pages[0];
+        let group_id = *graph.nodes.keys().next().expect("fixture node");
+        let image_id = NodeId::from_canonical(id(5));
+        let image_bounds = RectEmu::new(
+            LengthEmu::new(120),
+            LengthEmu::new(240),
+            LengthEmu::new(360),
+            LengthEmu::new(480),
+        );
+
+        {
+            let group = graph.nodes.get_mut(&group_id).expect("group node");
+            group.kind = NodeKind::Group;
+            group.payload.story_frame = None;
+        }
+
+        let mut image = graph.nodes[&group_id].clone();
+        image.kind = NodeKind::ImageFrame;
+        image.header.id = image_id;
+        image.header.parent_id = group_id.into_canonical();
+        image.header.bounds = image_bounds;
+        image.payload.contents_seq_num = 99;
+        image.payload.story_frame = None;
+        graph.nodes.insert(image_id, image);
+
+        let authoring =
+            bounded_legacy_noquill_authoring_slice_from_resolved_pages(&graph, &[page_id])
+                .expect("legacy authoring slice");
+        let projected = authoring
+            .node_geometry
+            .iter()
+            .find(|node| node.node_id == image_id)
+            .expect("grouped IMAGE projected");
+
+        assert_eq!(projected.parent_origin, page_id.into_canonical());
+        assert_eq!(projected.bounds, image_bounds);
+        assert_eq!(
+            graph.nodes[&image_id].header.parent_id,
+            group_id.into_canonical(),
+            "Viewer projection must not rewrite canonical GROUP ownership"
+        );
+    }
+
+    #[test]
+    fn legacy_image_projection_rejects_non_group_ancestry() {
+        let mut graph = resolved_graph_fixture();
+        let page_id = graph.document.pages[0];
+        let parent_id = *graph.nodes.keys().next().expect("fixture node");
+        let image_id = NodeId::from_canonical(id(6));
+
+        {
+            let parent = graph.nodes.get_mut(&parent_id).expect("parent node");
+            parent.kind = NodeKind::Shape;
+            parent.payload.story_frame = None;
+        }
+
+        let mut image = graph.nodes[&parent_id].clone();
+        image.kind = NodeKind::ImageFrame;
+        image.header.id = image_id;
+        image.header.parent_id = parent_id.into_canonical();
+        image.payload.contents_seq_num = 100;
+        graph.nodes.insert(image_id, image);
+
+        let authoring =
+            bounded_legacy_noquill_authoring_slice_from_resolved_pages(&graph, &[page_id])
+                .expect("legacy authoring slice");
+        assert!(
+            authoring
+                .node_geometry
+                .iter()
+                .all(|node| node.node_id != image_id),
+            "only a pure GROUP ancestry may flatten a legacy IMAGE onto a page"
+        );
     }
 
     #[test]
