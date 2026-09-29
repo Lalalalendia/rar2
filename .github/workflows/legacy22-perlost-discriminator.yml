@@ -149,7 +149,7 @@ jobs:
               print(json.dumps(out,indent=2,sort_keys=True))
           PY
 
-      - name: Prove MiniFAT invalid-entry reachability
+      - name: Prove MiniFAT validity within declared stream lengths
         shell: bash
         run: |
           set -euo pipefail
@@ -161,50 +161,128 @@ jobs:
           p=Path("corpus-src/pub-corpus/corpus/native/unclassified/d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f.pub")
           with olefile.OleFileIO(str(p)) as ole:
               ole.loadminifat()
-              # OleFileIO has already loaded the directory during open; olefile 0.47
-              # requires an explicit sector argument for loaddirectory(), so do not
-              # invoke that internal loader a second time here.
               mf=list(ole.minifat)
+              mini_sector_size=int(getattr(ole,"minisectorsize",64))
               max_regular=0xFFFFFFFA
               terminal={0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFD,0xFFFFFFFC}
               invalid={
                   i:v for i,v in enumerate(mf)
                   if v not in terminal and (v > max_regular or v >= len(mf))
               }
-              used=set()
-              chains={}
-              chain_errors=[]
+
+              required_sectors=set()
+              transition_errors=[]
+              tail_anomalies=[]
+              checked_small_streams=0
+
               for idx,entry in enumerate(ole.direntries):
                   if entry is None or entry.entry_type != olefile.STGTY_STREAM:
                       continue
-                  if entry.size >= ole.minisectorcutoff:
+                  size=int(entry.size)
+                  if size <= 0 or size >= ole.minisectorcutoff:
                       continue
-                  cur=entry.isectStart
-                  chain=[]
+                  checked_small_streams += 1
+                  needed=(size + mini_sector_size - 1)//mini_sector_size
+                  cur=int(entry.isectStart)
                   seen=set()
-                  while cur not in terminal:
-                      if cur in seen:
-                          chain_errors.append({"direntry":idx,"reason":"cycle","at":cur})
+                  chain=[]
+                  for ordinal in range(needed):
+                      if cur in terminal:
+                          transition_errors.append({
+                              "direntry":idx,
+                              "reason":"premature_terminal",
+                              "ordinal":ordinal,
+                              "needed":needed,
+                              "size":size,
+                          })
                           break
                       if not (0 <= cur < len(mf)):
-                          chain_errors.append({"direntry":idx,"reason":"out_of_range","at":cur})
+                          transition_errors.append({
+                              "direntry":idx,
+                              "reason":"sector_out_of_range",
+                              "ordinal":ordinal,
+                              "at":cur,
+                              "needed":needed,
+                              "size":size,
+                          })
                           break
-                      seen.add(cur); used.add(cur); chain.append(cur)
-                      nxt=mf[cur]
-                      if nxt not in terminal and (nxt > max_regular or nxt >= len(mf)):
-                          chain_errors.append({"direntry":idx,"reason":"invalid_next","at":cur,"next":nxt})
+                      if cur in seen:
+                          transition_errors.append({
+                              "direntry":idx,
+                              "reason":"cycle_before_declared_len",
+                              "ordinal":ordinal,
+                              "at":cur,
+                              "needed":needed,
+                              "size":size,
+                          })
                           break
-                      cur=nxt
-                  chains[str(idx)]=chain
-              invalid_reachable={str(i):v for i,v in invalid.items() if i in used}
+                      seen.add(cur)
+                      required_sectors.add(cur)
+                      chain.append(cur)
+                      nxt=int(mf[cur])
+                      if ordinal + 1 < needed:
+                          if nxt in terminal:
+                              transition_errors.append({
+                                  "direntry":idx,
+                                  "reason":"terminal_before_declared_len",
+                                  "ordinal":ordinal,
+                                  "at":cur,
+                                  "needed":needed,
+                                  "size":size,
+                              })
+                              break
+                          if nxt > max_regular or nxt >= len(mf):
+                              transition_errors.append({
+                                  "direntry":idx,
+                                  "reason":"invalid_next_before_declared_len",
+                                  "ordinal":ordinal,
+                                  "at":cur,
+                                  "next":nxt,
+                                  "needed":needed,
+                                  "size":size,
+                              })
+                              break
+                          cur=nxt
+                      elif nxt not in terminal:
+                          tail_anomalies.append({
+                              "direntry":idx,
+                              "size":size,
+                              "needed":needed,
+                              "last_required_sector":cur,
+                              "tail_next":nxt,
+                              "tail_next_in_range":0 <= nxt < len(mf),
+                          })
+
+              logical_stream_read_count=0
+              logical_stream_read_failures=0
+              logical_stream_length_mismatches=0
+              for parts in ole.listdir(streams=True,storages=False):
+                  logical_stream_read_count += 1
+                  try:
+                      expected=int(ole.get_size(parts))
+                      actual=len(ole.openstream(parts).read())
+                      if actual != expected:
+                          logical_stream_length_mismatches += 1
+                  except Exception:
+                      logical_stream_read_failures += 1
+
+              tail_by_sector={row["last_required_sector"]:row for row in tail_anomalies}
               print(json.dumps({
                   "minifat_entry_count":len(mf),
+                  "mini_sector_size":mini_sector_size,
+                  "invalid_entry_count":len(invalid),
                   "invalid_entries":invalid,
-                  "used_mini_sector_count":len(used),
-                  "invalid_reachable":invalid_reachable,
-                  "chain_error_count":len(chain_errors),
-                  "chain_errors":chain_errors,
-                  "mini_sector_384_used":384 in used,
+                  "checked_small_stream_count":checked_small_streams,
+                  "required_mini_sector_count":len(required_sectors),
+                  "required_transition_error_count":len(transition_errors),
+                  "required_transition_errors":transition_errors,
+                  "tail_anomaly_count":len(tail_anomalies),
+                  "tail_anomalies":tail_anomalies,
+                  "mini_sector_384_required":384 in required_sectors,
+                  "mini_sector_384_tail_anomaly":tail_by_sector.get(384),
+                  "logical_stream_read_count":logical_stream_read_count,
+                  "logical_stream_read_failure_count":logical_stream_read_failures,
+                  "logical_stream_length_mismatch_count":logical_stream_length_mismatches,
               },indent=2,sort_keys=True))
           PY
 
@@ -226,10 +304,13 @@ jobs:
           ole=json.loads(Path("/tmp/perlost-olefile.json").read_text())
           reach=json.loads(Path("/tmp/perlost-minifat-reachability.json").read_text())
           assert "/Contents" in ole["paths"], ole
-          assert reach["invalid_entries"] == {"384": 1431327565}, reach
-          assert reach["mini_sector_384_used"] is False, reach
-          assert reach["invalid_reachable"] == {}, reach
-          assert reach["chain_error_count"] == 0, reach
+          assert reach["invalid_entries"].get("384") == 1431327565, reach
+          assert reach["mini_sector_384_required"] is True, reach
+          assert reach["mini_sector_384_tail_anomaly"]["tail_next"] == 1431327565, reach
+          assert reach["required_transition_error_count"] == 0, reach
+          assert reach["logical_stream_read_failure_count"] == 0, reach
+          assert reach["logical_stream_length_mismatch_count"] == 0, reach
+          assert reach["tail_anomaly_count"] >= 1, reach
           # Report may retain only structural metadata/error text, never source bytes or recovered story text.
           forbidden=["PERLOST.PUB", "PageWiz/", "recovered_text", "story_text"]
           raw=p.read_text()
