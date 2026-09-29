@@ -1064,11 +1064,7 @@ mod tests {
         let mut tertiary_payload = Vec::new();
         tertiary_payload.extend_from_slice(&0x01CBu16.to_le_bytes());
         tertiary_payload.extend_from_slice(&0x0000_2535u32.to_le_bytes());
-        let tertiary = header(
-            (1 << 4) | 0x3,
-            OFFICE_ART_TERTIARY_FOPT,
-            &tertiary_payload,
-        );
+        let tertiary = header((1 << 4) | 0x3, OFFICE_ART_TERTIARY_FOPT, &tertiary_payload);
 
         let mut dgg_children = Vec::new();
         dgg_children.extend_from_slice(&primary);
@@ -1086,19 +1082,10 @@ mod tests {
         assert_eq!(dgg.primary_options.len(), 1);
         assert_eq!(dgg.tertiary_options.len(), 1);
         assert_eq!(dgg.primary_options[0].rec_type, OFFICE_ART_FOPT);
-        assert_eq!(
-            dgg.primary_options[0].properties[0].property_id(),
-            0x0181
-        );
+        assert_eq!(dgg.primary_options[0].properties[0].property_id(), 0x0181);
         assert_eq!(dgg.primary_options[0].properties[0].op, 0x0011_2233);
-        assert_eq!(
-            dgg.tertiary_options[0].rec_type,
-            OFFICE_ART_TERTIARY_FOPT
-        );
-        assert_eq!(
-            dgg.tertiary_options[0].properties[0].property_id(),
-            0x01CB
-        );
+        assert_eq!(dgg.tertiary_options[0].rec_type, OFFICE_ART_TERTIARY_FOPT);
+        assert_eq!(dgg.tertiary_options[0].properties[0].property_id(), 0x01CB);
         assert_eq!(dgg.tertiary_options[0].properties[0].op, 0x0000_2535);
     }
 
