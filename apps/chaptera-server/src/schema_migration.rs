@@ -35,6 +35,8 @@ const PROJECT_PERSISTENCE_SQL: &str = include_str!("../migrations/0013_project_p
 const WORKSPACE_CONTEXT_SQL: &str = include_str!("../migrations/0014_workspace_context.sql");
 const UPLOAD_ADMISSION_SQL: &str = include_str!("../migrations/0015_upload_admission.sql");
 const PUBLIC_RATE_LIMIT_SQL: &str = include_str!("../migrations/0016_public_rate_limit.sql");
+const READER_GUEST_SESSIONS_SQL: &str =
+    include_str!("../migrations/0017_reader_guest_sessions.sql");
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -124,9 +126,14 @@ const MIGRATIONS: &[MigrationSpec] = &[
         name: "public_rate_limit",
         sql: PUBLIC_RATE_LIMIT_SQL,
     },
+    MigrationSpec {
+        version: 17,
+        name: "reader_guest_sessions",
+        sql: READER_GUEST_SESSIONS_SQL,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 16;
+pub const CURRENT_SCHEMA_VERSION: i64 = 17;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MigrationReport {
@@ -552,7 +559,8 @@ async fn known_schema_tables_present(
             'workspaces',
             'workspace_memberships',
             'upload_admission_reservations',
-            'public_rate_limit_state'
+            'public_rate_limit_state',
+            'reader_guest_sessions'
           )
         "#,
     )
@@ -641,7 +649,7 @@ mod tests {
         assert_eq!(report.target_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(
             report.pending_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
         assert!(!path.exists());
     }
@@ -655,7 +663,7 @@ mod tests {
         assert_eq!(first.state, "current");
         assert_eq!(
             first.applied_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
         );
 
         let second = runtime.migrate_up().await.unwrap();
@@ -751,7 +759,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 final_report.applied_versions,
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
             );
 
             cleanup(&path);

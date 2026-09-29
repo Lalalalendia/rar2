@@ -14,7 +14,9 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::{
-    source_ingress_security::SourceSecurityScannerConfig, upload_admission::UploadAdmissionConfig,
+    public_rate_limit::{PublicRateLimitConfig, PublicRatePolicy},
+    source_ingress_security::SourceSecurityScannerConfig,
+    upload_admission::UploadAdmissionConfig,
 };
 
 pub const DEFAULT_LISTEN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
@@ -45,6 +47,8 @@ pub struct ChapteraConfig {
     pub edge: EdgeConfig,
     #[serde(default)]
     pub source_ingress: Option<SourceIngressHttpRuntimeConfig>,
+    #[serde(default)]
+    pub cloud_reader_guest: Option<CloudReaderGuestRuntimeConfig>,
     pub auth: Option<AuthConfig>,
     pub key_ring: Option<KeyRingConfig>,
 }
@@ -186,6 +190,57 @@ pub struct SourceIngressHttpRuntimeConfig {
     pub upload_ttl_seconds: u64,
     pub direct_grant_ttl_seconds: u64,
     pub baseline: SourceBaselineRuntimeConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudReaderGuestRuntimeConfig {
+    pub session_ttl_seconds: u64,
+    pub max_file_bytes: u64,
+    pub max_concurrent_uploads: i64,
+    pub max_reserved_bytes: i64,
+    pub rate_subject_secret: SecretRef,
+}
+
+impl CloudReaderGuestRuntimeConfig {
+    pub fn upload_admission(&self) -> UploadAdmissionConfig {
+        UploadAdmissionConfig {
+            principal_concurrent_cap: self.max_concurrent_uploads,
+            tenant_concurrent_cap: self.max_concurrent_uploads,
+            principal_bytes_cap: self.max_reserved_bytes,
+            tenant_bytes_cap: self.max_reserved_bytes,
+            max_single_upload_bytes: i64::try_from(self.max_file_bytes).unwrap_or(i64::MAX),
+            lease_duration: Duration::from_secs(self.session_ttl_seconds),
+            retention: Duration::from_secs(24 * 60 * 60),
+        }
+    }
+
+    pub fn public_rate_limit(&self) -> PublicRateLimitConfig {
+        PublicRateLimitConfig {
+            reader_session_create: PublicRatePolicy {
+                requests_per_window: 12,
+                window: Duration::from_secs(60),
+                burst: 4,
+            },
+            reader_session_upload: PublicRatePolicy {
+                requests_per_window: 8,
+                window: Duration::from_secs(60),
+                burst: 2,
+            },
+            reader_session_open: PublicRatePolicy {
+                requests_per_window: 30,
+                window: Duration::from_secs(60),
+                burst: 6,
+            },
+            public_metadata: PublicRatePolicy {
+                requests_per_window: 120,
+                window: Duration::from_secs(60),
+                burst: 20,
+            },
+            retention: Duration::from_secs(24 * 60 * 60),
+            max_entries: 100_000,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -375,6 +430,7 @@ impl ChapteraConfig {
             },
             edge: EdgeConfig::default(),
             source_ingress: None,
+            cloud_reader_guest: None,
             auth: None,
             key_ring: None,
         };
@@ -555,6 +611,10 @@ impl ChapteraConfig {
             validate_source_ingress_http(self.environment, &self.upload_admission, source)?;
         }
 
+        if let Some(guest) = &self.cloud_reader_guest {
+            validate_cloud_reader_guest(guest, &self.source_validation, &self.edge)?;
+        }
+
         match (&self.auth, self.environment) {
             (Some(auth), mode) => validate_auth(mode, auth)?,
             (None, EnvironmentMode::Prod) => {
@@ -588,12 +648,69 @@ impl ChapteraConfig {
             .as_ref()
             .map(|ring| resolver.resolve_key_ring(self.environment, ring))
             .transpose()?;
+        let cloud_reader_guest_rate_secret = self
+            .cloud_reader_guest
+            .as_ref()
+            .map(|guest| resolver.resolve(self.environment, &guest.rate_subject_secret))
+            .transpose()?;
 
         Ok(ResolvedSecrets {
             oidc_client_secret,
             key_ring,
+            cloud_reader_guest_rate_secret,
         })
     }
+}
+
+fn validate_cloud_reader_guest(
+    guest: &CloudReaderGuestRuntimeConfig,
+    source_validation: &SourceValidationRuntimeConfig,
+    edge: &EdgeConfig,
+) -> Result<(), ConfigError> {
+    if !(60..=3600).contains(&guest.session_ttl_seconds) {
+        return Err(ConfigError::new(
+            "cloud_reader_guest_ttl_invalid",
+            "cloud_reader_guest.session_ttl_seconds must be between 60 and 3600",
+        ));
+    }
+    if guest.max_file_bytes == 0
+        || guest.max_file_bytes > 64 * 1024 * 1024
+        || guest.max_file_bytes > source_validation.max_file_bytes
+        || guest.max_file_bytes > edge.max_upload_body_bytes
+    {
+        return Err(ConfigError::new(
+            "cloud_reader_guest_max_file_bytes_invalid",
+            "guest max file bytes must be positive, <=64MiB and fit scanner + edge limits",
+        ));
+    }
+    if !(1..=32).contains(&guest.max_concurrent_uploads) {
+        return Err(ConfigError::new(
+            "cloud_reader_guest_concurrency_invalid",
+            "guest max concurrent uploads must be 1..=32",
+        ));
+    }
+    let max_file_i64 = i64::try_from(guest.max_file_bytes).map_err(|_| {
+        ConfigError::new(
+            "cloud_reader_guest_max_file_bytes_invalid",
+            "guest max file bytes does not fit i64",
+        )
+    })?;
+    if guest.max_reserved_bytes < max_file_i64 || guest.max_reserved_bytes > 2 * 1024 * 1024 * 1024
+    {
+        return Err(ConfigError::new(
+            "cloud_reader_guest_reserved_bytes_invalid",
+            "guest reserved bytes must fit one max file and be <=2GiB",
+        ));
+    }
+    guest
+        .upload_admission()
+        .validate()
+        .map_err(|error| ConfigError::new(error.code, error.message))?;
+    guest
+        .public_rate_limit()
+        .validate()
+        .map_err(|error| ConfigError::new(error.code, error.message))?;
+    Ok(())
 }
 
 fn validate_source_ingress_http(
@@ -1149,6 +1266,7 @@ impl fmt::Debug for ResolvedKeyRing {
 pub struct ResolvedSecrets {
     pub oidc_client_secret: Option<SecretValue>,
     pub key_ring: Option<ResolvedKeyRing>,
+    pub cloud_reader_guest_rate_secret: Option<SecretValue>,
 }
 
 impl fmt::Debug for ResolvedSecrets {
@@ -1160,6 +1278,13 @@ impl fmt::Debug for ResolvedSecrets {
                 &self.oidc_client_secret.as_ref().map(|_| "<redacted>"),
             )
             .field("key_ring", &self.key_ring)
+            .field(
+                "cloud_reader_guest_rate_secret",
+                &self
+                    .cloud_reader_guest_rate_secret
+                    .as_ref()
+                    .map(|_| "<redacted>"),
+            )
             .finish()
     }
 }

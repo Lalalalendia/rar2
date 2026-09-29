@@ -1,4 +1,4 @@
-use std::{error::Error, process::ExitCode, time::Duration};
+use std::{error::Error, io, process::ExitCode, time::Duration};
 
 use chaptera_server::{
     auth_runtime::AuthRuntime,
@@ -8,6 +8,10 @@ use chaptera_server::{
     config::{ChapteraConfig, EnvironmentMode, SecretResolver},
     doctor,
     edge::EdgePolicy,
+    guest_reader_http::{
+        self, GuestReaderHttpConfig, GuestReaderHttpState, SqliteGuestReaderSessionStore,
+    },
+    guest_reader_worker::{self, IsolatedGuestSceneProducer},
     job_queue::SqliteJobQueue,
     jobs::UnconfiguredWorkerRuntime,
     jobs_runtime::JobsRuntime,
@@ -15,6 +19,7 @@ use chaptera_server::{
     product_api_http::{self, ProductApiHttpState},
     product_export_http::{self, ProductExportHttpState},
     project_persistence_sqlite::SqliteProjectPersistence,
+    public_rate_limit::SqlitePublicRateLimitAuthority,
     revision_materializer::BlobStoreExactSourceLoader,
     runtime_readiness::{ports_with_configured_serve, ports_with_revision_stream},
     schema_migration::SqliteMigrationRuntime,
@@ -23,6 +28,7 @@ use chaptera_server::{
     source_baseline,
     source_baseline::IsolatedSourceBaselineProducer,
     source_ingress_http::{self, SourceIngressHttpState},
+    source_ingress_security::ProductionSourceSecurityScanner,
     source_ingress_sqlite::SqliteSourceIngressRepository,
     source_validation_job::SourceValidationJobQueue,
     sqlite_store::SqliteRevisionStore,
@@ -45,6 +51,25 @@ fn main() -> ExitCode {
     {
         return match source_baseline::run_source_baseline_worker(
             document_id,
+            expected_sha256,
+            *expected_byte_len,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Command::GuestReaderScene {
+        session_id,
+        expected_sha256,
+        expected_byte_len,
+    } = &cli.command
+    {
+        return match guest_reader_worker::run_guest_scene_worker(
+            session_id,
             expected_sha256,
             *expected_byte_len,
         ) {
@@ -101,7 +126,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                 .await?;
                 if config.auth.is_some() {
                     let auth_runtime = AuthRuntime::open(&config, &secrets).await?;
-                    drop(secrets);
                     let auth_http = auth_runtime.http_state();
                     let busy_timeout = Duration::from_millis(config.sqlite.busy_timeout_ms);
                     let authz = SqliteAuthzAuthority::open(
@@ -118,7 +142,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                     )
                     .await?;
                     let blob_store = BlobStoreRuntime::open(&config).await?;
-                    let product_router = if let Some(source_config) = &config.source_ingress {
+                    let mut product_router = if let Some(source_config) = &config.source_ingress {
                         let workspace = SqliteWorkspaceContextResolver::open(
                             &config.sqlite.path,
                             config.sqlite.pool_max,
@@ -196,6 +220,76 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         None
                     };
 
+                    if let Some(guest_config) = &config.cloud_reader_guest {
+                        let rate_secret = secrets
+                            .cloud_reader_guest_rate_secret
+                            .as_ref()
+                            .ok_or_else(|| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "cloud_reader_guest rate subject secret was not resolved",
+                                )
+                            })?;
+                        let guest_rate = SqlitePublicRateLimitAuthority::open(
+                            &config.sqlite.path,
+                            config.sqlite.pool_max,
+                            busy_timeout,
+                            guest_config.public_rate_limit(),
+                            rate_secret.expose(),
+                        )
+                        .await?;
+                        let guest_admission = SqliteUploadAdmissionAuthority::open(
+                            &config.sqlite.path,
+                            config.sqlite.pool_max,
+                            busy_timeout,
+                            guest_config.upload_admission(),
+                        )
+                        .await?;
+                        let guest_sessions = SqliteGuestReaderSessionStore::open(
+                            &config.sqlite.path,
+                            config.sqlite.pool_max,
+                            busy_timeout,
+                        )
+                        .await?;
+                        let guest_scan_config = config.source_validation.materialize();
+                        let guest_scanner =
+                            ProductionSourceSecurityScanner::new(guest_scan_config.clone())?;
+                        let guest_scene_worker =
+                            IsolatedGuestSceneProducer::new(guest_scan_config)?;
+                        let guest_state = GuestReaderHttpState::new(
+                            guest_rate,
+                            guest_admission,
+                            guest_sessions,
+                            blob_store.service().clone(),
+                            guest_scanner,
+                            guest_scene_worker,
+                            GuestReaderHttpConfig {
+                                session_ttl: Duration::from_secs(guest_config.session_ttl_seconds),
+                                max_file_bytes: guest_config.max_file_bytes,
+                            },
+                        )?;
+                        let guest_cleanup_state = guest_state.clone();
+                        tokio::spawn(async move {
+                            let mut interval = tokio::time::interval(Duration::from_secs(30));
+                            interval
+                                .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                            loop {
+                                interval.tick().await;
+                                if let Err(error) =
+                                    guest_cleanup_state.cleanup_expired_sessions().await
+                                {
+                                    eprintln!("chaptera_guest_cleanup {error}");
+                                }
+                            }
+                        });
+                        let guest_router = guest_reader_http::router(guest_state);
+                        product_router = Some(match product_router {
+                            Some(router) => router.merge(guest_router),
+                            None => guest_router,
+                        });
+                    }
+                    drop(secrets);
+
                     let assembled = ports_with_configured_serve(
                         revision_stream,
                         auth_runtime,
@@ -266,6 +360,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"
+        ),
+        Command::GuestReaderScene { .. } => unreachable!(
+            "guest-reader-scene is dispatched synchronously before Tokio runtime creation"
         ),
     }
 

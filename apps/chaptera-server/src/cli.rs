@@ -42,6 +42,15 @@ pub enum Command {
         #[arg(long)]
         expected_byte_len: u64,
     },
+    #[command(hide = true)]
+    GuestReaderScene {
+        #[arg(long)]
+        session_id: String,
+        #[arg(long)]
+        expected_sha256: String,
+        #[arg(long)]
+        expected_byte_len: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Subcommand)]
