@@ -43,6 +43,16 @@ pub fn launch_contained(
     platform::launch_contained(executable, request, timeout)
 }
 
+/// Diagnostic control only: launch a trusted no-I/O probe with the exact
+/// Microsoft-documented minimal AppContainer shape (SECURITY_CAPABILITIES only).
+/// This must never carry untrusted PUB bytes or become a production fallback.
+pub fn launch_minimal_appcontainer_probe_for_diagnostic(
+    executable: &Path,
+    timeout: Duration,
+) -> Result<u32> {
+    platform::launch_minimal_appcontainer_probe_for_diagnostic(executable, timeout)
+}
+
 #[cfg(not(windows))]
 mod platform {
     use super::*;
@@ -53,6 +63,13 @@ mod platform {
         _timeout: Duration,
     ) -> Result<SandboxOutput> {
         bail!("Windows containment launcher is unavailable on this platform")
+    }
+
+    pub fn launch_minimal_appcontainer_probe_for_diagnostic(
+        _executable: &Path,
+        _timeout: Duration,
+    ) -> Result<u32> {
+        bail!("Windows AppContainer diagnostic is unavailable on this platform")
     }
 }
 
@@ -99,7 +116,7 @@ mod platform {
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION,
         ProcessChildProcessPolicy, ProcessExtensionPointDisablePolicy,
         ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, STARTF_USESTDHANDLES,
-        STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
+        STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
     };
     use windows_sys::Win32::System::WindowsProgramming::{
         PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
@@ -408,6 +425,104 @@ mod platform {
             bail!("DeriveAppContainerSidFromAppContainerName failed: HRESULT 0x{hr:08X}");
         }
         Ok(Sid(sid))
+    }
+
+    pub fn launch_minimal_appcontainer_probe_for_diagnostic(
+        executable: &Path,
+        timeout: Duration,
+    ) -> Result<u32> {
+        let executable = executable
+            .canonicalize()
+            .with_context(|| format!("canonicalize {}", executable.display()))?;
+        if !executable.is_absolute() || !executable.is_file() {
+            bail!("diagnostic executable must be an existing absolute file");
+        }
+        let cwd = executable
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("diagnostic executable has no parent"))?
+            .to_path_buf();
+
+        let profile = AppContainerProfile::ensure(
+            PROFILE_NAME,
+            PROFILE_DISPLAY,
+            Some("Chaptera source-path-free desktop PUB parser"),
+        )
+        .context("ensure AppContainer profile")?;
+
+        let access = AccessMask(FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+        grant_to_package(ResourcePath::Directory(cwd), &profile.sid, access)
+            .context("grant package read/execute to diagnostic directory")?;
+        grant_to_package(ResourcePath::File(executable.clone()), &profile.sid, access)
+            .context("grant package read/execute to diagnostic executable")?;
+
+        let sid = derive_sid(&profile.name)?;
+        let security_capabilities = SECURITY_CAPABILITIES {
+            AppContainerSid: sid.0,
+            Capabilities: null_mut(),
+            CapabilityCount: 0,
+            Reserved: 0,
+        };
+
+        let mut attributes = AttributeList::new(1)?;
+        attributes.set(
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+            &security_capabilities,
+        )?;
+
+        let executable_w = wide(executable.as_os_str());
+        let mut command_line = wide(OsStr::new(&format!("\"{}\"", executable.display())));
+        let mut startup = STARTUPINFOEXW::default();
+        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        startup.lpAttributeList = attributes.raw();
+
+        let mut process_info: PROCESS_INFORMATION = unsafe { zeroed() };
+        let ok = unsafe {
+            CreateProcessW(
+                executable_w.as_ptr(),
+                command_line.as_mut_ptr(),
+                null(),
+                null(),
+                0,
+                EXTENDED_STARTUPINFO_PRESENT,
+                null(),
+                null(),
+                &startup.StartupInfo,
+                &mut process_info,
+            )
+        };
+        if ok == 0 {
+            bail!(
+                "Microsoft-minimal AppContainer CreateProcessW failed: Win32 error {}",
+                unsafe { GetLastError() }
+            );
+        }
+
+        let process = Handle::new(process_info.hProcess, "diagnostic process handle")?;
+        let thread_handle = Handle::new(process_info.hThread, "diagnostic thread handle")?;
+        drop(thread_handle);
+
+        let timeout_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
+        let wait = unsafe { WaitForSingleObject(process.raw(), timeout_ms) };
+        if wait == WAIT_TIMEOUT_VALUE {
+            unsafe {
+                TerminateProcess(process.raw(), 124);
+                WaitForSingleObject(process.raw(), 5_000);
+            }
+            bail!("Microsoft-minimal AppContainer bootstrap timed out");
+        }
+        if wait != WAIT_OBJECT_0_VALUE {
+            bail!("Microsoft-minimal AppContainer wait failed: {wait}");
+        }
+
+        let mut exit_code = u32::MAX;
+        let ok = unsafe { GetExitCodeProcess(process.raw(), &mut exit_code) };
+        if ok == 0 {
+            bail!(
+                "GetExitCodeProcess(minimal AppContainer) failed: Win32 error {}",
+                unsafe { GetLastError() }
+            );
+        }
+        Ok(exit_code)
     }
 
     fn get_token_u32(token: HANDLE, class: i32) -> Result<u32> {
