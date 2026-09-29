@@ -466,7 +466,10 @@ pub fn from_viewer_geometry(
                     })
                     .collect(),
             };
-            if text_layout_by_node.insert(node_id.clone(), mapped).is_some() {
+            if text_layout_by_node
+                .insert(node_id.clone(), mapped)
+                .is_some()
+            {
                 return Err(format!("duplicate text layout binding for node {node_id}"));
             }
         }
