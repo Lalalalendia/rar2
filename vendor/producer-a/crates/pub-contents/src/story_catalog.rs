@@ -479,12 +479,10 @@ mod tests {
         array.extend_from_slice(&container(0, BLOCK_TYPE_CONTAINER_88, &e1));
         array.extend_from_slice(&container(0, BLOCK_TYPE_CONTAINER_88, &e2));
 
-        let mut fields = crate::encode_packed_field_tag(
-            STORY_CATALOG_DECLARED_COUNT_ID,
-            BLOCK_TYPE_U16,
-        )
-        .expect("declared-count tag must encode")
-        .to_vec();
+        let mut fields =
+            crate::encode_packed_field_tag(STORY_CATALOG_DECLARED_COUNT_ID, BLOCK_TYPE_U16)
+                .expect("declared-count tag must encode")
+                .to_vec();
         fields.extend_from_slice(&2_u16.to_le_bytes());
         fields.extend_from_slice(&container(
             STORY_CATALOG_ENTRY_ARRAY_ID,
@@ -586,9 +584,7 @@ mod tests {
 
         assert_eq!(
             parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk),
-            Err(StoryCatalogReadError::DerivedEmptyAmbiguousTail {
-                source: ambiguous
-            })
+            Err(StoryCatalogReadError::DerivedEmptyAmbiguousTail { source: ambiguous })
         );
     }
 
