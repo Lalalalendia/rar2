@@ -1,19 +1,23 @@
 use super::{
     CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
     PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubNodePayload,
-    PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource, ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE,
-    ROLE_STORY, derive_pub_id, source_ref,
+    PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource, PubTableCellCoordinates,
+    PubTableCellSource, PubTableSource, PubTableStoryOwnershipSource, ROLE_DOCUMENT, ROLE_NODE,
+    ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
-    Legacy0x22Directory, Legacy0x22DirectoryEntry, parse_legacy_0x22_directory,
-    parse_legacy_0x22_formatting_descriptor, parse_legacy_0x22_text_info_map,
+    LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22Directory, Legacy0x22DirectoryEntry,
+    Legacy0x22ResolvedTable, parse_legacy_0x22_directory,
+    parse_legacy_0x22_formatting_descriptor, parse_legacy_0x22_resolved_tables,
+    parse_legacy_0x22_text_info_map,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
     Affine2D, AuthorityClass, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader,
-    NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
-    SourceDescriptor, SourceRole, Story, StoryId,
+    NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest,
+    SimpleRectangularTable, SimpleTableCell, Size2D, SourceDescriptor, SourceRole, Story, StoryId,
+    TableCellAddress, TableCellId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -147,6 +151,23 @@ pub fn build_legacy_0x22_noquill_from_contents(
         .context("legacy no-Quill text range exceeds Contents")?;
     let mut story_by_owner = BTreeMap::<u16, StoryId>::new();
     let mut diagnostics = Vec::new();
+    let resolved_tables = if directory
+        .entries
+        .iter()
+        .any(|entry| entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE)
+    {
+        parse_legacy_0x22_resolved_tables(contents_stream.clone(), contents)
+            .map(|catalog| {
+                catalog
+                    .tables
+                    .into_iter()
+                    .map(|table| (table.object.chunk_id, table))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
 
     let text_info = parse_legacy_0x22_text_info_map(contents_stream.clone(), contents)
         .context("parse legacy no-Quill text owner map")?;
@@ -271,6 +292,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
                 page_id.into_canonical(),
                 child_object_id,
                 &story_by_owner,
+                &resolved_tables,
                 &mut diagnostics,
                 &mut group_stack,
                 0,
@@ -306,6 +328,7 @@ fn materialize_legacy_noquill_child(
     parent_id: CanonicalId,
     child_object_id: u16,
     story_by_owner: &BTreeMap<u16, StoryId>,
+    resolved_tables: &BTreeMap<u16, Legacy0x22ResolvedTable>,
     diagnostics: &mut Vec<PubBridgeDiagnostic>,
     group_stack: &mut BTreeSet<u16>,
     group_depth: usize,
@@ -329,7 +352,11 @@ fn materialize_legacy_noquill_child(
 
     let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
     let is_group = child_entry.chunk_type == LEGACY_GROUP_TYPE;
-    if !is_text_shape && !is_group && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type)
+    let is_table = child_entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE;
+    if !is_text_shape
+        && !is_group
+        && !is_table
+        && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type)
     {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
             object_id: u32::from(child_object_id),
@@ -338,6 +365,28 @@ fn materialize_legacy_noquill_child(
         });
         return Ok(());
     }
+
+    let resolved_table = if is_table {
+        let Some(table) = resolved_tables.get(&child_object_id) else {
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(child_object_id),
+                raw_type: Some(child_entry.chunk_type),
+                reason: "legacy_table_not_resolved_v1".into(),
+            });
+            return Ok(());
+        };
+        if table.object.chunk_id != child_object_id || table.object.parent_id != parent_object_id {
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(child_object_id),
+                raw_type: Some(child_entry.chunk_type),
+                reason: "legacy_table_identity_mismatch_v1".into(),
+            });
+            return Ok(());
+        }
+        Some(table)
+    } else {
+        None
+    };
 
     if is_group && (group_depth >= LEGACY_GROUP_MAX_DEPTH || !group_stack.insert(child_object_id)) {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
@@ -361,12 +410,43 @@ fn materialize_legacy_noquill_child(
         return Ok(());
     };
 
+    if let Some(table) = resolved_table {
+        if !table.object.is_materialized_grid()
+            || !table.object.columns_sum_to_declared_width()
+            || !table.object.rows_sum_to_declared_height()
+            || bounds.width.get() != i64::from(table.object.width_emu)
+            || bounds.height.get() != i64::from(table.object.height_emu)
+        {
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(child_object_id),
+                raw_type: Some(child_entry.chunk_type),
+                reason: "legacy_table_geometry_grid_mismatch_v1".into(),
+            });
+            return Ok(());
+        }
+    }
+
     let node_id = derive_legacy_node_id(source_hash, child_object_id)?;
     let story_id = if is_text_shape {
         story_by_owner.get(&child_object_id).copied()
     } else {
         None
     };
+    let (table_story, table_source) = if let Some(table) = resolved_table {
+        let Some((story, source)) = build_legacy_table_projection(
+            graph,
+            source_hash,
+            contents_stream,
+            table,
+            diagnostics,
+        )? else {
+            return Ok(());
+        };
+        (Some(story), Some(source))
+    } else {
+        (None, None)
+    };
+
     let source_refs = vec![
         source_ref(
             &graph.source,
@@ -397,6 +477,8 @@ fn materialize_legacy_noquill_child(
         Node {
             kind: if is_group {
                 NodeKind::Group
+            } else if is_table {
+                NodeKind::Table
             } else {
                 NodeKind::Shape
             },
@@ -424,8 +506,8 @@ fn materialize_legacy_noquill_child(
                     next_seq_num: None,
                     next_frame: None,
                 }),
-                table_story: None,
-                table: None,
+                table_story,
+                table: table_source,
             },
         },
     );
@@ -447,6 +529,7 @@ fn materialize_legacy_noquill_child(
                 node_id.into_canonical(),
                 nested_object_id,
                 story_by_owner,
+                resolved_tables,
                 diagnostics,
                 group_stack,
                 group_depth + 1,
@@ -456,6 +539,206 @@ fn materialize_legacy_noquill_child(
     }
 
     Ok(())
+}
+
+fn build_legacy_table_projection(
+    graph: &mut PubSourceGraph,
+    source_hash: &Sha256Digest,
+    contents_stream: &StreamPath,
+    table: &Legacy0x22ResolvedTable,
+    diagnostics: &mut Vec<PubBridgeDiagnostic>,
+) -> Result<Option<(PubTableStoryOwnershipSource, PubTableSource)>> {
+    let rows = u32::from(table.object.row_count);
+    let columns = u32::from(table.object.column_count);
+    let chunk_id = table.object.chunk_id;
+    let story_id =
+        derive_legacy_table_story_id(source_hash, chunk_id, table.effective_text_id)?;
+
+    let mut story_text = String::new();
+    let mut utf16_cursor = 0_u32;
+    let mut cells = Vec::with_capacity(table.text.cells.len());
+    let mut simple_cells = Vec::with_capacity(table.text.cells.len());
+
+    for (index, cell) in table.text.cells.iter().enumerate() {
+        let Ok(text) = decode_bounded_legacy_ascii(&cell.content_bytes) else {
+            diagnostics.push(PubBridgeDiagnostic::LegacyTextEncodingUnresolved {
+                owner_id: Some(table.effective_text_id),
+                source: cell.content_source.clone(),
+                high_byte_count: cell
+                    .content_bytes
+                    .iter()
+                    .filter(|byte| **byte >= 0x80)
+                    .count(),
+            });
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(chunk_id),
+                raw_type: Some(LEGACY_0X22_TABLE_CHUNK_TYPE),
+                reason: "legacy_table_text_encoding_unresolved_v1".into(),
+            });
+            return Ok(None);
+        };
+
+        let utf16_start = utf16_cursor;
+        if index != 0 {
+            story_text.push('\r');
+            utf16_cursor = utf16_cursor
+                .checked_add(1)
+                .context("legacy table story offset overflow")?;
+        }
+        story_text.push_str(&text);
+        let text_len = u32::try_from(text.encode_utf16().count())
+            .context("legacy table cell text length overflow")?;
+        utf16_cursor = utf16_cursor
+            .checked_add(text_len)
+            .context("legacy table story offset overflow")?;
+        let utf16_end = utf16_cursor;
+
+        let index_u32 = u32::try_from(index).context("legacy table cell index overflow")?;
+        let address = TableCellAddress {
+            row: index_u32 / columns,
+            column: index_u32 % columns,
+        };
+        let id = derive_legacy_table_cell_id(source_hash, chunk_id, cell.cell_index)?;
+        let key = format!("contents/0x22/table/{chunk_id}/cell/{}", cell.cell_index);
+        cells.push(PubTableCellSource {
+            id,
+            stored_record_index: cell.cell_index,
+            coordinates: Some(PubTableCellCoordinates {
+                start_row: address.row,
+                end_row: address.row,
+                start_column: address.column,
+                end_column: address.column,
+            }),
+            utf16_start,
+            utf16_end,
+            source_refs: vec![
+                source_ref(
+                    &graph.source,
+                    &cell.content_source,
+                    Some(key.clone()),
+                    Some("legacy_table_cell_text".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &cell.separator_source,
+                    Some(key),
+                    Some("legacy_table_cell_boundary".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ],
+        });
+        simple_cells.push(SimpleTableCell { id, address });
+    }
+
+    let simple_table = if table.horizontal_merges.is_empty() {
+        SimpleRectangularTable::new(rows, columns, simple_cells).ok()
+    } else {
+        None
+    };
+
+    graph.stories.insert(
+        story_id,
+        Story {
+            id: story_id,
+            text: story_text,
+            paragraphs: Vec::new(),
+            runs: Vec::new(),
+            fields: Vec::new(),
+            hyperlinks: Vec::new(),
+            source_refs: vec![source_ref(
+                &graph.source,
+                &table.text.source,
+                Some(format!("contents/0x22/table/{chunk_id}/text")),
+                Some("legacy_table_text_projection".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            )],
+        },
+    );
+
+    let mut ownership_refs = vec![source_ref(
+        &graph.source,
+        &table.object.local_text_index_source,
+        Some(format!("contents/0x22/table/{chunk_id}")),
+        Some("legacy_table_text_index".into()),
+        SourceRole::Relation,
+        AuthorityClass::Authoritative,
+        ReadConfidence::Exact,
+    )];
+    if let Some(source) = &table.text.text_id_source {
+        ownership_refs.push(source_ref(
+            &graph.source,
+            source,
+            Some(format!("contents/0x22/table/{chunk_id}")),
+            Some("legacy_table_text_owner".into()),
+            SourceRole::Relation,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ));
+    }
+
+    let table_story = PubTableStoryOwnershipSource {
+        text_id: table.effective_text_id,
+        story_id: Some(story_id),
+        source_refs: ownership_refs,
+    };
+    let table_source = PubTableSource {
+        text_id: table.effective_text_id,
+        story_id: Some(story_id),
+        rows,
+        columns,
+        cells_seq_num: None,
+        tcd_story_ordinal: None,
+        cells,
+        simple_table,
+        layout_metrics: None,
+        source_refs: vec![
+            source_ref(
+                &graph.source,
+                &table.object.row_count_source,
+                Some(format!("contents/0x22/table/{chunk_id}")),
+                Some("legacy_table_rows".into()),
+                SourceRole::Semantic,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ),
+            source_ref(
+                &graph.source,
+                &table.object.column_count_source,
+                Some(format!("contents/0x22/table/{chunk_id}")),
+                Some("legacy_table_columns".into()),
+                SourceRole::Semantic,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ),
+            source_ref(
+                &graph.source,
+                &table.object.width_source,
+                Some(format!("contents/0x22/table/{chunk_id}")),
+                Some("legacy_table_width".into()),
+                SourceRole::Semantic,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ),
+            source_ref(
+                &graph.source,
+                &table.object.height_source,
+                Some(format!("contents/0x22/table/{chunk_id}")),
+                Some("legacy_table_height".into()),
+                SourceRole::Semantic,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ),
+        ],
+    };
+
+    Ok(Some((table_story, table_source)))
 }
 
 fn materialize_unowned_text_story(
@@ -554,6 +837,32 @@ fn derive_legacy_story_id(source_hash: &Sha256Digest, owner_id: u16) -> Result<S
         source_hash,
         &format!("contents/0x22/noquill-owner/{owner_id}"),
         ROLE_STORY,
+    )?))
+}
+
+fn derive_legacy_table_story_id(
+    source_hash: &Sha256Digest,
+    chunk_id: u16,
+    effective_text_id: u32,
+) -> Result<StoryId> {
+    Ok(StoryId::from_canonical(derive_pub_id(
+        source_hash,
+        &format!(
+            "contents/0x22/table/{chunk_id}/effective-text/{effective_text_id}"
+        ),
+        ROLE_STORY,
+    )?))
+}
+
+fn derive_legacy_table_cell_id(
+    source_hash: &Sha256Digest,
+    chunk_id: u16,
+    cell_index: u32,
+) -> Result<TableCellId> {
+    Ok(TableCellId::from_canonical(derive_pub_id(
+        source_hash,
+        &format!("contents/0x22/table/{chunk_id}/cell/{cell_index}"),
+        "cdm.table_cell",
     )?))
 }
 
@@ -779,6 +1088,7 @@ mod tests {
         for chunk_type in [
             LEGACY_TEXT_SHAPE_TYPE,
             0x0002,            // image
+            LEGACY_0X22_TABLE_CHUNK_TYPE, // low/no-Quill table, admitted separately
             0x0008,            // Quill-era text shape
             0x000a,            // table
             LEGACY_GROUP_TYPE, // group is admitted separately from simple geometry
