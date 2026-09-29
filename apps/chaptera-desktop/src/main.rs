@@ -841,8 +841,6 @@ fn run_reader_update_control(_request_path: &Path) -> Result<(), String> {
 }
 
 fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
-
     const MAX_HOLD_MS: u64 = 60_000;
     if hold_ms == 0 || hold_ms > MAX_HOLD_MS {
         return Err(format!(
@@ -850,12 +848,13 @@ fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<
         ));
     }
 
-    let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
-    let source_sha256 = Sha256::digest(&bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let visual = diagnostic_sweep::open_for_product(&bytes)
+    // Use the same source admission seam as other Reader product-open paths.
+    // This keeps the activation proof inside the shared .pub identity/bounds
+    // policy instead of introducing a new direct fs::read bypass.
+    let admitted = chaptera_suite_handoff::AdmittedSource::open(path)?;
+    let source_sha256 = admitted.sha256().to_owned();
+    let source_byte_len = admitted.bytes().len();
+    let visual = diagnostic_sweep::open_for_product(admitted.bytes())
         .map_err(|error| format!("open {}: {error}", path.display()))?;
     let page_count = visual.document.pages.len();
 
@@ -868,7 +867,7 @@ fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<
             "schema_version": "chaptera.reader-activation-session.v1",
             "pid": std::process::id(),
             "source_sha256": source_sha256,
-            "source_byte_len": bytes.len(),
+            "source_byte_len": source_byte_len,
             "page_count": page_count,
             "read_only": true,
             "process_model": "independent_process_per_activation",
@@ -890,13 +889,9 @@ fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<
     std::hint::black_box(&visual);
     std::thread::sleep(Duration::from_millis(hold_ms));
 
-    let after = fs::read(path)
-        .map_err(|error| format!("re-read {} after activation hold: {error}", path.display()))?;
-    let after_sha256 = Sha256::digest(&after)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    if after_sha256 != source_sha256 || after.len() != bytes.len() {
+    let after = chaptera_suite_handoff::AdmittedSource::open(path)
+        .map_err(|error| format!("re-admit {} after activation hold: {error}", path.display()))?;
+    if after.sha256() != source_sha256 || after.bytes().len() != source_byte_len {
         return Err("Reader activation probe observed source mutation".to_owned());
     }
     write_receipt(true, true)
