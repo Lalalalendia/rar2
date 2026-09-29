@@ -156,9 +156,7 @@ fn main() -> Result<()> {
             .context("usage: legacy22_raw0022_companion_profile SOURCE.pub OUTPUT.json")?,
     );
     if args.next().is_some() {
-        anyhow::bail!(
-            "legacy22_raw0022_companion_profile accepts exactly SOURCE.pub OUTPUT.json"
-        );
+        anyhow::bail!("legacy22_raw0022_companion_profile accepts exactly SOURCE.pub OUTPUT.json");
     }
 
     let bytes = fs::read(&source).with_context(|| format!("read {}", source.display()))?;
