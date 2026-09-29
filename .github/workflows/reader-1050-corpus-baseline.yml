@@ -14,6 +14,7 @@ on:
       - 'tools/corpus/materialization_container_first_wave.csv'
       - 'tools/corpus/receipts/container-first-wave-425-2026-09-29.json'
       - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
+      - 'tools/corpus/receipts/reader-1050-baseline-2026-09-29.json'
       - 'tools/corpus/structural_novelty.py'
       - 'vendor/producer-a/crates/pub-contents/**'
       - 'vendor/producer-a/crates/pub-reader/**'
@@ -308,6 +309,18 @@ jobs:
           assert materialized["authority_overlap"] == 1050, materialized
           assert materialized["outside_authority"] == 0, materialized
           assert materialized["rejections"] == 0, materialized
+
+          reader = summary["reader"]
+          assert reader["opened_count"] == 1030, reader
+          assert reader["failed_count"] == 20, reader
+          assert reader["opened_by_family"] == {"0x22": 651, "0x2c": 379}, reader["opened_by_family"]
+          assert reader["failed_by_family"] == {"0x22": 2, "0x2c": 17, "unknown": 1}, reader["failed_by_family"]
+          assert reader["failure_signature_count"] == 12, reader["failure_signature_count"]
+          assert summary["contents_family_physical_counts"] == {"0x22": 653, "0x2c": 396, "unknown": 1}, summary["contents_family_physical_counts"]
+          assert summary["structural_cluster_count"] == 565, summary["structural_cluster_count"]
+          assert summary["path_cluster_count"] == 273, summary["path_cluster_count"]
+          assert summary["files_with_embedded_object_storage"] == 482, summary["files_with_embedded_object_storage"]
+          assert summary["max_embedded_object_storage_count"] == 125, summary["max_embedded_object_storage_count"]
 
           receipt = {
               "schema": "chaptera.reader-1050-corpus-baseline.v1",
