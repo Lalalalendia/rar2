@@ -131,6 +131,7 @@ VISUAL_ORACLE = (
     "vendor/producer-a/crates/pub-viewer/**",
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
+    "apps/chaptera-desktop/src/source_font.rs",
     "apps/chaptera-desktop/src/main.rs",
     "tools/acquire_carlton_march_pair.py",
     "tools/pdf_reference_diff_v1.py",
@@ -145,6 +146,7 @@ TYPOGRAPHY_GOLDEN = (
     "vendor/producer-a/crates/pub-viewer/**",
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
+    "apps/chaptera-desktop/src/source_font.rs",
     "apps/chaptera-desktop/src/main.rs",
     ".github/workflows/reader-typography-golden.yml",
 )
@@ -229,6 +231,7 @@ SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/product_smoke.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
     "apps/chaptera-desktop/src/fallback_font.rs",
+    "apps/chaptera-desktop/src/source_font.rs",
 }
 
 
