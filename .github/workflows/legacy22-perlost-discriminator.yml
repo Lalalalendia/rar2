@@ -33,6 +33,13 @@ jobs:
         with:
           toolchain: "1.94.1"
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install generic CFB comparator
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
       - name: Verify exact fixture
         shell: bash
         run: |
@@ -103,19 +110,27 @@ jobs:
           p=Path("/tmp/perlost-report.json")
           d=json.loads(p.read_text())
           assert d["source_sha256"] == "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f", d
-          assert d["family"]["family"] == "family0x22", d["family"]
-          assert d["family"]["route"] == "legacy_0x22_low_text", d["family"]
+          assert d["family"]["profile"] == "not_structured_publisher", d["family"]
+          assert d["family"]["route"] == "unsupported", d["family"]
+          assert "cfb_parse_failed" in d["family"]["reasons"], d["family"]
+          cfb=Path("/tmp/perlost-cfb.txt").read_text()
+          assert "PUB_CFB_ERROR=" in cfb, cfb
+          ole=json.loads(Path("/tmp/perlost-olefile.json").read_text())
+          assert "/Contents" in ole["paths"], ole
           # Report may retain only structural metadata/error text, never source bytes or recovered story text.
           forbidden=["PERLOST.PUB", "PageWiz/", "recovered_text", "story_text"]
           raw=p.read_text()
           for token in forbidden:
               assert token not in raw, token
-          print(json.dumps(d, indent=2, sort_keys=True))
+          print(json.dumps({"reader":d,"pub_cfb":cfb.strip(),"olefile":ole}, indent=2, sort_keys=True))
           PY
 
       - uses: actions/upload-artifact@v4
         with:
           name: legacy22-perlost-discriminator-${{ github.run_id }}
-          path: /tmp/perlost-report.json
+          path: |
+            /tmp/perlost-report.json
+            /tmp/perlost-cfb.txt
+            /tmp/perlost-olefile.json
           if-no-files-found: error
           retention-days: 30
