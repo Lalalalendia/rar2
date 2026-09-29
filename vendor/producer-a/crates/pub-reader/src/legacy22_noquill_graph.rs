@@ -48,9 +48,31 @@ pub fn build_legacy_0x22_noquill_source_graph<R: Read + Seek>(
     reader.seek(SeekFrom::Start(0))?;
     let mut pub_bytes = Vec::new();
     reader.read_to_end(&mut pub_bytes)?;
-    let contents =
-        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
-            .with_context(|| format!("read {CONTENTS_STREAM_PATH}"))?;
+    let contents = match pub_cfb::read_stream_reader(
+        Cursor::new(pub_bytes.as_slice()),
+        CONTENTS_STREAM_PATH,
+    ) {
+        Ok(contents) => contents,
+        Err(strict_error) => {
+            let recovered = pub_cfb::recover_root_regular_stream_reader(
+                Cursor::new(pub_bytes.as_slice()),
+                CONTENTS_STREAM_PATH,
+            )
+            .with_context(|| {
+                format!(
+                    "strict CFB read failed ({strict_error}); bounded root Contents recovery failed"
+                )
+            })?;
+            if recovered.root_entry_names.iter().any(|name| {
+                name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher")
+            }) {
+                bail!(
+                    "bounded root Contents recovery is forbidden when Quill or Escher is present"
+                );
+            }
+            recovered.bytes
+        }
+    };
     build_legacy_0x22_noquill_from_contents(source_hash, &contents)
 }
 
