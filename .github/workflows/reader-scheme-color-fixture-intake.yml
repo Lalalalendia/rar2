@@ -91,7 +91,7 @@ jobs:
       - name: Exercise real Reader Viewer open path
         run: |
           cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --bin corpus-reader-receipt             -- target/scheme-color-fixture/color1.pub                target/scheme-color-fixture/reader-receipt.json
-          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --bin paint_bridge_parity             -- target/scheme-color-fixture/color1.pub
+            target/scheme-color-fixture/paint-parity.log
 
       - name: Validate Reader product receipt
         run: |
@@ -105,6 +105,12 @@ jobs:
           assert reader["paint_node_count"] >= 8, reader
           assert reader["solid_fill_count"] >= 8, reader
           PY
+
+      - name: Run canonical paint parity with diagnostic log
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --bin paint_bridge_parity             -- target/scheme-color-fixture/color1.pub             2>&1 | tee target/scheme-color-fixture/paint-parity.log
 
       - name: Print receipts
         if: always()
