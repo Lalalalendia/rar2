@@ -3,8 +3,9 @@ use pub_model::Sha256Digest;
 use pub_reader::{
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_source_graph, classify_pub_family,
-    probe_mature_0x2c_quill_story_error_kind, probe_mature_0x2c_quill_story_failure_stage,
-    probe_mature_0x2c_source_graph_failure_stage, probe_mature_0x2c_story_catalog_error_kind,
+    probe_mature_0x2c_quill_story_error_kind, probe_mature_0x2c_quill_story_failure_evidence,
+    probe_mature_0x2c_quill_story_failure_stage, probe_mature_0x2c_source_graph_failure_stage,
+    probe_mature_0x2c_story_catalog_error_kind,
     resolve_pub_source_graph, PubReaderRoute,
 };
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
@@ -39,6 +40,7 @@ struct FailureStageRow {
     stage: String,
     opened: bool,
     open_error_signature_sha256: Option<String>,
+    quill_failure_evidence: Option<pub_quill::QuillStoryFailureEvidence>,
 }
 
 fn diagnose(bytes: &[u8]) -> FailureStageRow {
@@ -46,6 +48,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
     let source_sha256 = sha256_hex(bytes);
     let mut stage = "family_route".to_owned();
     let mut stage_error_signature_sha256: Option<String> = None;
+    let mut quill_failure_evidence = None;
 
     let lower_ok = match classification.route {
         PubReaderRoute::Mature2c => {
@@ -74,6 +77,8 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
                             .unwrap_or("unclassified");
                         let quill_stage = probe_mature_0x2c_quill_story_failure_stage(bytes)
                             .unwrap_or("unclassified");
+                        quill_failure_evidence =
+                            probe_mature_0x2c_quill_story_failure_evidence(bytes);
                         format!("mature.source_graph.{substage}.{kind}.{quill_stage}")
                     } else if substage == "story_catalog_parse" {
                         let kind = probe_mature_0x2c_story_catalog_error_kind(bytes)
@@ -137,6 +142,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             stage: "family.unsupported".to_owned(),
             opened: false,
             open_error_signature_sha256: None,
+            quill_failure_evidence: None,
         };
     }
 
@@ -150,6 +156,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             stage,
             opened: false,
             open_error_signature_sha256: stage_error_signature_sha256,
+            quill_failure_evidence,
         };
     }
 
@@ -163,6 +170,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             stage: "opened".to_owned(),
             opened: true,
             open_error_signature_sha256: None,
+            quill_failure_evidence: None,
         },
         Err(error) => {
             let error_text = format!("{error:#}");
@@ -175,6 +183,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
                 stage: "post_resolve.viewer_open".to_owned(),
                 opened: false,
                 open_error_signature_sha256: Some(sha256_hex(error_text.as_bytes())),
+                quill_failure_evidence: None,
             }
         }
     }
