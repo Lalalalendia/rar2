@@ -25,6 +25,7 @@ const META_SETTEXTALIGN: u16 = 0x012e;
 const META_DIBCREATEPATTERNBRUSH: u16 = 0x0142;
 const META_DELETEOBJECT: u16 = 0x01f0;
 const META_SETBKCOLOR: u16 = 0x0201;
+const META_SETTEXTCOLOR: u16 = 0x0209;
 const META_SETWINDOWORG: u16 = 0x020b;
 const META_SETWINDOWEXT: u16 = 0x020c;
 const META_CREATEPENINDIRECT: u16 = 0x02fa;
@@ -866,6 +867,13 @@ pub fn rasterize_wmf_preview(
                 let _ =
                     read_u32(params, 0).ok_or_else(|| anyhow!("WMF SETBKCOLOR is truncated"))?;
             }
+            META_SETTEXTCOLOR => {
+                if params.len() != 4 {
+                    bail!("WMF SETTEXTCOLOR parameter length is not 4 bytes");
+                }
+                let _ = read_u32(params, 0)
+                    .ok_or_else(|| anyhow!("WMF SETTEXTCOLOR parameter is truncated"))?;
+            }
             META_SETWINDOWORG => {
                 state.window_org_y = i32::from(
                     read_i16(params, 0)
@@ -1221,6 +1229,29 @@ mod tests {
         params.extend_from_slice(&body);
 
         assert!(validate_enhanced_metafile_escape(&params).is_err());
+    }
+
+    #[test]
+    fn accepts_bounded_text_color_setter_without_text_playback() {
+        let mut bytes = synthetic_polygon();
+        insert_record_before_eof(
+            &mut bytes,
+            record(META_SETTEXTCOLOR, &0x0000_00ff_u32.to_le_bytes()),
+        );
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("text color setter ignored");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+
+        let mut truncated = synthetic_polygon();
+        insert_record_before_eof(&mut truncated, record(META_SETTEXTCOLOR, &[0, 0]));
+        assert!(rasterize_wmf_preview(&truncated, 100, 100).is_err());
+
+        let mut oversized = synthetic_polygon();
+        insert_record_before_eof(
+            &mut oversized,
+            record(META_SETTEXTCOLOR, &[0, 0, 0, 0, 0, 0]),
+        );
+        assert!(rasterize_wmf_preview(&oversized, 100, 100).is_err());
     }
 
     #[test]
