@@ -4,6 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - ".github/workflows/legacy22-full-corpus-replay.yml"
       - "vendor/producer-a/crates/pub-contents/src/legacy22_directory.rs"
       - "vendor/producer-a/crates/pub-reader/src/family_classifier.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_graph.rs"
