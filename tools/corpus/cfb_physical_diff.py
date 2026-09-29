@@ -3,95 +3,12 @@ from __future__ import annotations
 import argparse,hashlib,io,json,struct
 from collections import Counter
 from pathlib import Path
-SIG=bytes.fromhex('d0cf11e0a1b11ae1'); FREE=0xffffffff; END=0xfffffffe; FAT=0xfffffffd; DIF=0xfffffffc; NO=0xffffffff
-SPECIAL={FREE,END,FAT,DIF}; SCHEMA='chaptera.cfb-physical-diff.v1'
-u16=lambda b,o:struct.unpack_from('<H',b,o)[0]; u32=lambda b,o:struct.unpack_from('<I',b,o)[0]; u64=lambda b,o:struct.unpack_from('<Q',b,o)[0]
-def h(b):return hashlib.sha256(b).hexdigest()
-def name(raw,n):
-    return raw[:n-2].decode('utf-16le',errors='replace') if 2<=n<=64 and n%2==0 else ''
-class CFB:
- def __init__(self,b):
-  self.b=b
-  if len(b)<512 or b[:8]!=SIG:raise ValueError('not CFB')
-  self.major=u16(b,26); self.ss=1<<u16(b,30); self.ms=1<<u16(b,32)
-  if self.ss not in (512,4096) or self.ms!=64 or len(b)%self.ss:raise ValueError('unsupported/alignment')
-  self.nsec=len(b)//self.ss-1; self.nfat=u32(b,44); self.dir0=u32(b,48); self.cut=u32(b,56); self.mini0=u32(b,60); self.nmini=u32(b,64); self.dif0=u32(b,68); self.ndif=u32(b,72)
-  self.difsecs=[]; self.fatsecs=self._difat(); self.fat=self._table(self.fatsecs); self.dirsecs=self.chain(self.dir0,self.fat,'dir'); self.minisecs=self.chain(self.mini0,self.fat,'minifat') if self.nmini else []
-  if len(self.minisecs)!=self.nmini:raise ValueError('MiniFAT count')
-  self.minifat=self._table(self.minisecs); self.dirs=self._dirs(); roots=[x for x in self.dirs if x['type']==5]
-  if not roots:raise ValueError('no root')
-  self.root=roots[0]; self.rootchain=self.chain(self.root['start'],self.fat,'root') if self.root['size'] else []
-  self.lab=['unknown']*len(b); self._labels()
- def off(self,s):
-  if s<0 or s>=self.nsec:raise ValueError(f'sector range {s}')
-  return (s+1)*self.ss
- def sec(self,s):o=self.off(s);return self.b[o:o+self.ss]
- def _difat(self):
-  ids=[u32(self.b,76+4*i) for i in range(109)];ids=[x for x in ids if x!=FREE];s=self.dif0;seen=set();n=self.ss//4-1
-  for _ in range(self.ndif):
-   if s in SPECIAL or s in seen:raise ValueError('DIFAT chain')
-   seen.add(s);self.difsecs.append(s);q=self.sec(s);ids += [u32(q,4*i) for i in range(n) if u32(q,4*i)!=FREE];s=u32(q,self.ss-4)
-  if len(ids)<self.nfat:raise ValueError('FAT ids')
-  return ids[:self.nfat]
- def _table(self,sectors):
-  out=[]
-  for s in sectors:out.extend(struct.unpack('<'+'I'*(self.ss//4),self.sec(s)))
-  return out
- def chain(self,s,t,label):
-  if s in (FREE,END):return []
-  out=[];seen=set();bound=self.nsec if t is self.fat else len(t)
-  while s!=END:
-   if s in SPECIAL or s in seen or s>=bound or s>=len(t):raise ValueError(label+' chain')
-   seen.add(s);out.append(s);s=t[s]
-   if len(out)>bound+1:raise ValueError(label+' long')
-  return out
- def _dirs(self):
-  out=[];idx=0
-  for s in self.dirsecs:
-   q=self.sec(s);base=self.off(s)
-   for p in range(0,self.ss,128):
-    r=q[p:p+128];typ=r[66]
-    if typ not in (0,1,2,5):raise ValueError('dir type')
-    low=u32(r,120);high=u32(r,124);effective=low if self.ss==512 else low+(high<<32)
-    out.append({'i':idx,'name':name(r[:64],u16(r,64)),'type':typ,'color':r[67],'left':u32(r,68),'right':u32(r,72),'child':u32(r,76),'clsid':r[80:96].hex(),'state':u32(r,96),'ctime':u64(r,100),'mtime':u64(r,108),'start':u32(r,116),'size':effective,'size_low':low,'size_high':high,'raw':base+p});idx+=1
-  return out
- def schain(self,e):
-  if not e['size']:return []
-  return self.chain(e['start'],self.minifat if e['type']==2 and e['size']<self.cut else self.fat,'stream '+e['name'])
- def mark(self,a,z,x):
-  for i in range(max(0,a),min(len(self.lab),z)):self.lab[i]=x
- def msec(self,s,x):o=self.off(s);self.mark(o,o+self.ss,x)
- def rawmini(self,o):
-  n,r=divmod(o,self.ss)
-  if n>=len(self.rootchain):raise ValueError('mini root range')
-  return self.off(self.rootchain[n])+r
- def _labels(self):
-  self.mark(0,self.ss,'header_area')
-  for a,z,x in [(0,8,'signature'),(8,24,'clsid'),(24,26,'minor'),(26,28,'major'),(28,30,'byte_order'),(30,32,'sector_shift'),(32,34,'mini_shift'),(34,40,'reserved'),(40,44,'num_dir'),(44,48,'num_fat'),(48,52,'first_dir'),(52,56,'transaction'),(56,60,'mini_cutoff'),(60,64,'first_minifat'),(64,68,'num_minifat'),(68,72,'first_difat'),(72,76,'num_difat'),(76,512,'difat_slots')]:self.mark(a,z,'header.'+x)
-  for s in range(self.nsec):self.msec(s,'unallocated_sector' if (s>=len(self.fat) or self.fat[s]==FREE) else 'allocated_other_sector')
-  for s in self.difsecs:self.msec(s,'difat_sector')
-  for s in self.fatsecs:self.msec(s,'fat_sector')
-  for s in self.minisecs:self.msec(s,'minifat_sector')
-  for s in self.dirsecs:self.msec(s,'directory_sector')
-  fields=[(0,64,'name'),(64,66,'name_length'),(66,67,'type'),(67,68,'color'),(68,72,'left'),(72,76,'right'),(76,80,'child'),(80,96,'clsid'),(96,100,'state'),(100,108,'ctime'),(108,116,'mtime'),(116,120,'start'),(120,124,'size_low'),(124,128,'size_high')]
-  for e in self.dirs:
-   for a,z,x in fields:self.mark(e['raw']+a,e['raw']+z,f"directory[{e['i']}].{x}")
-  for s in self.rootchain:self.msec(s,'root_ministream_container')
-  for e in self.dirs:
-   if e['type']!=2 or not e['size']:continue
-   rem=e['size']
-   if e['size']>=self.cut:
-    for s in self.schain(e):
-     o=self.off(s);n=min(rem,self.ss);self.mark(o,o+n,'stream_payload:'+e['name']);self.mark(o+n,o+self.ss,'stream_slack:'+e['name']);rem-=n
-   else:
-    for s in self.schain(e):
-     o=self.rawmini(s*self.ms);n=min(rem,self.ms);self.mark(o,o+n,'mini_stream_payload:'+e['name']);self.mark(o+n,o+self.ms,'mini_stream_slack:'+e['name']);rem-=n
-   if rem:raise ValueError('stream chain too short')
- def summary(self):
-  streams=[]
-  for e in self.dirs:
-   if e['type']==2 and e['size']:streams.append({'i':e['i'],'name':e['name'],'storage':'minifat' if e['size']<self.cut else 'fat','chain':self.schain(e),'size':e['size']})
-  return {'sha256':h(self.b),'byte_len':len(self.b),'major':self.major,'sector_size':self.ss,'mini_sector_size':self.ms,'fat_sector_ids':self.fatsecs,'difat_sector_ids':self.difsecs,'directory_sector_ids':self.dirsecs,'minifat_sector_ids':self.minisecs,'root_chain':self.rootchain,'streams':streams,'directory_entries':[{k:v for k,v in e.items() if k!='raw'} for e in self.dirs if e['type']]}
+
+try:
+ from .cfb_physical import CFB, END, FAT, FREE, NO, SIG, h
+except ImportError:
+ from cfb_physical import CFB, END, FAT, FREE, NO, SIG, h
+
 def logical(b):
  import olefile
  out={}

@@ -257,10 +257,33 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                 },
             ]
         )
-        # Chaptera Desktop currently has unrelated whole-crate clippy debt.
-        # Tier A proves integration with both Reader-only and default Editor
-        # compile checks; do not make every bounded Reader change pay for
-        # historical warnings outside its delta.
+        if desktop_source_changed:
+            changed_desktop = [
+                path
+                for path in paths
+                if path in {
+                    "apps/chaptera-desktop/src/render_backend.rs",
+                    "apps/chaptera-desktop/src/main.rs",
+                }
+            ]
+            commands.append(
+                {
+                    "id": "desktop-reader-clippy-delta",
+                    "argv": [
+                        "python",
+                        "tools/ci/check_desktop_clippy_delta.py",
+                        "--base",
+                        base,
+                        "--head",
+                        head,
+                        *[
+                            item
+                            for path in changed_desktop
+                            for item in ("--path", path)
+                        ],
+                    ],
+                }
+            )
     if mobile_reader:
         commands.append(
             {
@@ -279,7 +302,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         "affected_vendor_packages": packages,
         "render_plan": render_plan,
         "desktop_reader_integration": desktop,
-        "desktop_reader_clippy": False,
+        "desktop_reader_clippy": desktop_source_changed,
         "mobile_reader_integration": mobile_reader,
         "commands": commands,
     }
