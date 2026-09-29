@@ -380,3 +380,5 @@ mod tests {
         ));
     }
 }
+
+// CI selective-fanout measurement probe v4; no runtime behavior change.
