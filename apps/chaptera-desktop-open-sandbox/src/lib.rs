@@ -652,7 +652,16 @@ mod platform {
         let executable_w = wide(executable.as_os_str());
         let cwd_w = wide(cwd.as_os_str());
         let mut command_line = wide(OsStr::new(&format!("\"{}\"", executable.display())));
-        let environment = minimal_environment(&cwd);
+        let environment = if std::env::var_os("CHAPTERA_SANDBOX_DIAG_FULL_ENV").is_some() {
+            full_parent_environment_for_diagnostic()
+        } else {
+            minimal_environment(&cwd)
+        };
+        let cwd_ptr = if std::env::var_os("CHAPTERA_SANDBOX_DIAG_NO_CWD").is_some() {
+            null()
+        } else {
+            cwd_w.as_ptr()
+        };
 
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
@@ -674,7 +683,7 @@ mod platform {
                 1,
                 creation_flags,
                 environment.as_ptr().cast(),
-                cwd_w.as_ptr(),
+                cwd_ptr,
                 &startup.StartupInfo,
                 &mut process_info,
             )
@@ -701,7 +710,7 @@ mod platform {
                         1,
                         creation_flags,
                         diagnostic_environment.as_ptr().cast(),
-                        cwd_w.as_ptr(),
+                        cwd_ptr,
                         &startup.StartupInfo,
                         &mut diagnostic_info,
                     )
