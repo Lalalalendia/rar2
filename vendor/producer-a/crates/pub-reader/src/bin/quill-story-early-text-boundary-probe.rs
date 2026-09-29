@@ -212,26 +212,44 @@ fn parse_bte_positions(
     if payload.len() < 16 {
         return Ok(None);
     }
-    let count = usize::try_from(u32_at(payload, 0).context("BTE count truncated")?)
-        .context("BTE count too large")?;
-    let data_size = usize::try_from(u32_at(payload, 4).context("BTE data size truncated")?)
-        .context("BTE data size too large")?;
-    let expected = 12usize
-        .checked_add(
+
+    // BTEP/BTEC are only an independent research cross-check here. Early
+    // Publisher variants may use a different local BTE framing, so a payload
+    // that does not satisfy the already-confirmed ordinary BTE PLC grammar
+    // must make the cross-check unavailable rather than abort the STRS probe.
+    let Some(raw_count) = u32_at(payload, 0) else {
+        return Ok(None);
+    };
+    let Ok(count) = usize::try_from(raw_count) else {
+        return Ok(None);
+    };
+    let Some(raw_data_size) = u32_at(payload, 4) else {
+        return Ok(None);
+    };
+    let Ok(data_size) = usize::try_from(raw_data_size) else {
+        return Ok(None);
+    };
+    let Some(expected) = count
+        .checked_add(1)
+        .and_then(|value| value.checked_mul(4))
+        .and_then(|position_bytes| 12usize.checked_add(position_bytes))
+        .and_then(|base| {
             count
-                .checked_add(1)
-                .and_then(|value| value.checked_mul(4))
-                .context("BTE positions size overflow")?,
-        )
-        .and_then(|value| value.checked_add(count.checked_mul(data_size)?))
-        .context("BTE total size overflow")?;
+                .checked_mul(data_size)
+                .and_then(|data_bytes| base.checked_add(data_bytes))
+        })
+    else {
+        return Ok(None);
+    };
     if expected != payload.len() || data_size != 4 {
         return Ok(None);
     }
 
     let mut positions = BTreeSet::new();
     for index in 0..=count {
-        let raw = u32_at(payload, 12 + index * 4).context("BTE position truncated")?;
+        let Some(raw) = u32_at(payload, 12 + index * 4) else {
+            return Ok(None);
+        };
         positions.insert(if raw == 0 { text_start } else { raw });
     }
     Ok(Some(positions))
