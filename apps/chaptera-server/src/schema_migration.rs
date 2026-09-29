@@ -34,6 +34,7 @@ const BLOB_GC_DELETE_FENCE_SQL: &str = include_str!("../migrations/0012_blob_gc_
 const PROJECT_PERSISTENCE_SQL: &str = include_str!("../migrations/0013_project_persistence.sql");
 const WORKSPACE_CONTEXT_SQL: &str = include_str!("../migrations/0014_workspace_context.sql");
 const UPLOAD_ADMISSION_SQL: &str = include_str!("../migrations/0015_upload_admission.sql");
+const PUBLIC_RATE_LIMIT_SQL: &str = include_str!("../migrations/0016_public_rate_limit.sql");
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -118,9 +119,14 @@ const MIGRATIONS: &[MigrationSpec] = &[
         name: "upload_admission",
         sql: UPLOAD_ADMISSION_SQL,
     },
+    MigrationSpec {
+        version: 16,
+        name: "public_rate_limit",
+        sql: PUBLIC_RATE_LIMIT_SQL,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 15;
+pub const CURRENT_SCHEMA_VERSION: i64 = 16;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MigrationReport {
@@ -545,7 +551,8 @@ async fn known_schema_tables_present(
             'documents',
             'workspaces',
             'workspace_memberships',
-            'upload_admission_reservations'
+            'upload_admission_reservations',
+            'public_rate_limit_state'
           )
         "#,
     )
