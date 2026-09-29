@@ -171,8 +171,7 @@ fn require_stable_token(
     if value.is_empty()
         || value.len() > max_bytes
         || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/')
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':' | b'/')
         })
     {
         return Err(ProtocolError::new(code));
@@ -184,11 +183,7 @@ fn require_opaque_id(value: &str) -> Result<(), ProtocolError> {
     if value.len() < 16 || value.len() > MAX_OPAQUE_ID_BYTES {
         return Err(ProtocolError::new("intake_submission_id_invalid"));
     }
-    require_stable_token(
-        value,
-        MAX_OPAQUE_ID_BYTES,
-        "intake_submission_id_invalid",
-    )
+    require_stable_token(value, MAX_OPAQUE_ID_BYTES, "intake_submission_id_invalid")
 }
 
 fn require_sha256(value: &str) -> Result<(), ProtocolError> {
@@ -231,10 +226,7 @@ mod tests {
 
     #[test]
     fn exact_file_eligibility_is_fail_closed_to_two_classes() {
-        for class in [
-            FailureClassV1::PubHighValue,
-            FailureClassV1::PubDamaged,
-        ] {
+        for class in [FailureClassV1::PubHighValue, FailureClassV1::PubDamaged] {
             evidence(class)
                 .validate_and_authorize(&consent())
                 .expect("eligible class");
