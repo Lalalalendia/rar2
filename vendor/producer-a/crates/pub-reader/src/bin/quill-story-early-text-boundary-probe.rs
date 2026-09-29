@@ -30,6 +30,7 @@ struct Descriptor {
 
 #[derive(Debug, Serialize)]
 struct BtePlcCandidate {
+    carrier_index: usize,
     prefix_offset: usize,
     count: u32,
     data_size: u32,
@@ -41,7 +42,7 @@ struct BtePlcCandidate {
     text_end_present: bool,
     count_covers_story_count: bool,
     target_count: usize,
-    targets_inside_format_chunk_count: Option<usize>,
+    targets_inside_paired_format_ranges_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,10 +64,10 @@ struct WitnessRow {
     text_descriptor_length: u32,
     text_utf16_units: u64,
 
-    btep_descriptor_length: Option<u32>,
-    btec_descriptor_length: Option<u32>,
-    fdpp_descriptor_length: Option<u32>,
-    fdpc_descriptor_length: Option<u32>,
+    btep_descriptor_lengths: Vec<u32>,
+    btec_descriptor_lengths: Vec<u32>,
+    fdpp_descriptor_lengths: Vec<u32>,
+    fdpc_descriptor_lengths: Vec<u32>,
     btep_candidates: Vec<BtePlcCandidate>,
     btec_candidates: Vec<BtePlcCandidate>,
 }
@@ -95,12 +96,6 @@ fn descriptor_range<'a>(bytes: &'a [u8], descriptor: &Descriptor) -> Result<&'a 
     bytes
         .get(start..end)
         .with_context(|| format!("descriptor {:?} range outside Quill", descriptor.name))
-}
-
-fn descriptor_all_ff(bytes: &[u8], descriptor: &Descriptor) -> Result<bool> {
-    Ok(descriptor_range(bytes, descriptor)?
-        .iter()
-        .all(|byte| *byte == 0xff))
 }
 
 fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
@@ -161,21 +156,26 @@ fn unique_descriptor<'a>(descriptors: &'a [Descriptor], name: [u8; 4]) -> Result
         .next()
         .with_context(|| format!("missing Quill descriptor {:?}", name))?;
     if found.next().is_some() {
-        bail!("duplicate Quill descriptor {:?}", name);
+        bail!("duplicate required Quill descriptor {:?}", name);
     }
     Ok(first)
 }
 
-fn optional_unique_descriptor<'a>(
+fn descriptors_named<'a>(
     descriptors: &'a [Descriptor],
     name: [u8; 4],
-) -> Result<Option<&'a Descriptor>> {
-    let mut found = descriptors.iter().filter(|item| item.name == name);
-    let first = found.next();
-    if found.next().is_some() {
-        bail!("duplicate Quill descriptor {:?}", name);
-    }
-    Ok(first)
+) -> Vec<&'a Descriptor> {
+    descriptors
+        .iter()
+        .filter(|item| item.name == name)
+        .collect()
+}
+
+fn scan_direct_generic_plc_count(payload: &[u8], grounded_count: u32) -> usize {
+    let max_prefix = payload.len().saturating_sub(12).min(32);
+    (0..=max_prefix)
+        .filter(|prefix| u32_at(payload, *prefix) == Some(grounded_count))
+        .count()
 }
 
 fn grounded_contents_story_count(contents: &[u8]) -> Result<(u16, u32)> {
@@ -222,145 +222,148 @@ fn grounded_contents_story_count(contents: &[u8]) -> Result<(u16, u32)> {
     ))
 }
 
-fn scan_direct_generic_plc_count(payload: &[u8], grounded_count: u32) -> usize {
-    let max_prefix = payload.len().saturating_sub(12).min(32);
-    (0..=max_prefix)
-        .filter(|prefix| u32_at(payload, *prefix) == Some(grounded_count))
-        .count()
+fn format_ranges(descriptors: &[&Descriptor]) -> Vec<(u64, u64)> {
+    descriptors
+        .iter()
+        .filter_map(|descriptor| {
+            let start = u64::from(descriptor.data_offset);
+            let end = start.checked_add(u64::from(descriptor.data_length))?;
+            Some((start, end))
+        })
+        .collect()
 }
 
 fn scan_bte_plc_candidates(
     quill: &[u8],
-    descriptor: Option<&Descriptor>,
-    format_descriptor: Option<&Descriptor>,
+    carriers: &[&Descriptor],
+    paired_formats: &[&Descriptor],
     text_descriptor: &Descriptor,
     grounded_story_count: u32,
 ) -> Result<Vec<BtePlcCandidate>> {
-    let Some(descriptor) = descriptor else {
-        return Ok(Vec::new());
-    };
-    let payload = descriptor_range(quill, descriptor)?;
-    if payload.len() < 20 {
-        return Ok(Vec::new());
-    }
-
     let text_start = u64::from(text_descriptor.data_offset);
     let text_end = text_start
         .checked_add(u64::from(text_descriptor.data_length))
         .context("TEXT range overflow")?;
-
-    let format_range = format_descriptor.map(|descriptor| {
-        let start = u64::from(descriptor.data_offset);
-        let end = start.saturating_add(u64::from(descriptor.data_length));
-        (start, end)
-    });
+    let paired_ranges = format_ranges(paired_formats);
 
     let mut out = Vec::new();
-    let max_prefix = payload.len().saturating_sub(20).min(64);
-    for prefix in 0..=max_prefix {
-        let Some(raw_count) = u32_at(payload, prefix) else {
-            continue;
-        };
-        let Ok(count) = usize::try_from(raw_count) else {
-            continue;
-        };
-        if count == 0 || count > 4096 {
+    for (carrier_index, descriptor) in carriers.iter().enumerate() {
+        let payload = descriptor_range(quill, descriptor)?;
+        if payload.len() < 20 {
             continue;
         }
 
-        let Some(raw_data_size) = u32_at(payload, prefix + 4) else {
-            continue;
-        };
-        if raw_data_size != 4 {
-            continue;
-        }
-        let data_size = 4usize;
-        let Some(flags) = payload.get(prefix + 8..prefix + 12) else {
-            continue;
-        };
-
-        let Some(position_bytes) = count
-            .checked_add(1)
-            .and_then(|value| value.checked_mul(4))
-        else {
-            continue;
-        };
-        let Some(target_bytes) = count.checked_mul(data_size) else {
-            continue;
-        };
-        let Some(expected_end) = prefix
-            .checked_add(12)
-            .and_then(|value| value.checked_add(position_bytes))
-            .and_then(|value| value.checked_add(target_bytes))
-        else {
-            continue;
-        };
-        if expected_end != payload.len() {
-            continue;
-        }
-
-        let positions_start = prefix + 12;
-        let targets_start = positions_start + position_bytes;
-
-        let mut positions = Vec::with_capacity(count + 1);
-        for index in 0..=count {
-            let Some(raw) = u32_at(payload, positions_start + index * 4) else {
-                positions.clear();
-                break;
+        let max_prefix = payload.len().saturating_sub(20).min(64);
+        for prefix in 0..=max_prefix {
+            let Some(raw_count) = u32_at(payload, prefix) else {
+                continue;
             };
-            let mapped = if raw == 0 {
-                text_start
-            } else {
-                u64::from(raw)
+            let Ok(count) = usize::try_from(raw_count) else {
+                continue;
             };
-            positions.push(mapped);
-        }
-        if positions.len() != count + 1 {
-            continue;
-        }
+            if count == 0 || count > 4096 {
+                continue;
+            }
 
-        let positions_monotonic = positions.windows(2).all(|pair| pair[0] <= pair[1]);
-        let positions_inside_text_count = positions
-            .iter()
-            .filter(|value| **value >= text_start && **value <= text_end)
-            .count();
-
-        let mut targets = Vec::with_capacity(count);
-        for index in 0..count {
-            let Some(raw) = u32_at(payload, targets_start + index * 4) else {
-                targets.clear();
-                break;
+            let Some(raw_data_size) = u32_at(payload, prefix + 4) else {
+                continue;
             };
-            targets.push(u64::from(raw));
-        }
-        if targets.len() != count {
-            continue;
-        }
+            if raw_data_size != 4 {
+                continue;
+            }
+            let Some(flags) = payload.get(prefix + 8..prefix + 12) else {
+                continue;
+            };
 
-        let targets_inside_format_chunk_count = format_range.map(|(start, end)| {
-            targets
+            let Some(position_bytes) = count
+                .checked_add(1)
+                .and_then(|value| value.checked_mul(4))
+            else {
+                continue;
+            };
+            let Some(target_bytes) = count.checked_mul(4) else {
+                continue;
+            };
+            let Some(expected_end) = prefix
+                .checked_add(12)
+                .and_then(|value| value.checked_add(position_bytes))
+                .and_then(|value| value.checked_add(target_bytes))
+            else {
+                continue;
+            };
+            if expected_end != payload.len() {
+                continue;
+            }
+
+            let positions_start = prefix + 12;
+            let targets_start = positions_start + position_bytes;
+
+            let mut positions = Vec::with_capacity(count + 1);
+            for index in 0..=count {
+                let Some(raw) = u32_at(payload, positions_start + index * 4) else {
+                    positions.clear();
+                    break;
+                };
+                positions.push(if raw == 0 {
+                    text_start
+                } else {
+                    u64::from(raw)
+                });
+            }
+            if positions.len() != count + 1 {
+                continue;
+            }
+
+            let positions_monotonic = positions.windows(2).all(|pair| pair[0] <= pair[1]);
+            let positions_inside_text_count = positions
                 .iter()
-                .filter(|value| **value >= start && **value < end)
-                .count()
-        });
+                .filter(|value| **value >= text_start && **value <= text_end)
+                .count();
 
-        out.push(BtePlcCandidate {
-            prefix_offset: prefix,
-            count: raw_count,
-            data_size: raw_data_size,
-            nonzero_flag_count: flags.iter().filter(|byte| **byte != 0).count(),
-            position_count: positions.len(),
-            positions_monotonic,
-            positions_inside_text_count,
-            text_start_present: positions.contains(&text_start),
-            text_end_present: positions.contains(&text_end),
-            count_covers_story_count: raw_count >= grounded_story_count,
-            target_count: targets.len(),
-            targets_inside_format_chunk_count,
-        });
+            let mut targets = Vec::with_capacity(count);
+            for index in 0..count {
+                let Some(raw) = u32_at(payload, targets_start + index * 4) else {
+                    targets.clear();
+                    break;
+                };
+                targets.push(u64::from(raw));
+            }
+            if targets.len() != count {
+                continue;
+            }
+
+            let targets_inside_paired_format_ranges_count = targets
+                .iter()
+                .filter(|target| {
+                    paired_ranges
+                        .iter()
+                        .any(|(start, end)| **target >= *start && **target < *end)
+                })
+                .count();
+
+            out.push(BtePlcCandidate {
+                carrier_index,
+                prefix_offset: prefix,
+                count: raw_count,
+                data_size: raw_data_size,
+                nonzero_flag_count: flags.iter().filter(|byte| **byte != 0).count(),
+                position_count: positions.len(),
+                positions_monotonic,
+                positions_inside_text_count,
+                text_start_present: positions.contains(&text_start),
+                text_end_present: positions.contains(&text_end),
+                count_covers_story_count: raw_count >= grounded_story_count,
+                target_count: targets.len(),
+                targets_inside_paired_format_ranges_count,
+            });
+        }
     }
 
     Ok(out)
+}
+
+fn descriptor_lengths(descriptors: &[&Descriptor]) -> Vec<u32> {
+    descriptors.iter().map(|descriptor| descriptor.data_length).collect()
 }
 
 fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
@@ -375,10 +378,10 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let syid = unique_descriptor(&descriptors, *b"SYID")?;
     let strs = unique_descriptor(&descriptors, *b"STRS")?;
     let text = unique_descriptor(&descriptors, *b"TEXT")?;
-    let btep = optional_unique_descriptor(&descriptors, *b"BTEP")?;
-    let btec = optional_unique_descriptor(&descriptors, *b"BTEC")?;
-    let fdpp = optional_unique_descriptor(&descriptors, *b"FDPP")?;
-    let fdpc = optional_unique_descriptor(&descriptors, *b"FDPC")?;
+    let btep = descriptors_named(&descriptors, *b"BTEP");
+    let btec = descriptors_named(&descriptors, *b"BTEC");
+    let fdpp = descriptors_named(&descriptors, *b"FDPP");
+    let fdpc = descriptors_named(&descriptors, *b"FDPC");
 
     let syid_payload = descriptor_range(&quill, syid)?;
     let strs_payload = descriptor_range(&quill, strs)?;
@@ -388,9 +391,9 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_story_count);
 
     let btep_candidates =
-        scan_bte_plc_candidates(&quill, btep, fdpp, text, grounded_story_count)?;
+        scan_bte_plc_candidates(&quill, &btep, &fdpp, text, grounded_story_count)?;
     let btec_candidates =
-        scan_bte_plc_candidates(&quill, btec, fdpc, text, grounded_story_count)?;
+        scan_bte_plc_candidates(&quill, &btec, &fdpc, text, grounded_story_count)?;
 
     Ok(WitnessRow {
         source_sha256: sha256_hex(bytes),
@@ -411,10 +414,10 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         text_descriptor_length: text.data_length,
         text_utf16_units: u64::from(text.data_length) / 2,
 
-        btep_descriptor_length: btep.map(|value| value.data_length),
-        btec_descriptor_length: btec.map(|value| value.data_length),
-        fdpp_descriptor_length: fdpp.map(|value| value.data_length),
-        fdpc_descriptor_length: fdpc.map(|value| value.data_length),
+        btep_descriptor_lengths: descriptor_lengths(&btep),
+        btec_descriptor_lengths: descriptor_lengths(&btec),
+        fdpp_descriptor_lengths: descriptor_lengths(&fdpp),
+        fdpc_descriptor_lengths: descriptor_lengths(&fdpc),
         btep_candidates,
         btec_candidates,
     })
@@ -461,7 +464,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v2",
+        "schema": "chaptera.quill-story-early-text-boundary.v3",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
