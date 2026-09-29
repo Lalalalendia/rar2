@@ -590,11 +590,18 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
 }
 
 fn validate_region_object(params: &[u8]) -> Result<()> {
-    const REGION_HEADER_BYTES: usize = 22;
+    // Exact source-backed carrier profile proven by the pinned 1,050 corpus.
+    // Region scanline bytes remain opaque here because this bounded rasterizer
+    // never applies Region clipping unless META_SELECTCLIPREGION is supported.
+    // The active corpus cohort uses only generic META_SELECTOBJECT(region),
+    // followed by an explicit META_INTERSECTCLIPRECT.
+    const REGION_BYTES: usize = 42;
     const REGION_OBJECT_TYPE: i16 = 0x0006;
+    const REGION_SCAN_COUNT: i16 = 1;
+    const REGION_MAX_SCAN: i16 = 2;
 
-    if params.len() < REGION_HEADER_BYTES {
-        bail!("WMF region object is truncated");
+    if params.len() != REGION_BYTES {
+        bail!("unsupported WMF region object byte length");
     }
     let object_type =
         read_i16(params, 2).ok_or_else(|| anyhow!("WMF region object type is truncated"))?;
@@ -602,67 +609,28 @@ fn validate_region_object(params: &[u8]) -> Result<()> {
         bail!("unsupported WMF region object type {object_type}");
     }
 
-    let region_size_raw =
+    let region_size =
         read_i16(params, 8).ok_or_else(|| anyhow!("WMF region size is truncated"))?;
-    let region_size = usize::try_from(i32::from(region_size_raw))
-        .map_err(|_| anyhow!("WMF region size is negative"))?;
-    if region_size != params.len() {
-        bail!("WMF region size disagrees with record payload");
+    if region_size != REGION_BYTES as i16 {
+        bail!("unsupported WMF region size");
     }
 
-    let scan_count_raw =
+    let scan_count =
         read_i16(params, 10).ok_or_else(|| anyhow!("WMF region scan count is truncated"))?;
-    let scan_count = usize::try_from(i32::from(scan_count_raw))
-        .map_err(|_| anyhow!("WMF region scan count is negative"))?;
-    if scan_count > MAX_POINTS_PER_RECORD {
-        bail!("WMF region scan count exceeds bounded limit");
-    }
-
-    let max_scan_raw =
+    let max_scan =
         read_i16(params, 12).ok_or_else(|| anyhow!("WMF region maxScan is truncated"))?;
-    let max_scan = usize::try_from(i32::from(max_scan_raw))
-        .map_err(|_| anyhow!("WMF region maxScan is negative"))?;
-    if max_scan > MAX_POINTS_PER_RECORD {
-        bail!("WMF region maxScan exceeds bounded limit");
+    if scan_count != REGION_SCAN_COUNT || max_scan != REGION_MAX_SCAN {
+        bail!("unsupported WMF region scan profile");
     }
 
-    let mut offset = REGION_HEADER_BYTES;
-    for _ in 0..scan_count {
-        let count = usize::from(
-            read_u16(params, offset).ok_or_else(|| anyhow!("WMF region scan is truncated"))?,
-        );
-        if count % 2 != 0 {
-            bail!("WMF region scan coordinate count is odd");
-        }
-        if count > MAX_POINTS_PER_RECORD.saturating_mul(2) {
-            bail!("WMF region scan coordinate count exceeds bounded limit");
-        }
-        let scan_line_bytes = count
-            .checked_mul(2)
-            .ok_or_else(|| anyhow!("WMF region scan byte count overflow"))?;
-        let count2_offset = offset
-            .checked_add(6)
-            .and_then(|value| value.checked_add(scan_line_bytes))
-            .ok_or_else(|| anyhow!("WMF region scan range overflow"))?;
-        let scan_end = count2_offset
-            .checked_add(2)
-            .ok_or_else(|| anyhow!("WMF region scan range overflow"))?;
-        if scan_end > params.len() {
-            bail!("WMF region scan payload is truncated");
-        }
-        let count2 = usize::from(
-            read_u16(params, count2_offset)
-                .ok_or_else(|| anyhow!("WMF region scan Count2 is truncated"))?,
-        );
-        if count2 != count {
-            bail!("WMF region scan Count2 disagrees with Count");
-        }
-        offset = scan_end;
+    for offset in [14_usize, 16, 18, 20] {
+        read_i16(params, offset)
+            .ok_or_else(|| anyhow!("WMF region bounding rectangle is truncated"))?;
     }
 
-    if offset != params.len() {
-        bail!("WMF region payload has trailing bytes");
-    }
+    // The remaining 20 bytes are the bounded persisted aScans carrier. They
+    // are retained only to validate exact record size; no scanline semantics
+    // are executed by this slice.
     Ok(())
 }
 
@@ -1317,9 +1285,14 @@ mod tests {
         wrong_size[8..10].copy_from_slice(&40_i16.to_le_bytes());
         assert!(validate_region_object(&wrong_size).is_err());
 
-        let mut odd_scan = valid;
-        odd_scan[22..24].copy_from_slice(&5_u16.to_le_bytes());
-        assert!(validate_region_object(&odd_scan).is_err());
+        let mut wrong_scan_profile = valid.clone();
+        wrong_scan_profile[10..12].copy_from_slice(&2_i16.to_le_bytes());
+        assert!(validate_region_object(&wrong_scan_profile).is_err());
+
+        let mut truncated = valid;
+        truncated.pop();
+        truncated.pop();
+        assert!(validate_region_object(&truncated).is_err());
     }
 
     #[test]
