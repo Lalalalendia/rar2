@@ -868,11 +868,11 @@ pub fn rasterize_wmf_preview(
                     read_u32(params, 0).ok_or_else(|| anyhow!("WMF SETBKCOLOR is truncated"))?;
             }
             META_SETTEXTCOLOR => {
-                if params.len() < 4 {
-                    bail!("WMF SETTEXTCOLOR is truncated");
+                if params.len() != 4 {
+                    bail!("WMF SETTEXTCOLOR parameter length is not 4 bytes");
                 }
-                let _ =
-                    read_u32(params, 0).ok_or_else(|| anyhow!("WMF SETTEXTCOLOR is truncated"))?;
+                let _ = read_u32(params, 0)
+                    .ok_or_else(|| anyhow!("WMF SETTEXTCOLOR parameter is truncated"))?;
             }
             META_SETWINDOWORG => {
                 state.window_org_y = i32::from(
@@ -1245,6 +1245,13 @@ mod tests {
         let mut truncated = synthetic_polygon();
         insert_record_before_eof(&mut truncated, record(META_SETTEXTCOLOR, &[0, 0]));
         assert!(rasterize_wmf_preview(&truncated, 100, 100).is_err());
+
+        let mut oversized = synthetic_polygon();
+        insert_record_before_eof(
+            &mut oversized,
+            record(META_SETTEXTCOLOR, &[0, 0, 0, 0, 0, 0]),
+        );
+        assert!(rasterize_wmf_preview(&oversized, 100, 100).is_err());
     }
 
     #[test]
