@@ -18,6 +18,8 @@ const CONTENTS_STREAM_PATH: &str = "/Contents";
 struct ErrorAggregate {
     file_count: usize,
     raw_0001_count: usize,
+    detail_counts: BTreeMap<String, usize>,
+    raw_0001_per_file_counts: BTreeMap<usize, usize>,
     example_source_sha256: Vec<String>,
 }
 
@@ -81,6 +83,19 @@ fn table_error_kind(error: &Legacy0x22TableCatalogReadError) -> &'static str {
         Legacy0x22TableCatalogReadError::TableCellCountMismatch { .. } => {
             "table_cell_count_mismatch"
         }
+    }
+}
+
+fn table_error_detail(error: &Legacy0x22TableCatalogReadError) -> Option<String> {
+    match error {
+        Legacy0x22TableCatalogReadError::TableCountMismatch {
+            object_tables,
+            text_tables,
+        } => Some(format!("object_tables={object_tables}:text_tables={text_tables}")),
+        Legacy0x22TableCatalogReadError::TooFewTableRecords {
+            count, required, ..
+        } => Some(format!("count={count}:required={required}")),
+        _ => None,
     }
 }
 
@@ -171,6 +186,13 @@ fn main() -> Result<()> {
                 let aggregate = errors.entry(kind).or_default();
                 aggregate.file_count += 1;
                 aggregate.raw_0001_count += raw_0001_count;
+                *aggregate
+                    .raw_0001_per_file_counts
+                    .entry(raw_0001_count)
+                    .or_default() += 1;
+                if let Some(detail) = table_error_detail(&error) {
+                    *aggregate.detail_counts.entry(detail).or_default() += 1;
+                }
                 if aggregate.example_source_sha256.len() < 5 {
                     aggregate.example_source_sha256.push(source_sha256);
                 }
@@ -190,6 +212,8 @@ fn main() -> Result<()> {
                 "kind": kind,
                 "file_count": aggregate.file_count,
                 "raw_0001_physical_count": aggregate.raw_0001_count,
+                "detail_counts": aggregate.detail_counts,
+                "raw_0001_per_file_counts": aggregate.raw_0001_per_file_counts,
                 "example_source_sha256": aggregate.example_source_sha256,
             })
         })
