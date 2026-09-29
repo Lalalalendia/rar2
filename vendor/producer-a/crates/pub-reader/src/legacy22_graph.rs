@@ -1,5 +1,5 @@
 use super::{
-    CONTENTS_STREAM_PATH, PUB_ADAPTER_ID, PubBridgeDiagnostic, PubEffectivePageProjection,
+    CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
     PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubNodePayload,
     PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource, QUILL_STREAM_PATH, ROLE_DOCUMENT,
     ROLE_NODE, ROLE_PAGE, decode_utf16le_strict, derive_pub_id, quill_story_object_key, source_ref,
@@ -9,8 +9,7 @@ use pub_contents::{Legacy0x22Directory, Legacy0x22DirectoryEntry, parse_legacy_0
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
     Affine2D, AuthorityClass, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
-    Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceGraph,
-    SourceRole, Story, StoryId,
+    Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceRole, Story,
 };
 use pub_quill::parse_confirmed_story_catalog;
 use std::collections::{BTreeMap, BTreeSet};
