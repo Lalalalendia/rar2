@@ -592,8 +592,9 @@ fn validate_enhanced_metafile_escape(params: &[u8]) -> Result<()> {
     if escape != META_ESCAPE_ENHANCED_METAFILE {
         bail!("unsupported WMF escape function 0x{escape:04x}");
     }
-    let byte_count =
-        usize::from(read_u16(params, 2).ok_or_else(|| anyhow!("WMF escape byte count is truncated"))?);
+    let byte_count = usize::from(
+        read_u16(params, 2).ok_or_else(|| anyhow!("WMF escape byte count is truncated"))?,
+    );
     if byte_count > params.len().saturating_sub(4) {
         bail!("WMF enhanced-metafile escape payload is truncated");
     }
@@ -770,13 +771,15 @@ pub fn rasterize_wmf_preview(
                 if params.len() < 2 {
                     bail!("WMF SETTEXTALIGN is truncated");
                 }
-                let _ = read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETTEXTALIGN is truncated"))?;
+                let _ =
+                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETTEXTALIGN is truncated"))?;
             }
             META_SETBKCOLOR => {
                 if params.len() < 4 {
                     bail!("WMF SETBKCOLOR is truncated");
                 }
-                let _ = read_u32(params, 0).ok_or_else(|| anyhow!("WMF SETBKCOLOR is truncated"))?;
+                let _ =
+                    read_u32(params, 0).ok_or_else(|| anyhow!("WMF SETBKCOLOR is truncated"))?;
             }
             META_SETWINDOWORG => {
                 state.window_org_y = i32::from(
@@ -883,7 +886,12 @@ pub fn rasterize_wmf_preview(
                 let points = map_points(&state, &canvas, &logical)?;
                 if function == META_POLYGON {
                     if state.brush.style != BS_NULL && points.len() >= 3 {
-                        fill_rings(&mut canvas, &state, std::slice::from_ref(&points), state.brush.color);
+                        fill_rings(
+                            &mut canvas,
+                            &state,
+                            std::slice::from_ref(&points),
+                            state.brush.color,
+                        );
                     }
                     draw_polyline(&mut canvas, &state, &points, true);
                 } else {
@@ -940,8 +948,8 @@ pub fn rasterize_wmf_preview(
                 }
             }
             META_RECTANGLE => {
-                let bottom =
-                    read_i16(params, 0).ok_or_else(|| anyhow!("WMF RECTANGLE bottom is truncated"))?;
+                let bottom = read_i16(params, 0)
+                    .ok_or_else(|| anyhow!("WMF RECTANGLE bottom is truncated"))?;
                 let right =
                     read_i16(params, 2).ok_or_else(|| anyhow!("WMF RECTANGLE right is truncated"))?;
                 let top =
@@ -951,7 +959,12 @@ pub fn rasterize_wmf_preview(
                 let logical = [(left, top), (right, top), (right, bottom), (left, bottom)];
                 let points = map_points(&state, &canvas, &logical)?;
                 if state.brush.style != BS_NULL {
-                    fill_rings(&mut canvas, &state, std::slice::from_ref(&points), state.brush.color);
+                    fill_rings(
+                        &mut canvas,
+                        &state,
+                        std::slice::from_ref(&points),
+                        state.brush.color,
+                    );
                 }
                 draw_polyline(&mut canvas, &state, &points, true);
             }
