@@ -728,3 +728,4 @@ mod tests {
         );
     }
 }
+// CI measurement probe: Windows ARM64 default-branch cache restore 280.
