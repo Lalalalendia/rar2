@@ -1,0 +1,138 @@
+name: Reader Consumer Admission V1
+
+on:
+  workflow_call:
+    inputs:
+      event_name:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      pr_number:
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+jobs:
+  admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      admit: ${{ steps.gate.outputs.admit }}
+    steps:
+      - id: gate
+        name: Wait for exact-head Reader Tier A
+        uses: actions/github-script@v7
+        env:
+          EVENT_NAME: ${{ inputs.event_name }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const eventName = process.env.EVENT_NAME;
+            const headSha = process.env.HEAD_SHA;
+            const prNumber = Number(process.env.PR_NUMBER || 0);
+
+            if (eventName !== "pull_request" || !prNumber) {
+              core.info("Non-PR/manual execution preserves existing product acceptance.");
+              core.setOutput("admit", "true");
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+            const paths = files.map(file => file.filename);
+
+            const exact = new Set([
+              "Cargo.toml",
+              "Cargo.lock",
+              "vendor/producer-a/Cargo.toml",
+              "vendor/producer-a/Cargo.lock",
+              "apps/chaptera-desktop/src/render_backend.rs",
+              "apps/chaptera-desktop/src/main.rs",
+              "tools/ci/reader_consumer_preflight.py",
+              ".github/workflows/reader-consumer-preflight.yml",
+              ".github/workflows/reader-consumer-admission.yml",
+              ".github/workflows/chaptera-reader-windows.yml",
+              ".github/workflows/chaptera-desktop-windows.yml",
+              ".github/workflows/carlton-reader-visual-oracle.yml",
+              ".github/workflows/reader-typography-golden.yml",
+              ".github/workflows/reader-corpus-truth-v1.yml",
+              ".github/workflows/mobile-reader-android-local-open.yml",
+              ".github/workflows/mobile-reader-android-render.yml",
+              ".github/workflows/chaptera-local-portable-windows.yml",
+              ".github/workflows/web-acceptance-real-chromium.yml",
+            ]);
+            const prefixes = [
+              "crates/chaptera-viewer-render-plan/",
+              "vendor/producer-a/crates/pub-core/",
+              "vendor/producer-a/crates/pub-cfb/",
+              "vendor/producer-a/crates/pub-contents/",
+              "vendor/producer-a/crates/pub-escher/",
+              "vendor/producer-a/crates/pub-model/",
+              "vendor/producer-a/crates/pub-quill/",
+              "vendor/producer-a/crates/pub-reader/",
+              "vendor/producer-a/crates/pub-layout/",
+              "vendor/producer-a/crates/pub-viewer/",
+            ];
+
+            const needsTierA = paths.some(path =>
+              exact.has(path) || prefixes.some(prefix => path.startsWith(prefix))
+            );
+            if (!needsTierA) {
+              core.info("No Reader Tier-A seam change; preserving existing workflow admission.");
+              core.setOutput("admit", "true");
+              return;
+            }
+
+            core.info(`Reader Tier A required for exact head ${headSha}`);
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+            for (let attempt = 1; attempt <= 40; attempt++) {
+              const response = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: headSha,
+                per_page: 100,
+                filter: "latest",
+              });
+              const matches = response.data.check_runs
+                .filter(run => run.name === "Reader consumer Tier A")
+                .sort((a, b) => b.id - a.id);
+
+              if (matches.length) {
+                const latest = matches[0];
+                core.info(
+                  `Tier A attempt ${attempt}: status=${latest.status}, conclusion=${latest.conclusion}`
+                );
+                if (latest.status === "completed") {
+                  if (latest.conclusion === "success") {
+                    core.setOutput("admit", "true");
+                    return;
+                  }
+                  core.setOutput("admit", "false");
+                  core.setFailed(
+                    `Reader consumer Tier A failed closed on ${headSha}: ${latest.conclusion}`
+                  );
+                  return;
+                }
+              } else {
+                core.info(`Tier A attempt ${attempt}: check not registered yet`);
+              }
+              await sleep(15000);
+            }
+
+            core.setOutput("admit", "false");
+            core.setFailed(
+              `Reader consumer Tier A did not complete successfully for exact head ${headSha} within the bounded wait`
+            );
