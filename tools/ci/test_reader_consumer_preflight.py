@@ -38,6 +38,12 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         )
         rustfmt = next(command for command in plan["commands"] if command["id"].startswith("rustfmt:"))
         self.assertIn("2024", rustfmt["argv"])
+        ids = {command["id"] for command in plan["commands"]}
+        self.assertIn("desktop-reader-check", ids)
+        self.assertIn("desktop-editor-check", ids)
+        self.assertIn("mobile-reader-core-check", ids)
+        self.assertTrue(plan["desktop_reader_integration"])
+        self.assertTrue(plan["mobile_reader_integration"])
 
 
 if __name__ == "__main__":
