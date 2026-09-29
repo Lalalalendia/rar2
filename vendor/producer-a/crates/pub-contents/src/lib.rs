@@ -99,8 +99,7 @@ pub use legacy22_table_object::{
     LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22HorizontalMerge, Legacy0x22ResolvedTable,
     Legacy0x22ResolvedTableCatalog, Legacy0x22TableAxisSegment, Legacy0x22TableCatalog,
     Legacy0x22TableCatalogReadError, Legacy0x22TableChunk, Legacy0x22TableLayoutProfile,
-    Legacy0x22TableListHeader,
-    parse_legacy_0x22_resolved_tables, parse_legacy_0x22_table_catalog,
+    Legacy0x22TableListHeader, parse_legacy_0x22_resolved_tables, parse_legacy_0x22_table_catalog,
 };
 pub use legacy22_text_info::{
     LEGACY_0X22_TEXT_INFO_CHUNK_TYPE, Legacy0x22TextInfoMap, Legacy0x22TextInfoOwnerEnd,
