@@ -968,6 +968,32 @@ pub fn probe_mature_0x2c_quill_story_failure_stage(bytes: &[u8]) -> Option<&'sta
 }
 
 
+/// Returns only source-safe mature Contents context needed to classify Quill Story failures.
+pub fn probe_mature_0x2c_contents_serialization_revision(bytes: &[u8]) -> Option<u16> {
+    let contents = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH).ok()?;
+    let header = parse_0x2c_header(StreamPath(CONTENTS_STREAM_PATH.into()), &contents).ok()?;
+    Some(header.preamble.serialization_revision)
+}
+
+/// Returns the grounded Contents 0x65 Story count when the catalog parses exactly.
+pub fn probe_mature_0x2c_contents_story_count(bytes: &[u8]) -> Option<u32> {
+    let contents = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH).ok()?;
+    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let header = parse_0x2c_header(contents_stream.clone(), &contents).ok()?;
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header).ok()?;
+    let references = build_reference_index(&contents, &trailer.directory).ok()?;
+    let story_catalog_reference = unique_reference_by_raw_type(
+        &references,
+        CONTENTS_RAW_TYPE_STORY_CATALOG,
+        "Story catalog 0x65",
+    )
+    .ok()?;
+    let story_catalog_chunk =
+        chunk_for_reference(contents_stream, &contents, story_catalog_reference).ok()?;
+    let catalog = parse_confirmed_mature_story_catalog(&contents, &story_catalog_chunk).ok()?;
+    Some(catalog.declared_count)
+}
+
 /// Returns only the stable mature Contents Story-catalog error class.
 ///
 /// Dynamic payloads such as offsets, counts and identities are deliberately
