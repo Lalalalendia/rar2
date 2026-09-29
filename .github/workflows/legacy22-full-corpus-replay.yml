@@ -379,6 +379,8 @@ jobs:
           f_by_olepres_aspect = Counter()
           f_by_olepres_advf = Counter()
           f_by_presentation_profile = Counter()
+          f_clsid_presentation_profile = Counter()
+          f_clsid_compobj_clipboard = Counter()
           presentation_profile_counts = Counter()
           matched_count = 0
           olepres_parse_count = 0
@@ -422,9 +424,10 @@ jobs:
                           )
                       matched_count += 1
 
-                      clsid = str(ole.getclsid(root) or "").upper()
-                      f_by_storage_clsid[(f_key, clsid or "NULL")] += 1
+                      clsid = str(ole.getclsid(root) or "").upper() or "NULL"
+                      f_by_storage_clsid[(f_key, clsid)] += 1
 
+                      compobj_clipboard = "missing"
                       compobj_paths = []
                       olepres_paths = []
                       for stream_path in streams_by_root.get(v, []):
@@ -450,8 +453,9 @@ jobs:
                           f_by_compobj_user_type[
                               (f_key, parsed["user_type_hash"])
                           ] += 1
+                          compobj_clipboard = parsed["clipboard"]
                           f_by_compobj_clipboard[
-                              (f_key, parsed["clipboard"])
+                              (f_key, compobj_clipboard)
                           ] += 1
 
                       f_by_olepres_count[(f_key, str(len(olepres_paths)))] += 1
@@ -487,6 +491,12 @@ jobs:
                       ).hexdigest()[:16]
                       presentation_profile_counts[profile_hash] += 1
                       f_by_presentation_profile[(f_key, profile_hash)] += 1
+                      f_clsid_presentation_profile[
+                          (f_key, clsid, profile_hash)
+                      ] += 1
+                      f_clsid_compobj_clipboard[
+                          (f_key, clsid, compobj_clipboard)
+                      ] += 1
 
           assert matched_count == 305, matched_count
           assert f_counts == Counter({"0": 192, "32768": 113}), f_counts
@@ -496,6 +506,12 @@ jobs:
               return {
                   f"{left}:{right}": count
                   for (left, right), count in sorted(counter.items())
+              }
+
+          def triple_counts(counter):
+              return {
+                  f"{first}:{second}:{third}": count
+                  for (first, second, third), count in sorted(counter.items())
               }
 
           summary = {
@@ -525,6 +541,12 @@ jobs:
               ),
               "presentation_profile_by_f_counts": pair_counts(
                   f_by_presentation_profile
+              ),
+              "f_clsid_presentation_profile_counts": triple_counts(
+                  f_clsid_presentation_profile
+              ),
+              "f_clsid_compobj_clipboard_counts": triple_counts(
+                  f_clsid_compobj_clipboard
               ),
               "evidence_boundary": (
                   "aggregate-only join of OleData.F to matched Object-storage CLSID, "
