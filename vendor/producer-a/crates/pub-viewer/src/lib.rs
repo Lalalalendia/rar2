@@ -447,11 +447,14 @@ fn bridge_effective_value<T: Clone>(
     PubEffectivePaintValueV1 {
         value: value.value.clone(),
         authority: bridge_effective_authority(value.authority),
-        source: value.source.as_ref().map(|source| PubEffectivePaintSourceSpanV1 {
-            stream: source.stream.0.clone(),
-            offset: source.offset,
-            len: source.len,
-        }),
+        source: value
+            .source
+            .as_ref()
+            .map(|source| PubEffectivePaintSourceSpanV1 {
+                stream: source.stream.0.clone(),
+                offset: source.offset,
+                len: source.len,
+            }),
     }
 }
 
