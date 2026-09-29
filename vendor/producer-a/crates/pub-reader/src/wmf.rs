@@ -221,7 +221,6 @@ mod tests {
         bytes.extend_from_slice(&PLACEABLE_KEY.to_le_bytes());
         bytes.extend_from_slice(&0u16.to_le_bytes());
         bytes.extend_from_slice(&[0u8; 16]);
-        bytes.extend_from_slice(&0u16.to_le_bytes());
         bytes.extend_from_slice(&base);
         let profile = profile_wmf(&bytes).expect("placeable wmf");
         assert!(profile.placeable);
