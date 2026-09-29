@@ -704,6 +704,17 @@ fn admitted_layout_frame_ordinal(
     Ok(0)
 }
 
+fn projected_incomplete_layout_is_explicit_overset(
+    projected_target_frame_node_id: Option<NodeId>,
+    diagnostics: &[pub_layout::ResolveDiagnostic],
+    story_id: StoryId,
+) -> bool {
+    projected_target_frame_node_id.is_some()
+        && diagnostics.len() == 1
+        && diagnostics[0].code == "story_overset"
+        && diagnostics[0].origin == story_id.into_canonical()
+}
+
 fn resolve_text_layout_v1(
     visual: &ViewerGeometryDocument,
     target: RenderTextLayoutTargetV1,
@@ -823,6 +834,11 @@ fn resolve_text_layout_v1(
     let Ok(scene) = resolve_bounded_shaped_flow(&projection, &runtime) else {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
     };
+    let projected_explicit_overset = projected_incomplete_layout_is_explicit_overset(
+        projected_target_frame_node_id,
+        &scene.diagnostics,
+        story.id,
+    );
     let mut source_lines = scene
         .lines
         .into_iter()
@@ -832,6 +848,7 @@ fn resolve_text_layout_v1(
 
     if story_scalar_len > 0
         && source_lines.last().map(|line| line.consumed_scalar_end) != Some(story_scalar_len)
+        && !projected_explicit_overset
     {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     }
@@ -1187,6 +1204,41 @@ mod tests {
             ),
             Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired)
         );
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
+    fn projected_cmo_admits_only_explicit_story_overset_as_partial_shared_layout() {
+        let story_id = StoryId::from_canonical(canonical(3));
+        let frame_id = NodeId::from_canonical(canonical(9));
+        let overset = pub_layout::ResolveDiagnostic {
+            code: "story_overset".into(),
+            severity: pub_layout::ResolveSeverity::FidelityWarning,
+            origin: story_id.into_canonical(),
+            message: "bounded fixture".into(),
+        };
+        assert!(projected_incomplete_layout_is_explicit_overset(
+            Some(frame_id),
+            std::slice::from_ref(&overset),
+            story_id,
+        ));
+        assert!(!projected_incomplete_layout_is_explicit_overset(
+            None,
+            std::slice::from_ref(&overset),
+            story_id,
+        ));
+
+        let unbreakable = pub_layout::ResolveDiagnostic {
+            code: "unbreakable_shaped_line".into(),
+            severity: pub_layout::ResolveSeverity::FidelityWarning,
+            origin: frame_id.into_canonical(),
+            message: "bounded fixture".into(),
+        };
+        assert!(!projected_incomplete_layout_is_explicit_overset(
+            Some(frame_id),
+            &[overset, unbreakable],
+            story_id,
+        ));
     }
 
     #[cfg(feature = "projected-scene-instances")]
