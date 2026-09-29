@@ -153,8 +153,8 @@ jobs:
               for item in row.get("candidates") or []:
                   candidates.append({"source_sha256": row["source_sha256"], **item})
 
-          assert len(candidates) == 305, len(candidates)
-          assert len(affected) == 102, len(affected)
+          assert len(candidates) == 307, len(candidates)
+          assert len(affected) == 103, len(affected)
           assert all(
               int(item["child_parent_id"]) == int(item["parent_object_id"])
               for item in candidates
@@ -299,7 +299,7 @@ jobs:
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
           assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
-          assert reader["opened_by_family"].get("0x22") == 226, reader["opened_by_family"]
+          assert reader["opened_by_family"].get("0x22") == 227, reader["opened_by_family"]
 
           legacy_open = [
               row for row in rows
@@ -317,10 +317,10 @@ jobs:
               for row in legacy_open
           )
 
-          assert len(legacy_with_scene) == 215, len(legacy_with_scene)
-          assert legacy_scene_nodes == 1963, legacy_scene_nodes
-          assert legacy_story_frames == 1430, legacy_story_frames
-          assert legacy_text_fragments == 1383, legacy_text_fragments
+          assert len(legacy_with_scene) == 216, len(legacy_with_scene)
+          assert legacy_scene_nodes == 1967, legacy_scene_nodes
+          assert legacy_story_frames == 1432, legacy_story_frames
+          assert legacy_text_fragments == 1385, legacy_text_fragments
           assert unresolved_encoding_files == 58, unresolved_encoding_files
 
           receipt = {
