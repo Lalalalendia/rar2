@@ -4,10 +4,12 @@ use pub_reader::{
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_source_graph, classify_pub_family,
     probe_mature_0x2c_contents_serialization_revision, probe_mature_0x2c_contents_story_count,
+    probe_mature_0x2c_contents_story_demand,
     probe_mature_0x2c_quill_story_error_kind, probe_mature_0x2c_quill_story_failure_evidence,
     probe_mature_0x2c_quill_story_failure_stage, probe_mature_0x2c_source_graph_failure_stage,
     probe_mature_0x2c_story_catalog_error_kind,
-    resolve_pub_source_graph, PubReaderRoute, QuillStoryFailureEvidence,
+    resolve_pub_source_graph, PubContentsStoryDemandEvidence, PubReaderRoute,
+    QuillStoryFailureEvidence,
 };
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -44,6 +46,7 @@ struct FailureStageRow {
     quill_failure_evidence: Option<QuillStoryFailureEvidence>,
     mature_contents_serialization_revision: Option<u16>,
     mature_contents_story_count: Option<u32>,
+    mature_contents_story_demand: Option<PubContentsStoryDemandEvidence>,
 }
 
 fn diagnose(bytes: &[u8]) -> FailureStageRow {
@@ -54,12 +57,14 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
     let mut quill_failure_evidence = None;
     let mut mature_contents_serialization_revision = None;
     let mut mature_contents_story_count = None;
+    let mut mature_contents_story_demand = None;
 
     let lower_ok = match classification.route {
         PubReaderRoute::Mature2c => {
             mature_contents_serialization_revision =
                 probe_mature_0x2c_contents_serialization_revision(bytes);
             mature_contents_story_count = probe_mature_0x2c_contents_story_count(bytes);
+            mature_contents_story_demand = probe_mature_0x2c_contents_story_demand(bytes);
             stage = "mature.source_graph".to_owned();
             match build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash(bytes)) {
                 Ok(source) => {
@@ -153,6 +158,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             quill_failure_evidence: None,
             mature_contents_serialization_revision,
             mature_contents_story_count,
+            mature_contents_story_demand,
         };
     }
 
@@ -169,6 +175,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             quill_failure_evidence,
             mature_contents_serialization_revision,
             mature_contents_story_count,
+            mature_contents_story_demand,
         };
     }
 
@@ -185,6 +192,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             quill_failure_evidence: None,
             mature_contents_serialization_revision,
             mature_contents_story_count,
+            mature_contents_story_demand,
         },
         Err(error) => {
             let error_text = format!("{error:#}");
@@ -200,6 +208,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
                 quill_failure_evidence: None,
                 mature_contents_serialization_revision,
                 mature_contents_story_count,
+                mature_contents_story_demand,
             }
         }
     }
