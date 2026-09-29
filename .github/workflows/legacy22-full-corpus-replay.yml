@@ -574,6 +574,20 @@ jobs:
               "viewer.text.legacy_encoding_unresolved" in (row.get("diagnostic_codes") or [])
               for row in legacy_existing
           )
+          existing_image_resources = sum(
+              int(row.get("image_resource_count") or 0) for row in legacy_existing
+          )
+          existing_image_placements = sum(
+              int(row.get("image_placement_count") or 0) for row in legacy_existing
+          )
+          existing_files_with_images = sum(
+              int(row.get("image_resource_count") or 0) > 0 for row in legacy_existing
+          )
+          legacy_image_raster_unsupported_files = sum(
+              "viewer.legacy_image.preview_raster_unsupported"
+              in (row.get("diagnostic_codes") or [])
+              for row in legacy_existing
+          )
 
           raw_candidates = json.loads(Path("/tmp/raw0022-candidates.json").read_text())
           perlost_candidates = [
@@ -584,10 +598,14 @@ jobs:
           assert len(perlost_candidates) == 2, len(perlost_candidates)
           assert len(legacy_existing) == 226, len(legacy_existing)
           assert len(existing_with_scene) == 224, len(existing_with_scene)
-          # Exact pinned-625 GROUP receipt from run 36626143347 established 2700 nodes.
-          # The grounded legacy IMAGE slice adds exactly 4 ImageFrame scene nodes on this corpus;
-          # Story/text, encoding and OLE-candidate depth remain unchanged.
-          assert existing_scene_nodes == 2704, existing_scene_nodes
+          # Exact pinned-625 grouped-IMAGE receipt from run 36641738977:
+          # 131 admitted positive-geometry IMAGE frames are present in the Viewer scene.
+          # Existing image resources rise from 301 to 362: exactly 61 new legacy IMAGE PNG previews.
+          assert existing_scene_nodes == 2831, existing_scene_nodes
+          assert existing_image_resources == 362, existing_image_resources
+          assert existing_image_placements == 362, existing_image_placements
+          assert existing_files_with_images == 114, existing_files_with_images
+          assert legacy_image_raster_unsupported_files == 8, legacy_image_raster_unsupported_files
           assert existing_story_frames == 1430, existing_story_frames
           assert existing_text_fragments == 1383, existing_text_fragments
           assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files
@@ -598,10 +616,9 @@ jobs:
           legacy_scene_nodes = sum(
               int(row.get("scene_node_count") or 0) for row in legacy_open
           )
-          # Grounded legacy IMAGE materialization + pure GROUP ancestry projection raises the
-          # complete legacy-open scene total from 2700-era authority to 2831 on pinned-625.
-          # Openability, story/text and encoding invariants remain unchanged.
-          assert legacy_scene_nodes == 2831, legacy_scene_nodes
+          # PERLOST contributes six unchanged scene nodes on top of the 2,831-node
+          # legacy_existing authority above.
+          assert legacy_scene_nodes == 2837, legacy_scene_nodes
           legacy_story_frames = sum(
               int(row.get("story_frame_count") or 0) for row in legacy_open
           )
@@ -622,6 +639,11 @@ jobs:
               "legacy_opened": len(legacy_open),
               "legacy_files_with_scene_nodes": len(legacy_with_scene),
               "legacy_scene_node_count": legacy_scene_nodes,
+              "legacy_existing_scene_node_count": existing_scene_nodes,
+              "legacy_existing_image_resource_count": existing_image_resources,
+              "legacy_existing_image_placement_count": existing_image_placements,
+              "legacy_existing_files_with_images": existing_files_with_images,
+              "legacy_image_raster_unsupported_file_count": legacy_image_raster_unsupported_files,
               "legacy_ole_candidate_count": companion["candidate_count"],
               "legacy_story_frame_count": legacy_story_frames,
               "legacy_text_fragment_count": legacy_text_fragments,
