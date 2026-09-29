@@ -12,6 +12,7 @@ permissions:
   contents: read
 
 env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
   LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
 
 jobs:
