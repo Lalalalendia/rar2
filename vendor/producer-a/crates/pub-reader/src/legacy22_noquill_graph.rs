@@ -8,16 +8,15 @@ use super::{
 use anyhow::{Context, Result, bail};
 use pub_contents::{
     LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22Directory, Legacy0x22DirectoryEntry,
-    Legacy0x22ResolvedTable, parse_legacy_0x22_directory,
-    parse_legacy_0x22_formatting_descriptor, parse_legacy_0x22_resolved_tables,
-    parse_legacy_0x22_text_info_map,
+    Legacy0x22ResolvedTable, parse_legacy_0x22_directory, parse_legacy_0x22_formatting_descriptor,
+    parse_legacy_0x22_resolved_tables, parse_legacy_0x22_text_info_map,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
     Affine2D, AuthorityClass, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader,
-    NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest,
-    SimpleRectangularTable, SimpleTableCell, Size2D, SourceDescriptor, SourceRole, Story, StoryId,
-    TableCellAddress, TableCellId,
+    NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, SimpleRectangularTable,
+    SimpleTableCell, Size2D, SourceDescriptor, SourceRole, Story, StoryId, TableCellAddress,
+    TableCellId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -578,8 +577,7 @@ fn build_legacy_table_projection(
     let rows = u32::from(table.object.row_count);
     let columns = u32::from(table.object.column_count);
     let chunk_id = table.object.chunk_id;
-    let story_id =
-        derive_legacy_table_story_id(source_hash, chunk_id, table.effective_text_id)?;
+    let story_id = derive_legacy_table_story_id(source_hash, chunk_id, table.effective_text_id)?;
 
     let mut story_text = String::new();
     let mut utf16_cursor = 0_u32;
@@ -874,9 +872,7 @@ fn derive_legacy_table_story_id(
 ) -> Result<StoryId> {
     Ok(StoryId::from_canonical(derive_pub_id(
         source_hash,
-        &format!(
-            "contents/0x22/table/{chunk_id}/effective-text/{effective_text_id}"
-        ),
+        &format!("contents/0x22/table/{chunk_id}/effective-text/{effective_text_id}"),
         ROLE_STORY,
     )?))
 }
