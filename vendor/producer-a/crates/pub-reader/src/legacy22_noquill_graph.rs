@@ -339,9 +339,7 @@ fn materialize_legacy_noquill_child(
         return Ok(());
     }
 
-    if is_group
-        && (group_depth >= LEGACY_GROUP_MAX_DEPTH || !group_stack.insert(child_object_id))
-    {
+    if is_group && (group_depth >= LEGACY_GROUP_MAX_DEPTH || !group_stack.insert(child_object_id)) {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
             object_id: u32::from(child_object_id),
             raw_type: Some(child_entry.chunk_type),
@@ -797,7 +795,6 @@ mod tests {
         assert!(!is_legacy_simple_geometry_shape_type(LEGACY_GROUP_TYPE));
         assert_eq!(LEGACY_GROUP_MAX_DEPTH, 100);
     }
-
 
     #[test]
     fn group_materialization_preserves_parent_hierarchy() {
