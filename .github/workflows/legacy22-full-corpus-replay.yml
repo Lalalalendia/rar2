@@ -1,4 +1,4 @@
-name: Legacy22 full corpus replay
+# PERLOST measured acceptance: 625 opens 606; legacy 227; raw0022 candidates 307/103.\nname: Legacy22 full corpus replay
 
 on:
   pull_request:
