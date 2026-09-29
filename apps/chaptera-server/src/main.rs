@@ -9,6 +9,7 @@ use chaptera_server::{
     doctor,
     edge::EdgePolicy,
     guest_reader_http::{self, GuestReaderHttpConfig, GuestReaderHttpState, SqliteGuestReaderSessionStore},
+    guest_reader_worker::{self, IsolatedGuestSceneProducer},
     job_queue::SqliteJobQueue,
     jobs::UnconfiguredWorkerRuntime,
     jobs_runtime::JobsRuntime,
@@ -48,6 +49,25 @@ fn main() -> ExitCode {
     {
         return match source_baseline::run_source_baseline_worker(
             document_id,
+            expected_sha256,
+            *expected_byte_len,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Command::GuestReaderScene {
+        session_id,
+        expected_sha256,
+        expected_byte_len,
+    } = &cli.command
+    {
+        return match guest_reader_worker::run_guest_scene_worker(
+            session_id,
             expected_sha256,
             *expected_byte_len,
         ) {
@@ -322,6 +342,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         }
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"
+        ),
+        Command::GuestReaderScene { .. } => unreachable!(
+            "guest-reader-scene is dispatched synchronously before Tokio runtime creation"
         ),
     }
 
