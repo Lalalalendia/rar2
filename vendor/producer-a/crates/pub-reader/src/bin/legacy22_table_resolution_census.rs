@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use pub_contents::{
     detect_family, parse_legacy_0x22_directory, parse_legacy_0x22_resolved_tables,
-    parse_legacy_0x22_table_catalog, parse_legacy_0x22_text_info_map, parse_preamble, ContentsFamily,
-    Legacy0x22TableCatalogReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
+    parse_legacy_0x22_table_catalog, parse_legacy_0x22_text_info_map, parse_preamble,
+    ContentsFamily, Legacy0x22TableCatalogReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
 };
 use pub_core::StreamPath;
 use pub_model::Sha256Digest;
@@ -52,8 +52,7 @@ fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
 }
 
 fn reader_raw_0001_target_ids(bytes: &[u8]) -> BTreeSet<u16> {
-    let Ok(source) =
-        build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash(bytes))
+    let Ok(source) = build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash(bytes))
     else {
         return BTreeSet::new();
     };
