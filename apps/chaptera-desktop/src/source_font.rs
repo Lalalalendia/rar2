@@ -1,5 +1,6 @@
 use chaptera_viewer_render_plan::{ExplicitRenderTextFontResourceV1, RenderTextFragmentV1};
 use pub_viewer::ViewerGeometryDocument;
+#[cfg(target_os = "windows")]
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
