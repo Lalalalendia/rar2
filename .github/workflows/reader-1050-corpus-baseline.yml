@@ -67,16 +67,26 @@ jobs:
         with:
           toolchain: '1.94.1'
 
-      - name: Checkout current materialized donor and profiling code
+      - name: Checkout corpus profiling code
         uses: actions/checkout@v4
         with:
           repository: Lalalalendia/lalamu
           ref: main
           path: corpus-src
           sparse-checkout: |
-            pub-corpus/corpus
             pub-corpus/data
             pub-corpus/scripts
+          sparse-checkout-cone-mode: true
+
+      - name: Checkout 625-file donor only for reconstruction fallback
+        if: steps.pinned-1050.outcome != 'success'
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: main
+          path: corpus-donor
+          sparse-checkout: |
+            pub-corpus/corpus
           sparse-checkout-cone-mode: true
 
       - name: Install profiling dependency
@@ -194,7 +204,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/corpus/materialize_corpus_1000.py \
-            --input lalamu_625=corpus-src/pub-corpus/corpus \
+            --input lalamu_625=corpus-donor/pub-corpus/corpus \
             --input historical_container_first_wave=out/container/pub \
             --authority tools/corpus/receipts/current-rar-1556.sha256.txt \
             --out out/materialized \
