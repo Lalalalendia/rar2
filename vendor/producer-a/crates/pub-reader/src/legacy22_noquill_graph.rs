@@ -369,7 +369,7 @@ fn materialize_legacy_noquill_child(
     }
 
     let chunk = chunk_bytes(contents, child_entry)?;
-    let Some(bounds) = legacy_shape_bounds(page, chunk) else {
+    let Some(bounds) = legacy_shape_bounds(page, child_entry.chunk_type, chunk) else {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
             object_id: u32::from(child_object_id),
             raw_type: Some(child_entry.chunk_type),
@@ -700,18 +700,51 @@ fn is_legacy_simple_geometry_shape_type(chunk_type: u16) -> bool {
     LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES.contains(&chunk_type)
 }
 
-fn legacy_shape_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
+fn legacy_shape_bounds(page: &Page, chunk_type: u16, chunk: &[u8]) -> Option<RectEmu> {
     let xs = i64::from(read_i32(chunk, LEGACY_SHAPE_XS_OFFSET)?);
     let ys = i64::from(read_i32(chunk, LEGACY_SHAPE_YS_OFFSET)?);
     let xe = i64::from(read_i32(chunk, LEGACY_SHAPE_XE_OFFSET)?);
     let ye = i64::from(read_i32(chunk, LEGACY_SHAPE_YE_OFFSET)?);
-    let width = xe.checked_sub(xs)?;
-    let height = ye.checked_sub(ys)?;
-    if width <= 0 || height <= 0 {
-        return None;
-    }
-    let x = page.size.width.get().checked_div(2)?.checked_add(xs)?;
-    let y = page.size.height.get().checked_div(2)?.checked_add(ys)?;
+
+    let (origin_x, origin_y, width, height) = if chunk_type == 0x0004 {
+        // Legacy 0x0004 is LINE. The persisted carrier stores endpoints, not a
+        // positive-area rectangle. Horizontal/vertical lines legitimately
+        // have one zero delta; reversed endpoints legitimately have a
+        // negative raw delta. Only an exact point is degenerate.
+        if xs == xe && ys == ye {
+            return None;
+        }
+        let left = xs.min(xe);
+        let top = ys.min(ye);
+        let right = xs.max(xe);
+        let bottom = ys.max(ye);
+        (
+            left,
+            top,
+            right.checked_sub(left)?,
+            bottom.checked_sub(top)?,
+        )
+    } else {
+        let width = xe.checked_sub(xs)?;
+        let height = ye.checked_sub(ys)?;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        (xs, ys, width, height)
+    };
+
+    let x = page
+        .size
+        .width
+        .get()
+        .checked_div(2)?
+        .checked_add(origin_x)?;
+    let y = page
+        .size
+        .height
+        .get()
+        .checked_div(2)?
+        .checked_add(origin_y)?;
     Some(RectEmu::new(
         LengthEmu::new(x),
         LengthEmu::new(y),
@@ -862,6 +895,108 @@ mod tests {
 
         chunk[0x08] ^= 0x01;
         assert!(parse_legacy_ole_data_chunk(&chunk).is_none());
+    }
+
+    fn legacy_geometry_chunk(xs: i32, ys: i32, xe: i32, ye: i32) -> Vec<u8> {
+        let mut chunk = vec![0_u8; LEGACY_SHAPE_YE_OFFSET + 4];
+        chunk[LEGACY_SHAPE_XS_OFFSET..LEGACY_SHAPE_XS_OFFSET + 4]
+            .copy_from_slice(&xs.to_le_bytes());
+        chunk[LEGACY_SHAPE_YS_OFFSET..LEGACY_SHAPE_YS_OFFSET + 4]
+            .copy_from_slice(&ys.to_le_bytes());
+        chunk[LEGACY_SHAPE_XE_OFFSET..LEGACY_SHAPE_XE_OFFSET + 4]
+            .copy_from_slice(&xe.to_le_bytes());
+        chunk[LEGACY_SHAPE_YE_OFFSET..LEGACY_SHAPE_YE_OFFSET + 4]
+            .copy_from_slice(&ye.to_le_bytes());
+        chunk
+    }
+
+    fn legacy_geometry_test_page() -> Page {
+        Page {
+            id: derive_legacy_page_id(
+                &"0000000000000000000000000000000000000000000000000000000000000000"
+                    .parse()
+                    .unwrap(),
+                1,
+            )
+            .unwrap(),
+            size: Size2D::new(LengthEmu::new(1000), LengthEmu::new(1000)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn legacy_line_geometry_accepts_axis_aligned_endpoints_without_fake_thickness() {
+        let page = legacy_geometry_test_page();
+
+        let horizontal = legacy_shape_bounds(
+            &page,
+            0x0004,
+            &legacy_geometry_chunk(-100, 20, 100, 20),
+        )
+        .expect("horizontal line");
+        assert_eq!(
+            horizontal,
+            RectEmu::new(
+                LengthEmu::new(400),
+                LengthEmu::new(520),
+                LengthEmu::new(200),
+                LengthEmu::new(0),
+            )
+        );
+
+        let vertical = legacy_shape_bounds(
+            &page,
+            0x0004,
+            &legacy_geometry_chunk(30, -90, 30, 110),
+        )
+        .expect("vertical line");
+        assert_eq!(
+            vertical,
+            RectEmu::new(
+                LengthEmu::new(530),
+                LengthEmu::new(410),
+                LengthEmu::new(0),
+                LengthEmu::new(200),
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_line_geometry_normalizes_reversed_endpoints_and_rejects_points() {
+        let page = legacy_geometry_test_page();
+        let reversed = legacy_shape_bounds(
+            &page,
+            0x0004,
+            &legacy_geometry_chunk(100, 80, -100, -20),
+        )
+        .expect("reversed line");
+        assert_eq!(
+            reversed,
+            RectEmu::new(
+                LengthEmu::new(400),
+                LengthEmu::new(480),
+                LengthEmu::new(200),
+                LengthEmu::new(100),
+            )
+        );
+
+        assert!(
+            legacy_shape_bounds(&page, 0x0004, &legacy_geometry_chunk(7, 9, 7, 9)).is_none()
+        );
+    }
+
+    #[test]
+    fn non_line_simple_geometry_keeps_positive_rectangle_requirement() {
+        let page = legacy_geometry_test_page();
+        assert!(
+            legacy_shape_bounds(&page, 0x0005, &legacy_geometry_chunk(0, 0, 100, 0)).is_none()
+        );
+        assert!(
+            legacy_shape_bounds(&page, 0x0005, &legacy_geometry_chunk(100, 0, 0, 100)).is_none()
+        );
     }
 
     #[test]
