@@ -315,8 +315,8 @@ fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
     if params.len() != 4 + LEGACY_PATTERN_DIB_BYTES {
         bail!("unsupported WMF DIB pattern brush payload length");
     }
-    let style = read_u16(params, 0)
-        .ok_or_else(|| anyhow!("WMF DIB pattern brush style is truncated"))?;
+    let style =
+        read_u16(params, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush style is truncated"))?;
     let color_usage = read_u16(params, 2)
         .ok_or_else(|| anyhow!("WMF DIB pattern brush color usage is truncated"))?;
     if style != BS_DIBPATTERN || color_usage != DIB_RGB_COLORS {
@@ -324,16 +324,16 @@ fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
     }
 
     let dib = &params[4..];
-    let header_size = read_u32(dib, 0)
-        .ok_or_else(|| anyhow!("WMF DIB pattern brush header is truncated"))?;
-    let width = read_i32(dib, 4)
-        .ok_or_else(|| anyhow!("WMF DIB pattern brush width is truncated"))?;
-    let height = read_i32(dib, 8)
-        .ok_or_else(|| anyhow!("WMF DIB pattern brush height is truncated"))?;
-    let planes = read_u16(dib, 12)
-        .ok_or_else(|| anyhow!("WMF DIB pattern brush planes are truncated"))?;
-    let bit_count = read_u16(dib, 14)
-        .ok_or_else(|| anyhow!("WMF DIB pattern brush bit count is truncated"))?;
+    let header_size =
+        read_u32(dib, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush header is truncated"))?;
+    let width =
+        read_i32(dib, 4).ok_or_else(|| anyhow!("WMF DIB pattern brush width is truncated"))?;
+    let height =
+        read_i32(dib, 8).ok_or_else(|| anyhow!("WMF DIB pattern brush height is truncated"))?;
+    let planes =
+        read_u16(dib, 12).ok_or_else(|| anyhow!("WMF DIB pattern brush planes are truncated"))?;
+    let bit_count =
+        read_u16(dib, 14).ok_or_else(|| anyhow!("WMF DIB pattern brush bit count is truncated"))?;
     let compression = read_u32(dib, 16)
         .ok_or_else(|| anyhow!("WMF DIB pattern brush compression is truncated"))?;
     let image_size = read_u32(dib, 20)
@@ -610,11 +610,7 @@ fn draw_polyline(
     Ok(())
 }
 
-fn fill_rings(
-    canvas: &mut Canvas,
-    state: &PlaybackState,
-    rings: &[Vec<(i32, i32)>],
-) -> Result<()> {
+fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32)>]) -> Result<()> {
     let Some(min_y) = rings
         .iter()
         .flat_map(|ring| ring.iter().map(|point| point.1))
