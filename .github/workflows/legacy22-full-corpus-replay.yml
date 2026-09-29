@@ -295,6 +295,9 @@ jobs:
 
           summary = json.loads(Path("out/legacy625/summary.json").read_text())
           rows = json.loads(Path("out/legacy625/reader-records.json").read_text())
+          companion = json.loads(
+              Path("out/legacy625/raw0022-companion-census.json").read_text()
+          )
           reader = summary["reader"]
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
@@ -317,8 +320,11 @@ jobs:
               for row in legacy_open
           )
 
-          assert len(legacy_with_scene) == 215, len(legacy_with_scene)
-          assert legacy_scene_nodes == 1963, legacy_scene_nodes
+          assert companion["candidate_count"] == 305, companion["candidate_count"]
+          assert len(legacy_with_scene) == 217, len(legacy_with_scene)
+          # #160 admits exactly the 305 authoritative PAGE OLE candidates and no
+          # other old-0x22 object class into the scene geometry projection.
+          assert legacy_scene_nodes == 1963 + companion["candidate_count"], legacy_scene_nodes
           assert legacy_story_frames == 1430, legacy_story_frames
           assert legacy_text_fragments == 1383, legacy_text_fragments
           assert unresolved_encoding_files == 58, unresolved_encoding_files
@@ -332,6 +338,7 @@ jobs:
               "legacy_opened": len(legacy_open),
               "legacy_files_with_scene_nodes": len(legacy_with_scene),
               "legacy_scene_node_count": legacy_scene_nodes,
+              "legacy_ole_candidate_count": companion["candidate_count"],
               "legacy_story_frame_count": legacy_story_frames,
               "legacy_text_fragment_count": legacy_text_fragments,
               "legacy_unresolved_encoding_file_count": unresolved_encoding_files,
