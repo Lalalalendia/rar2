@@ -551,7 +551,7 @@ fn sign_i32(value: Option<i32>) -> &'static str {
     }
 }
 
-fn wmf_records<'a>(wmf: &'a [u8]) -> Option<Vec<(u16, &'a [u8])>> {
+fn wmf_records(wmf: &[u8]) -> Option<Vec<(u16, &[u8])>> {
     let header_offset = wmf_header_offset(wmf);
     let mut offset = header_offset.checked_add(WMF_META_HEADER_BYTES)?;
     if offset > wmf.len() {
