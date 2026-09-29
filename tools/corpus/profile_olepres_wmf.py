@@ -29,6 +29,7 @@ META_SELECTCLIPREGION = 0x012C
 META_SELECTOBJECT = 0x012D
 META_POLYGON = 0x0324
 META_POLYLINE = 0x0325
+META_INTERSECTCLIPRECT = 0x0416
 META_RECTANGLE = 0x041B
 META_POLYPOLYGON = 0x0538
 
@@ -272,6 +273,22 @@ def dib_pattern_brush_profile(params: bytes) -> dict:
     return profile
 
 
+def word_relation(left: bytes, right: bytes) -> dict | None:
+    if len(left) != 8 or len(right) != 8:
+        return None
+    left_words = [u16(left, offset) for offset in range(0, 8, 2)]
+    right_words = [u16(right, offset) for offset in range(0, 8, 2)]
+    same_words = sorted(left_words) == sorted(right_words)
+    permutation = None
+    if same_words and len(set(left_words)) == 4:
+        permutation = [left_words.index(value) for value in right_words]
+    return {
+        "exact": left == right,
+        "same_words": same_words,
+        "permutation": permutation,
+    }
+
+
 def region_profile(params: bytes) -> dict:
     profile = {
         "payload_bytes": len(params),
@@ -352,6 +369,12 @@ def region_profile(params: bytes) -> dict:
                 else "descending"
             ),
         }
+        profile["tail_relation_to_bounding_rectangle"] = word_relation(
+            tail, params[14:22]
+        )
+        profile["tail_relation_to_scan_geometry"] = word_relation(
+            tail, params[24:32]
+        )
 
     profile["scan_structure"] = (
         "valid_exact" if profile["exact_payload_consumed"] else "valid_with_tail"
@@ -369,15 +392,24 @@ def classify_special_object_selections(raw: bytes) -> list[dict]:
     active: dict[str, dict | None] = {"pattern_brush": None, "region": None}
     completed: list[dict] = []
 
-    def allocate(kind: str, creation_profile: dict) -> None:
+    def allocate(
+        kind: str, creation_profile: dict, private_tail: bytes | None = None
+    ) -> None:
         for index, slot in enumerate(object_slots):
             if slot is None:
                 object_slots[index] = {
                     "kind": kind,
                     "creation_profile": creation_profile,
+                    "private_tail": private_tail,
                 }
                 return
-        object_slots.append({"kind": kind, "creation_profile": creation_profile})
+        object_slots.append(
+            {
+                "kind": kind,
+                "creation_profile": creation_profile,
+                "private_tail": private_tail,
+            }
+        )
 
     def close(kind: str) -> None:
         current = active.get(kind)
@@ -388,6 +420,7 @@ def classify_special_object_selections(raw: bytes) -> list[dict]:
             current["supported_draw_counts"].most_common()
         )
         current["fill_draw_counts"] = dict(current["fill_draw_counts"].most_common())
+        current.pop("private_tail", None)
         completed.append(current)
         active[kind] = None
 
@@ -417,6 +450,14 @@ def classify_special_object_selections(raw: bytes) -> list[dict]:
             if current is None:
                 continue
             key = f"0x{function:04x}"
+            if (
+                current["kind"] == "region"
+                and current["record_count"] == 0
+                and function == META_INTERSECTCLIPRECT
+            ):
+                current["first_cliprect_tail_relation"] = word_relation(
+                    current.get("private_tail") or b"", params
+                )
             current["record_count"] += 1
             current["function_counts"][key] += 1
             if len(current["first_functions"]) < 16:
@@ -433,7 +474,10 @@ def classify_special_object_selections(raw: bytes) -> list[dict]:
         elif function == META_DIBCREATEPATTERNBRUSH:
             allocate("pattern_brush", dib_pattern_brush_profile(params))
         elif function == META_CREATEREGION:
-            allocate("region", region_profile(params))
+            creation_profile = region_profile(params)
+            tail_len = int(creation_profile.get("tail_bytes") or 0)
+            private_tail = params[-tail_len:] if tail_len else None
+            allocate("region", creation_profile, private_tail)
         elif function == META_DELETEOBJECT and len(params) >= 2:
             delete_index = u16(params, 0)
             if delete_index < len(object_slots):
@@ -469,6 +513,8 @@ def classify_special_object_selections(raw: bytes) -> list[dict]:
                     "function_counts": Counter(),
                     "supported_draw_counts": Counter(),
                     "fill_draw_counts": Counter(),
+                    "private_tail": selected.get("private_tail"),
+                    "first_cliprect_tail_relation": None,
                 }
 
         if function == META_EOF:
