@@ -1,0 +1,71 @@
+# Rar2 live branch GC wave 5 — 2026-09-30
+# Conservative inclusion only.
+# 34 refs: live tip exactly matches a merged PR head.
+# 25 refs: live tip exactly matches a closed PR explicitly marked superseded/stale/historical.
+# Excluded: open PR heads, provenance/evidence-only/measurement/control branches,
+# no-PR branches, and any branch whose live tip changed after its PR head.
+# Runtime branch-GC rechecks open heads + exact SHA before deletion.
+# Format: <branch> <expected_sha>
+
+# merged exact-head refs
+ci/desktop-win-arm64-cache-01 bc7e712eb12f6fdd5332f391a3c309ea39e8c770
+ci/legacy22-depth-guard-scope-02-current-main 8e9dd2d3591cfe97b5fa44dc8500b3e3ee2f9edb
+ci/narrow-root-cargo-fanout-02 c9178b46fcd702bd7cd781401a4e33ccb910f14e
+cloud/cloud-abuse-public-01 55aeb9ab81225b7b39f3259fa957cbd0c7901214
+cloud/cloud-reader-guest-ingress-01 4566d399c0579c7fdf30a366fe6b59059dcef7d6
+cloud/cloud-reader-intake-v0-01 04706d6e184d7d9fa888333d0c2251d96b31c5c2
+fix/pub-viewer-duplicate-legacy-ole-fixture 4cecfe7185a0a430a6d01abe69357458e7128c77
+reader/legacy22-line-geometry-01 e78b93d5364aa4f24548dc0718f4671446615ce2
+reader/legacy22-lowtext-table-layout-main-afd5055b 0298dd979a376fcacd69c4986f3c9b0f98cd59c3
+reader/legacy22-ole-inert-frame-01-main-replay 099c439a347d7d798aecab7621e7d4c8659e34eb
+reader/legacy22-ole-wmf-preview-06-current-main 661d46e24cb792b4fd297ace9db9e815a4f7c029
+reader/legacy22-olepres-parser-01 5d27155fa1df567a0532661e16ba0f6e740e2655
+reader/legacy22-olepres-select-04-current-main 823fe19f20eaa1c5e7dedf10c2de9fadda283c2c
+reader/legacy-ole-wmf-mfcomment-01 82660aff046eab3f8cfaff08c20e100d7cf7ea76
+reader/olepres-data-bound-01 bee818741aa9fb69b21af6ea2c6bcda366ffed85
+reader/olepres-eof-compat-01 7858878a886be17494d4ddbfb4c2581154c35efe
+reader/scheme-color-fixture-01 789a23d9b1f0383091d444d3bfb89896e14463b4
+reader/story65-current-main-replay-01 0a8a913faf4be23b031c4b31ae90038a274facbb
+reader/win-open-with-physical-receipt-01 67eb1471c023d40744af0b4073d407fa4239b5b1
+replay/chaptera-win-sign-preflight-02-current-main bc44f2d399a59b2e4f7f326713c0c03f72f5d1c2
+replay/cloud-reader-corpus-promotion-01a-current-main df08ac1b35947d31a17acb7e59dedb14bfb6334a
+replay/legacy22-lowtext-table0001-visible-current-main 1750fa0d40f96d6dae29929251e773e94fc319c8
+replay/process-launch-harden-path-identity f285654b84005dab5d9864378f937af86d3d16bf
+replay/reader-win-shell-activation-post-admission 72e48cecba3a44955f32cd48e940ccc4efd447ba
+replay/viewer-desktop-source-font-resolve-03 a95bce45f6a3b6961b8ade8186ca97ea3069f8d0
+replay/viewer-picture-crop-fit-consume-02 811e353f2584c1b4b88472d037f7f3ec243593a4
+replay/viewer-script-font-map-04-current-main 23f39a22ac66dcb28db0fab25a844a2656e8040f
+research/legacy22-oledata-f-noruntime-main-replay 7c247054de76a0593ae3c1dad85a0faae42fd9d0
+research/legacy22-perlost-recovery-current-main e84b03c67568f080195acec8ebfdefa81a9fd39a
+research/legacy22-residual-1050-01 2dd5215040f3fb6cf883cb1157169f58ca3f2a77
+research/olepres-wmf-record-census-02-main ae591b6b5e5398de099136ede4fc402ba6285e81
+security/desktop-pub-headless-worker-01 b5d049cc365f1271f2a6e191989ab37831c624d4
+security/pub-viewer-open-bundle-01 102014ab5907d824a9f849722de2b84f35da5c3e
+viewer/legacy-ole-preview-04-current-main ac49159b4758584f976199cade41a38fe0b7c0bf
+
+# closed superseded/stale exact-head refs
+ci/legacy22-depth-guard-scope-01 859b6d8e29fdf24ab1d50548ef9fd78586af27d8
+fix/pub-viewer-duplicate-legacy-ole-20260929 edd6b33932e4f7e9d68feee0bd0d1c5a28b0e90f
+fix/pub-viewer-duplicate-legacy-ole-current-main 363ded7133907a48b958489fe59aeafdca4e3d65
+fix/pub-viewer-legacy-ole-test-literal 76c25f5e41a4b8b7430254c309d93f82b69f4037
+reader/legacy22-lowtext-table-layout-current-main-clean 13717432e79803826f1185497b421ac1def1f789
+reader/legacy22-ole-wmf-preview-03 836ea24f0f39815be1677f52dcbf03e2d7725a81
+reader/legacy22-ole-wmf-preview-04-current-main b5493ab507d8189cbecf5835e11649d52aab4f73
+reader/legacy22-ole-wmf-preview-05-current-main 9376683f4256d1cd0a58d96e1f60b165f8e37a1a
+reader/legacy22-ole-wmf-preview-current-main-clean ecc42d17e6f89fb62ec53a14c1e70f43fde89fac
+reader/legacy22-olepres-select-03-main aafbc6c926e724723a642d5ef0038cd0f9589666
+reader/legacy22-olepres-select-05-current-main adbf3ff311ebffbc495bd88928d7ad0732d47639
+reader/legacy22-olepres-wmf-profile-01 8b66298d0662164a3e7a833c6a73e00f94021234
+replay/chaptera-win-sign-preflight-01-current-main 5ebdc28da86ef3abc89cb5000d980b190ea37a8a
+replay/viewer-script-font-map-01 63a55c6dd6e49d2c5e9bf40ee1e5b429ff941773
+replay/viewer-script-font-map-02 231fff8df51bbe861e2f58605144425e0f3a6109
+replay/viewer-script-font-map-03-current-main 8ccde7ad7dc60cbda5433c1577a610fa094ee267
+research/legacy22-perlost-discriminator-current-main c83eab9ea818609b78155f546ee586f889683426
+research/legacy22-perlost-discriminator-final-main 86aed4c090adb1971ad772bfcbac372ab03e43e9
+research/legacy22-perlost-recovery-final-main a46b9ec5b61588d9ffd5a29953567c9f7c729f0f
+research/legacy22-perlost-recovery-main-v2 3843fa4798d8bb9aa269c9d79dcd62031cbfdea7
+viewer/desktop-source-font-resolve-02-current-main 7f95519fd1c06ff09c6690577a73930f5d85c09e
+viewer/legacy22-ole-preview-01 6fcce62e3ca88c2a99849fbd73de5b6a148522f2
+viewer/legacy-ole-preview-01 9cae5215bebe0a5025331ed4aa2f0c39a0ba911b
+viewer/legacy-ole-preview-02-post-story65 ba8f1fc73f33c7a089085842947be514fe8ec9ef
+viewer/legacy-ole-preview-02-raster-main 53f8744ed1017e233380002b47f1ff502bcec3e6
