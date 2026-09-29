@@ -1,3 +1,4 @@
+use crate::wmf::{WmfMetafileInfo, validate_wmf_metafile};
 use anyhow::{Context, Result, bail};
 use std::io::{Read, Seek};
 
@@ -32,6 +33,7 @@ pub struct LegacyOleCachedPresentation {
     pub advf: u32,
     pub width: u32,
     pub height: u32,
+    pub wmf: WmfMetafileInfo,
     pub data: Vec<u8>,
 }
 
@@ -131,6 +133,8 @@ fn parse_cached_presentation_blob(
         .with_context(|| format!("invalid OLE presentation stream name {}", blob.name))?;
     let parsed = parse_cf_metafilepict_ole_presentation(&blob.bytes)
         .with_context(|| format!("parse bounded OLE presentation {}", blob.path))?;
+    let wmf = validate_wmf_metafile(parsed.data)
+        .with_context(|| format!("validate bounded WMF payload {}", blob.path))?;
 
     Ok(LegacyOleCachedPresentation {
         stream_path: blob.path,
@@ -142,6 +146,7 @@ fn parse_cached_presentation_blob(
         advf: parsed.advf,
         width: parsed.width,
         height: parsed.height,
+        wmf,
         data: parsed.data.to_vec(),
     })
 }
@@ -174,6 +179,20 @@ pub fn read_legacy_ole_cached_presentations<R: Read + Seek>(
 mod tests {
     use super::*;
 
+    fn valid_wmf_payload() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&9u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300u16.to_le_bytes());
+        bytes.extend_from_slice(&12u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes
+    }
+
     fn fixture(format: u32, target_device_size: u32, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&STANDARD_CLIPBOARD_MARKER_ANSI.to_le_bytes());
@@ -196,7 +215,7 @@ mod tests {
 
     #[test]
     fn owned_cached_presentation_preserves_stream_identity_and_payload() {
-        let payload = [0x04u8; 18];
+        let payload = valid_wmf_payload();
         let blob = pub_cfb::CfbStreamBlob {
             path: "/Objects/Object 73/\u{2}OlePres001".into(),
             name: "\u{2}OlePres001".into(),
@@ -208,7 +227,8 @@ mod tests {
         assert_eq!(parsed.stream_name, "\u{2}OlePres001");
         assert_eq!(parsed.stream_ordinal, 1);
         assert_eq!(parsed.clipboard_format, CF_METAFILEPICT);
-        assert_eq!(parsed.data.as_slice(), payload);
+        assert_eq!(parsed.wmf.record_count, 1);
+        assert_eq!(parsed.data.as_slice(), payload.as_slice());
     }
 
     #[test]
