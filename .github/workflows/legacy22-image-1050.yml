@@ -225,6 +225,29 @@ jobs:
               for profile in declared_profiles
               if profile.get("payload_sha256")
           ]
+          prefix_profiles = [
+              profile.get("wmf_prefix") or {}
+              for profile in declared_profiles
+          ]
+          strict_invalid_prefix_valid = [
+              prefix
+              for profile, prefix in zip(declared_profiles, prefix_profiles)
+              if profile.get("wmf_valid") is not True and prefix.get("prefix_valid") is True
+          ]
+          prefix_suffix_lengths = Counter(
+              str(prefix.get("suffix_len", "missing"))
+              for prefix in strict_invalid_prefix_valid
+          )
+          prefix_payload_hashes = [
+              prefix.get("prefix_sha256")
+              for prefix in strict_invalid_prefix_valid
+              if prefix.get("prefix_sha256")
+          ]
+          prefix_validation_errors = Counter(
+              prefix.get("validation_error_class")
+              or ("none" if prefix.get("prefix_valid") is True else "unclassified")
+              for prefix in prefix_profiles
+          )
           no_child_previous_types = Counter(
               item.get("previous_object_raw_type") or "none" for item in no_child
           )
@@ -284,6 +307,18 @@ jobs:
               ),
               "direct_declared_payload_reference_count": len(declared_payload_hashes),
               "direct_declared_unique_payload_sha256_count": len(set(declared_payload_hashes)),
+              "direct_wmf_prefix_valid_count": sum(
+                  prefix.get("prefix_valid") is True for prefix in prefix_profiles
+              ),
+              "direct_strict_invalid_but_prefix_valid_count": len(strict_invalid_prefix_valid),
+              "direct_strict_invalid_prefix_suffix_length_counts": dict(
+                  prefix_suffix_lengths.most_common()
+              ),
+              "direct_strict_invalid_prefix_payload_reference_count": len(prefix_payload_hashes),
+              "direct_strict_invalid_prefix_unique_sha256_count": len(set(prefix_payload_hashes)),
+              "direct_wmf_prefix_validation_error_counts": dict(
+                  prefix_validation_errors.most_common()
+              ),
               "no_direct_image_data_owner_count": len(no_child),
               "no_direct_image_data_file_count": len(no_child_files),
               "no_direct_image_data_files_also_with_direct_image_data_count": len(
