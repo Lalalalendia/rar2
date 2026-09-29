@@ -5418,7 +5418,7 @@ mod tests {
         let source_hash = visual.document.source.source_hash;
 
         let mut edited =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("editor open");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("editor open");
         let story_id = edited
             .graph()
             .stories
@@ -5433,7 +5433,7 @@ mod tests {
         let json = serde_json::to_vec(&edited.project()).expect("serialize EditorProject");
 
         let mut reopened =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("fresh editor reopen");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("fresh editor reopen");
         let operation_count =
             apply_editor_project_json(&mut reopened, &json).expect("replay sidecar JSON");
 
@@ -5987,7 +5987,7 @@ mod tests {
         )
         .expect("SampleNewsletter should open through the desktop Viewer path");
         let source_hash = visual.document.source.source_hash;
-        let editor = pub_editor::open_mature_0x2c_editor(bytes, source_hash)
+        let editor = pub_editor::open_mature_0x2c_editor(&bytes, source_hash)
             .expect("same real PUB should open through bounded editor facade");
 
         let frame = visual
@@ -6124,7 +6124,7 @@ mod tests {
         )
         .expect("SampleNewsletter Viewer open");
         let source_hash = visual.document.source.source_hash;
-        let editor = pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("editor open");
+        let editor = pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("editor open");
 
         let (node_id, before) = visual
             .scene
@@ -6265,7 +6265,7 @@ mod tests {
         .expect("SampleNewsletter Viewer open");
         let source_hash = visual.document.source.source_hash;
         let mut edited =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("editor open");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("editor open");
 
         let (node_id, before) = visual
             .scene
@@ -6296,7 +6296,7 @@ mod tests {
         let json = serde_json::to_vec(&edited.project()).expect("serialize geometry project");
 
         let mut reopened =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("fresh editor reopen");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("fresh editor reopen");
         assert_eq!(
             apply_editor_project_json(&mut reopened, &json).expect("replay geometry project"),
             1
@@ -7096,7 +7096,7 @@ mod tests {
         .expect("SampleNewsletter Viewer open");
         let source_hash = visual.document.source.source_hash;
         let mut editor =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("editor open");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("editor open");
 
         let (node_id, replacement_mime, replacement_bytes) = visual
             .document
@@ -7184,7 +7184,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
 
         let mut reopened =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("fresh editor reopen");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("fresh editor reopen");
         reopened
             .apply_project_with_assets(&project, &asset_bytes)
             .expect("fresh replay with replacement bytes");
@@ -7206,7 +7206,7 @@ mod tests {
         )
         .expect("SampleNewsletter Viewer open");
         let source_hash = visual.document.source.source_hash;
-        let editor = pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("editor open");
+        let editor = pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("editor open");
 
         let (page_index, instance_id, mime, replacement_bytes) = visual
             .document
@@ -7411,7 +7411,7 @@ mod tests {
         )
         .expect("SampleNewsletter Viewer open");
         let source_hash = visual.document.source.source_hash;
-        let editor = pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("editor open");
+        let editor = pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("editor open");
 
         let (page_index, instance_id, target, source_asset_sha256, before_bounds, before_crop) =
             visual
@@ -7701,7 +7701,7 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
 
         let mut missing_asset_replay =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("fresh candidate");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("fresh candidate");
         let empty_state = missing_asset_replay.project();
         assert!(
             missing_asset_replay
@@ -7715,7 +7715,7 @@ mod tests {
         );
 
         let mut reopened =
-            pub_editor::open_mature_0x2c_editor(bytes, source_hash).expect("fresh editor");
+            pub_editor::open_mature_0x2c_editor(&bytes, source_hash).expect("fresh editor");
         reopened
             .apply_project_with_assets(&project, &asset_bytes)
             .expect("fresh replay with replacement bytes");
