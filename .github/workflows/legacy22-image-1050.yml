@@ -248,6 +248,21 @@ jobs:
               or ("none" if prefix.get("prefix_valid") is True else "unclassified")
               for prefix in prefix_profiles
           )
+          strict_valid_positive_geometry = sum(
+              profile.get("wmf_valid") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, profile in zip(direct_child, declared_profiles)
+          )
+          prefix_valid_positive_geometry = sum(
+              prefix.get("prefix_valid") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, prefix in zip(direct_child, prefix_profiles)
+          )
+          prefix_valid_nonpositive_geometry = sum(
+              prefix.get("prefix_valid") is True
+              and (item.get("geometry") or {}).get("positive_rect") is not True
+              for item, prefix in zip(direct_child, prefix_profiles)
+          )
           no_child_previous_types = Counter(
               item.get("previous_object_raw_type") or "none" for item in no_child
           )
@@ -319,6 +334,9 @@ jobs:
               "direct_wmf_prefix_validation_error_counts": dict(
                   prefix_validation_errors.most_common()
               ),
+              "direct_strict_wmf_positive_geometry_count": strict_valid_positive_geometry,
+              "direct_wmf_prefix_positive_geometry_count": prefix_valid_positive_geometry,
+              "direct_wmf_prefix_nonpositive_geometry_count": prefix_valid_nonpositive_geometry,
               "no_direct_image_data_owner_count": len(no_child),
               "no_direct_image_data_file_count": len(no_child_files),
               "no_direct_image_data_files_also_with_direct_image_data_count": len(
