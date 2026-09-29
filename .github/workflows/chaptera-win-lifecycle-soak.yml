@@ -1,16 +1,8 @@
 name: Chaptera Windows lifecycle soak
 
 on:
-  pull_request:
-    paths:
-      - "tools/chaptera-win-lifecycle-soak.ps1"
-      - "crates/chaptera-update-orchestrator/**"
-      - "crates/chaptera-update-engine/**"
-      - "crates/chaptera-update-trust/**"
-      - "installer/windows/chaptera-reader.iss"
-      - "apps/chaptera-desktop/**"
-      - ".github/workflows/chaptera-win-lifecycle-soak.yml"
-      - ".github/workstream-scopes/chaptera-win-lifecycle-soak-01.md"
+  schedule:
+    - cron: "43 4 * * *"
   workflow_dispatch:
     inputs:
       cycles:
