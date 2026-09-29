@@ -9,8 +9,8 @@ use pub_contents::{Legacy0x22Directory, Legacy0x22DirectoryEntry, parse_legacy_0
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
     Affine2D, AuthorityClass, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
-    Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceRole,
-    SourceGraph, Story, StoryId,
+    Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceGraph,
+    SourceRole, Story, StoryId,
 };
 use pub_quill::parse_confirmed_story_catalog;
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,10 +38,7 @@ pub fn legacy22_object_key(object_id: u16) -> String {
     format!("contents/0x22/object/{object_id}")
 }
 
-fn derive_legacy_document_id(
-    source_hash: &Sha256Digest,
-    object_id: u16,
-) -> Result<DocumentId> {
+fn derive_legacy_document_id(source_hash: &Sha256Digest, object_id: u16) -> Result<DocumentId> {
     Ok(DocumentId::from_canonical(derive_pub_id(
         source_hash,
         &legacy22_object_key(object_id),
@@ -98,8 +95,7 @@ pub fn build_legacy_0x22_quill_from_streams(
     let directory = parse_legacy_0x22_directory(contents_stream.clone(), contents)
         .context("parse legacy 0x22 Contents directory")?;
 
-    let document_entry =
-        unique_entry_by_type(&directory, LEGACY_DOCUMENT_TYPE, "DOCUMENT 0x0015")?;
+    let document_entry = unique_entry_by_type(&directory, LEGACY_DOCUMENT_TYPE, "DOCUMENT 0x0015")?;
     let document_object_id = document_entry.object_id;
     let document_chunk = chunk_bytes(contents, document_entry)?;
     let page_width_emu = read_u32(document_chunk, LEGACY_DOCUMENT_WIDTH_OFFSET)
@@ -130,7 +126,9 @@ pub fn build_legacy_0x22_quill_from_streams(
         }
         let entry = directory
             .entry_by_object_id(*page_object_id)
-            .with_context(|| format!("legacy DOCUMENT PageList references missing object {page_object_id}"))?;
+            .with_context(|| {
+                format!("legacy DOCUMENT PageList references missing object {page_object_id}")
+            })?;
         if entry.chunk_type != LEGACY_PAGE_TYPE {
             bail!(
                 "legacy DOCUMENT PageList object {} has type {:#06x}, expected PAGE 0x0014",
@@ -369,10 +367,7 @@ fn unique_entry_by_type<'a>(
     Ok(first)
 }
 
-fn chunk_bytes<'a>(
-    contents: &'a [u8],
-    entry: &Legacy0x22DirectoryEntry,
-) -> Result<&'a [u8]> {
+fn chunk_bytes<'a>(contents: &'a [u8], entry: &Legacy0x22DirectoryEntry) -> Result<&'a [u8]> {
     let start = usize::try_from(entry.chunk_source.offset)
         .context("legacy chunk offset does not fit usize")?;
     let len = usize::try_from(entry.chunk_source.len)
@@ -417,9 +412,7 @@ fn parse_u16_id_list(
         bail!("{label}: max_count {max_count} is less than count {count}");
     }
     if record_size != LEGACY_LIST_U16_RECORD_SIZE {
-        bail!(
-            "{label}: record size {record_size}, expected {LEGACY_LIST_U16_RECORD_SIZE}"
-        );
+        bail!("{label}: record size {record_size}, expected {LEGACY_LIST_U16_RECORD_SIZE}");
     }
 
     let payload_start = header_end;
@@ -495,10 +488,7 @@ mod tests {
         let page_id = PageId::from_canonical(pub_model::CanonicalId::from_bytes([1; 16]));
         let page = Page {
             id: page_id,
-            size: Size2D::new(
-                LengthEmu::new(7_772_400),
-                LengthEmu::new(10_058_400),
-            ),
+            size: Size2D::new(LengthEmu::new(7_772_400), LengthEmu::new(10_058_400)),
             bleed: None,
             margins: None,
             children: Vec::new(),
