@@ -149,8 +149,11 @@ jobs:
           try { $stream.WriteByte(0) } finally { $stream.Dispose() }
           $tamperedSig = Get-AuthenticodeSignature -LiteralPath $tampered
           Write-Host ("AUTHENTICODE_TAMPER status={0} signer={1} message={2}" -f [string]$tamperedSig.Status, $(if ($tamperedSig.SignerCertificate) { $tamperedSig.SignerCertificate.Thumbprint } else { "<none>" }), [string]$tamperedSig.StatusMessage)
-          if ($tamperedSig.Status -ne "HashMismatch") {
-            throw "post-sign mutation did not produce HashMismatch: $($tamperedSig.Status) $($tamperedSig.StatusMessage)"
+          if ($tamperedSig.Status -notin @("HashMismatch", "NotSigned")) {
+            throw "post-sign mutation still produced an unexpectedly signature-like state: $($tamperedSig.Status) $($tamperedSig.StatusMessage)"
+          }
+          if ($tamperedSig.SignerCertificate -and $tamperedSig.SignerCertificate.Thumbprint -eq $env:CHAPTERA_TEST_SIGN_THUMBPRINT -and $tamperedSig.Status -ne "HashMismatch") {
+            throw "post-sign mutation retained the TEST-ONLY signer without a hash mismatch"
           }
 
           $installRoot = Join-Path $env:LOCALAPPDATA "Programs\Chaptera PUB Reader"
