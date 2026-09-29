@@ -95,15 +95,16 @@ fn run() -> Result<()> {
         bail!("contained desktop-open worker exited unsuccessfully");
     }
 
-    let response_frames =
-        decode_frames(&output.stdout, response_limits()).context("decode worker response frames")?;
+    let response_frames = decode_frames(&output.stdout, response_limits())
+        .context("decode worker response frames")?;
     let response_control = response_frames
         .iter()
         .find(|frame| frame.kind == FrameKindV1::ControlJson && frame.key == "response")
         .ok_or_else(|| anyhow!("worker response omitted control frame"))?;
-    let response: DesktopOpenResponseV1 = decode_control_json(&response_control.payload)
-        .context("decode worker response control")?;
-    validate_response_source(&response, &expected_source).context("worker response source identity")?;
+    let response: DesktopOpenResponseV1 =
+        decode_control_json(&response_control.payload).context("decode worker response control")?;
+    validate_response_source(&response, &expected_source)
+        .context("worker response source identity")?;
 
     if let DesktopOpenOutcomeV1::Success { payloads } = &response.outcome {
         let payload_frames = response_frames
