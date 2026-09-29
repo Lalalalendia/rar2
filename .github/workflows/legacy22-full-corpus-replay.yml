@@ -8,6 +8,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/family_classifier.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_graph.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/legacy22_raw0003_profile.rs"
       - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
   workflow_dispatch:
 
@@ -47,6 +48,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+          components: rustfmt, clippy
 
       - name: Install pinned CFB parser
         run: python -m pip install --disable-pip-version-check olefile==0.47
@@ -60,6 +62,29 @@ jobs:
             --release \
             --bin corpus-reader-receipt
 
+      - name: Validate raw0003 structural profiler
+        run: |
+          set -euo pipefail
+          rustfmt \
+            --check \
+            --edition 2021 \
+            vendor/producer-a/crates/pub-reader/src/bin/legacy22_raw0003_profile.rs
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin legacy22_raw0003_profile
+          cargo clippy \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin legacy22_raw0003_profile \
+            -- \
+            -D warnings
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin legacy22_raw0003_profile
+
       - name: Replay full pinned corpus
         run: |
           set -euo pipefail
@@ -71,6 +96,356 @@ jobs:
             --rar-ref "rar2:${GITHUB_SHA}" \
             --out out/legacy625 \
             --workers 4
+
+      - name: Classify current raw 0x0003 population
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from collections import Counter
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
+          paths = sorted(corpus.glob("*.pub"))
+          assert len(paths) == 625, len(paths)
+
+          exe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "legacy22_raw0003_profile"
+
+          def run(path, out_dir):
+              target = out_dir / f"{path.stem}.json"
+              cp = subprocess.run(
+                  [str(exe), str(path), str(target)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=45,
+                  check=False,
+              )
+              if cp.returncode != 0:
+                  raise RuntimeError(
+                      f"{path.name}: profiler rc={cp.returncode}: {cp.stderr[-2000:]}"
+                  )
+              return json.loads(target.read_text())
+
+          rows = []
+          with tempfile.TemporaryDirectory(prefix="legacy22-raw0003-") as td:
+              out_dir = Path(td)
+              with ThreadPoolExecutor(max_workers=8) as pool:
+                  futures = {pool.submit(run, path, out_dir): path for path in paths}
+                  for future in as_completed(futures):
+                      rows.append(future.result())
+
+          rows.sort(key=lambda row: row["source_sha256"])
+          eligible = [row for row in rows if row.get("eligible_reader_open") is True]
+          affected = [
+              row for row in eligible
+              if int(row.get("raw0003_instance_count") or 0) > 0
+          ]
+
+          instances = []
+          for row in affected:
+              for item in row.get("instances") or []:
+                  instances.append({"source_sha256": row["source_sha256"], **item})
+
+          object_like = [
+              item for item in instances
+              if (item.get("child_raw_type_counts") or {}) == {"0x0022": 1}
+              and (item.get("geometry") or {}).get("positive_rect") is True
+          ]
+          service_prototypes = [
+              item for item in instances
+              if item.get("parent_raw_type") == "0x0014"
+              and (item.get("child_raw_type_counts") or {}) == {}
+              and int(item.get("service_word") or 0) == 5696
+              and (item.get("geometry") or {}).get("positive_rect") is False
+              and (item.get("sibling_raw_type_counts") or {}) == {
+                  "0x0000": 1,
+                  "0x0001": 1,
+                  "0x0002": 1,
+                  "0x0004": 1,
+                  "0x0005": 1,
+                  "0x0006": 1,
+                  "0x0007": 1,
+              }
+              and item.get("previous_directory_raw_type") == "0x0002"
+              and item.get("next_directory_raw_type") == "0x0004"
+          ]
+          candidates = [
+              item for item in object_like
+              if item.get("matching_parent_page_membership") is True
+          ]
+          parent_mismatches = [
+              item for item in object_like
+              if int(item.get("page_child_membership_count") or 0) > 0
+              and item.get("matching_parent_page_membership") is not True
+          ]
+          unlisted_or_nested = [
+              item for item in instances
+              if item not in service_prototypes
+              and item not in candidates
+              and item not in parent_mismatches
+          ]
+          candidate_files = {item["source_sha256"] for item in candidates}
+          mismatch_files = {item["source_sha256"] for item in parent_mismatches}
+          service_files = {item["source_sha256"] for item in service_prototypes}
+          unlisted_files = {item["source_sha256"] for item in unlisted_or_nested}
+
+          parent_types = Counter(
+              str(item.get("parent_raw_type") or "none") for item in candidates
+          )
+          chunk_lengths = Counter(str(item["chunk_len"]) for item in candidates)
+          service_words = Counter(str(item["service_word"]) for item in candidates)
+          adjacency = Counter(
+              f"{item.get('previous_directory_raw_type') or 'none'}->"
+              f"{item.get('next_directory_raw_type') or 'none'}"
+              for item in candidates
+          )
+          page_adjacency = Counter(
+              f"{item.get('matching_page_previous_raw_type') or 'none'}->"
+              f"{item.get('matching_page_next_raw_type') or 'none'}"
+              for item in candidates
+          )
+          page_positions = Counter(
+              str(item.get("matching_page_child_position"))
+              for item in candidates
+          )
+          sibling_signatures = Counter(
+              json.dumps(
+                  item.get("sibling_raw_type_counts") or {},
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              for item in candidates
+          )
+          child_signatures = Counter(
+              json.dumps(
+                  item.get("child_raw_type_counts") or {},
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              for item in candidates
+          )
+
+          child_profiles = [
+              item.get("child_0x0022")
+              for item in candidates
+              if item.get("child_0x0022")
+          ]
+          assert len(child_profiles) == len(candidates), (
+              len(child_profiles),
+              len(candidates),
+          )
+          child_chunk_lengths = Counter(
+              str(item["chunk_len"]) for item in child_profiles
+          )
+          child_service_words = Counter(
+              str(item["service_word"]) for item in child_profiles
+          )
+          child_exact = Counter(
+              str(item["chunk_sha256"]) for item in child_profiles
+          )
+          child_prefixes = Counter(
+              str(item["prefix32_sha256"]) for item in child_profiles
+          )
+          child_suffixes = Counter(
+              str(item["suffix32_sha256"]) for item in child_profiles
+          )
+          parent_child_pairs = Counter(
+              (
+                  str((item.get("geometry") or {}).get("normalized_chunk_sha256")),
+                  str((item.get("child_0x0022") or {}).get("chunk_sha256")),
+              )
+              for item in candidates
+          )
+
+          geometry_present = sum(
+              bool((item.get("geometry") or {}).get("carrier_present"))
+              for item in candidates
+          )
+          geometry_positive = sum(
+              (item.get("geometry") or {}).get("positive_rect") is True
+              for item in candidates
+          )
+          normalized = Counter(
+              str((item.get("geometry") or {}).get("normalized_chunk_sha256"))
+              for item in candidates
+              if (item.get("geometry") or {}).get("normalized_chunk_sha256")
+          )
+          exact = Counter(str(item["chunk_sha256"]) for item in candidates)
+          prefixes = Counter(str(item["prefix32_sha256"]) for item in candidates)
+          suffixes = Counter(str(item["suffix32_sha256"]) for item in candidates)
+
+          child_profiles = [
+              item.get("child_0x0022")
+              for item in candidates
+              if isinstance(item.get("child_0x0022"), dict)
+          ]
+          child_chunk_lengths = Counter(
+              str(item["chunk_len"]) for item in child_profiles
+          )
+          child_service_words = Counter(
+              str(item["service_word"]) for item in child_profiles
+          )
+          child_exact = Counter(
+              str(item["chunk_sha256"]) for item in child_profiles
+          )
+          child_prefixes = Counter(
+              str(item["prefix32_sha256"]) for item in child_profiles
+          )
+          child_suffixes = Counter(
+              str(item["suffix32_sha256"]) for item in child_profiles
+          )
+
+          representatives = {}
+          for item in candidates:
+              key = (item.get("geometry") or {}).get("normalized_chunk_sha256")
+              if not key:
+                  continue
+              representatives.setdefault(key, [])
+              if len(representatives[key]) < 5:
+                  representatives[key].append(
+                      {
+                          "source_sha256": item["source_sha256"],
+                          "object_id": item["object_id"],
+                          "parent_id": item["parent_id"],
+                          "chunk_len": item["chunk_len"],
+                          "parent_raw_type": item.get("parent_raw_type"),
+                      }
+                  )
+
+          summary = {
+              "schema": "chaptera.legacy22-raw0003-census.v1",
+              "corpus_file_count": len(paths),
+              "eligible_noquill_reader_file_count": len(eligible),
+              "affected_file_count": len(affected),
+              "all_directory_instance_count": len(instances),
+              "service_prototype_count": len(service_prototypes),
+              "service_prototype_file_count": len(service_files),
+              "object_like_count": len(object_like),
+              "reader_candidate_count": len(candidates),
+              "reader_candidate_file_count": len(candidate_files),
+              "page_child_parent_mismatch_count": len(parent_mismatches),
+              "page_child_parent_mismatch_file_count": len(mismatch_files),
+              "unlisted_or_nested_instance_count": len(unlisted_or_nested),
+              "unlisted_or_nested_file_count": len(unlisted_files),
+              "parent_raw_type_counts": dict(sorted(parent_types.items())),
+              "chunk_length_counts": dict(
+                  sorted(chunk_lengths.items(), key=lambda item: int(item[0]))
+              ),
+              "service_word_counts": dict(
+                  sorted(service_words.items(), key=lambda item: int(item[0]))
+              ),
+              "geometry_carrier_present_count": geometry_present,
+              "geometry_positive_rect_count": geometry_positive,
+              "normalized_chunk_cluster_count": len(normalized),
+              "normalized_chunk_singleton_count": sum(
+                  count == 1 for count in normalized.values()
+              ),
+              "largest_normalized_chunk_cluster_size": max(
+                  normalized.values(), default=0
+              ),
+              "exact_chunk_cluster_count": len(exact),
+              "prefix32_cluster_count": len(prefixes),
+              "suffix32_cluster_count": len(suffixes),
+              "directory_adjacency_counts": dict(adjacency.most_common()),
+              "page_child_adjacency_counts": dict(page_adjacency.most_common()),
+              "page_child_position_counts": dict(
+                  sorted(page_positions.items(), key=lambda item: int(item[0]))
+              ),
+              "sibling_signature_counts": dict(sibling_signatures.most_common()),
+              "child_signature_counts": dict(child_signatures.most_common()),
+              "child_0x0022_count": len(child_profiles),
+              "child_0x0022_chunk_length_counts": dict(
+                  sorted(
+                      child_chunk_lengths.items(),
+                      key=lambda item: int(item[0]),
+                  )
+              ),
+              "child_0x0022_service_word_counts": dict(
+                  sorted(
+                      child_service_words.items(),
+                      key=lambda item: int(item[0]),
+                  )
+              ),
+              "child_0x0022_exact_cluster_count": len(child_exact),
+              "child_0x0022_exact_singleton_count": sum(
+                  count == 1 for count in child_exact.values()
+              ),
+              "child_0x0022_largest_exact_cluster_size": max(
+                  child_exact.values(), default=0
+              ),
+              "child_0x0022_prefix32_cluster_count": len(child_prefixes),
+              "child_0x0022_suffix32_cluster_count": len(child_suffixes),
+              "parent_child_exact_pair_cluster_count": len(parent_child_pairs),
+              "parent_child_exact_pair_singleton_count": sum(
+                  count == 1 for count in parent_child_pairs.values()
+              ),
+              "largest_parent_child_exact_pair_cluster_size": max(
+                  parent_child_pairs.values(), default=0
+              ),
+              "top_child_0x0022_exact_clusters": [
+                  {
+                      "chunk_sha256": key,
+                      "count": count,
+                  }
+                  for key, count in child_exact.most_common(30)
+              ],
+              "top_parent_child_exact_pair_clusters": [
+                  {
+                      "parent_normalized_chunk_sha256": parent_hash,
+                      "child_chunk_sha256": child_hash,
+                      "count": count,
+                  }
+                  for (parent_hash, child_hash), count
+                  in parent_child_pairs.most_common(30)
+              ],
+              "top_normalized_clusters": [
+                  {
+                      "normalized_chunk_sha256": key,
+                      "count": count,
+                      "representatives": representatives.get(key, []),
+                  }
+                  for key, count in normalized.most_common(30)
+              ],
+              "evidence_boundary": (
+                  "structural classification only; raw 0x0003 splits into a "
+                  "223-file service/prototype class and an object-like class with "
+                  "one 0x0022 child plus positive geometry; only matching-parent "
+                  "PAGE members enter candidate metrics; child 0x0022 payload "
+                  "clusters are profiled independently before any semantic admission"
+              ),
+          }
+
+          Path("out/legacy625/raw0003-instances.json").write_text(
+              json.dumps(instances, indent=2, sort_keys=True) + "\n"
+          )
+          Path("out/legacy625/raw0003-census.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+
+          # Fail closed only after preserving the research artifact so counterexamples
+          # remain available for inspection on red runs.
+          assert len(service_prototypes) == 223, len(service_prototypes)
+          assert len(service_files) == 223, len(service_files)
+          assert len(object_like) == 552, len(object_like)
+          assert len(candidates) == 305, len(candidates)
+          assert len(candidate_files) == 102, len(candidate_files)
+          assert len(parent_mismatches) == 9, len(parent_mismatches)
+          assert len(mismatch_files) == 5, len(mismatch_files)
+          assert len(child_profiles) == 305, len(child_profiles)
+          assert (
+              len(service_prototypes)
+              + len(candidates)
+              + len(parent_mismatches)
+              + len(unlisted_or_nested)
+              == len(instances)
+          )
+          PY
 
       - name: Guard legacy22 product depth
         run: |
