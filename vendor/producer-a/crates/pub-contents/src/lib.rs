@@ -587,3 +587,5 @@ mod tests {
         assert_eq!(cursor.position(), 0);
     }
 }
+
+// CI selective-fanout measurement probe; no runtime behavior change.
