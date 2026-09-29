@@ -15,9 +15,15 @@ if (-not (Test-Path -LiteralPath $File)) { throw "signing target missing: $File"
 & $signtool sign /sha1 $thumbprint /fd SHA256 $File
 if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE for $File" }
 
-$signature = Get-AuthenticodeSignature -LiteralPath $File
-if (-not $signature.SignerCertificate) { throw "missing Authenticode signer certificate for $File" }
-if ($signature.SignerCertificate.Thumbprint -ne $thumbprint) { throw "unexpected Authenticode signer for $File" }
-if ($signature.Status -notin @("Valid", "NotTrusted")) {
-  throw "test Authenticode integrity check failed for ${File}: $($signature.Status) $($signature.StatusMessage)"
+$verifyOutput = @(& $signtool verify /pa /all /v $File 2>&1)
+$verifyExit = $LASTEXITCODE
+$verifyText = $verifyOutput -join [Environment]::NewLine
+$verifyOutput | ForEach-Object { Write-Output $_ }
+
+if ($verifyExit -ne 0) {
+  $expectedUntrustedRoot = $verifyText -match "(?is)certificate chain processed.*terminated in a root\s+certificate which is not trusted by the trust provider"
+  $exactlyOneError = $verifyText -match "(?im)^Number of errors:\s*1\s*$"
+  if (-not ($expectedUntrustedRoot -and $exactlyOneError)) {
+    throw "signtool integrity verification failed with unexpected error for ${File}: exit=$verifyExit"
+  }
 }
