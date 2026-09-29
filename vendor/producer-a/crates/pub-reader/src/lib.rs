@@ -91,8 +91,8 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillTypographyValueSource, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    QuillMcldReadError, QuillStoryReadError, QuillTypographyValueSource, parse_bounded_mcld,
+    parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -891,6 +891,54 @@ impl PubMatureSourceGraphFailureStage {
             Self::GraphMaterialization => "graph_materialization",
         }
     }
+}
+
+/// Returns only the stable Quill story-catalog error class for a mature PUB.
+///
+/// Variant payloads (offsets, lengths, counts and chunk names) are deliberately
+/// discarded so the census can group parser failures without retaining source
+/// data or raw error text.
+pub fn probe_mature_0x2c_quill_story_error_kind(bytes: &[u8]) -> Option<&'static str> {
+    let quill = pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM_PATH).ok()?;
+    let error =
+        parse_confirmed_story_catalog(StreamPath(QUILL_STREAM_PATH.into()), &quill).err()?;
+    Some(match error {
+        QuillStoryReadError::TooShort { .. } => "too_short",
+        QuillStoryReadError::DescriptorListPointerOutOfBounds { .. } => {
+            "descriptor_list_pointer_out_of_bounds"
+        }
+        QuillStoryReadError::DescriptorListCycle { .. } => "descriptor_list_cycle",
+        QuillStoryReadError::UnexpectedDescriptorPresenceMarker { .. } => {
+            "unexpected_descriptor_presence_marker"
+        }
+        QuillStoryReadError::ChunkOutOfBounds { .. } => "chunk_out_of_bounds",
+        QuillStoryReadError::MissingRequiredChunk { .. } => "missing_required_chunk",
+        QuillStoryReadError::DuplicateRequiredChunk { .. } => "duplicate_required_chunk",
+        QuillStoryReadError::StrsServiceSpanOutOfBounds { .. } => {
+            "strs_service_span_out_of_bounds"
+        }
+        QuillStoryReadError::StoryCountMismatch { .. } => "story_count_mismatch",
+        QuillStoryReadError::TextLengthOverflow => "text_length_overflow",
+        QuillStoryReadError::TextLengthMismatch { .. } => "text_length_mismatch",
+        QuillStoryReadError::TcdStoryOrdinalOutOfBounds { .. } => {
+            "tcd_story_ordinal_out_of_bounds"
+        }
+        QuillStoryReadError::TcdCellCountOverflow { .. } => "tcd_cell_count_overflow",
+        QuillStoryReadError::ToknStoryOrdinalOutOfBounds { .. } => {
+            "tokn_story_ordinal_out_of_bounds"
+        }
+        QuillStoryReadError::ToknUnexpectedPlcType { .. } => "tokn_unexpected_plc_type",
+        QuillStoryReadError::ToknCountOverflow { .. } => "tokn_count_overflow",
+        QuillStoryReadError::ToknNonMonotonicBoundary { .. } => {
+            "tokn_non_monotonic_boundary"
+        }
+        QuillStoryReadError::ToknInvalidBlockLength { .. } => "tokn_invalid_block_length",
+        QuillStoryReadError::ToknTokenSpanOverflow { .. } => "tokn_token_span_overflow",
+        QuillStoryReadError::ToknTokenLengthExceedsBoundary { .. } => {
+            "tokn_token_length_exceeds_boundary"
+        }
+        QuillStoryReadError::ToknTargetSectionOverflow => "tokn_target_section_overflow",
+    })
 }
 
 /// Source-safe localization for a mature-0x2C source-graph build failure.
