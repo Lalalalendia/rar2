@@ -1,0 +1,94 @@
+{
+  "schema": "chaptera.reader-scheme-color-fixture.v1",
+  "id": "color1-0f85b2b6",
+  "source_file": "color1.pub",
+  "encoding": "gzip+base64",
+  "encoded_path": "vendor/producer-a/crates/pub-reader/tests/fixtures/color1-0f85b2b6.pub.gz.b64",
+  "source_sha256": "0f85b2b6d96ac6c7d1fa86b2627a85635769b31df726f5d285e5f72d0f634099",
+  "source_byte_len": 84480,
+  "gzip_sha256": "0e7f9626e071cf7cc0e838b23367907352143f1199d4c123ed13484fd4da733a",
+  "gzip_byte_len": 6435,
+  "expected_scheme": {
+    "name": "Office",
+    "declared_count": 8,
+    "ordinals": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "raw_slot_rgb": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        91,
+        155,
+        213
+      ],
+      [
+        237,
+        125,
+        49
+      ],
+      [
+        158,
+        158,
+        158
+      ],
+      [
+        255,
+        192,
+        0
+      ],
+      [
+        8,
+        82,
+        150
+      ],
+      [
+        153,
+        51,
+        102
+      ],
+      [
+        255,
+        255,
+        255
+      ]
+    ],
+    "effective_slot_0_rgb": [
+      0,
+      0,
+      0
+    ]
+  },
+  "safety": {
+    "treat_as_untrusted_input": true,
+    "active_content_must_remain_inert": true,
+    "observed_legacy_strings": [
+      "FORMDATA.HTM",
+      "http://example.com/~user/ispscript.cgi",
+      "proverka@example.com"
+    ]
+  },
+  "provenance": {
+    "received_from_user": "2026-09-29",
+    "previous_manual_receipt_sha256": "760085b2cf274ebc06ac353fcabc812935b8425fb65fe7a27f444f07958767ca",
+    "note": "This upload is a distinct byte-level revision and must not silently replace the previous manual receipt.",
+    "story65_main_merge_sha": "1c3d974180dbe3a3503b5a4ee8cf96532030d46e",
+    "story65_owner_pr": "Lalalalendia/rar2#283"
+  },
+  "current_reader_expectation": {
+    "opened": true,
+    "minimum_paint_node_count": 8,
+    "minimum_solid_fill_count": 8,
+    "acceptance_owner": "Lalalalendia/rar2#186"
+  }
+}
