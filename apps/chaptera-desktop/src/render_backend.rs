@@ -608,3 +608,8 @@ mod tests {
     }
 }
 // CI measurement probe: inherited Desktop clippy debt must not block changed-line admission.
+
+#[allow(dead_code)]
+fn ci_desktop_lint_delta_negative_probe() -> bool {
+    1 == 1
+}
