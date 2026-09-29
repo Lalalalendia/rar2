@@ -1,5 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use chaptera_viewer_render_plan::{
+    ExplicitRenderTextFontResourceV1, RenderTextLayoutDispositionV1,
+    build_page_render_plan_with_text_layout_v1,
+};
 use pub_viewer::ViewerGeometryDocument;
 use serde::Serialize;
 use serde_json::Value;
@@ -8,6 +12,7 @@ pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
 const MAX_INLINE_IMAGE_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+const SHARED_FALLBACK_FONT_MIME: &str = "font/ttf";
 
 #[derive(Debug, Serialize)]
 pub struct ReaderSceneV1 {
@@ -23,6 +28,8 @@ pub struct ReaderSceneV1 {
     pub stories: Vec<ReaderStoryV1>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<ReaderImageResourceV1>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fonts: Vec<ReaderFontResourceV1>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<ReaderDiagnosticV1>,
 }
@@ -60,6 +67,8 @@ pub struct ReaderNodeV1 {
     pub table: Option<ReaderTableV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_layout: Option<ReaderTextLayoutV1>,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +122,27 @@ pub struct ReaderTableCellV1 {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ReaderTextLayoutV1 {
+    pub disposition: &'static str,
+    pub font_resource_id: String,
+    pub font_fingerprint_sha256: String,
+    pub font_size_emu: i64,
+    pub line_height_emu: i64,
+    pub lines: Vec<ReaderTextLineV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTextLineV1 {
+    pub line_index: u32,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub consumed_scalar_end: u32,
+    pub text: String,
+    pub measured_width_emu: i64,
+    pub line_height_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ReaderStoryV1 {
     pub story_id: String,
     pub text: String,
@@ -134,6 +164,16 @@ pub struct ReaderImageResourceV1 {
     pub availability: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inline_data_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderFontResourceV1 {
+    pub resource_id: &'static str,
+    pub family_name: &'static str,
+    pub mime: &'static str,
+    pub expected_sha256: &'static str,
+    pub availability: &'static str,
+    pub inline_data_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -370,6 +410,75 @@ pub fn from_viewer_geometry(
         })
         .collect::<HashMap<_, String>>();
 
+    chaptera_desktop_fallback_font_resource::validate()
+        .map_err(|error| format!("shared fallback font validation failed: {error}"))?;
+    let fallback_font = shared_text_font_resource();
+    let mut text_layout_by_node = HashMap::new();
+    let mut text_layout_partial = false;
+    for page_index in 0..geometry.document.pages.len() {
+        let plan = match build_page_render_plan_with_text_layout_v1(
+            geometry,
+            page_index,
+            &fallback_font,
+        ) {
+            Ok(plan) => plan,
+            Err(_) => {
+                text_layout_partial = true;
+                continue;
+            }
+        };
+        for node in plan.nodes {
+            let Some(text) = node.text else {
+                continue;
+            };
+            let Some(layout) = text.layout else {
+                text_layout_partial = true;
+                continue;
+            };
+            let RenderTextLayoutDispositionV1::SharedResolved {
+                font_resource_id,
+                font_fingerprint_sha256,
+                font_size_emu,
+                line_height_emu,
+            } = layout.disposition
+            else {
+                text_layout_partial = true;
+                continue;
+            };
+            let node_id = serialized_string(&node.node_id, "text layout node id")?;
+            let mapped = ReaderTextLayoutV1 {
+                disposition: "shared_resolved",
+                font_resource_id,
+                font_fingerprint_sha256,
+                font_size_emu,
+                line_height_emu,
+                lines: layout
+                    .lines
+                    .into_iter()
+                    .map(|line| ReaderTextLineV1 {
+                        line_index: line.line_index,
+                        scalar_start: line.scalar_start,
+                        scalar_end: line.scalar_end,
+                        consumed_scalar_end: line.consumed_scalar_end,
+                        text: line.text,
+                        measured_width_emu: line.measured_width_emu,
+                        line_height_emu: line.line_height_emu,
+                    })
+                    .collect(),
+            };
+            if text_layout_by_node
+                .insert(node_id.clone(), mapped)
+                .is_some()
+            {
+                return Err(format!("duplicate text layout binding for node {node_id}"));
+            }
+        }
+    }
+    let text_layout_count = text_layout_by_node.len();
+    if text_by_node.len() > text_layout_count {
+        text_layout_partial = true;
+    }
+
     let mut nodes = Vec::with_capacity(raw_nodes.len());
     for (node_id, parent_id, bounds, transform) in raw_nodes {
         let page_id = page_cache
@@ -387,6 +496,7 @@ pub fn from_viewer_geometry(
             image_source_window: source_window_by_node.remove(&node_id),
             table: table_by_node.remove(&node_id),
             text: text_by_node.get(&node_id).cloned(),
+            text_layout: text_layout_by_node.remove(&node_id),
             node_id,
             page_id,
             parent_node_id,
@@ -407,6 +517,22 @@ pub fn from_viewer_geometry(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+
+    let fonts = if text_layout_count > 0 {
+        vec![ReaderFontResourceV1 {
+            resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
+            family_name: chaptera_desktop_fallback_font_resource::FAMILY_NAME,
+            mime: SHARED_FALLBACK_FONT_MIME,
+            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+            availability: "inline_data_url",
+            inline_data_url: format!(
+                "data:{SHARED_FALLBACK_FONT_MIME};base64,{}",
+                base64_encode(chaptera_desktop_fallback_font_resource::bytes())
+            ),
+        }]
+    } else {
+        Vec::new()
+    };
 
     let mut diagnostics = Vec::new();
     for diagnostic in &geometry.document.diagnostics {
@@ -439,6 +565,9 @@ pub fn from_viewer_geometry(
     {
         reasons.push("image_resource_not_inline");
     }
+    if text_layout_partial {
+        reasons.push("text_layout_partial");
+    }
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity == "warning")
@@ -465,6 +594,7 @@ pub fn from_viewer_geometry(
         nodes,
         stories,
         resources,
+        fonts,
         diagnostics,
     })
 }
@@ -568,6 +698,17 @@ fn object_string(value: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| format!("{key} must be a string"))
+}
+
+fn shared_text_font_resource() -> ExplicitRenderTextFontResourceV1<'static> {
+    ExplicitRenderTextFontResourceV1 {
+        resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
+        expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+        face_index: 0,
+        default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
+        default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
+        bytes: chaptera_desktop_fallback_font_resource::bytes(),
+    }
 }
 
 fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
