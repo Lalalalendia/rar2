@@ -769,6 +769,52 @@ impl BlobStoreService {
             .map_err(provider_error)
     }
 
+    pub async fn delete_quarantine_exact(
+        &self,
+        tenant_id: &str,
+        upload_id: &str,
+        expected_generation: &str,
+        expected_etag: &str,
+        expected_byte_len: u64,
+    ) -> Result<(), BlobStoreError> {
+        require_ident(tenant_id, "tenant_id")?;
+        require_ident(upload_id, "upload_id")?;
+        require_ident(expected_generation, "storage_generation")?;
+        require_ident(expected_etag, "object_etag")?;
+        let metadata = match self.inspect_quarantine_upload(tenant_id, upload_id).await? {
+            Some(metadata) => metadata,
+            None => return Ok(()),
+        };
+        if metadata.storage_generation != expected_generation {
+            return Err(BlobStoreError::new(
+                "quarantine_generation_mismatch",
+                "quarantine object generation changed before deletion",
+            ));
+        }
+        if metadata.etag != expected_etag {
+            return Err(BlobStoreError::new(
+                "quarantine_etag_mismatch",
+                "quarantine object etag changed before deletion",
+            ));
+        }
+        if metadata.byte_len != expected_byte_len {
+            return Err(BlobStoreError::new(
+                "quarantine_length_mismatch",
+                "quarantine object byte length changed before deletion",
+            ));
+        }
+
+        match self
+            .provider
+            .delete_exact(&metadata.object_locator, &metadata.storage_generation)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind == ProviderErrorKind::NotFound => Ok(()),
+            Err(error) => Err(provider_error(error)),
+        }
+    }
+
     pub async fn delete_physical_if_eligible(
         &self,
         tenant_id: &str,
