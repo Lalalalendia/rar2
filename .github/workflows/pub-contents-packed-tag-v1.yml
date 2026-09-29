@@ -5,8 +5,9 @@ on:
     paths:
       - "tools/pub_contents_packed_tag_v1.py"
       - "tools/test_pub_contents_packed_tag_v1.py"
-      - "vendor/producer-a/crates/pub-contents/**"
-      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-contents/src/block.rs"
+      - "vendor/producer-a/crates/pub-contents/src/lib.rs"
+      - "vendor/producer-a/crates/pub-contents/tests/packed_tag.rs"
       - ".github/workflows/pub-contents-packed-tag-v1.yml"
   workflow_dispatch:
 
