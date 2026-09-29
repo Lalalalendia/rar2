@@ -92,10 +92,7 @@ impl AdmittedSource {
             ));
         }
 
-        let capacity = usize::try_from(declared_len)
-            .unwrap_or(0)
-            .min(usize::try_from(policy.max_file_bytes).unwrap_or(usize::MAX));
-        let mut bytes = Vec::with_capacity(capacity);
+        let mut bytes = Vec::new();
         file.by_ref()
             .take(policy.max_file_bytes.saturating_add(1))
             .read_to_end(&mut bytes)
