@@ -1032,7 +1032,7 @@ fn viewer_legacy_noquill_native_images(
     let mut images = Vec::new();
 
     for node in graph.nodes.values() {
-        if node.kind != NodeKind::Image || !renderable_node_ids.contains(&node.header.id) {
+        if node.kind != NodeKind::ImageFrame || !renderable_node_ids.contains(&node.header.id) {
             continue;
         }
         let Ok(image_object_id) = u16::try_from(node.payload.contents_seq_num) else {
