@@ -97,6 +97,27 @@ jobs:
           legacy_scene_nodes = sum(int(row.get("scene_node_count") or 0) for row in legacy_open)
           legacy_story_frames = sum(int(row.get("story_frame_count") or 0) for row in legacy_open)
           legacy_text_fragments = sum(int(row.get("text_fragment_count") or 0) for row in legacy_open)
+          residual_raw_type_counts = {}
+          residual_raw_type_file_counts = {}
+          residual_raw_type_reason_counts = {}
+          for row in legacy_open:
+              per_file = row.get("legacy_object_not_materialized_raw_type_counts") or {}
+              for raw_type, count in per_file.items():
+                  residual_raw_type_counts[raw_type] = (
+                      residual_raw_type_counts.get(raw_type, 0) + int(count)
+                  )
+                  if int(count) > 0:
+                      residual_raw_type_file_counts[raw_type] = (
+                          residual_raw_type_file_counts.get(raw_type, 0) + 1
+                      )
+
+              per_file_reasons = (
+                  row.get("legacy_object_not_materialized_raw_type_reason_counts") or {}
+              )
+              for raw_type, reasons in per_file_reasons.items():
+                  target = residual_raw_type_reason_counts.setdefault(raw_type, {})
+                  for reason, count in reasons.items():
+                      target[reason] = target.get(reason, 0) + int(count)
 
           unresolved_encoding_files = sum(
               "viewer.text.legacy_encoding_unresolved" in (row.get("diagnostic_codes") or [])
@@ -121,6 +142,16 @@ jobs:
               "legacy_story_frame_count": legacy_story_frames,
               "legacy_text_fragment_count": legacy_text_fragments,
               "legacy_unresolved_encoding_file_count": unresolved_encoding_files,
+              "legacy_object_not_materialized_raw_type_counts": dict(
+                  sorted(residual_raw_type_counts.items())
+              ),
+              "legacy_object_not_materialized_raw_type_file_counts": dict(
+                  sorted(residual_raw_type_file_counts.items())
+              ),
+              "legacy_object_not_materialized_raw_type_reason_counts": {
+                  raw_type: dict(sorted(reasons.items()))
+                  for raw_type, reasons in sorted(residual_raw_type_reason_counts.items())
+              },
               "lalamu_corpus_ref": "f78cc6f455f4dc222868f9cc035511a6ca7a91ea",
           }
           Path("out/legacy625/acceptance.json").write_text(
