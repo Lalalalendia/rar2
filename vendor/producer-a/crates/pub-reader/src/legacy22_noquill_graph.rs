@@ -390,7 +390,8 @@ fn materialize_legacy_noquill_child(
     let is_legacy_ole = child_entry.chunk_type == LEGACY_OLE_TYPE;
     let is_table = child_entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE;
     let legacy_image_source = if is_legacy_image {
-        let Some((_, source)) = legacy_image_wmf_profile(contents, directory, child_object_id) else {
+        let Some((_, source)) = legacy_image_wmf_profile(contents, directory, child_object_id)
+        else {
             diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
                 object_id: u32::from(child_object_id),
                 raw_type: Some(child_entry.chunk_type),
@@ -1594,8 +1595,7 @@ mod tests {
 
     fn image_data_chunk(payload: &[u8]) -> Vec<u8> {
         let mut chunk = vec![0_u8; LEGACY_IMAGE_PAYLOAD_OFFSET];
-        chunk[0x04..0x08]
-            .copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+        chunk[0x04..0x08].copy_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
         chunk.extend_from_slice(payload);
         chunk
     }
