@@ -1,0 +1,373 @@
+name: Legacy22 OLE WMF census
+
+on:
+  push:
+    branches:
+      - research/legacy22-ole-wmf-census-01
+    paths:
+      - ".github/workflows/legacy22-ole-wmf-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+
+jobs:
+  census:
+    name: Census OlePres WMF record types
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout pinned 625-file corpus
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: ${{ env.LALAMU_CORPUS_REF }}
+          path: corpus-src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CFB parser
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Census standard CF_METAFILEPICT presentations
+        run: |
+          set -euo pipefail
+          mkdir -p out/ole-wmf-census
+          python - <<'PY'
+          import json
+          import re
+          import struct
+          from collections import Counter, defaultdict
+          from pathlib import Path
+          import olefile
+
+          corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
+          paths = sorted(corpus.glob("*.pub"))
+          assert len(paths) == 625, len(paths)
+
+          MAX_STREAM = 64 * 1024 * 1024
+          MAX_TARGET = 1024 * 1024
+          PLACEABLE_MAGIC = 0x9AC6CDD7
+
+          function_names = {
+              0x0000: "EOF",
+              0x001E: "SAVEDC",
+              0x0102: "SETBKMODE",
+              0x0103: "SETMAPMODE",
+              0x0104: "SETROP2",
+              0x0106: "SETPOLYFILLMODE",
+              0x0127: "RESTOREDC",
+              0x012D: "SELECTOBJECT",
+              0x012E: "SETTEXTALIGN",
+              0x01F0: "DELETEOBJECT",
+              0x0201: "SETBKCOLOR",
+              0x0209: "SETTEXTCOLOR",
+              0x020B: "SETWINDOWORG",
+              0x020C: "SETWINDOWEXT",
+              0x020D: "SETVIEWPORTORG",
+              0x020E: "SETVIEWPORTEXT",
+              0x0213: "LINETO",
+              0x0214: "MOVETO",
+              0x02FA: "CREATEPENINDIRECT",
+              0x02FB: "CREATEFONTINDIRECT",
+              0x02FC: "CREATEBRUSHINDIRECT",
+              0x0324: "POLYGON",
+              0x0325: "POLYLINE",
+              0x0416: "INTERSECTCLIPRECT",
+              0x0418: "ELLIPSE",
+              0x041B: "RECTANGLE",
+              0x0521: "TEXTOUT",
+              0x061C: "ROUNDRECT",
+              0x061D: "PATBLT",
+              0x0626: "ESCAPE",
+              0x0922: "BITBLT",
+              0x0A32: "EXTTEXTOUT",
+              0x0B23: "STRETCHBLT",
+              0x0B41: "DIBSTRETCHBLT",
+              0x0F43: "STRETCHDIB",
+          }
+
+          def u16(buf, off):
+              if off + 2 > len(buf):
+                  raise ValueError("u16 out of bounds")
+              return int.from_bytes(buf[off:off+2], "little")
+
+          def u32(buf, off):
+              if off + 4 > len(buf):
+                  raise ValueError("u32 out of bounds")
+              return int.from_bytes(buf[off:off+4], "little")
+
+          def parse_presentation(raw):
+              if len(raw) > MAX_STREAM:
+                  raise ValueError("presentation too large")
+              marker = u32(raw, 0)
+              if marker in (0xFFFFFFFF, 0xFFFFFFFE):
+                  fmt = u32(raw, 4)
+                  fmt_end = 8
+                  fmt_key = f"standard:{fmt}"
+              else:
+                  if marker == 0 or marker > 0x201:
+                      raise ValueError(f"invalid clipboard marker/length {marker}")
+                  fmt_end = 4 + marker
+                  if fmt_end > len(raw):
+                      raise ValueError("registered clipboard name truncated")
+                  fmt = None
+                  fmt_key = f"registered-len:{marker}"
+
+              target_size = u32(raw, fmt_end)
+              if target_size < 4 or target_size > MAX_TARGET:
+                  raise ValueError(f"invalid TargetDeviceSize {target_size}")
+              fields = fmt_end + target_size
+              if fields + 28 > len(raw):
+                  raise ValueError("presentation header truncated")
+
+              aspect = u32(raw, fields)
+              lindex = u32(raw, fields + 4)
+              advf = u32(raw, fields + 8)
+              reserved1 = u32(raw, fields + 12)
+              width = u32(raw, fields + 16)
+              height = u32(raw, fields + 20)
+              size = u32(raw, fields + 24)
+              data_off = fields + 28
+              data_end = data_off + size
+              if data_end > len(raw):
+                  raise ValueError("presentation Data truncated")
+              data = raw[data_off:data_end]
+              tail = raw[data_end:]
+              return {
+                  "marker": marker,
+                  "format": fmt,
+                  "format_key": fmt_key,
+                  "target_size": target_size,
+                  "aspect": aspect,
+                  "lindex": lindex,
+                  "advf": advf,
+                  "reserved1": reserved1,
+                  "width": width,
+                  "height": height,
+                  "size": size,
+                  "data": data,
+                  "tail_len": len(tail),
+              }
+
+          def parse_wmf(data):
+              start = 0
+              placeable = False
+              if len(data) >= 22 and u32(data, 0) == PLACEABLE_MAGIC:
+                  placeable = True
+                  start = 22
+
+              if len(data) < start + 18:
+                  raise ValueError("WMF header truncated")
+
+              mt_type = u16(data, start)
+              mt_header_size = u16(data, start + 2)
+              mt_version = u16(data, start + 4)
+              mt_size_words = u32(data, start + 6)
+              mt_no_objects = u16(data, start + 10)
+              mt_max_record_words = u32(data, start + 12)
+              mt_no_parameters = u16(data, start + 16)
+
+              if mt_header_size != 9:
+                  raise ValueError(f"WMF mtHeaderSize={mt_header_size}, expected 9")
+              declared_bytes = mt_size_words * 2
+              declared_end = start + declared_bytes
+              if declared_end > len(data):
+                  raise ValueError(
+                      f"WMF declared size {declared_bytes} exceeds payload {len(data)-start}"
+                  )
+              if declared_bytes < 18:
+                  raise ValueError("WMF declared size shorter than METAHEADER")
+
+              record_off = start + 18
+              functions = []
+              sizes = []
+              eof_seen = False
+              while record_off < declared_end:
+                  if record_off + 6 > declared_end:
+                      raise ValueError("WMF record header truncated")
+                  size_words = u32(data, record_off)
+                  function = u16(data, record_off + 4)
+                  if size_words < 3:
+                      raise ValueError(f"WMF record size {size_words} < 3")
+                  size_bytes = size_words * 2
+                  next_off = record_off + size_bytes
+                  if next_off > declared_end:
+                      raise ValueError(
+                          f"WMF record 0x{function:04X} exceeds declared metafile size"
+                      )
+                  functions.append(function)
+                  sizes.append(size_words)
+                  record_off = next_off
+                  if function == 0x0000:
+                      eof_seen = True
+                      break
+
+              return {
+                  "placeable": placeable,
+                  "mt_type": mt_type,
+                  "mt_header_size": mt_header_size,
+                  "mt_version": mt_version,
+                  "mt_size_words": mt_size_words,
+                  "mt_no_objects": mt_no_objects,
+                  "mt_max_record_words": mt_max_record_words,
+                  "mt_no_parameters": mt_no_parameters,
+                  "functions": functions,
+                  "sizes": sizes,
+                  "eof_seen": eof_seen,
+                  "declared_trailing_bytes": declared_end - record_off,
+                  "payload_trailing_bytes": len(data) - declared_end,
+              }
+
+          total_olepres = 0
+          parsed_presentations = 0
+          format_counts = Counter()
+          marker_counts = Counter()
+          target_size_counts = Counter()
+          aspect_counts = Counter()
+          advf_counts = Counter()
+          tail_len_counts = Counter()
+          parse_errors = Counter()
+
+          wmf_parsed = 0
+          wmf_errors = Counter()
+          placeable_counts = Counter()
+          header_type_counts = Counter()
+          header_version_counts = Counter()
+          function_counts = Counter()
+          function_file_counts = Counter()
+          record_count_distribution = Counter()
+          unique_function_sets = Counter()
+          max_record_words = 0
+          max_record_function = None
+          source_rows = []
+
+          for path in paths:
+              file_functions = set()
+              file_presentations = 0
+              try:
+                  with olefile.OleFileIO(str(path)) as ole:
+                      for parts in ole.listdir(streams=True, storages=False):
+                          if len(parts) < 3 or parts[0].casefold() != "objects":
+                              continue
+                          if re.fullmatch(r"Object\s*\d+", parts[1], flags=re.IGNORECASE) is None:
+                              continue
+                          if re.fullmatch(r"\x02?OlePres\d{3}", parts[-1], flags=re.IGNORECASE) is None and re.fullmatch(r"OlePres\d{3}", parts[-1], flags=re.IGNORECASE) is None:
+                              if "olepres" not in parts[-1].casefold():
+                                  continue
+
+                          total_olepres += 1
+                          file_presentations += 1
+                          try:
+                              raw = ole.openstream(parts).read(MAX_STREAM + 1)
+                              if len(raw) > MAX_STREAM:
+                                  raise ValueError("presentation too large")
+                              p = parse_presentation(raw)
+                              parsed_presentations += 1
+                              marker_counts[f"0x{p['marker']:08X}"] += 1
+                              format_counts[p["format_key"]] += 1
+                              target_size_counts[str(p["target_size"])] += 1
+                              aspect_counts[str(p["aspect"])] += 1
+                              advf_counts[str(p["advf"])] += 1
+                              tail_len_counts[str(p["tail_len"])] += 1
+                          except Exception as exc:
+                              parse_errors[type(exc).__name__ + ":" + str(exc)] += 1
+                              continue
+
+                          if p["format"] != 3:
+                              continue
+
+                          try:
+                              w = parse_wmf(p["data"])
+                              wmf_parsed += 1
+                              placeable_counts[str(w["placeable"]).lower()] += 1
+                              header_type_counts[str(w["mt_type"])] += 1
+                              header_version_counts[f"0x{w['mt_version']:04X}"] += 1
+                              record_count_distribution[str(len(w["functions"]))] += 1
+                              fnset = tuple(sorted(set(w["functions"])))
+                              unique_function_sets[",".join(f"0x{x:04X}" for x in fnset)] += 1
+                              for fn in w["functions"]:
+                                  function_counts[f"0x{fn:04X}"] += 1
+                                  file_functions.add(fn)
+                              if w["sizes"]:
+                                  local_max = max(w["sizes"])
+                                  if local_max > max_record_words:
+                                      max_record_words = local_max
+                                      max_record_function = w["functions"][w["sizes"].index(local_max)]
+                          except Exception as exc:
+                              wmf_errors[type(exc).__name__ + ":" + str(exc)] += 1
+
+              except Exception as exc:
+                  parse_errors["file:" + type(exc).__name__ + ":" + str(exc)] += 1
+
+              for fn in file_functions:
+                  function_file_counts[f"0x{fn:04X}"] += 1
+              if file_presentations:
+                  source_rows.append({
+                      "source_sha256": path.stem.lower(),
+                      "olepres_count": file_presentations,
+                      "wmf_function_ids": [f"0x{x:04X}" for x in sorted(file_functions)],
+                  })
+
+          named_function_counts = []
+          for key, count in function_counts.most_common():
+              fn = int(key, 16)
+              named_function_counts.append({
+                  "function": key,
+                  "name": function_names.get(fn, "UNKNOWN"),
+                  "record_count": count,
+                  "file_count": function_file_counts.get(key, 0),
+              })
+
+          summary = {
+              "schema": "chaptera.legacy22-ole-wmf-census.v1",
+              "corpus_file_count": len(paths),
+              "olepres_stream_count": total_olepres,
+              "parsed_presentation_count": parsed_presentations,
+              "presentation_parse_errors": dict(parse_errors.most_common()),
+              "marker_counts": dict(marker_counts),
+              "format_counts": dict(format_counts),
+              "target_device_size_counts": dict(target_size_counts),
+              "aspect_counts": dict(aspect_counts),
+              "advf_counts": dict(advf_counts),
+              "tail_len_counts": dict(tail_len_counts),
+              "wmf_parsed_count": wmf_parsed,
+              "wmf_parse_errors": dict(wmf_errors.most_common()),
+              "wmf_placeable_counts": dict(placeable_counts),
+              "wmf_header_type_counts": dict(header_type_counts),
+              "wmf_header_version_counts": dict(header_version_counts),
+              "wmf_record_count_distribution": dict(
+                  sorted(record_count_distribution.items(), key=lambda kv: int(kv[0]))
+              ),
+              "wmf_function_counts": named_function_counts,
+              "wmf_unique_function_set_count": len(unique_function_sets),
+              "wmf_unique_function_sets": [
+                  {"set": key, "count": count}
+                  for key, count in unique_function_sets.most_common()
+              ],
+              "wmf_max_record_words": max_record_words,
+              "wmf_max_record_function": (
+                  f"0x{max_record_function:04X}" if max_record_function is not None else None
+              ),
+              "source_rows": source_rows,
+          }
+
+          Path("out/ole-wmf-census/summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({k: v for k, v in summary.items() if k != "source_rows"}, indent=2))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy22-ole-wmf-census-${{ github.run_id }}
+          path: out/ole-wmf-census/**
+          if-no-files-found: error
+          retention-days: 30
