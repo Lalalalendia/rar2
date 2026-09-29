@@ -176,22 +176,37 @@ jobs:
               for item in candidates
           )
 
-          u16_values = defaultdict(Counter)
-          u32_values = defaultdict(Counter)
-          for item in candidates:
-              for offset, value in (item.get("child_u16_first64") or {}).items():
-                  u16_values[offset][str(value)] += 1
-              for offset, value in (item.get("child_u32_first64") or {}).items():
-                  u32_values[offset][str(value)] += 1
+          def collect_scalar_values(items, field):
+              values = defaultdict(Counter)
+              for item in items:
+                  for offset, value in (item.get(field) or {}).items():
+                      values[offset][str(value)] += 1
+              return values
 
           def summarize(values):
               result = {}
               for offset in sorted(values, key=lambda value: int(value, 16)):
                   counter = values[offset]
+                  observed_count = sum(counter.values())
+                  ordered_value_counts = [
+                      {"value": value, "count": count}
+                      for value, count in sorted(
+                          counter.items(), key=lambda item: int(item[0])
+                      )
+                  ]
                   result[offset] = {
-                      "observed_count": sum(counter.values()),
+                      "observed_count": observed_count,
                       "distinct_count": len(counter),
                       "invariant": len(counter) == 1,
+                      "zero_count": counter.get("0", 0),
+                      "singleton_value_count": sum(
+                          count == 1 for count in counter.values()
+                      ),
+                      "top1_count": max(counter.values(), default=0),
+                      "top5_count": sum(
+                          count for _, count in counter.most_common(5)
+                      ),
+                      "value_counts": ordered_value_counts,
                       "top_values": [
                           {"value": value, "count": count}
                           for value, count in counter.most_common(12)
@@ -199,8 +214,94 @@ jobs:
                   }
               return result
 
+          u16_values = collect_scalar_values(candidates, "child_u16_first64")
+          u32_values = collect_scalar_values(candidates, "child_u32_first64")
           u16_summary = summarize(u16_values)
           u32_summary = summarize(u32_values)
+
+          service_words = sorted(
+              {str(item["child_service_word"]) for item in candidates},
+              key=int,
+          )
+          u16_summary_by_service_word = {}
+          u32_summary_by_service_word = {}
+          for service_word in service_words:
+              scoped = [
+                  item
+                  for item in candidates
+                  if str(item["child_service_word"]) == service_word
+              ]
+              u16_summary_by_service_word[service_word] = summarize(
+                  collect_scalar_values(scoped, "child_u16_first64")
+              )
+              u32_summary_by_service_word[service_word] = summarize(
+                  collect_scalar_values(scoped, "child_u32_first64")
+              )
+
+          scalar_vectors = Counter(
+              (
+                  tuple(
+                      sorted(
+                          (item.get("child_u16_first64") or {}).items(),
+                          key=lambda pair: int(pair[0], 16),
+                      )
+                  ),
+                  tuple(
+                      sorted(
+                          (item.get("child_u32_first64") or {}).items(),
+                          key=lambda pair: int(pair[0], 16),
+                      )
+                  ),
+              )
+              for item in candidates
+          )
+
+          parent_normalized_groups = defaultdict(list)
+          for item in candidates:
+              parent_normalized_groups[
+                  str(item["parent_normalized_chunk_sha256"])
+              ].append(item)
+
+          within_parent_variable_u16_offsets = Counter()
+          within_parent_variable_u32_offsets = Counter()
+          multi_member_parent_normalized_cluster_count = 0
+          for group in parent_normalized_groups.values():
+              if len(group) < 2:
+                  continue
+              multi_member_parent_normalized_cluster_count += 1
+              for offset in u16_summary:
+                  if len(
+                      {
+                          str((item.get("child_u16_first64") or {}).get(offset))
+                          for item in group
+                      }
+                  ) > 1:
+                      within_parent_variable_u16_offsets[offset] += 1
+              for offset in u32_summary:
+                  if len(
+                      {
+                          str((item.get("child_u32_first64") or {}).get(offset))
+                          for item in group
+                      }
+                  ) > 1:
+                      within_parent_variable_u32_offsets[offset] += 1
+
+          assert child_lengths == Counter({"18": 305}), child_lengths
+          assert all(
+              len(item.get("child_u16_first64") or {}) == 9
+              and len(item.get("child_u32_first64") or {}) == 4
+              for item in candidates
+          )
+          assert len(scalar_vectors) == len(child_exact), (
+              len(scalar_vectors),
+              len(child_exact),
+          )
+          assert sum(count == 1 for count in scalar_vectors.values()) == sum(
+              count == 1 for count in child_exact.values()
+          )
+          assert max(scalar_vectors.values(), default=0) == max(
+              child_exact.values(), default=0
+          )
 
           summary = {
               "schema": "chaptera.legacy22-raw0022-companion-census.v1",
@@ -235,6 +336,42 @@ jobs:
               ),
               "child_u16_first64_offsets": u16_summary,
               "child_u32_first64_offsets": u32_summary,
+              "child_u16_first64_offsets_by_service_word": (
+                  u16_summary_by_service_word
+              ),
+              "child_u32_first64_offsets_by_service_word": (
+                  u32_summary_by_service_word
+              ),
+              "child_scalar_vector_cluster_count": len(scalar_vectors),
+              "child_scalar_vector_singleton_count": sum(
+                  count == 1 for count in scalar_vectors.values()
+              ),
+              "largest_child_scalar_vector_cluster_size": max(
+                  scalar_vectors.values(), default=0
+              ),
+              "parent_normalized_cluster_count": len(parent_normalized_groups),
+              "parent_normalized_singleton_count": sum(
+                  len(group) == 1 for group in parent_normalized_groups.values()
+              ),
+              "largest_parent_normalized_cluster_size": max(
+                  (len(group) for group in parent_normalized_groups.values()),
+                  default=0,
+              ),
+              "multi_member_parent_normalized_cluster_count": (
+                  multi_member_parent_normalized_cluster_count
+              ),
+              "within_parent_variable_u16_offset_cluster_counts": dict(
+                  sorted(
+                      within_parent_variable_u16_offsets.items(),
+                      key=lambda item: int(item[0], 16),
+                  )
+              ),
+              "within_parent_variable_u32_offset_cluster_counts": dict(
+                  sorted(
+                      within_parent_variable_u32_offsets.items(),
+                      key=lambda item: int(item[0], 16),
+                  )
+              ),
               "child_u16_invariant_offsets": [
                   offset
                   for offset, profile in u16_summary.items()
