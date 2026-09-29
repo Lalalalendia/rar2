@@ -9,7 +9,7 @@ use pub_model::Sha256Digest;
 use pub_reader::{build_legacy_0x22_noquill_source_graph, PubBridgeDiagnostic};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::Cursor;
@@ -29,7 +29,16 @@ struct ErrorAggregate {
     revision_counts: BTreeMap<u16, usize>,
     raw_header_profile_counts: BTreeMap<String, usize>,
     materialized_object_profile_counts: BTreeMap<String, usize>,
+    count_pair_candidate_counts: BTreeMap<String, usize>,
     example_source_sha256: Vec<String>,
+}
+
+#[derive(Default)]
+struct CountPairScore {
+    sum_hits: usize,
+    monotonic_hits: usize,
+    geometry_hits: usize,
+    value_counts: BTreeMap<String, usize>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -39,91 +48,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn source_hash(bytes: &[u8]) -> Sha256Digest {
     Sha256Digest::from_bytes(Sha256::digest(bytes).into())
-}
-
-fn reader_raw_0001_target_count(bytes: &[u8]) -> usize {
-    let Ok(build) =
-        build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash(bytes))
-    else {
-        return 0;
-    };
-    build
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| {
-            matches!(
-                diagnostic,
-                PubBridgeDiagnostic::LegacyObjectNotMaterialized {
-                    raw_type: Some(LEGACY_0X22_TABLE_CHUNK_TYPE),
-                    reason,
-                    ..
-                } if reason == "legacy_table_not_resolved_v1"
-            )
-        })
-        .count()
-}
-
-fn text_error_kind(error: &Legacy0x22TableTextReadError) -> &'static str {
-    match error {
-        Legacy0x22TableTextReadError::Formatting(_) => "text_formatting",
-        Legacy0x22TableTextReadError::TextInfo(_) => "text_info",
-        Legacy0x22TableTextReadError::TextInfoOwnerEndOutOfBounds { .. } => {
-            "text_info_owner_end_out_of_bounds"
-        }
-        Legacy0x22TableTextReadError::DuplicateStyleBoundary { .. } => "duplicate_style_boundary",
-        Legacy0x22TableTextReadError::CellSeparatorWithoutStyleBoundary { .. } => {
-            "cell_separator_without_style_boundary"
-        }
-    }
-}
-
-fn table_error_kind(error: &Legacy0x22TableCatalogReadError) -> &'static str {
-    match error {
-        Legacy0x22TableCatalogReadError::Contents(_) => "contents",
-        Legacy0x22TableCatalogReadError::UnexpectedFamily(_) => "unexpected_family",
-        Legacy0x22TableCatalogReadError::TrailerPointerOutOfBounds { .. } => {
-            "trailer_pointer_out_of_bounds"
-        }
-        Legacy0x22TableCatalogReadError::DirectoryOutOfBounds { .. } => "directory_out_of_bounds",
-        Legacy0x22TableCatalogReadError::ChunkOffsetOutOfBounds { .. } => {
-            "chunk_offset_out_of_bounds"
-        }
-        Legacy0x22TableCatalogReadError::TableHeaderTooShort { .. } => "table_header_too_short",
-        Legacy0x22TableCatalogReadError::TableDataOffsetOutOfBounds { .. } => {
-            "table_data_offset_out_of_bounds"
-        }
-        Legacy0x22TableCatalogReadError::UnsupportedExtendedListHeader { .. } => {
-            "unsupported_extended_list_header"
-        }
-        Legacy0x22TableCatalogReadError::UnexpectedTableRecordSize { .. } => {
-            "unexpected_table_record_size"
-        }
-        Legacy0x22TableCatalogReadError::TooFewTableRecords { .. } => "too_few_table_records",
-        Legacy0x22TableCatalogReadError::TableRecordOutOfBounds { .. } => {
-            "table_record_out_of_bounds"
-        }
-        Legacy0x22TableCatalogReadError::AxisNotMonotonic { .. } => "axis_not_monotonic",
-        Legacy0x22TableCatalogReadError::Text(error) => text_error_kind(error),
-        Legacy0x22TableCatalogReadError::TableCountMismatch { .. } => "table_count_mismatch",
-        Legacy0x22TableCatalogReadError::DuplicateTextIdentity { .. } => "duplicate_text_identity",
-        Legacy0x22TableCatalogReadError::DuplicateObjectTextIdentity { .. } => {
-            "duplicate_object_text_identity"
-        }
-        Legacy0x22TableCatalogReadError::MissingTableTextIdentity { .. } => {
-            "missing_table_text_identity"
-        }
-        Legacy0x22TableCatalogReadError::UnmatchedTableTextIdentities { .. } => {
-            "unmatched_table_text_identities"
-        }
-        Legacy0x22TableCatalogReadError::TableCellCountMismatch { .. } => {
-            "table_cell_count_mismatch"
-        }
-    }
-}
-
-fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    let raw = bytes.get(offset..offset.checked_add(2)?)?;
-    Some(u16::from_le_bytes([raw[0], raw[1]]))
 }
 
 fn raw_header_profiles(
@@ -285,7 +209,8 @@ fn main() -> Result<()> {
 
         files_with_raw_0001 += 1;
         raw_0001_physical_count += raw_0001_count;
-        let reader_target_count = reader_raw_0001_target_count(&bytes);
+        let reader_target_ids = reader_raw_0001_target_ids(&bytes);
+        let reader_target_count = reader_target_ids.len();
         reader_target_residual_count += reader_target_count;
         if reader_target_count > 0 {
             reader_target_files += 1;
@@ -328,6 +253,17 @@ fn main() -> Result<()> {
                         .entry(profile)
                         .or_default() += count;
                 }
+                for candidate in count_pair_scores(&contents, &directory, &reader_target_ids) {
+                    let first = candidate["first_offset"].as_u64().unwrap_or_default();
+                    let second = candidate["second_offset"].as_u64().unwrap_or_default();
+                    let sum_hits = candidate["sum_hits"].as_u64().unwrap_or_default();
+                    let monotonic_hits = candidate["monotonic_hits"].as_u64().unwrap_or_default();
+                    let geometry_hits = candidate["geometry_hits"].as_u64().unwrap_or_default();
+                    let key = format!(
+                        "{first}:{second}:sum={sum_hits}:monotonic={monotonic_hits}:geometry={geometry_hits}"
+                    );
+                    *aggregate.count_pair_candidate_counts.entry(key).or_default() += 1;
+                }
                 *aggregate
                     .raw_0001_per_file_counts
                     .entry(raw_0001_count)
@@ -366,6 +302,7 @@ fn main() -> Result<()> {
                 "revision_counts": aggregate.revision_counts,
                 "raw_header_profile_counts": aggregate.raw_header_profile_counts,
                 "materialized_object_profile_counts": aggregate.materialized_object_profile_counts,
+                "count_pair_candidate_counts": aggregate.count_pair_candidate_counts,
                 "example_source_sha256": aggregate.example_source_sha256,
             })
         })
