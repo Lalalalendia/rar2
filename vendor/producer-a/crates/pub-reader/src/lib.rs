@@ -67,7 +67,7 @@ pub use legacy22_graph::{
 };
 pub use legacy22_noquill_graph::{
     build_legacy_0x22_noquill_from_contents, build_legacy_0x22_noquill_source_graph,
-    read_legacy_0x22_image_wmf,
+    read_legacy_0x22_image_wmf, read_legacy_0x22_image_wmfs,
 };
 pub use ole_presentation::{
     LegacyOleCachedPresentation, LegacyOleCachedPresentationDiagnostic,
