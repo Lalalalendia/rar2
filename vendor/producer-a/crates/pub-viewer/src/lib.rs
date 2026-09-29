@@ -50,8 +50,8 @@ pub use pub_reader::{
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
-    FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentation,
-    LegacyOleCachedPresentationScan, LegacyOleCachedPresentationSelection,
+    FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
+    LegacyOleCachedPresentationSelection,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
     PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
     PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild, WmfPreviewRgba,
@@ -66,6 +66,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
+#[cfg(test)]
+use pub_reader::LegacyOleCachedPresentation;
 
 pub const VIEWER_DOCUMENT_SCHEMA_V0_1: &str = "0.1";
 pub const VIEWER_GEOMETRY_SCHEMA_V0_1: &str = "0.1";
@@ -790,7 +792,13 @@ fn legacy_ole_preview_resource_id(
     storage_number: u16,
     wmf_bytes: &[u8],
 ) -> Result<ResourceId> {
-    let wmf_sha256 = format!("{:x}", Sha256::digest(wmf_bytes));
+    let digest = Sha256::digest(wmf_bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
+        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
     let source_object_key = format!(
         "legacy-ole-preview/object-{storage_number}/wmf-sha256-{wmf_sha256}/{}",
         LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1
