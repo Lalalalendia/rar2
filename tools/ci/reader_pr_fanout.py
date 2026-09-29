@@ -231,6 +231,7 @@ SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/product_smoke.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
     "apps/chaptera-desktop/src/fallback_font.rs",
+    "apps/chaptera-desktop/src/source_font.rs",
 }
 
 
