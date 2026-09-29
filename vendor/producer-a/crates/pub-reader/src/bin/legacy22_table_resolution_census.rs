@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use pub_contents::{
-    ContentsFamily, LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22TableCatalogReadError,
-    Legacy0x22TableTextReadError, detect_family, parse_legacy_0x22_directory,
-    parse_legacy_0x22_resolved_tables,
+    detect_family, parse_legacy_0x22_directory, parse_legacy_0x22_resolved_tables, ContentsFamily,
+    Legacy0x22TableCatalogReadError, Legacy0x22TableTextReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
 };
 use pub_core::StreamPath;
 use serde_json::json;
@@ -34,9 +33,7 @@ fn text_error_kind(error: &Legacy0x22TableTextReadError) -> &'static str {
         Legacy0x22TableTextReadError::TextInfoOwnerEndOutOfBounds { .. } => {
             "text_info_owner_end_out_of_bounds"
         }
-        Legacy0x22TableTextReadError::DuplicateStyleBoundary { .. } => {
-            "duplicate_style_boundary"
-        }
+        Legacy0x22TableTextReadError::DuplicateStyleBoundary { .. } => "duplicate_style_boundary",
         Legacy0x22TableTextReadError::CellSeparatorWithoutStyleBoundary { .. } => {
             "cell_separator_without_style_boundary"
         }
@@ -50,9 +47,7 @@ fn table_error_kind(error: &Legacy0x22TableCatalogReadError) -> &'static str {
         Legacy0x22TableCatalogReadError::TrailerPointerOutOfBounds { .. } => {
             "trailer_pointer_out_of_bounds"
         }
-        Legacy0x22TableCatalogReadError::DirectoryOutOfBounds { .. } => {
-            "directory_out_of_bounds"
-        }
+        Legacy0x22TableCatalogReadError::DirectoryOutOfBounds { .. } => "directory_out_of_bounds",
         Legacy0x22TableCatalogReadError::ChunkOffsetOutOfBounds { .. } => {
             "chunk_offset_out_of_bounds"
         }
@@ -73,9 +68,7 @@ fn table_error_kind(error: &Legacy0x22TableCatalogReadError) -> &'static str {
         Legacy0x22TableCatalogReadError::AxisNotMonotonic { .. } => "axis_not_monotonic",
         Legacy0x22TableCatalogReadError::Text(error) => text_error_kind(error),
         Legacy0x22TableCatalogReadError::TableCountMismatch { .. } => "table_count_mismatch",
-        Legacy0x22TableCatalogReadError::DuplicateTextIdentity { .. } => {
-            "duplicate_text_identity"
-        }
+        Legacy0x22TableCatalogReadError::DuplicateTextIdentity { .. } => "duplicate_text_identity",
         Legacy0x22TableCatalogReadError::DuplicateObjectTextIdentity { .. } => {
             "duplicate_object_text_identity"
         }
