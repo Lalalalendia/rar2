@@ -1,6 +1,7 @@
 use super::{
     CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
-    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubNodePayload,
+    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyOleSource,
+    PubNodePayload,
     PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource, QUILL_STREAM_PATH, ROLE_DOCUMENT,
     ROLE_NODE, ROLE_PAGE, decode_utf16le_strict, derive_pub_id, quill_story_object_key, source_ref,
 };
@@ -20,6 +21,11 @@ const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
 const LEGACY_PAGE_LIST_SPECIAL_TYPE: u16 = 0x0041;
 const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0008;
+const LEGACY_OLE_TYPE: u16 = 0x0003;
+const LEGACY_OLE_DATA_TYPE: u16 = 0x0022;
+const LEGACY_OLE_DATA_CHUNK_LEN: usize = 18;
+const LEGACY_OLE_DATA_STORAGE_OFFSET: usize = 0x0a;
+const LEGACY_OLE_DATA_FLAG_OFFSET: usize = 0x0e;
 const LEGACY_LIST_HEADER_SIZE: usize = 10;
 const LEGACY_LIST_U16_RECORD_SIZE: u16 = 2;
 const LEGACY_DOCUMENT_WIDTH_OFFSET: usize = 0x14;
@@ -249,6 +255,134 @@ pub fn build_legacy_0x22_quill_from_streams(
                 });
                 continue;
             }
+            if child_entry.chunk_type == LEGACY_OLE_TYPE {
+                let chunk = chunk_bytes(contents, child_entry)?;
+                let Some(bounds) = legacy_text_shape_bounds(&page, chunk) else {
+                    diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                        object_id: u32::from(child_object_id),
+                        raw_type: Some(child_entry.chunk_type),
+                        reason: "invalid_or_incomplete_geometry".into(),
+                    });
+                    continue;
+                };
+
+                let mut ole_data_entries = directory
+                    .entries_by_parent_id(child_object_id)
+                    .filter(|entry| entry.chunk_type == LEGACY_OLE_DATA_TYPE);
+                let Some(ole_data_entry) = ole_data_entries.next() else {
+                    diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                        object_id: u32::from(child_object_id),
+                        raw_type: Some(child_entry.chunk_type),
+                        reason: "legacy_ole_missing_oledata_child".into(),
+                    });
+                    continue;
+                };
+                if ole_data_entries.next().is_some() {
+                    diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                        object_id: u32::from(child_object_id),
+                        raw_type: Some(child_entry.chunk_type),
+                        reason: "legacy_ole_multiple_oledata_children".into(),
+                    });
+                    continue;
+                }
+
+                let ole_data_chunk = chunk_bytes(contents, ole_data_entry)?;
+                let Some(legacy_ole) = parse_legacy_ole_data(ole_data_chunk) else {
+                    diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                        object_id: u32::from(child_object_id),
+                        raw_type: Some(child_entry.chunk_type),
+                        reason: "legacy_oledata_grammar_invalid".into(),
+                    });
+                    continue;
+                };
+
+                let node_id = derive_legacy_node_id(&source_hash, child_object_id)?;
+                let object_key = legacy22_object_key(child_object_id);
+                let geometry_span = RawSpan {
+                    stream: contents_stream.clone(),
+                    offset: child_entry.chunk_source.offset + LEGACY_SHAPE_XS_OFFSET as u64,
+                    len: 16,
+                };
+                let storage_span = RawSpan {
+                    stream: contents_stream.clone(),
+                    offset: ole_data_entry.chunk_source.offset
+                        + LEGACY_OLE_DATA_STORAGE_OFFSET as u64,
+                    len: 2,
+                };
+                let flag_span = RawSpan {
+                    stream: contents_stream.clone(),
+                    offset: ole_data_entry.chunk_source.offset + LEGACY_OLE_DATA_FLAG_OFFSET as u64,
+                    len: 2,
+                };
+                let source_refs = vec![
+                    source_ref(
+                        &graph.source,
+                        &child_entry.entry_source,
+                        Some(object_key.clone()),
+                        Some("directory_entry".into()),
+                        SourceRole::Relation,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ),
+                    source_ref(
+                        &graph.source,
+                        &geometry_span,
+                        Some(object_key.clone()),
+                        Some("legacy_center_origin_geometry".into()),
+                        SourceRole::Projection,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ),
+                    source_ref(
+                        &graph.source,
+                        &storage_span,
+                        Some(object_key.clone()),
+                        Some("legacy_ole_storage_number".into()),
+                        SourceRole::Relation,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ),
+                    source_ref(
+                        &graph.source,
+                        &flag_span,
+                        Some(object_key),
+                        Some("legacy_ole_raw_flag".into()),
+                        SourceRole::Semantic,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ),
+                ];
+
+                graph.nodes.insert(
+                    node_id,
+                    Node {
+                        kind: NodeKind::Unsupported,
+                        header: NodeHeader {
+                            id: node_id,
+                            parent_id: page_id.into_canonical(),
+                            bounds,
+                            transform: Affine2D::identity(),
+                            source_refs,
+                            extensions: Vec::new(),
+                        },
+                        payload: PubNodePayload {
+                            contents_seq_num: u32::from(child_object_id),
+                            officeart_shape_type: None,
+                            officeart_spid: None,
+                            image_slot: None,
+                            legacy_ole: Some(legacy_ole),
+                            explicit_image_crop: None,
+                            explicit_paint: PubExplicitShapePaintSource::default(),
+                            effective_paint: None,
+                            story_frame: None,
+                            table_story: None,
+                            table: None,
+                        },
+                    },
+                );
+                continue;
+            }
+
             if child_entry.chunk_type != LEGACY_TEXT_SHAPE_TYPE {
                 diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
                     object_id: u32::from(child_object_id),
@@ -322,6 +456,7 @@ pub fn build_legacy_0x22_quill_from_streams(
                         officeart_shape_type: None,
                         officeart_spid: None,
                         image_slot: None,
+                        legacy_ole: None,
                         explicit_image_crop: None,
                         explicit_paint: PubExplicitShapePaintSource::default(),
                         effective_paint: None,
@@ -453,6 +588,25 @@ fn parse_u16_id_list(
     Ok(LegacyIdList { ids })
 }
 
+fn parse_legacy_ole_data(chunk: &[u8]) -> Option<PubLegacyOleSource> {
+    if chunk.len() != LEGACY_OLE_DATA_CHUNK_LEN
+        || read_u16(chunk, 0x00)? != LEGACY_OLE_DATA_TYPE
+        || read_u16(chunk, 0x02)? != 0x0800
+        || read_u16(chunk, 0x04)? != 0x000a
+        || read_u16(chunk, 0x06)? != 0
+        || chunk.get(0x08..0x0a)? != b"MO"
+        || read_u16(chunk, 0x0c)? != 0
+        || read_u16(chunk, 0x10)? != 0
+    {
+        return None;
+    }
+
+    Some(PubLegacyOleSource {
+        storage_number: read_u16(chunk, LEGACY_OLE_DATA_STORAGE_OFFSET)?,
+        raw_flag: read_u16(chunk, LEGACY_OLE_DATA_FLAG_OFFSET)?,
+    })
+}
+
 fn legacy_text_shape_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
     let xs = i64::from(read_i32(chunk, LEGACY_SHAPE_XS_OFFSET)?);
     let ys = i64::from(read_i32(chunk, LEGACY_SHAPE_YS_OFFSET)?);
@@ -518,5 +672,36 @@ mod tests {
         assert_eq!(bounds.y.get(), 5_429_250);
         assert_eq!(bounds.width.get(), 1_447_800);
         assert_eq!(bounds.height.get(), 704_850);
+    }
+
+    #[test]
+    fn legacy_oledata_parser_preserves_storage_number_and_opaque_flag() {
+        let mut chunk = vec![0_u8; LEGACY_OLE_DATA_CHUNK_LEN];
+        chunk[0x00..0x02].copy_from_slice(&LEGACY_OLE_DATA_TYPE.to_le_bytes());
+        chunk[0x02..0x04].copy_from_slice(&0x0800_u16.to_le_bytes());
+        chunk[0x04..0x06].copy_from_slice(&0x000a_u16.to_le_bytes());
+        chunk[0x08..0x0a].copy_from_slice(b"MO");
+        chunk[LEGACY_OLE_DATA_STORAGE_OFFSET..LEGACY_OLE_DATA_STORAGE_OFFSET + 2]
+            .copy_from_slice(&17_u16.to_le_bytes());
+        chunk[LEGACY_OLE_DATA_FLAG_OFFSET..LEGACY_OLE_DATA_FLAG_OFFSET + 2]
+            .copy_from_slice(&0x8000_u16.to_le_bytes());
+
+        let parsed = parse_legacy_ole_data(&chunk).unwrap();
+        assert_eq!(parsed.storage_number, 17);
+        assert_eq!(parsed.raw_flag, 0x8000);
+    }
+
+    #[test]
+    fn legacy_oledata_parser_fails_closed_on_wire_drift() {
+        let mut chunk = vec![0_u8; LEGACY_OLE_DATA_CHUNK_LEN];
+        chunk[0x00..0x02].copy_from_slice(&LEGACY_OLE_DATA_TYPE.to_le_bytes());
+        chunk[0x02..0x04].copy_from_slice(&0x0800_u16.to_le_bytes());
+        chunk[0x04..0x06].copy_from_slice(&0x000a_u16.to_le_bytes());
+        chunk[0x08..0x0a].copy_from_slice(b"NO");
+
+        assert!(parse_legacy_ole_data(&chunk).is_none());
+        chunk[0x08..0x0a].copy_from_slice(b"MO");
+        chunk.push(0);
+        assert!(parse_legacy_ole_data(&chunk).is_none());
     }
 }
