@@ -1671,6 +1671,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "The typography stream contains unproven fixed block widths; affected typography promotion fails closed.",
         ),
+        ColorSchemeProjectionUnavailable { .. } => (
+            "viewer.paint.color_scheme_unavailable",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "The current publication color scheme could not be resolved safely; scheme-indexed shape colors remain unavailable.",
+        ),
     };
 
     ViewerDiagnostic {
@@ -2602,6 +2607,19 @@ mod tests {
                 .message
                 .contains("core document content remains available")
         );
+    }
+
+    #[test]
+    fn unavailable_color_scheme_is_reported_as_bounded_fidelity_loss() {
+        let mapped =
+            map_bridge_diagnostic(&PubBridgeDiagnostic::ColorSchemeProjectionUnavailable {
+                reason: "synthetic control".into(),
+            });
+
+        assert_eq!(mapped.code, "viewer.paint.color_scheme_unavailable");
+        assert_eq!(mapped.severity, ViewerDiagnosticSeverity::FidelityWarning);
+        assert!(mapped.message.contains("scheme-indexed shape colors"));
+        assert!(!mapped.message.contains("synthetic control"));
     }
 
     #[test]
