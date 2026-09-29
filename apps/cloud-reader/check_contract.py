@@ -3,6 +3,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
+APP = (ROOT / "reader-app.mjs").read_text(encoding="utf-8")
+MODEL = (ROOT / "reader-model.mjs").read_text(encoding="utf-8")
+SURFACE = HTML + APP + MODEL
 RENDERER = (ROOT / "render-v1.mjs").read_text(encoding="utf-8")
 
 required = [
@@ -18,7 +21,7 @@ required = [
     './render-v1.mjs',
 ]
 for needle in required:
-    if needle not in HTML:
+    if needle not in SURFACE:
         raise SystemExit(f"cloud-reader contract missing required marker: {needle!r}")
 
 forbidden = [
@@ -34,13 +37,22 @@ forbidden = [
     "file.name",
 ]
 for needle in forbidden:
-    if needle in HTML:
+    if needle in SURFACE:
         raise SystemExit(f"cloud-reader contract contains forbidden authority/retention marker: {needle!r}")
 
-if 'body: file' not in HTML:
+if 'body: file' not in APP:
     raise SystemExit("guest upload must remain raw-body, not filename-bearing multipart")
 
 print("cloud-reader read-only/ephemeral-consent contract: ok")
+
+for needle in ["#page-select", "#zoom-select", "#search-query", "#story-text", "#assets", "#limitations"]:
+    if needle not in APP:
+        raise SystemExit(f"cloud-reader reading control missing: {needle!r}")
+for needle in ["AbortController", "isCurrent(operation)", "guestRequestPath", "credentials: \"omit\""]:
+    if needle not in APP:
+        raise SystemExit(f"cloud-reader open lifecycle guard missing: {needle!r}")
+if "innerHTML" in SURFACE:
+    raise SystemExit("Reader recovered content must use textContent, not HTML injection")
 
 
 renderer_required = [

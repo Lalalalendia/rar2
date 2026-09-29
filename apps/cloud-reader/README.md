@@ -41,3 +41,37 @@ Viewing a document and contributing it to Chaptera research are separate actions
 5. private durable research promotion only after consent.
 
 Cloud Editor mutation, collaboration, undo/redo and authoring export are intentionally out of scope.
+
+## Reading controls
+
+The interface consumes the same server-owned `chaptera.reader-scene.v1` DTO and
+SVG renderer. Pages follow canonical order, with fit-width and percentage zoom,
+page selection and PgUp/PgDn keyboard navigation in the focused page view.
+Zoom changes only the SVG viewport dimensions.
+
+Recovered stories provide literal, case-insensitive Unicode search and plain-text
+selection/copy. Search selects an exact recovered-text range; the scene contract
+does not currently identify its page location. Images can be saved only when the
+service supplies an admitted inline PNG/JPEG/GIF resource, bounded to 4 MiB each
+and 8 MiB in total. Display limitations remain visible alongside the document.
+
+Opening can be cancelled or replaced by dropping another file. A superseded
+network response or delayed font activation cannot publish an old document.
+Guest paths, session IDs and response protocol versions must agree before the
+client advances; capability tokens never go to another origin.
+
+## UI validation
+
+```sh
+python3 apps/cloud-reader/check_contract.py
+node --test apps/cloud-reader/render-v1.test.mjs apps/cloud-reader/reader-model.test.mjs
+npm install --no-save playwright@1.55.0
+npx playwright install --with-deps chromium
+node apps/cloud-reader/reader-browser.test.mjs
+```
+
+The existing Cloud Reader workflow runs these checks and keeps desktop/mobile
+screenshots and an exact-head receipt under `target/cloud-reader-ui/`. Inputs are
+public-safe synthetic DTOs. This UI suite does not establish real-PUB visual
+fidelity, live hostile-file scanning, deployed cleanup or contribution consent.
+Those require their own release evidence.
