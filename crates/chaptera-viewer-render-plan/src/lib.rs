@@ -13,7 +13,9 @@ use pub_layout::{
 };
 #[cfg(feature = "projected-scene-instances")]
 use pub_model::CanonicalId;
-use pub_model::{Affine2D, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, StoryId};
+use pub_model::{
+    Affine2D, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, StoryId, TableCellId,
+};
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
@@ -47,6 +49,26 @@ pub struct NodeRenderPlanV1 {
     pub image: Option<RenderImageRefV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<RenderTextFragmentV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<RenderTableV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTableV1 {
+    pub story_id: StoryId,
+    pub rows: u32,
+    pub columns: u32,
+    pub cells: Vec<RenderTableCellV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTableCellV1 {
+    pub id: TableCellId,
+    pub row: u32,
+    pub column: u32,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<RectEmu>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -411,6 +433,26 @@ pub fn build_page_render_plan_v1(
                     resource_id: image.resource_id,
                     mime: image.mime.clone(),
                 });
+            let table = visual
+                .tables
+                .iter()
+                .find(|table| table.node_id == node.origin)
+                .map(|table| RenderTableV1 {
+                    story_id: table.story_id,
+                    rows: table.rows,
+                    columns: table.columns,
+                    cells: table
+                        .cells
+                        .iter()
+                        .map(|cell| RenderTableCellV1 {
+                            id: cell.id,
+                            row: cell.address.row,
+                            column: cell.address.column,
+                            text: cell.text.clone(),
+                            bounds: cell.bounds,
+                        })
+                        .collect(),
+                });
             NodeRenderPlanV1 {
                 node_id: node.origin,
                 #[cfg(feature = "projected-scene-instances")]
@@ -426,6 +468,7 @@ pub fn build_page_render_plan_v1(
                     }),
                 image,
                 text,
+                table,
             }
         })
         .collect::<Vec<_>>();
@@ -467,6 +510,7 @@ pub fn build_page_render_plan_v1(
                 }),
             image,
             text: projected_text(visual, projected)?,
+            table: None,
         };
 
         let insert_at = nodes
@@ -839,6 +883,7 @@ mod tests {
                 size_inherited: true,
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
+            tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
                 resource_id,
                 mime: "image/png".into(),
@@ -869,6 +914,7 @@ mod tests {
             node.text.as_ref().map(|text| text.text.as_str()),
             Some("hello")
         );
+        assert!(node.table.is_none());
         let typography = &node.text.as_ref().expect("text").typography;
         assert_eq!(typography.len(), 1);
         assert_eq!(typography[0].scalar_start, 0);
