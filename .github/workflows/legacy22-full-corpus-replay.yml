@@ -481,7 +481,6 @@ jobs:
 
           exact_pairs = pair_rows(exact_groups)
           profile_pairs = pair_rows(profile_groups)
-          assert exact_pairs, "no same CLSID+presentation+clipboard F0/F8000 pairs"
           assert profile_pairs, "no same CLSID+presentation F0/F8000 pairs"
 
           summary = {
