@@ -1,0 +1,289 @@
+name: TEMP exact OPNHOUS Reader acceptance
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/tmp-opnhous-exact-acceptance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  accept:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Reacquire exact public OPNHOUS fixtures by ISO range
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, time, urllib.parse, urllib.request
+          from pathlib import Path
+
+          UA = "chaptera-opnhous-reader-acceptance/1.0"
+          SECTOR = 2048
+          SPECS = {
+              "valid": {
+                  "sha256": "0c74bed1b862f4603a77567f817ad22bf1f7c42eb5afbee0c907732953534b5c",
+                  "size": 11264,
+                  "member": "PAGEWIZ/OPNHOUS.PUB",
+                  "archive_url": "https://archive.org/download/PUB40CD/PUB_40_CD.ISO",
+              },
+              "malformed": {
+                  "sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+                  "size": 11264,
+                  "member": "PageWiz/OPNHOUS.PUB",
+                  "archive_url": "https://archive.org/download/pub-40-cd/PUB_40_CD.iso",
+              },
+          }
+
+          def sha256(data):
+              return hashlib.sha256(data).hexdigest()
+
+          class ISO:
+              def __init__(self, url):
+                  self.url = url
+                  self.cache = {}
+                  self.delivery = self._choose()
+
+              def candidates(self):
+                  parsed = urllib.parse.urlparse(self.url)
+                  parts = parsed.path.split("/")
+                  ident = parts[2]
+                  filename = "/".join(parts[3:])
+                  req = urllib.request.Request(
+                      f"https://archive.org/metadata/{ident}",
+                      headers={"User-Agent": UA},
+                  )
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      meta = json.load(response)
+                  directory = str(meta.get("dir") or "")
+                  out = []
+                  for key in ("d1", "d2"):
+                      host = str(meta.get(key) or "")
+                      if host and directory:
+                          out.append(
+                              "https://" + host + directory.rstrip("/") + "/"
+                              + urllib.parse.quote(filename, safe="/")
+                          )
+                  out.extend([self.url, self.url + "?download=1"])
+                  return list(dict.fromkeys(out))
+
+              def _range(self, url, start, length):
+                  req = urllib.request.Request(
+                      url,
+                      headers={
+                          "User-Agent": UA,
+                          "Range": f"bytes={start}-{start + length - 1}",
+                          "Accept-Encoding": "identity",
+                      },
+                  )
+                  with urllib.request.urlopen(req, timeout=45) as response:
+                      if getattr(response, "status", None) != 206 and not response.headers.get("Content-Range"):
+                          raise ValueError("range unsupported")
+                      data = response.read(length + 1)
+                  if len(data) != length:
+                      raise ValueError("range length drift")
+                  return data
+
+              def _choose(self):
+                  last = None
+                  for url in self.candidates():
+                      for attempt in range(3):
+                          try:
+                              pvd = self._range(url, 16 * SECTOR, SECTOR)
+                              if pvd[:6] != b"\x01CD001":
+                                  raise ValueError("bad ISO primary descriptor")
+                              return url
+                          except Exception as exc:
+                              last = exc
+                              if attempt < 2:
+                                  time.sleep(2 ** attempt)
+                  raise last
+
+              def read(self, start, length):
+                  last = None
+                  for attempt in range(3):
+                      try:
+                          return self._range(self.delivery, start, length)
+                      except Exception as exc:
+                          last = exc
+                          if attempt < 2:
+                              time.sleep(2 ** attempt)
+                  raise last
+
+              @staticmethod
+              def record(raw):
+                  name = raw[33:33 + raw[32]].decode("ascii", "strict")
+                  extent = int.from_bytes(raw[2:6], "little")
+                  size = int.from_bytes(raw[10:14], "little")
+                  flags = raw[25]
+                  return name, extent, size, flags
+
+              def directory(self, extent, size):
+                  key = (extent, size)
+                  if key in self.cache:
+                      return self.cache[key]
+                  data = self.read(extent * SECTOR, size)
+                  out = {}
+                  pos = 0
+                  while pos < len(data):
+                      record_len = data[pos]
+                      if not record_len:
+                          pos = ((pos // SECTOR) + 1) * SECTOR
+                          continue
+                      name, child_extent, child_size, flags = self.record(data[pos:pos + record_len])
+                      if name not in ("\x00", "\x01"):
+                          out[name.split(";")[0].upper()] = (child_extent, child_size, flags)
+                      pos += record_len
+                  self.cache[key] = out
+                  return out
+
+              def member(self, path):
+                  pvd = self.read(16 * SECTOR, SECTOR)
+                  root_len = pvd[156]
+                  _, extent, size, flags = self.record(pvd[156:156 + root_len])
+                  parts = [part.upper() for part in path.strip("/").split("/") if part]
+                  for idx, part in enumerate(parts):
+                      extent, size, flags = self.directory(extent, size)[part]
+                      if idx + 1 < len(parts) and not (flags & 2):
+                          raise ValueError("intermediate member is not directory")
+                  if flags & 2:
+                      raise ValueError("target is directory")
+                  return self.read(extent * SECTOR, size)
+
+          out = Path("/tmp/chaptera-opnhous")
+          out.mkdir(parents=True, exist_ok=True)
+          receipt = {"schema": "chaptera.opnhous-reacquisition.v1", "fixtures": {}}
+          for name, spec in SPECS.items():
+              iso = ISO(spec["archive_url"])
+              data = iso.member(spec["member"])
+              observed = sha256(data)
+              if len(data) != spec["size"] or observed != spec["sha256"]:
+                  raise SystemExit(f"{name} exact fixture drift: len={len(data)} sha={observed}")
+              target = out / f"{name}.pub"
+              target.write_bytes(data)
+              receipt["fixtures"][name] = {
+                  "sha256": observed,
+                  "byte_len": len(data),
+                  "member": spec["member"],
+              }
+
+          Path("/tmp/chaptera-opnhous-reacquisition.json").write_text(
+              json.dumps(receipt, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, indent=2))
+          PY
+
+      - name: Add source-safe exact acceptance test
+        run: |
+          set -euo pipefail
+          cat > vendor/producer-a/crates/pub-viewer/tests/opnhous_exact_acceptance.rs <<'RS'
+          use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
+          use std::{env, fs};
+
+          #[test]
+          fn exact_public_opnhous_positive_and_malformed_negative() {
+              let valid_path = env::var("CHAPTERA_OPNHOUS_PUB").expect("valid OPNHOUS path");
+              let malformed_path =
+                  env::var("CHAPTERA_OPNHOUS_MALFORMED_PUB").expect("malformed OPNHOUS path");
+
+              let valid = fs::read(valid_path).expect("read exact valid OPNHOUS");
+              let before = valid.clone();
+              let visual = open_pub_geometry(&valid, viewer_geometry_environment_v0_1())
+                  .expect("exact Publisher97 OPNHOUS must open through product Viewer path");
+              assert_eq!(valid, before, "Reader open must not mutate source bytes");
+              assert_eq!(visual.document.pages.len(), 4, "authoritative page list");
+              assert_eq!(visual.scene.surfaces.len(), 4, "one scene surface per page");
+              assert!(!visual.scene.nodes.is_empty(), "grounded scene nodes required");
+              assert!(!visual.story_frames.is_empty(), "grounded story frame required");
+              assert!(!visual.text_fragments.is_empty(), "recovered text fragment required");
+              for query in ["OPEN HOUSE", "date of event", "street address"] {
+                  assert!(
+                      !visual.document.search_text(query).is_empty(),
+                      "recovered semantic text must be searchable: {query}"
+                  );
+              }
+
+              let malformed = fs::read(malformed_path).expect("read malformed OPNHOUS control");
+              assert!(
+                  open_pub_geometry(&malformed, viewer_geometry_environment_v0_1()).is_err(),
+                  "malformed same-name OPNHOUS control must remain rejected"
+              );
+          }
+          RS
+          rustfmt --edition 2024 vendor/producer-a/crates/pub-viewer/tests/opnhous_exact_acceptance.rs
+
+      - name: Run exact Reader acceptance
+        env:
+          CHAPTERA_OPNHOUS_PUB: /tmp/chaptera-opnhous/valid.pub
+          CHAPTERA_OPNHOUS_MALFORMED_PUB: /tmp/chaptera-opnhous/malformed.pub
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader family_classifier::tests::exact_opnhous_publisher97_routes_to_legacy_low_text -- --ignored --nocapture
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test opnhous_exact_acceptance -- --nocapture
+
+      - name: Emit source-safe structural receipt
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --release --bin corpus-reader-receipt
+          "$CARGO_TARGET_DIR/release/corpus-reader-receipt" /tmp/chaptera-opnhous/valid.pub out/valid.json
+          "$CARGO_TARGET_DIR/release/corpus-reader-receipt" /tmp/chaptera-opnhous/malformed.pub out/malformed.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          valid = json.loads(Path("out/valid.json").read_text())
+          malformed = json.loads(Path("out/malformed.json").read_text())
+          reacq = json.loads(Path("/tmp/chaptera-opnhous-reacquisition.json").read_text())
+
+          assert valid["opened"] is True
+          assert valid["source_sha256"] == "0c74bed1b862f4603a77567f817ad22bf1f7c42eb5afbee0c907732953534b5c"
+          assert valid["byte_len"] == 11264
+          assert valid["viewer_page_count"] == 4
+          assert valid["scene_surface_count"] == 4
+          assert valid["scene_node_count"] > 0
+          assert valid["story_frame_count"] > 0
+          assert valid["text_fragment_count"] > 0
+          assert malformed["opened"] is False
+          assert malformed["source_sha256"] == "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"
+
+          summary = {
+              "schema": "chaptera.opnhous-reader-acceptance.v1",
+              "source_safe": True,
+              "valid": valid,
+              "malformed": malformed,
+              "reacquisition": reacq,
+              "search_queries_verified": ["OPEN HOUSE", "date of event", "street address"],
+              "raw_pub_retained": False,
+          }
+          Path("out/summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+          Path("out/valid.json").unlink()
+          Path("out/malformed.json").unlink()
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Enforce no raw PUB retention
+        if: always()
+        run: |
+          set -euo pipefail
+          if find out -type f -iname '*.pub' | grep -q .; then
+            echo "raw PUB leaked into receipt"
+            exit 1
+          fi
+          rm -rf /tmp/chaptera-opnhous
+          rm -f vendor/producer-a/crates/pub-viewer/tests/opnhous_exact_acceptance.rs
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: opnhous-reader-exact-acceptance
+          path: out/summary.json
+          if-no-files-found: error
+          retention-days: 90
