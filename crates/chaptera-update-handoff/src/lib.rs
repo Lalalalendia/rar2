@@ -7,7 +7,7 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Child;
 
 pub const CONTROL_REQUEST_SCHEMA_VERSION: &str = "chaptera.update-control-request.v1";
 pub const CONTROL_RECEIPT_SCHEMA_VERSION: &str = "chaptera.update-control-receipt.v1";
@@ -255,15 +255,6 @@ fn sha256_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
-fn apply_control_environment(command: &mut Command) {
-    command.env_clear();
-    for key in CONTROL_ENV_ALLOWLIST {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-}
-
 pub fn read_control_request(path: &Path) -> Result<ControlHandoffRequest> {
     let request: ControlHandoffRequest = serde_json::from_slice(&fs::read(path)?)?;
     if request.schema_version != CONTROL_REQUEST_SCHEMA_VERSION {
@@ -357,24 +348,7 @@ mod launch_policy_tests {
     use super::*;
 
     #[test]
-    fn control_environment_clears_hostile_resolution_and_tooling_variables() {
-        let mut command = Command::new("chaptera-control-probe");
-        command
-            .env("PATH", "C:\\attacker")
-            .env("PATHEXT", ".EXE;.BAT")
-            .env("PYTHONPATH", "C:\\attacker\\python")
-            .env("RUSTFLAGS", "-C linker=C:\\attacker\\link.exe")
-            .env("CARGO_HOME", "C:\\attacker\\cargo")
-            .env("HTTPS_PROXY", "http://127.0.0.1:9")
-            .env("CHAPTERA_HOSTILE_PARENT", "present");
-
-        apply_control_environment(&mut command);
-
-        let environment = command
-            .get_envs()
-            .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
-            .collect::<std::collections::BTreeMap<_, _>>();
-
+    fn control_environment_allowlist_excludes_resolution_and_tooling_authority() {
         for forbidden in [
             "PATH",
             "PATHEXT",
@@ -385,13 +359,10 @@ mod launch_policy_tests {
             "CHAPTERA_HOSTILE_PARENT",
         ] {
             assert!(
-                !environment.contains_key(std::ffi::OsStr::new(forbidden)),
-                "{forbidden} must not survive env_clear"
+                !CONTROL_ENV_ALLOWLIST.contains(&forbidden),
+                "{forbidden} must not enter the updater control allowlist"
             );
         }
-        assert!(environment.keys().all(|key| CONTROL_ENV_ALLOWLIST
-            .iter()
-            .any(|allowed| key == std::ffi::OsStr::new(allowed))));
     }
 }
 
