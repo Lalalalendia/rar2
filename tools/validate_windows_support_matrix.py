@@ -1,1 +1,127 @@
-#!/usr/bin/env python3\n"""Validate the Chaptera Reader Windows support matrix and public copy."""\n\nfrom __future__ import annotations\n\nimport argparse\nimport json\nfrom pathlib import Path\nimport sys\n\nimport jsonschema\n\nSTART = "<!-- chaptera-windows-support:start -->"\nEND = "<!-- chaptera-windows-support:end -->"\n\n\ndef load_json(path: Path) -> dict:\n    with path.open("r", encoding="utf-8-sig") as handle:\n        return json.load(handle)\n\n\ndef render_public_copy(matrix: dict) -> str:\n    public = matrix["public_copy"]\n    editions = ", ".join(public["required_edition_receipts"])\n    scales = " and ".join(f"{value}%" for value in public["fixed_display_scales_percent"])\n    return "\n".join([\n        START,\n        "## Windows system requirements",\n        "",\n        f"Public V0 target: **{public['baseline']}**.",\n        "",\n        "- Consumer Windows support is not claimed until the corresponding matrix row has its physical/VM product receipts.",\n        f"- The first required edition receipt is **Windows 11 25H2 {editions} x64**; other editions require independent receipts.",\n        f"- Fixed display-scale acceptance is **{scales}**. Live movement across mixed-DPI monitors is not claimed.",\n        "- Native ARM64 support is not claimed; hosted ARM64 work is compile-only preflight.",\n        "- GitHub windows-latest / Windows Server 2025 is **CI mechanics evidence only**, not consumer-Windows support evidence.",\n        "- Windows 10 22H2 is outside the default public support promise.",\n        END,\n    ])\n\n\ndef semantic_checks(matrix: dict) -> list[str]:\n    errors: list[str] = []\n    public = matrix["public_copy"]\n    if public["baseline"] != "Windows 11 25H2 x64":\n        errors.append("Public V0 baseline must remain Windows 11 25H2 x64.")\n    if public["fixed_display_scales_percent"] != [100, 150]:\n        errors.append("Public V0 fixed display-scale cells must be exactly 100% and 150%.")\n    if public["mixed_dpi_transition_support"]:\n        errors.append("Mixed-DPI transition support cannot be claimed before separate acceptance closes.")\n    if public["arm64_native_support"]:\n        errors.append("Native ARM64 support cannot be claimed from hosted compile/emulation evidence.")\n    if matrix["ci_evidence"]["consumer_support_claim"]:\n        errors.append("windows-latest / Server 2025 must remain CI-only evidence.")\n\n    cells = matrix["cells"]\n    def key(cell: dict) -> tuple[str, str, str, str]:\n        return (cell["os"], cell["version"], cell["edition"], cell["architecture"])\n    by_key = {key(cell): cell for cell in cells}\n    required = {\n        ("Windows 11", "25H2", "Pro", "x86_64"): "candidate",\n        ("Windows 11", "25H2", "Home", "x86_64"): "candidate",\n        ("Windows 10", "22H2", "any", "x86_64"): "excluded",\n        ("Windows Server", "2025", "GitHub-hosted", "x86_64"): "ci_only",\n        ("Windows 11", "25H2", "any", "arm64"): "evaluation_only",\n    }\n    for cell_key, expected_state in required.items():\n        cell = by_key.get(cell_key)\n        if cell is None:\n            errors.append(f"Missing required support cell: {cell_key!r}")\n        elif cell["state"] != expected_state:\n            errors.append(f"Support cell {cell_key!r} must be {expected_state}, got {cell['state']}.")\n\n    for cell in cells:\n        if cell["state"] == "supported" and not cell.get("receipt_refs"):\n            errors.append("A consumer cell cannot be marked supported without at least one exact receipt_ref: " + repr(key(cell)))\n        if cell["os"] == "Windows Server" and cell["state"] != "ci_only":\n            errors.append("Windows Server rows are CI-only and cannot become consumer support rows.")\n    return errors\n\n\ndef extract_copy(readme_text: str) -> str:\n    start = readme_text.find(START)\n    end = readme_text.find(END)\n    if start < 0 or end < 0 or end < start:\n        raise ValueError("README is missing the bounded Windows support marker block.")\n    end += len(END)\n    return readme_text[start:end].strip()\n\n\ndef validate_matrix(matrix_path: Path, schema_path: Path, readme_path: Path) -> None:\n    matrix = load_json(matrix_path)\n    schema = load_json(schema_path)\n    jsonschema.Draft202012Validator(schema).validate(matrix)\n    errors = semantic_checks(matrix)\n    if errors:\n        raise ValueError("\n".join(errors))\n    actual = extract_copy(readme_path.read_text(encoding="utf-8"))\n    expected = render_public_copy(matrix)\n    if actual != expected:\n        raise ValueError("Reader public Windows support copy drifted from the support matrix.")\n\n\ndef validate_runner_receipt(receipt_path: Path, matrix_path: Path) -> None:\n    receipt = load_json(receipt_path)\n    matrix = load_json(matrix_path)\n    errors: list[str] = []\n    if receipt.get("schema_version") != "chaptera.windows-runner-receipt.v1":\n        errors.append("Runner receipt schema mismatch.")\n    if receipt.get("runner_label") != matrix["ci_evidence"]["github_runner_label"]:\n        errors.append("Runner label does not match matrix CI evidence authority.")\n    if receipt.get("consumer_support_claim") is not False:\n        errors.append("Hosted runner receipt must never claim consumer support.")\n    caption = str(receipt.get("os_caption", ""))\n    expected = matrix["ci_evidence"]["expected_runner_family"]\n    if expected not in caption:\n        errors.append(f"Expected runner family {expected!r} not found in OS caption {caption!r}.")\n    if str(receipt.get("runner_arch", "")).upper() not in {"X64", "AMD64"}:\n        errors.append("Hosted support-matrix evidence must be produced by the expected x64 runner.")\n    if errors:\n        raise ValueError("\n".join(errors))\n\n\ndef main() -> int:\n    parser = argparse.ArgumentParser()\n    sub = parser.add_subparsers(dest="command", required=True)\n    matrix_cmd = sub.add_parser("matrix")\n    matrix_cmd.add_argument("matrix", type=Path)\n    matrix_cmd.add_argument("schema", type=Path)\n    matrix_cmd.add_argument("readme", type=Path)\n    receipt_cmd = sub.add_parser("runner-receipt")\n    receipt_cmd.add_argument("receipt", type=Path)\n    receipt_cmd.add_argument("matrix", type=Path)\n    args = parser.parse_args()\n    try:\n        if args.command == "matrix":\n            validate_matrix(args.matrix, args.schema, args.readme)\n        else:\n            validate_runner_receipt(args.receipt, args.matrix)\n    except (OSError, ValueError, json.JSONDecodeError, jsonschema.ValidationError) as exc:\n        print(f"windows-support validation failed: {exc}", file=sys.stderr)\n        return 1\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n
+#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+
+import jsonschema
+
+START = "<!-- chaptera-windows-support:start -->"
+END = "<!-- chaptera-windows-support:end -->"
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def render_copy(matrix):
+    public = matrix["public_copy"]
+    scales = " and ".join(str(value) + "%" for value in public["fixed_display_scales_percent"])
+    edition = ", ".join(public["required_edition_receipts"])
+    return "\n".join([
+        START,
+        "## Windows system requirements",
+        "",
+        "Public V0 target: **" + public["baseline"] + "**.",
+        "",
+        "- Consumer Windows support is not claimed until the corresponding matrix row has its physical/VM product receipts.",
+        "- The first required edition receipt is **Windows 11 25H2 " + edition + " x64**; other editions require independent receipts.",
+        "- Fixed display-scale acceptance is **" + scales + "**. Live movement across mixed-DPI monitors is not claimed.",
+        "- Native ARM64 support is not claimed; hosted ARM64 work is compile-only preflight.",
+        "- GitHub windows-latest / Windows Server 2025 is **CI mechanics evidence only**, not consumer-Windows support evidence.",
+        "- Windows 10 22H2 is outside the default public support promise.",
+        END,
+    ])
+
+
+def semantic_errors(matrix):
+    errors = []
+    public = matrix["public_copy"]
+    if public["baseline"] != "Windows 11 25H2 x64":
+        errors.append("baseline must be Windows 11 25H2 x64")
+    if public["fixed_display_scales_percent"] != [100, 150]:
+        errors.append("fixed display-scale cells must be exactly 100 and 150")
+    if public["mixed_dpi_transition_support"]:
+        errors.append("mixed-DPI transition support is not admitted")
+    if public["arm64_native_support"]:
+        errors.append("native ARM64 support cannot come from hosted preflight")
+    if matrix["ci_evidence"]["consumer_support_claim"]:
+        errors.append("windows-latest must remain CI-only evidence")
+
+    cells = {
+        (c["os"], c["version"], c["edition"], c["architecture"]): c
+        for c in matrix["cells"]
+    }
+    required = {
+        ("Windows 11", "25H2", "Pro", "x86_64"): "candidate",
+        ("Windows 11", "25H2", "Home", "x86_64"): "candidate",
+        ("Windows 10", "22H2", "any", "x86_64"): "excluded",
+        ("Windows Server", "2025", "GitHub-hosted", "x86_64"): "ci_only",
+        ("Windows 11", "25H2", "any", "arm64"): "evaluation_only",
+    }
+    for key, state in required.items():
+        if key not in cells:
+            errors.append("missing required cell: " + repr(key))
+        elif cells[key]["state"] != state:
+            errors.append("wrong state for " + repr(key) + ": expected " + state)
+    for key, cell in cells.items():
+        if cell["state"] == "supported" and not cell.get("receipt_refs"):
+            errors.append("supported cell lacks receipt_refs: " + repr(key))
+        if cell["os"] == "Windows Server" and cell["state"] != "ci_only":
+            errors.append("Windows Server rows must remain ci_only")
+    return errors
+
+
+def validate_matrix(matrix_path, schema_path, readme_path):
+    matrix = read_json(matrix_path)
+    schema = read_json(schema_path)
+    jsonschema.Draft202012Validator(schema).validate(matrix)
+    errors = semantic_errors(matrix)
+    if errors:
+        raise ValueError("; ".join(errors))
+
+    readme = Path(readme_path).read_text(encoding="utf-8")
+    start = readme.find(START)
+    end = readme.find(END)
+    if start < 0 or end < start:
+        raise ValueError("README support marker block is missing")
+    actual = readme[start:end + len(END)].strip()
+    if actual != render_copy(matrix):
+        raise ValueError("README Windows support copy drifted from matrix")
+
+
+def validate_receipt(receipt_path, matrix_path):
+    receipt = read_json(receipt_path)
+    matrix = read_json(matrix_path)
+    if receipt.get("schema_version") != "chaptera.windows-runner-receipt.v1":
+        raise ValueError("runner receipt schema mismatch")
+    if receipt.get("runner_label") != matrix["ci_evidence"]["github_runner_label"]:
+        raise ValueError("runner label mismatch")
+    if receipt.get("consumer_support_claim") is not False:
+        raise ValueError("hosted runner cannot claim consumer support")
+    expected = matrix["ci_evidence"]["expected_runner_family"]
+    if expected not in str(receipt.get("os_caption", "")):
+        raise ValueError("unexpected runner family")
+    if str(receipt.get("runner_arch", "")).upper() not in {"X64", "AMD64"}:
+        raise ValueError("runner is not x64")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    matrix_cmd = sub.add_parser("matrix")
+    matrix_cmd.add_argument("matrix")
+    matrix_cmd.add_argument("schema")
+    matrix_cmd.add_argument("readme")
+    receipt_cmd = sub.add_parser("runner-receipt")
+    receipt_cmd.add_argument("receipt")
+    receipt_cmd.add_argument("matrix")
+    args = parser.parse_args()
+
+    if args.command == "matrix":
+        validate_matrix(args.matrix, args.schema, args.readme)
+    else:
+        validate_receipt(args.receipt, args.matrix)
+
+
+if __name__ == "__main__":
+    main()
