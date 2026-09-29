@@ -1334,15 +1334,17 @@ impl ViewerApp {
             .flatten();
 
         #[cfg(target_os = "windows")]
-        let contained = contained_open::open_admitted_source(bytes).map_err(|error| {
-            ViewerLoadFailure {
+        let contained =
+            contained_open::open_admitted_source(bytes).map_err(|error| ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
                 attempted_path: Some(path.clone()),
-                message: format!("Could not open {} in the Windows parser sandbox: {error}", path.display()),
+                message: format!(
+                    "Could not open {} in the Windows parser sandbox: {error}",
+                    path.display()
+                ),
                 classification: Some(classify_failure_candidate(bytes)),
                 diagnostic_json: None,
-            }
-        })?;
+            })?;
 
         #[cfg(target_os = "windows")]
         let visual = contained.visual;
@@ -1361,8 +1363,8 @@ impl ViewerApp {
             (None, None, None)
         } else {
             #[cfg(target_os = "windows")]
-            let editor_result = pub_editor::EditorSession::new(contained.graph)
-                .map_err(|error| error.to_string());
+            let editor_result =
+                pub_editor::EditorSession::new(contained.graph).map_err(|error| error.to_string());
 
             #[cfg(not(target_os = "windows"))]
             let editor_result = {
