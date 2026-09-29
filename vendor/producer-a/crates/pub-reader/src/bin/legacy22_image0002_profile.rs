@@ -271,7 +271,11 @@ fn main() -> Result<()> {
             .entries_by_parent_id(image.object_id)
             .filter(|entry| entry.chunk_type == RAW_IMAGE_DATA)
             .collect::<Vec<_>>();
-        let direct_native_entry = (direct_image_data.len() == 1).then_some(direct_image_data[0]);
+        let direct_native_entry = if direct_image_data.len() == 1 {
+            direct_image_data.first().copied()
+        } else {
+            None
+        };
         let direct_native_chunk =
             direct_native_entry.and_then(|entry| chunk_bytes(&contents, entry));
         let direct_native_wmf_offsets = direct_native_chunk
