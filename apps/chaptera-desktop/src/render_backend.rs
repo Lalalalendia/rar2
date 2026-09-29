@@ -5,7 +5,8 @@
 //! EditorSession state, commands and product chrome) stays in the shell.
 
 use chaptera_viewer_render_plan::{
-    NodeRenderPlanV1, RenderTextFragmentV1, RenderTextLayoutDispositionV1,
+    NodeRenderPlanV1, RenderImageSourceWindowV1, RenderTextFragmentV1,
+    RenderTextLayoutDispositionV1,
 };
 use eframe::egui;
 
@@ -66,6 +67,69 @@ pub fn physical_rect_to_egui(
     Some(egui::Rect::from_min_size(min, size))
 }
 
+fn image_paint_geometry(
+    node_rect: egui::Rect,
+    source_window: Option<&RenderImageSourceWindowV1>,
+) -> Option<(egui::Rect, egui::Rect)> {
+    let destination = node_rect.shrink(1.0);
+    if destination.width() <= 0.0 || destination.height() <= 0.0 {
+        return None;
+    }
+
+    let Some(window) = source_window else {
+        return Some((
+            destination,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        ));
+    };
+
+    const Q16_ONE: f64 = 65_536.0;
+    let left = window.left_q16 as f64 / Q16_ONE;
+    let top = window.top_q16 as f64 / Q16_ONE;
+    let right = window.right_q16 as f64 / Q16_ONE;
+    let bottom = window.bottom_q16 as f64 / Q16_ONE;
+    if !left.is_finite()
+        || !top.is_finite()
+        || !right.is_finite()
+        || !bottom.is_finite()
+        || right <= left
+        || bottom <= top
+    {
+        return None;
+    }
+
+    let source_left = left.max(0.0);
+    let source_top = top.max(0.0);
+    let source_right = right.min(1.0);
+    let source_bottom = bottom.min(1.0);
+    if source_right <= source_left || source_bottom <= source_top {
+        return None;
+    }
+
+    let window_width = right - left;
+    let window_height = bottom - top;
+    let dest_left = (source_left - left) / window_width;
+    let dest_top = (source_top - top) / window_height;
+    let dest_right = (source_right - left) / window_width;
+    let dest_bottom = (source_bottom - top) / window_height;
+
+    let image_rect = egui::Rect::from_min_max(
+        egui::pos2(
+            destination.left() + (dest_left as f32 * destination.width()),
+            destination.top() + (dest_top as f32 * destination.height()),
+        ),
+        egui::pos2(
+            destination.left() + (dest_right as f32 * destination.width()),
+            destination.top() + (dest_bottom as f32 * destination.height()),
+        ),
+    );
+    let uv_rect = egui::Rect::from_min_max(
+        egui::pos2(source_left as f32, source_top as f32),
+        egui::pos2(source_right as f32, source_bottom as f32),
+    );
+    Some((image_rect, uv_rect))
+}
+
 /// Paints document-owned layers that occur before shell/debug overlays.
 ///
 /// The shell resolves temporary authoring preview state (for example a
@@ -86,12 +150,13 @@ pub fn paint_document_node_base(
     }
 
     if let Some(texture) = texture {
-        painter.image(
-            texture,
-            node_rect.shrink(1.0),
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
+        let source_window = node
+            .image
+            .as_ref()
+            .and_then(|image| image.source_window.as_ref());
+        if let Some((image_rect, uv_rect)) = image_paint_geometry(node_rect, source_window) {
+            painter.image(texture, image_rect, uv_rect, egui::Color32::WHITE);
+        }
     }
 }
 
@@ -509,6 +574,62 @@ mod tests {
 
         assert_eq!(rect.min, egui::pos2(110.0, 65.0));
         assert_eq!(rect.size(), egui::vec2(50.0, 40.0));
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn image_paint_geometry_keeps_full_texture_when_no_source_window_exists() {
+        let node = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(210.0, 120.0));
+        let (destination, uv) = image_paint_geometry(node, None).expect("full image");
+        assert_eq!(destination, node.shrink(1.0));
+        assert_eq!(
+            uv,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
+        );
+    }
+
+    #[test]
+    fn image_paint_geometry_executes_positive_crop_as_uv_viewport() {
+        let node = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(202.0, 102.0));
+        let window = RenderImageSourceWindowV1 {
+            left_q16: 0,
+            top_q16: 16_384,
+            right_q16: 65_536,
+            bottom_q16: 49_152,
+        };
+        let (destination, uv) = image_paint_geometry(node, Some(&window)).expect("positive crop");
+        assert_eq!(destination, node.shrink(1.0));
+        assert_close(uv.left(), 0.0);
+        assert_close(uv.top(), 0.25);
+        assert_close(uv.right(), 1.0);
+        assert_close(uv.bottom(), 0.75);
+    }
+
+    #[test]
+    fn image_paint_geometry_executes_negative_fit_crop_as_letterboxed_content() {
+        let node = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(202.0, 102.0));
+        let window = RenderImageSourceWindowV1 {
+            left_q16: -65_536,
+            top_q16: 0,
+            right_q16: 131_072,
+            bottom_q16: 65_536,
+        };
+        let (destination, uv) = image_paint_geometry(node, Some(&window)).expect("negative crop");
+        let frame = node.shrink(1.0);
+        assert_close(destination.left(), frame.left() + frame.width() / 3.0);
+        assert_close(destination.right(), frame.right() - frame.width() / 3.0);
+        assert_close(destination.top(), frame.top());
+        assert_close(destination.bottom(), frame.bottom());
+        assert_eq!(
+            uv,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))
+        );
     }
 
     #[test]
