@@ -38,6 +38,10 @@ jobs:
           cargo build -p chaptera-desktop --release --features reader-only
           if (-not (Test-Path "target/release/chaptera-editor.exe")) { throw "reader-only shared desktop binary missing" }
 
+      - name: Stage contained desktop-open runtime
+        shell: pwsh
+        run: ./tools/windows/build_desktop_open_runtime.ps1 -Destination "target/release"
+
       - name: Stage product-qualified Reader payload
         shell: pwsh
         run: |
@@ -46,6 +50,9 @@ jobs:
           $stage = "stage/chaptera-reader"
           New-Item -ItemType Directory -Force -Path $stage,dist | Out-Null
           Copy-Item "target/release/chaptera-editor.exe" "$stage/Chaptera-Reader.exe"
+          Copy-Item "target/release/chaptera-desktop-open-worker.exe" "$stage/chaptera-desktop-open-worker.exe"
+          Copy-Item "target/release/chaptera-desktop-open-sandbox-host.exe" "$stage/chaptera-desktop-open-sandbox-host.exe"
+          Copy-Item "target/release/chaptera-desktop-open-runtime.json" "$stage/chaptera-desktop-open-runtime.json"
           @"
           # Chaptera PUB Reader — Technical Preview
 
@@ -118,6 +125,15 @@ jobs:
 
           $installed = Join-Path $installRoot "current\chaptera-reader.exe"
           if (-not (Test-Path $installed)) { throw "Installed Reader binary not found under current/" }
+          foreach ($runtimeName in @(
+            "chaptera-desktop-open-worker.exe",
+            "chaptera-desktop-open-sandbox-host.exe",
+            "chaptera-desktop-open-runtime.json"
+          )) {
+            if (-not (Test-Path (Join-Path (Split-Path $installed) $runtimeName))) {
+              throw "Installed Reader containment runtime missing: $runtimeName"
+            }
+          }
           if (Test-Path (Join-Path $installRoot "chaptera-reader.exe")) { throw "legacy root-level Reader executable survived epoch-1 install" }
           if (Test-Path (Join-Path $installRoot "README.md")) { throw "legacy root-level README survived epoch-1 install" }
           foreach ($requiredDir in @("current",".staging",".rollback")) {
