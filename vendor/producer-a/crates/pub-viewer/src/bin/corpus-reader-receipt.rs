@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use pub_model::{NodeId, NodeKind};
 use pub_reader::{
-    LegacyOleCachedPresentationSelection, PubBridgeDiagnostic,
     build_legacy_0x22_noquill_source_graph, rasterize_wmf_preview, resolve_pub_source_graph,
     scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
+    LegacyOleCachedPresentationSelection, PubBridgeDiagnostic,
 };
-use pub_viewer::{ViewerGeometryDocument, open_pub_geometry, viewer_geometry_environment_v0_1};
+use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1, ViewerGeometryDocument};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -19,7 +19,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
-
 
 fn legacy_object_residual_census(
     bytes: &[u8],
@@ -55,7 +54,6 @@ fn legacy_object_residual_census(
         })
         .collect())
 }
-
 
 fn raster_rejection_detail(error: &anyhow::Error) -> String {
     let message = error.to_string();
