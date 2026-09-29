@@ -496,6 +496,25 @@ fn wmf_raster_error_class(message: &str) -> &'static str {
     }
 }
 
+fn wmf_raster_error_detail(message: &str) -> String {
+    if let Some(code) = message.strip_prefix("unsupported WMF record function ") {
+        return format!("record_function_{code}");
+    }
+    if let Some(code) = message.strip_prefix("unsupported WMF escape function ") {
+        return format!("escape_function_{code}");
+    }
+    if message == "WMF selects an unsupported pattern brush graphics object" {
+        return "select_unsupported_pattern_brush".to_owned();
+    }
+    if message == "WMF selects an unsupported region graphics object" {
+        return "select_unsupported_region".to_owned();
+    }
+    if message == "WMF selects an unsupported graphics object" {
+        return "select_unsupported_object".to_owned();
+    }
+    wmf_raster_error_class(message).to_owned()
+}
+
 fn wmf_raster_profile(chunk: &[u8]) -> Value {
     let Some((recovery_class, wmf)) = recovered_wmf_candidate(chunk) else {
         return json!({
@@ -515,12 +534,16 @@ fn wmf_raster_profile(chunk: &[u8]) -> Value {
             "raster_width": preview.width,
             "raster_height": preview.height,
         }),
-        Err(error) => json!({
-            "candidate": true,
-            "recovery_class": recovery_class,
-            "raster_success": false,
-            "raster_error_class": wmf_raster_error_class(&error.to_string()),
-        }),
+        Err(error) => {
+            let message = error.to_string();
+            json!({
+                "candidate": true,
+                "recovery_class": recovery_class,
+                "raster_success": false,
+                "raster_error_class": wmf_raster_error_class(&message),
+                "raster_error_detail": wmf_raster_error_detail(&message),
+            })
+        },
     }
 }
 
