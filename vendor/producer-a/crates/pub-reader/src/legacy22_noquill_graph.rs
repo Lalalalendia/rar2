@@ -21,6 +21,7 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
 const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0000;
+const LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES: [u16; 4] = [0x0004, 0x0005, 0x0006, 0x0007];
 const LEGACY_LIST_HEADER_SIZE: usize = 10;
 const LEGACY_LIST_U16_RECORD_SIZE: u16 = 2;
 const LEGACY_DOCUMENT_WIDTH_OFFSET: usize = 0x14;
@@ -258,7 +259,8 @@ pub fn build_legacy_0x22_noquill_from_contents(
                 });
                 continue;
             }
-            if child_entry.chunk_type != LEGACY_TEXT_SHAPE_TYPE {
+            let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
+            if !is_text_shape && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type) {
                 diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
                     object_id: u32::from(child_object_id),
                     raw_type: Some(child_entry.chunk_type),
@@ -268,7 +270,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
             }
 
             let chunk = chunk_bytes(contents, child_entry)?;
-            let Some(bounds) = legacy_text_shape_bounds(&page, chunk) else {
+            let Some(bounds) = legacy_shape_bounds(&page, chunk) else {
                 diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
                     object_id: u32::from(child_object_id),
                     raw_type: Some(child_entry.chunk_type),
@@ -278,7 +280,11 @@ pub fn build_legacy_0x22_noquill_from_contents(
             };
 
             let node_id = derive_legacy_node_id(&source_hash, child_object_id)?;
-            let story_id = story_by_owner.get(&child_object_id).copied();
+            let story_id = if is_text_shape {
+                story_by_owner.get(&child_object_id).copied()
+            } else {
+                None
+            };
             let source_refs = vec![
                 source_ref(
                     &graph.source,
@@ -548,7 +554,11 @@ fn parse_u16_id_list(
     })
 }
 
-fn legacy_text_shape_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
+fn is_legacy_simple_geometry_shape_type(chunk_type: u16) -> bool {
+    LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES.contains(&chunk_type)
+}
+
+fn legacy_shape_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
     let xs = i64::from(read_i32(chunk, LEGACY_SHAPE_XS_OFFSET)?);
     let ys = i64::from(read_i32(chunk, LEGACY_SHAPE_YS_OFFSET)?);
     let xe = i64::from(read_i32(chunk, LEGACY_SHAPE_XE_OFFSET)?);
@@ -594,5 +604,24 @@ mod tests {
             "OPEN HOUSE"
         );
         assert!(decode_bounded_legacy_ascii(&[0x80]).is_err());
+    }
+
+    #[test]
+    fn simple_geometry_shape_admission_is_bounded() {
+        for chunk_type in LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES {
+            assert!(is_legacy_simple_geometry_shape_type(chunk_type));
+        }
+
+        for chunk_type in [
+            LEGACY_TEXT_SHAPE_TYPE,
+            0x0002, // image
+            0x0008, // Quill-era text shape
+            0x000a, // table
+            0x000f, // group
+            LEGACY_PAGE_TYPE,
+            LEGACY_DOCUMENT_TYPE,
+        ] {
+            assert!(!is_legacy_simple_geometry_shape_type(chunk_type));
+        }
     }
 }
