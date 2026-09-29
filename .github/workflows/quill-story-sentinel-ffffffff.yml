@@ -1,0 +1,151 @@
+name: Quill story sentinel FFFFFFFF discriminator
+
+on:
+  push:
+    branches:
+      - research/quill-story-sentinel-ffffffff-01
+    paths:
+      - ".github/workflows/quill-story-sentinel-ffffffff.yml"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/quill-story-sentinel-probe.rs"
+      - "vendor/producer-a/crates/pub-quill/src/story.rs"
+      - "vendor/producer-a/crates/pub-quill/src/lib.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  sentinel-discriminator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Prepare exact seven sentinel witnesses
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/sentinel7
+          cat > /tmp/sentinel-sha.txt <<'EOF'
+          211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157
+          6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a
+          9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569
+          9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966
+          b171668d889a4e30cc8c7838a88f406017d67c722bf059965b1dfcfb9876d055
+          bc28f3ced90b0c9452bda1bd5bdaf2d841feb1d44bd7e84749a13ff2072e20f2
+          ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff
+          EOF
+          while read -r sha; do
+            src="out/pinned1050/materialized/native/${sha}.pub"
+            test -f "$src"
+            echo "${sha}  $src" | sha256sum -c -
+            cp "$src" "out/sentinel7/${sha}.pub"
+          done < /tmp/sentinel-sha.txt
+          test "$(find out/sentinel7 -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 7
+
+      - name: Build targeted source-safe sentinel probe
+        run: |
+          set -euo pipefail
+          cargo build             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --release             --bin quill-story-sentinel-probe
+
+      - name: Run exact seven-witness discriminator
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/release/quill-story-sentinel-probe"             out/sentinel7             out/quill-story-sentinel-report.json
+
+      - name: Guard sentinel cohort and summarize grounded demand
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+
+          expected = {
+              "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
+              "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a",
+              "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569",
+              "9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966",
+              "b171668d889a4e30cc8c7838a88f406017d67c722bf059965b1dfcfb9876d055",
+              "bc28f3ced90b0c9452bda1bd5bdaf2d841feb1d44bd7e84749a13ff2072e20f2",
+              "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff",
+          }
+          report = json.loads(Path("out/quill-story-sentinel-report.json").read_text())
+          rows = report["rows"]
+          assert report["witness_count"] == 7, report["witness_count"]
+          assert {row["source_sha256"] for row in rows} == expected
+
+          for row in rows:
+              assert row["quill_error_kind"] == "too_short", row
+              assert row["quill_failure_stage"] == "syid_id_array", row
+              evidence = row["quill_failure_evidence"]
+              assert evidence["kind"] == "syid_id_array", evidence
+              assert evidence["declared_count"] == 0xFFFFFFFF, evidence
+              assert evidence["strs_declared_count"] == 0xFFFFFFFF, evidence
+              assert evidence["strs_count_matches"] is True, evidence
+              assert evidence["next_boundary_is_descriptor"] is True, evidence
+              assert evidence["required_fits_before_next_boundary"] is False, evidence
+              assert row["contents_story_demand"] is not None, row
+
+          story_counts = Counter(
+              "none" if row["contents_story_count"] is None else str(row["contents_story_count"])
+              for row in rows
+          )
+          demand = Counter(
+              (
+                  row["contents_story_demand"]["live_shape_field_27_occurrence_count"],
+                  row["contents_story_demand"]["live_table_field_27_occurrence_count"],
+                  row["contents_story_demand"]["live_distinct_field_27_value_count"],
+              )
+              for row in rows
+          )
+          summary = {
+              "schema": "chaptera.quill-story-sentinel-ffffffff.summary.v1",
+              "witness_count": 7,
+              "contents_story_count_clusters": dict(sorted(story_counts.items())),
+              "story_demand_clusters": [
+                  {
+                      "shape_field27_occurrences": key[0],
+                      "table_field27_occurrences": key[1],
+                      "distinct_field27_values": key[2],
+                      "count": count,
+                  }
+                  for key, count in sorted(demand.items())
+              ],
+              "evidence_boundary": (
+                  "exact witness SHA and aggregate source-safe counts only; "
+                  "no filenames, paths, document text, Story IDs, raw bytes or raw parser text"
+              ),
+          }
+          Path("out/quill-story-sentinel-summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quill-story-sentinel-ffffffff-${{ github.run_id }}
+          path: |
+            out/quill-story-sentinel-report.json
+            out/quill-story-sentinel-summary.json
+          if-no-files-found: error
+          retention-days: 90
