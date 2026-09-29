@@ -126,6 +126,51 @@ function appendText(group, node) {
   group.appendChild(foreign);
 }
 
+export function tableCellPaintGeometry(cell) {
+  const bounds = cell?.bounds;
+  if (!bounds) return null;
+  const x = safeInteger(bounds.x, "table.cell.bounds.x");
+  const y = safeInteger(bounds.y, "table.cell.bounds.y");
+  const width = safeInteger(bounds.width, "table.cell.bounds.width");
+  const height = safeInteger(bounds.height, "table.cell.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  return Object.freeze({ x, y, width, height });
+}
+
+function appendTableText(group, node) {
+  const table = node.table;
+  if (!table) return;
+  for (const cell of table.cells ?? []) {
+    const geometry = tableCellPaintGeometry(cell);
+    if (!geometry || !cell.text) continue;
+
+    const foreign = svgNode("foreignObject", {
+      x: geometry.x,
+      y: geometry.y,
+      width: geometry.width,
+      height: geometry.height,
+      "data-table-cell-id": cell.cell_id,
+      "data-table-row": cell.row,
+      "data-table-column": cell.column,
+      "data-table-paint-authority": "none",
+      "data-text-authority": "browser-preview-only"
+    });
+    const div = document.createElementNS(XHTML_NS, "div");
+    div.style.width = "100%";
+    div.style.height = "100%";
+    div.style.overflow = "hidden";
+    div.style.whiteSpace = "pre-wrap";
+    div.style.font = "12px system-ui, sans-serif";
+    div.style.lineHeight = "1.2";
+    div.style.color = "#000";
+    div.style.padding = "2px";
+    div.style.boxSizing = "border-box";
+    div.textContent = cell.text.replace(/\r/g, "\n");
+    foreign.appendChild(div);
+    group.appendChild(foreign);
+  }
+}
+
 function appendImage(group, defs, node, resource, clipId) {
   const href = imageDataUrl(resource);
   if (!href) return false;
@@ -219,6 +264,7 @@ function renderNode(svg, defs, node, resources, index) {
     }));
   }
 
+  appendTableText(group, node);
   appendText(group, node);
   svg.appendChild(group);
 }
