@@ -1,0 +1,174 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Open a PUB file — Chaptera</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;background:#f5f6f8;color:#17202a}
+header{padding:24px 28px;background:#fff;border-bottom:1px solid #dfe3e8}
+h1{margin:0;font-size:24px}p{line-height:1.5}
+main{max-width:1180px;margin:0 auto;padding:24px}
+.card{background:#fff;border:1px solid #dfe3e8;border-radius:12px;padding:18px;margin-bottom:18px}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+input,button{font:inherit;padding:9px 11px;border-radius:8px;border:1px solid #c7ced8;background:#fff}
+button{cursor:pointer;background:#1f5eff;color:#fff;border-color:#1f5eff}
+button:disabled{opacity:.55;cursor:not-allowed}
+#status{font-size:13px;color:#5d6876}.error{color:#b3261e!important}.ok{color:#137333!important}
+#pages{display:flex;flex-direction:column;gap:24px;align-items:center}
+.page{position:relative;background:#fff;box-shadow:0 2px 14px rgba(0,0,0,.14);overflow:hidden}
+.node{position:absolute;border:1px solid rgba(20,30,45,.18);overflow:hidden;white-space:pre-wrap;font-size:12px;padding:2px}
+.meta{font-size:13px;color:#5d6876;display:flex;gap:14px;flex-wrap:wrap}
+.notice{font-size:13px;color:#46515f}
+code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+</style>
+<header>
+  <h1>Open a Publisher (.PUB) file online</h1>
+  <p>Chaptera Cloud Reader is a read-only surface. Viewing and research contribution are separate actions.</p>
+</header>
+<main>
+  <section class="card">
+    <div class="toolbar">
+      <label>Cloud document ID <input id="document-id" autocomplete="off" placeholder="document-..."></label>
+      <button id="open">Open</button>
+      <span id="status">Enter an authorized cloud document ID.</span>
+    </div>
+    <p class="notice">
+      Public drag-and-drop upload is not enabled in this implementation slice.
+      Choosing to view a file will never, by itself, authorize Chaptera to retain it as a research fixture.
+      Exact-file corpus contribution requires a separate explicit consent flow.
+    </p>
+  </section>
+  <section id="summary" class="card" hidden>
+    <div class="meta">
+      <span id="revision"></span>
+      <span id="fidelity"></span>
+      <span id="diagnostics"></span>
+    </div>
+  </section>
+  <section id="pages"></section>
+</main>
+<script>
+(() => {
+  const EMU_PER_CSS_PX = 9525;
+  const MAX_PAGE_WIDTH = 920;
+  const input = document.querySelector("#document-id");
+  const openButton = document.querySelector("#open");
+  const status = document.querySelector("#status");
+  const pagesHost = document.querySelector("#pages");
+  const summary = document.querySelector("#summary");
+
+  const params = new URLSearchParams(location.search);
+  input.value = params.get("document_id") ?? "";
+
+  function idString(value) {
+    if (typeof value === "string") return value;
+    return JSON.stringify(value);
+  }
+
+  function px(emu, scale) {
+    return (Number(emu) / EMU_PER_CSS_PX) * scale;
+  }
+
+  function rgb(value, fallback) {
+    if (!Array.isArray(value) || value.length !== 3) return fallback;
+    return "rgb(" + value.map(Number).join(" ") + ")";
+  }
+
+  function sceneFidelity(geometry) {
+    return (geometry.document.diagnostics ?? []).some((item) => item.severity === "fidelity_warning")
+      ? "partial"
+      : "supported";
+  }
+
+  function render(payload) {
+    const geometry = payload.geometry;
+    const scene = geometry.scene;
+    const paintByNode = new Map((geometry.paints ?? []).map((paint) => [idString(paint.node_id), paint]));
+    const textByFrame = new Map();
+    for (const fragment of geometry.text_fragments ?? []) {
+      const key = idString(fragment.frame_id);
+      textByFrame.set(key, (textByFrame.get(key) ?? "") + fragment.text);
+    }
+
+    pagesHost.replaceChildren();
+    for (const surface of scene.surfaces ?? []) {
+      const pageWidth = Number(surface.size.width) / EMU_PER_CSS_PX;
+      const pageHeight = Number(surface.size.height) / EMU_PER_CSS_PX;
+      const scale = Math.min(1, MAX_PAGE_WIDTH / Math.max(1, pageWidth));
+      const page = document.createElement("div");
+      page.className = "page";
+      page.style.width = px(surface.size.width, scale) + "px";
+      page.style.height = px(surface.size.height, scale) + "px";
+      page.dataset.pageId = idString(surface.origin);
+
+      for (const node of scene.nodes ?? []) {
+        if (idString(node.parent_origin) !== idString(surface.origin)) continue;
+        const nodeId = idString(node.origin);
+        const paint = paintByNode.get(nodeId);
+        const el = document.createElement("div");
+        el.className = "node";
+        el.style.left = px(node.bounds.x, scale) + "px";
+        el.style.top = px(node.bounds.y, scale) + "px";
+        el.style.width = Math.max(0, px(node.bounds.width, scale)) + "px";
+        el.style.height = Math.max(0, px(node.bounds.height, scale)) + "px";
+        el.style.background = rgb(paint?.solid_fill_rgb, "rgba(120,120,120,.06)");
+        el.style.borderColor = rgb(paint?.solid_line?.rgb, "rgba(20,30,45,.18)");
+        if (paint?.solid_line?.width_emu) {
+          el.style.borderWidth = Math.max(.5, px(paint.solid_line.width_emu, scale)) + "px";
+        }
+        const text = textByFrame.get(nodeId);
+        if (text) el.textContent = text;
+        page.appendChild(el);
+      }
+      pagesHost.appendChild(page);
+    }
+
+    document.querySelector("#revision").textContent = "Revision: " + payload.revision_id;
+    document.querySelector("#fidelity").textContent = "Fidelity: " + sceneFidelity(geometry);
+    document.querySelector("#diagnostics").textContent =
+      "Diagnostics: " + String((geometry.document.diagnostics ?? []).length + (scene.diagnostics ?? []).length);
+    summary.hidden = false;
+  }
+
+  async function openDocument() {
+    const documentId = input.value.trim();
+    if (!documentId) return;
+    status.className = "";
+    status.textContent = "Opening…";
+    openButton.disabled = true;
+    pagesHost.replaceChildren();
+    summary.hidden = true;
+    try {
+      const response = await fetch(
+        "/v1/reader/documents/" + encodeURIComponent(documentId) + "/scene",
+        {credentials: "include", cache: "no-store"}
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.error?.message ?? payload?.error?.code ?? ("HTTP " + response.status));
+      }
+      if (payload.protocol_version !== "chaptera.reader-scene.v1") {
+        throw new Error("Unsupported Reader scene protocol");
+      }
+      render(payload);
+      status.className = "ok";
+      status.textContent = "Opened read-only.";
+      const url = new URL(location.href);
+      url.searchParams.set("document_id", documentId);
+      history.replaceState(null, "", url);
+    } catch (error) {
+      status.className = "error";
+      status.textContent = String(error?.message ?? error);
+    } finally {
+      openButton.disabled = false;
+    }
+  }
+
+  openButton.addEventListener("click", openDocument);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") openDocument();
+  });
+  if (input.value) openDocument();
+})();
+</script>
