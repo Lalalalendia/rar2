@@ -130,12 +130,7 @@ fn sample_table_cell_officeart_geometry_join_probe() {
         let Some(table) = node.payload.table.as_ref() else {
             continue;
         };
-        let Some(simple) = table.simple_table.as_ref() else {
-            continue;
-        };
-        if simple.cells.len() != table.cells.len()
-            || table.cells.iter().any(|cell| cell.bounds.is_none())
-        {
+        if table.cells.is_empty() || table.cells.iter().any(|cell| cell.bounds.is_none()) {
             continue;
         }
 
