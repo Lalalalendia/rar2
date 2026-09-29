@@ -60,6 +60,7 @@ def main():
         android_core=False,
         android=True,
         reader_windows=False,
+        reader_windows_full=False,
         editor_windows=False,
         web=False,
     )
@@ -78,12 +79,14 @@ def main():
         installer=True,
         update_accept=True,
         reader_windows=False,
+        reader_windows_full=False,
     )
     assert_scope(
         ["apps/chaptera-desktop/src/text_session.rs"],
         tier_a=True,
         editor_windows=True,
         reader_windows=False,
+        reader_windows_full=False,
         android_core=False,
         android=False,
     )
@@ -99,6 +102,7 @@ def main():
         ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
         tier_a=True,
         reader_windows=False,
+        reader_windows_full=False,
         editor_windows=False,
         android_core=False,
     )
@@ -110,9 +114,17 @@ def main():
         editor_windows=False,
     )
     assert_scope(
+        ["packages/product/reader-portable/v1/README.md"],
+        tier_a=False,
+        reader_windows=True,
+        reader_windows_full=True,
+        installer=True,
+    )
+    assert_scope(
         ["apps/chaptera-desktop/src/fallback_font.rs"],
         tier_a=True,
         reader_windows=False,
+        reader_windows_full=False,
         editor_windows=False,
     )
     assert_scope(
