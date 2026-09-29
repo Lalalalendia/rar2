@@ -598,6 +598,10 @@ jobs:
           legacy_scene_nodes = sum(
               int(row.get("scene_node_count") or 0) for row in legacy_open
           )
+          # Grounded legacy IMAGE materialization + pure GROUP ancestry projection raises the
+          # complete legacy-open scene total from 2700-era authority to 2831 on pinned-625.
+          # Openability, story/text and encoding invariants remain unchanged.
+          assert legacy_scene_nodes == 2831, legacy_scene_nodes
           legacy_story_frames = sum(
               int(row.get("story_frame_count") or 0) for row in legacy_open
           )
