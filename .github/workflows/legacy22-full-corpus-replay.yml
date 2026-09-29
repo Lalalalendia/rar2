@@ -140,6 +140,15 @@ jobs:
                       rows.append(future.result())
 
           rows.sort(key=lambda row: row["source_sha256"])
+          fingerprints = json.loads(
+              Path("out/legacy625/fingerprints.json").read_text()
+          )
+          fingerprints_by_sha = {
+              str(row.get("sha256") or row.get("source_sha256")): row
+              for row in fingerprints
+              if row.get("sha256") or row.get("source_sha256")
+          }
+
           eligible = [row for row in rows if row.get("eligible_reader_open") is True]
           affected = [
               row for row in eligible
@@ -254,6 +263,77 @@ jobs:
           child_suffixes = Counter(
               str(item["suffix32_sha256"]) for item in child_profiles
           )
+
+          candidate_file_shas = sorted({item["source_sha256"] for item in candidates})
+          missing_fingerprints = [
+              sha for sha in candidate_file_shas if sha not in fingerprints_by_sha
+          ]
+          assert not missing_fingerprints, missing_fingerprints
+
+          logical_groups = {}
+          for sha in candidate_file_shas:
+              row = fingerprints_by_sha[sha]
+              logical = str(row.get("content_topology_fingerprint_sha256") or "")
+              assert logical, sha
+              logical_groups.setdefault(logical, []).append(sha)
+
+          candidate_file_revision_counts = Counter(
+              str(fingerprints_by_sha[sha].get("contents_serialization_revision"))
+              for sha in candidate_file_shas
+          )
+          candidate_instance_revision_counts = Counter(
+              str(
+                  fingerprints_by_sha[item["source_sha256"]].get(
+                      "contents_serialization_revision"
+                  )
+              )
+              for item in candidates
+          )
+          child_service_by_revision = Counter(
+              (
+                  str(
+                      fingerprints_by_sha[item["source_sha256"]].get(
+                          "contents_serialization_revision"
+                      )
+                  ),
+                  str((item.get("child_0x0022") or {}).get("service_word")),
+              )
+              for item in candidates
+          )
+          child_hash_revisions = {}
+          child_hash_service_words = {}
+          for item in candidates:
+              child = item.get("child_0x0022") or {}
+              child_hash = str(child.get("chunk_sha256"))
+              revision = str(
+                  fingerprints_by_sha[item["source_sha256"]].get(
+                      "contents_serialization_revision"
+                  )
+              )
+              child_hash_revisions.setdefault(child_hash, set()).add(revision)
+              child_hash_service_words.setdefault(child_hash, set()).add(
+                  str(child.get("service_word"))
+              )
+
+          carrier_patterns = Counter(
+              "|".join(
+                  key
+                  for key, value in sorted(
+                      (fingerprints_by_sha[sha].get("carrier_flags") or {}).items()
+                  )
+                  if value
+              ) or "none"
+              for sha in candidate_file_shas
+          )
+          candidate_path_fingerprints = {
+              str(fingerprints_by_sha[sha].get("path_fingerprint_sha256") or "")
+              for sha in candidate_file_shas
+          }
+          candidate_topology_fingerprints = {
+              str(fingerprints_by_sha[sha].get("topology_fingerprint_sha256") or "")
+              for sha in candidate_file_shas
+          }
+
           child_u16_value_counts = [Counter() for _ in range(9)]
           child_u32_value_counts = [Counter() for _ in range(4)]
           for item in child_profiles:
@@ -426,6 +506,47 @@ jobs:
               ),
               "child_0x0022_prefix32_cluster_count": len(child_prefixes),
               "child_0x0022_suffix32_cluster_count": len(child_suffixes),
+              "candidate_file_logical_identity_count": len(logical_groups),
+              "candidate_file_duplicate_logical_group_count": sum(
+                  len(group) > 1 for group in logical_groups.values()
+              ),
+              "candidate_file_physical_sha_in_duplicate_logical_groups": sum(
+                  len(group)
+                  for group in logical_groups.values()
+                  if len(group) > 1
+              ),
+              "candidate_file_largest_logical_duplicate_group_size": max(
+                  (len(group) for group in logical_groups.values()),
+                  default=0,
+              ),
+              "candidate_file_contents_revision_counts": dict(
+                  sorted(candidate_file_revision_counts.items())
+              ),
+              "candidate_instance_contents_revision_counts": dict(
+                  sorted(candidate_instance_revision_counts.items())
+              ),
+              "child_0x0022_service_word_by_revision_counts": {
+                  f"{revision}:{service_word}": count
+                  for (revision, service_word), count
+                  in sorted(child_service_by_revision.items())
+              },
+              "child_0x0022_exact_clusters_spanning_multiple_revisions": sum(
+                  len(revisions) > 1
+                  for revisions in child_hash_revisions.values()
+              ),
+              "child_0x0022_exact_clusters_with_multiple_service_words": sum(
+                  len(service_words) > 1
+                  for service_words in child_hash_service_words.values()
+              ),
+              "candidate_file_path_fingerprint_count": len(
+                  candidate_path_fingerprints
+              ),
+              "candidate_file_topology_fingerprint_count": len(
+                  candidate_topology_fingerprints
+              ),
+              "candidate_file_carrier_pattern_counts": dict(
+                  carrier_patterns.most_common()
+              ),
               "child_0x0022_u16_le_value_counts": {
                   f"0x{index * 2:02x}": dict(
                       sorted(counter.items(), key=lambda item: int(item[0]))
@@ -535,6 +656,23 @@ jobs:
           assert len(parent_mismatches) == 9, len(parent_mismatches)
           assert len(mismatch_files) == 5, len(mismatch_files)
           assert len(child_profiles) == 305, len(child_profiles)
+          assert len(candidate_file_shas) == 102, len(candidate_file_shas)
+          assert len(logical_groups) == 102, len(logical_groups)
+          assert sum(len(group) > 1 for group in logical_groups.values()) == 0
+          assert carrier_patterns == {"contents": 102}, carrier_patterns
+          assert (
+              candidate_file_revision_counts == {"125": 73, "136": 29}
+          ), candidate_file_revision_counts
+          assert (
+              candidate_instance_revision_counts == {"125": 249, "136": 56}
+          ), candidate_instance_revision_counts
+          assert sum(
+              len(revisions) > 1 for revisions in child_hash_revisions.values()
+          ) == 21
+          assert sum(
+              len(service_words) > 1
+              for service_words in child_hash_service_words.values()
+          ) == 12
           assert (
               len(service_prototypes)
               + len(candidates)
