@@ -341,6 +341,7 @@ fn projected_text(
         text: story.text.clone(),
         line_count: 0,
         typography,
+        backend_font_resource_id: None,
         layout: None,
     }))
 }
@@ -406,6 +407,7 @@ pub fn build_page_render_plan_v1(
                             })
                         })
                         .collect(),
+                    backend_font_resource_id: None,
                     layout: None,
                 });
             #[cfg(feature = "projected-scene-instances")]
