@@ -20,6 +20,7 @@ const META_SETRELABS: u16 = 0x0105;
 const META_SETPOLYFILLMODE: u16 = 0x0106;
 const META_SETSTRETCHBLTMODE: u16 = 0x0107;
 const META_RESTOREDC: u16 = 0x0127;
+const META_SELECTCLIPREGION: u16 = 0x012c;
 const META_SELECTOBJECT: u16 = 0x012d;
 const META_SETTEXTALIGN: u16 = 0x012e;
 const META_DIBCREATEPATTERNBRUSH: u16 = 0x0142;
@@ -87,6 +88,7 @@ struct Brush {
 enum GdiObject {
     Pen(Pen),
     Brush(Brush),
+    Region,
     Unsupported,
 }
 
@@ -580,6 +582,46 @@ fn fill_rings(
     Ok(())
 }
 
+fn validate_bounded_inert_region(params: &[u8]) -> Result<()> {
+    // Exact source profile proven by the pinned 1,050 corpus. Per MS-WMF,
+    // a Region Object does not affect playback until META_SELECTCLIPREGION.
+    // This slice therefore validates and preserves only the observed inert
+    // carrier; it does not implement region clipping.
+    const REGION_BYTES: usize = 42;
+    const REGION_OBJECT_TYPE: i16 = 6;
+    const REGION_SCAN_COUNT: i16 = 1;
+    const REGION_MAX_SCAN: i16 = 2;
+
+    if params.len() != REGION_BYTES {
+        bail!("unsupported WMF Region Object byte length");
+    }
+    let object_type =
+        read_i16(params, 2).ok_or_else(|| anyhow!("WMF Region ObjectType is truncated"))?;
+    if object_type != REGION_OBJECT_TYPE {
+        bail!("unsupported WMF Region ObjectType");
+    }
+    let region_size =
+        read_i16(params, 8).ok_or_else(|| anyhow!("WMF RegionSize is truncated"))?;
+    if region_size != REGION_BYTES as i16 {
+        bail!("unsupported WMF RegionSize");
+    }
+    let scan_count =
+        read_i16(params, 10).ok_or_else(|| anyhow!("WMF Region ScanCount is truncated"))?;
+    let max_scan =
+        read_i16(params, 12).ok_or_else(|| anyhow!("WMF Region maxScan is truncated"))?;
+    if scan_count != REGION_SCAN_COUNT || max_scan != REGION_MAX_SCAN {
+        bail!("unsupported WMF Region scan profile");
+    }
+    // BoundingRectangle occupies the next four i16 values. Reading all four
+    // keeps the exact observed header structurally bounded without assigning
+    // clipping semantics to it.
+    for offset in [14_usize, 16, 18, 20] {
+        read_i16(params, offset)
+            .ok_or_else(|| anyhow!("WMF Region BoundingRectangle is truncated"))?;
+    }
+    Ok(())
+}
+
 fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Result<()> {
     let Some(slot) = objects.iter_mut().find(|slot| slot.is_none()) else {
         bail!("WMF object table is full");
@@ -944,8 +986,12 @@ pub fn rasterize_wmf_preview(
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
             }
-            META_DIBCREATEPATTERNBRUSH | META_CREATEREGION => {
+            META_DIBCREATEPATTERNBRUSH => {
                 allocate_object(&mut objects, GdiObject::Unsupported)?;
+            }
+            META_CREATEREGION => {
+                validate_bounded_inert_region(params)?;
+                allocate_object(&mut objects, GdiObject::Region)?;
             }
             META_DELETEOBJECT => {
                 let index = usize::from(
@@ -967,6 +1013,10 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
+                    GdiObject::Region => {
+                        // Region playback is controlled only by META_SELECTCLIPREGION.
+                        // A generic META_SELECTOBJECT does not mutate the clipping state.
+                    }
                     GdiObject::Unsupported => {
                         bail!("WMF selects an unsupported graphics object");
                     }
@@ -1162,6 +1212,61 @@ mod tests {
         assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
         let corner = ((5 * 100 + 5) * 4) as usize;
         assert_eq!(&image.rgba[corner..corner + 4], &[0, 0, 0, 0]);
+    }
+
+    fn bounded_region_params() -> Vec<u8> {
+        let mut params = vec![0_u8; 42];
+        params[2..4].copy_from_slice(&6_i16.to_le_bytes());
+        params[8..10].copy_from_slice(&42_i16.to_le_bytes());
+        params[10..12].copy_from_slice(&1_i16.to_le_bytes());
+        params[12..14].copy_from_slice(&2_i16.to_le_bytes());
+        params
+    }
+
+    #[test]
+    fn generic_selectobject_keeps_bounded_region_inert() {
+        let baseline = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("baseline");
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_eof(
+            &mut bytes,
+            record(META_CREATEREGION, &bounded_region_params()),
+        );
+        insert_record_before_eof(
+            &mut bytes,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("inert region select");
+        assert_eq!(image, baseline);
+    }
+
+    #[test]
+    fn rejects_region_profile_outside_exact_bounded_witness() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        let mut region = bounded_region_params();
+        region[10..12].copy_from_slice(&2_i16.to_le_bytes());
+        insert_record_before_eof(&mut bytes, record(META_CREATEREGION, &region));
+
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn selectclipregion_remains_fail_closed() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_eof(
+            &mut bytes,
+            record(META_CREATEREGION, &bounded_region_params()),
+        );
+        insert_record_before_eof(
+            &mut bytes,
+            record(META_SELECTCLIPREGION, &2_u16.to_le_bytes()),
+        );
+
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
