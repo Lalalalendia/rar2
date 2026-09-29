@@ -248,6 +248,29 @@ jobs:
               or ("none" if prefix.get("prefix_valid") is True else "unclassified")
               for prefix in prefix_profiles
           )
+          strict_invalid_profiles = [
+              profile for profile in declared_profiles
+              if profile.get("wmf_valid") is not True
+          ]
+          strict_invalid_recovery_classes = Counter()
+          first_eof_suffix_lengths = Counter()
+          first_eof_payload_hashes = []
+          for profile in strict_invalid_profiles:
+              prefix = profile.get("wmf_prefix") or {}
+              first_eof = profile.get("first_eof") or {}
+              if prefix.get("prefix_valid") is True:
+                  recovery = "internal_declared_prefix_valid"
+              elif profile.get("outer_size_rewrite_valid") is True:
+                  recovery = "outer_size_rewrite_valid"
+              elif first_eof.get("prefix_valid") is True:
+                  recovery = "first_eof_prefix_valid"
+              else:
+                  recovery = "unresolved"
+              strict_invalid_recovery_classes[recovery] += 1
+              if first_eof.get("prefix_valid") is True:
+                  first_eof_suffix_lengths[str(first_eof.get("suffix_len", "missing"))] += 1
+                  if first_eof.get("prefix_sha256"):
+                      first_eof_payload_hashes.append(first_eof["prefix_sha256"])
           strict_valid_positive_geometry = sum(
               profile.get("wmf_valid") is True
               and (item.get("geometry") or {}).get("positive_rect") is True
@@ -333,6 +356,26 @@ jobs:
               "direct_strict_invalid_prefix_unique_sha256_count": len(set(prefix_payload_hashes)),
               "direct_wmf_prefix_validation_error_counts": dict(
                   prefix_validation_errors.most_common()
+              ),
+              "direct_strict_invalid_outer_size_rewrite_valid_count": sum(
+                  profile.get("outer_size_rewrite_valid") is True
+                  for profile in strict_invalid_profiles
+              ),
+              "direct_strict_invalid_first_eof_prefix_valid_count": sum(
+                  (profile.get("first_eof") or {}).get("prefix_valid") is True
+                  for profile in strict_invalid_profiles
+              ),
+              "direct_strict_invalid_recovery_class_counts": dict(
+                  strict_invalid_recovery_classes.most_common()
+              ),
+              "direct_strict_invalid_first_eof_suffix_length_counts": dict(
+                  first_eof_suffix_lengths.most_common()
+              ),
+              "direct_strict_invalid_first_eof_payload_reference_count": len(
+                  first_eof_payload_hashes
+              ),
+              "direct_strict_invalid_first_eof_unique_sha256_count": len(
+                  set(first_eof_payload_hashes)
               ),
               "direct_strict_wmf_positive_geometry_count": strict_valid_positive_geometry,
               "direct_wmf_prefix_positive_geometry_count": prefix_valid_positive_geometry,
