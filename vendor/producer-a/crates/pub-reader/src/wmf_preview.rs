@@ -393,13 +393,13 @@ fn clip_line_to_rect(
 fn draw_line(
     canvas: &mut Canvas,
     clip: RectPx,
-    mut x0: i32,
-    mut y0: i32,
-    x1: i32,
-    y1: i32,
+    start: (i32, i32),
+    end: (i32, i32),
     width: u32,
     color: Color,
 ) {
+    let (mut x0, mut y0) = start;
+    let (x1, y1) = end;
     let Some((cx0, cy0, cx1, cy1)) = clip_line_to_rect(clip, x0, y0, x1, y1) else {
         return;
     };
@@ -440,10 +440,8 @@ fn draw_polyline(canvas: &mut Canvas, state: &PlaybackState, points: &[(i32, i32
         draw_line(
             canvas,
             state.clip,
-            pair[0].0,
-            pair[0].1,
-            pair[1].0,
-            pair[1].1,
+            pair[0],
+            pair[1],
             width,
             state.pen.color,
         );
@@ -454,10 +452,8 @@ fn draw_polyline(canvas: &mut Canvas, state: &PlaybackState, points: &[(i32, i32
         draw_line(
             canvas,
             state.clip,
-            last.0,
-            last.1,
-            first.0,
-            first.1,
+            last,
+            first,
             width,
             state.pen.color,
         );
