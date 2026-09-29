@@ -63,7 +63,7 @@ def edition_for(path: str) -> str:
     return "2021"
 
 
-def build_plan(paths: list[str]) -> dict:
+def build_plan(paths: list[str], base: str, head: str) -> dict:
     direct: set[str] = set()
     changed_rust: list[str] = []
 
@@ -113,13 +113,16 @@ def build_plan(paths: list[str]) -> dict:
             {
                 "id": f"rustfmt:{path}",
                 "argv": [
-                    "rustfmt",
-                    "--check",
+                    "python",
+                    "tools/ci/check_rustfmt_delta.py",
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                    "--path",
+                    path,
                     "--edition",
                     edition_for(path),
-                    "--config",
-                    "skip_children=true",
-                    path,
                 ],
             }
         )
@@ -279,7 +282,7 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = changed_paths(args.base, args.head)
-    plan = build_plan(paths)
+    plan = build_plan(paths, args.base, args.head)
     receipt = {
         "schema": "chaptera.reader-consumer-preflight.v1",
         "base_sha": args.base,
