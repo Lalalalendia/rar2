@@ -15,6 +15,8 @@ const LEGACY_DIRECTORY_ENTRY_SIZE: usize = 10;
 const LEGACY_TABLE_HEADER_MIN_SIZE: usize = 62;
 const LEGACY_TABLE_LIST_HEADER_SIZE: usize = 10;
 const LEGACY_TABLE_AXIS_RECORD_SIZE: u16 = 14;
+const LEGACY_TABLE_ALT_COLUMN_COUNT_OFFSET: usize = 74;
+const LEGACY_TABLE_ALT_ROW_COUNT_OFFSET: usize = 80;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Legacy0x22TableListHeader {
@@ -37,6 +39,13 @@ pub struct Legacy0x22TableAxisSegment {
     pub record_source: RawSpan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Legacy0x22TableLayoutProfile {
+    HistoricalHeader,
+    ExplicitOwnerAxisCounts,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Legacy0x22TableChunk {
     pub directory_index: u16,
@@ -51,12 +60,14 @@ pub struct Legacy0x22TableChunk {
     pub data_offset_delta: u8,
     pub data_offset_delta_source: RawSpan,
     pub data_offset: u32,
-    /// Publisher 2 low-family text selector before the historical +65536
-    /// synthetic namespace adjustment.
+    pub layout_profile: Legacy0x22TableLayoutProfile,
+    /// Observed u16 at the historical header selector position. It is semantic
+    /// only for HistoricalHeader; ExplicitOwnerAxisCounts requires TEXT_INFO
+    /// owner authority and does not use this value for text identity.
     pub local_text_index: u16,
     pub local_text_index_source: RawSpan,
-    /// Default low-family text id used when no separate text-info override is
-    /// present. This is not a universal cross-version effective text identifier.
+    /// Default low-family text id used only by HistoricalHeader when no
+    /// separate text-info override is present.
     pub default_text_id: u32,
     /// Historical parser comment calls this "data size ?"; keep it observed.
     pub observed_header_u16_at_48: u16,
@@ -217,6 +228,9 @@ pub enum Legacy0x22TableCatalogReadError {
         chunk_id: u16,
         effective_text_id: u32,
     },
+    AlternateProfileRequiresExplicitTextOwner {
+        chunk_id: u16,
+    },
     UnmatchedTableTextIdentities {
         text_ids: Vec<u32>,
     },
@@ -339,6 +353,10 @@ impl fmt::Display for Legacy0x22TableCatalogReadError {
                 f,
                 "legacy 0x22 table chunk {chunk_id} resolves to effective text id {effective_text_id}, but no table text group has that identity"
             ),
+            Self::AlternateProfileRequiresExplicitTextOwner { chunk_id } => write!(
+                f,
+                "legacy 0x22 table chunk {chunk_id} uses the alternate axis-count profile without an explicit TEXT_INFO owner"
+            ),
             Self::UnmatchedTableTextIdentities { text_ids } => write!(
                 f,
                 "legacy 0x22 table text identities remain unmatched after object resolution: {text_ids:?}"
@@ -387,6 +405,11 @@ fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn read_i32(bytes: &[u8], offset: usize) -> Option<i32> {
+    let raw = bytes.get(offset..offset.checked_add(4)?)?;
+    Some(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
 }
 
 struct AxisReader<'a> {
@@ -445,6 +468,44 @@ impl AxisReader<'_> {
 
         Ok(result)
     }
+}
+
+fn alternate_axis_count_profile(
+    axis_reader: &AxisReader<'_>,
+    bytes: &[u8],
+    chunk: usize,
+    count: u16,
+) -> Option<(
+    u16,
+    u16,
+    Vec<Legacy0x22TableAxisSegment>,
+    Vec<Legacy0x22TableAxisSegment>,
+)> {
+    let column_count = read_u16(bytes, chunk + LEGACY_TABLE_ALT_COLUMN_COUNT_OFFSET)?;
+    let row_count = read_u16(bytes, chunk + LEGACY_TABLE_ALT_ROW_COUNT_OFFSET)?;
+    if column_count == 0 || row_count == 0 || column_count.checked_add(row_count)? != count {
+        return None;
+    }
+
+    let columns = axis_reader
+        .segments(0, usize::from(column_count), "column")
+        .ok()?;
+    let rows = axis_reader
+        .segments(usize::from(column_count), usize::from(row_count), "row")
+        .ok()?;
+
+    let xs = i64::from(read_i32(bytes, chunk + 0x06)?);
+    let ys = i64::from(read_i32(bytes, chunk + 0x0a)?);
+    let xe = i64::from(read_i32(bytes, chunk + 0x0e)?);
+    let ye = i64::from(read_i32(bytes, chunk + 0x12)?);
+    let width = u32::try_from(xe.checked_sub(xs)?).ok()?;
+    let height = u32::try_from(ye.checked_sub(ys)?).ok()?;
+
+    if columns.last()?.cumulative_emu != width || rows.last()?.cumulative_emu != height {
+        return None;
+    }
+
+    Some((column_count, row_count, columns, rows))
 }
 
 /// Parse type-0x0001 Publisher 2 table chunks from the low-family Contents
@@ -619,15 +680,6 @@ pub fn parse_legacy_0x22_table_catalog(
         let observed_value_1 =
             read_u16(bytes, data_offset + 8).expect("list header bounds checked");
 
-        let required = column_count.saturating_add(row_count);
-        if count < required {
-            return Err(Legacy0x22TableCatalogReadError::TooFewTableRecords {
-                chunk_id: entry.chunk_id,
-                count,
-                required,
-            });
-        }
-
         let axis_reader = AxisReader {
             stream: &stream,
             bytes,
@@ -636,9 +688,84 @@ pub fn parse_legacy_0x22_table_catalog(
             data_offset,
             record_size: usize::from(record_size),
         };
-        let columns = axis_reader.segments(0, usize::from(column_count), "column")?;
-        let rows =
-            axis_reader.segments(usize::from(column_count), usize::from(row_count), "row")?;
+
+        let historical_required = column_count.saturating_add(row_count);
+        let alternate =
+            if (column_count == 0 && row_count == 0 && count != 0) || count < historical_required {
+                alternate_axis_count_profile(&axis_reader, bytes, chunk, count)
+            } else {
+                None
+            };
+
+        let (
+            layout_profile,
+            column_count,
+            column_count_source,
+            row_count,
+            row_count_source,
+            width_emu,
+            width_source,
+            height_emu,
+            height_source,
+            columns,
+            rows,
+        ) = if let Some((column_count, row_count, columns, rows)) = alternate {
+            let width_source = columns
+                .last()
+                .expect("alternate profile requires a nonzero column count")
+                .cumulative_source
+                .clone();
+            let height_source = rows
+                .last()
+                .expect("alternate profile requires a nonzero row count")
+                .cumulative_source
+                .clone();
+            let width_emu = columns
+                .last()
+                .expect("alternate profile requires a nonzero column count")
+                .cumulative_emu;
+            let height_emu = rows
+                .last()
+                .expect("alternate profile requires a nonzero row count")
+                .cumulative_emu;
+            (
+                Legacy0x22TableLayoutProfile::ExplicitOwnerAxisCounts,
+                column_count,
+                span(&stream, chunk + LEGACY_TABLE_ALT_COLUMN_COUNT_OFFSET, 2),
+                row_count,
+                span(&stream, chunk + LEGACY_TABLE_ALT_ROW_COUNT_OFFSET, 2),
+                width_emu,
+                width_source,
+                height_emu,
+                height_source,
+                columns,
+                rows,
+            )
+        } else {
+            if count < historical_required {
+                return Err(Legacy0x22TableCatalogReadError::TooFewTableRecords {
+                    chunk_id: entry.chunk_id,
+                    count,
+                    required: historical_required,
+                });
+            }
+            let columns = axis_reader.segments(0, usize::from(column_count), "column")?;
+            let rows =
+                axis_reader.segments(usize::from(column_count), usize::from(row_count), "row")?;
+            (
+                Legacy0x22TableLayoutProfile::HistoricalHeader,
+                column_count,
+                span(&stream, chunk + 50, 2),
+                row_count,
+                span(&stream, chunk + 52, 2),
+                width_emu,
+                span(&stream, chunk + 54, 4),
+                height_emu,
+                span(&stream, chunk + 58, 4),
+                columns,
+                rows,
+            )
+        };
 
         table_chunks.push(Legacy0x22TableChunk {
             directory_index: entry.directory_index,
@@ -651,19 +778,20 @@ pub fn parse_legacy_0x22_table_catalog(
             data_offset_delta,
             data_offset_delta_source: span(&stream, chunk + 3, 1),
             data_offset: data_offset as u32,
+            layout_profile,
             local_text_index,
             local_text_index_source: span(&stream, chunk + 46, 2),
             default_text_id: 65536 + u32::from(local_text_index),
             observed_header_u16_at_48,
             observed_header_u16_at_48_source: span(&stream, chunk + 48, 2),
             column_count,
-            column_count_source: span(&stream, chunk + 50, 2),
+            column_count_source,
             row_count,
-            row_count_source: span(&stream, chunk + 52, 2),
+            row_count_source,
             width_emu,
-            width_source: span(&stream, chunk + 54, 4),
+            width_source,
             height_emu,
-            height_source: span(&stream, chunk + 58, 4),
+            height_source,
             list_header: Legacy0x22TableListHeader {
                 count,
                 max_count,
@@ -689,15 +817,23 @@ pub fn parse_legacy_0x22_table_catalog(
 fn object_effective_text_id(
     object: &Legacy0x22TableChunk,
     text_info: Option<&Legacy0x22TextInfoMap>,
-) -> u32 {
+) -> Result<u32, Legacy0x22TableCatalogReadError> {
     if text_info
         .and_then(|map| map.end_for_owner(object.chunk_id))
         .is_some()
     {
-        u32::from(object.chunk_id)
-    } else {
-        object.default_text_id
+        return Ok(u32::from(object.chunk_id));
     }
+
+    if object.layout_profile == Legacy0x22TableLayoutProfile::ExplicitOwnerAxisCounts {
+        return Err(
+            Legacy0x22TableCatalogReadError::AlternateProfileRequiresExplicitTextOwner {
+                chunk_id: object.chunk_id,
+            },
+        );
+    }
+
+    Ok(object.default_text_id)
 }
 
 fn horizontal_merges(
@@ -819,7 +955,7 @@ pub fn parse_legacy_0x22_resolved_tables(
     let mut tables = Vec::with_capacity(materialized.len());
 
     for (index, object) in materialized.into_iter().enumerate() {
-        let effective_text_id = object_effective_text_id(&object, text_info.as_ref());
+        let effective_text_id = object_effective_text_id(&object, text_info.as_ref())?;
         if !seen_object_text_ids.insert(effective_text_id) {
             let first_chunk_id = object_text_chunks[&effective_text_id];
             return Err(
