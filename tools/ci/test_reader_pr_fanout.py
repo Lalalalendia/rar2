@@ -48,7 +48,8 @@ def main():
         editor_windows=True,
         visual_oracle=True,
         typography_golden=True,
-        android=True,
+        editor_windows=False,
+        android=False,
     )
     assert_scope(
         ["apps/chaptera-mobile-android/app/src/main/AndroidManifest.xml"],
@@ -70,7 +71,23 @@ def main():
         ["installer/windows/chaptera-reader.iss"],
         tier_a=False,
         installer=True,
+        lifecycle_soak=True,
+        update_accept=True,
         reader_windows=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/editor_session.rs"],
+        tier_a=False,
+        editor_windows=True,
+        reader_windows=True,
+        android=False,
+    )
+    assert_scope(
+        ["crates/chaptera-update-orchestrator/src/lib.rs"],
+        update_accept=True,
+        lifecycle_soak=True,
+        reader_windows=True,
+        installer=False,
     )
     assert_scope(
         ["docs/notes.md"],
@@ -85,6 +102,8 @@ def main():
         local_portable=False,
         installer=False,
         path_identity=False,
+        update_accept=False,
+        lifecycle_soak=False,
     )
     print("reader_pr_fanout tests: ok")
 
