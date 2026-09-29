@@ -11,8 +11,8 @@ use chaptera_untrusted_pub_scan::{DEFAULT_MAX_FILE_BYTES, SECURITY_PROFILE_V1};
 use pub_reader::PubResolvedGraph;
 use pub_viewer::ViewerGeometryDocument;
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::ffi::OsString;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::thread;
@@ -57,13 +57,8 @@ fn sibling_sandbox_host() -> Result<BoundProgram, String> {
 }
 
 fn sandbox_host_environment() -> Result<Vec<(OsString, OsString)>, String> {
-    let mut environment = current_environment_allowlist(&[
-        "SystemRoot",
-        "WINDIR",
-        "TEMP",
-        "TMP",
-        "LOCALAPPDATA",
-    ]);
+    let mut environment =
+        current_environment_allowlist(&["SystemRoot", "WINDIR", "TEMP", "TMP", "LOCALAPPDATA"]);
     let system_root = environment
         .iter()
         .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case("SystemRoot"))

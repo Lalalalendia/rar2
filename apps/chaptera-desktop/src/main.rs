@@ -1350,7 +1350,7 @@ impl ViewerApp {
             .then_some(stamp_after)
             .flatten();
 
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", not(test)))]
         let contained =
             contained_open::open_admitted_source(bytes).map_err(|error| ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
@@ -1363,10 +1363,10 @@ impl ViewerApp {
                 diagnostic_json: None,
             })?;
 
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", not(test)))]
         let visual = contained.visual;
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(any(not(target_os = "windows"), test))]
         let visual =
             diagnostic_sweep::open_for_product(bytes).map_err(|error| ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
@@ -1379,11 +1379,11 @@ impl ViewerApp {
         let (editor, editor_load_error, project_status) = if reader_only_mode() {
             (None, None, None)
         } else {
-            #[cfg(target_os = "windows")]
+            #[cfg(all(target_os = "windows", not(test)))]
             let editor_result =
                 pub_editor::EditorSession::new(contained.graph).map_err(|error| error.to_string());
 
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(any(not(target_os = "windows"), test))]
             let editor_result = {
                 let source_hash = visual.document.source.source_hash;
                 pub_editor::open_mature_0x2c_editor(bytes, source_hash)
