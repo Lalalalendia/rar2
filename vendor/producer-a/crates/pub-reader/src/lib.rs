@@ -68,7 +68,8 @@ pub use legacy22_noquill_graph::{
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
     Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
-    RawContentsBlock, RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    RawContentsBlock, RawContentsBlockBody, StoryCatalogReadError, parse_0x2c_header,
+    parse_bounded_empty_mature_story_catalog_variant, parse_confirmed_0x2c_chunk,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
     parse_confirmed_controlling_page_list, parse_confirmed_document_page_list,
     parse_confirmed_margins_page_extent, parse_confirmed_mature_color_scheme,
@@ -1837,18 +1838,49 @@ pub fn build_mature_0x2c_from_streams(
     )?;
     let story_catalog_chunk =
         chunk_for_reference(contents_stream.clone(), contents, story_catalog_reference)?;
-    let story_catalog = parse_confirmed_mature_story_catalog(contents, &story_catalog_chunk)
-        .context("parse mature Story catalog 0x65")?;
-    let story_layout_keys: BTreeMap<_, _> = story_catalog
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            Some((
-                entry.text_id,
-                (entry.layout_key?, entry.layout_key_source.as_ref()?.clone()),
-            ))
-        })
-        .collect();
+    let story_layout_keys: BTreeMap<_, _> =
+        match parse_confirmed_mature_story_catalog(contents, &story_catalog_chunk) {
+            Ok(story_catalog) => story_catalog
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    Some((
+                        entry.text_id,
+                        (entry.layout_key?, entry.layout_key_source.as_ref()?.clone()),
+                    ))
+                })
+                .collect(),
+            Err(StoryCatalogReadError::MissingDeclaredCount) => {
+                let _derived_empty = parse_bounded_empty_mature_story_catalog_variant(
+                    contents,
+                    &story_catalog_chunk,
+                )
+                .context("parse bounded derived-empty Story catalog 0x65 variant")?;
+
+                let mut referenced_story_ids = BTreeSet::new();
+                for reference in references.values() {
+                    if !matches!(
+                        single_raw_type(reference),
+                        Some(RAW_TYPE_SHAPE) | Some(RAW_TYPE_TABLE)
+                    ) {
+                        continue;
+                    }
+                    let chunk =
+                        chunk_for_reference(contents_stream.clone(), contents, reference)?;
+                    if let Some((text_id, _)) = unique_u32_field(&chunk, FIELD_STORY_ID)? {
+                        referenced_story_ids.insert(text_id);
+                    }
+                }
+                if !referenced_story_ids.is_empty() {
+                    bail!(
+                        "derived-empty Story catalog 0x65 conflicts with live Story references: {:?}",
+                        referenced_story_ids
+                    );
+                }
+                BTreeMap::new()
+            }
+            Err(error) => return Err(error).context("parse mature Story catalog 0x65"),
+        };
 
     let document_reference =
         unique_reference_by_raw_type(&references, RAW_TYPE_DOCUMENT, "DOCUMENT")?;
