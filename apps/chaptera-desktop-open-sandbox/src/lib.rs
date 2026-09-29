@@ -380,10 +380,18 @@ mod platform {
         // perform shell/PATH lookup. Keep host path/search/temp authority out of
         // the AppContainer environment and retain only the Windows root identity
         // needed by the process/runtime itself.
-        let entries = ["SystemRoot", "WINDIR"]
-            .into_iter()
-            .filter_map(|key| std::env::var_os(key).map(|value| (OsString::from(key), value)))
-            .collect::<Vec<_>>();
+        let entries = [
+            "SystemRoot",
+            "windir",
+            "ComSpec",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+            "PATH",
+        ]
+        .into_iter()
+        .filter_map(|key| std::env::var_os(key).map(|value| (OsString::from(key), value)))
+        .collect::<Vec<_>>();
         encode_environment(entries)
     }
 
