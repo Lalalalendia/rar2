@@ -95,11 +95,9 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
     let data_end = data_offset
         .checked_add(data_size)
         .ok_or_else(|| anyhow::anyhow!("OLE presentation data range overflow"))?;
-    let reserved2_end = data_end
-        .checked_add(METAFILE_RESERVED2_LEN)
-        .ok_or_else(|| anyhow::anyhow!("OLE presentation trailer overflow"))?;
-    if reserved2_end > bytes.len() {
-        bail!("truncated CF_METAFILEPICT OLE presentation");
+    let trailing_len = bytes.len().saturating_sub(data_end);
+    if trailing_len != 0 && trailing_len < METAFILE_RESERVED2_LEN {
+        bail!("truncated CF_METAFILEPICT OLE presentation trailer");
     }
 
     let data = &bytes[data_offset..data_end];
@@ -277,6 +275,14 @@ mod tests {
         let mut bytes = fixture(CF_METAFILEPICT, 4, &payload);
         bytes.truncate(bytes.len() - 1);
         assert!(parse_cf_metafilepict_ole_presentation(&bytes).is_err());
+
+        let mut no_trailer = fixture(CF_METAFILEPICT, 4, &payload);
+        no_trailer.truncate(no_trailer.len() - METAFILE_RESERVED2_LEN);
+        assert!(parse_cf_metafilepict_ole_presentation(&no_trailer).is_ok());
+
+        let mut short_trailer = no_trailer.clone();
+        short_trailer.extend_from_slice(&[0_u8; METAFILE_RESERVED2_LEN - 1]);
+        assert!(parse_cf_metafilepict_ole_presentation(&short_trailer).is_err());
     }
 
     #[test]
