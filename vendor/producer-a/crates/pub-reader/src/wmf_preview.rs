@@ -9,6 +9,7 @@ const MAX_OBJECTS: usize = 4096;
 const MAX_POINTS_PER_RECORD: usize = 4096;
 const MAX_OUTPUT_SIDE: u32 = 1024;
 const MAX_OUTPUT_PIXELS: u64 = 1024 * 1024;
+const MAX_RASTER_WORK_UNITS: u64 = 64 * 1024 * 1024;
 
 const META_EOF: u16 = 0x0000;
 const META_SAVEDC: u16 = 0x001e;
@@ -158,6 +159,7 @@ struct Canvas {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    work_units: u64,
 }
 
 impl Canvas {
@@ -178,7 +180,19 @@ impl Canvas {
             width,
             height,
             rgba: vec![0; byte_len],
+            work_units: 0,
         })
+    }
+
+    fn charge_work(&mut self, units: u64) -> Result<()> {
+        self.work_units = self
+            .work_units
+            .checked_add(units)
+            .ok_or_else(|| anyhow!("WMF raster work counter overflow"))?;
+        if self.work_units > MAX_RASTER_WORK_UNITS {
+            bail!("WMF raster work exceeds bounded limit");
+        }
+        Ok(())
     }
 
     fn set(&mut self, clip: RectPx, x: i32, y: i32, color: Color) {
@@ -201,18 +215,22 @@ impl Canvas {
         self.rgba[index..index + 4].copy_from_slice(&[color.r, color.g, color.b, 255]);
     }
 
-    fn span(&mut self, clip: RectPx, y: i32, x0: i32, x1: i32, color: Color) {
+    fn span(&mut self, clip: RectPx, y: i32, x0: i32, x1: i32, color: Color) -> Result<()> {
         if y < clip.top || y >= clip.bottom || y < 0 || y >= self.height as i32 {
-            return;
+            return Ok(());
         }
         let start = x0.min(x1).max(clip.left).max(0);
         let end = x0.max(x1).min(clip.right - 1).min(self.width as i32 - 1);
         if start > end {
-            return;
+            return Ok(());
         }
+        let pixel_count = u64::try_from(end - start + 1)
+            .map_err(|_| anyhow!("WMF span work does not fit u64"))?;
+        self.charge_work(pixel_count)?;
         for x in start..=end {
             self.set(clip, x, y, color);
         }
+        Ok(())
     }
 }
 
@@ -292,11 +310,26 @@ fn mapped_pen_width(state: &PlaybackState, canvas: &Canvas) -> u32 {
     (logical * scale).round().clamp(1.0, 64.0) as u32
 }
 
-fn draw_disk(canvas: &mut Canvas, clip: RectPx, x: i32, y: i32, radius: i32, color: Color) {
+fn draw_disk(
+    canvas: &mut Canvas,
+    clip: RectPx,
+    x: i32,
+    y: i32,
+    radius: i32,
+    color: Color,
+) -> Result<()> {
     if radius <= 0 {
+        canvas.charge_work(1)?;
         canvas.set(clip, x, y, color);
-        return;
+        return Ok(());
     }
+    let diameter = u64::try_from(radius.saturating_mul(2).saturating_add(1))
+        .map_err(|_| anyhow!("WMF stroke work does not fit u64"))?;
+    canvas.charge_work(
+        diameter
+            .checked_mul(diameter)
+            .ok_or_else(|| anyhow!("WMF stroke work overflow"))?,
+    )?;
     let rr = radius * radius;
     for dy in -radius..=radius {
         for dx in -radius..=radius {
@@ -305,6 +338,7 @@ fn draw_disk(canvas: &mut Canvas, clip: RectPx, x: i32, y: i32, radius: i32, col
             }
         }
     }
+    Ok(())
 }
 
 fn out_code(rect: RectPx, x: i32, y: i32) -> u8 {
@@ -405,11 +439,11 @@ fn draw_line(
     end: (i32, i32),
     width: u32,
     color: Color,
-) {
+) -> Result<()> {
     let (mut x0, mut y0) = start;
     let (x1, y1) = end;
     let Some((cx0, cy0, cx1, cy1)) = clip_line_to_rect(clip, x0, y0, x1, y1) else {
-        return;
+        return Ok(());
     };
     x0 = cx0;
     y0 = cy0;
@@ -423,7 +457,7 @@ fn draw_line(
     let radius = i32::try_from(width.saturating_sub(1) / 2).unwrap_or(0);
 
     loop {
-        draw_disk(canvas, clip, x0, y0, radius, color);
+        draw_disk(canvas, clip, x0, y0, radius, color)?;
         if x0 == x1 && y0 == y1 {
             break;
         }
@@ -437,44 +471,62 @@ fn draw_line(
             y0 += sy;
         }
     }
+    Ok(())
 }
 
-fn draw_polyline(canvas: &mut Canvas, state: &PlaybackState, points: &[(i32, i32)], closed: bool) {
+fn draw_polyline(
+    canvas: &mut Canvas,
+    state: &PlaybackState,
+    points: &[(i32, i32)],
+    closed: bool,
+) -> Result<()> {
     if state.pen.style == PS_NULL || points.len() < 2 {
-        return;
+        return Ok(());
     }
     let width = mapped_pen_width(state, canvas);
     for pair in points.windows(2) {
-        draw_line(canvas, state.clip, pair[0], pair[1], width, state.pen.color);
+        draw_line(canvas, state.clip, pair[0], pair[1], width, state.pen.color)?;
     }
     if closed {
         let first = points[0];
         let last = points[points.len() - 1];
-        draw_line(canvas, state.clip, last, first, width, state.pen.color);
+        draw_line(canvas, state.clip, last, first, width, state.pen.color)?;
     }
+    Ok(())
 }
 
-fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32)>], color: Color) {
+fn fill_rings(
+    canvas: &mut Canvas,
+    state: &PlaybackState,
+    rings: &[Vec<(i32, i32)>],
+    color: Color,
+) -> Result<()> {
     let Some(min_y) = rings
         .iter()
         .flat_map(|ring| ring.iter().map(|point| point.1))
         .min()
     else {
-        return;
+        return Ok(());
     };
     let Some(max_y) = rings
         .iter()
         .flat_map(|ring| ring.iter().map(|point| point.1))
         .max()
     else {
-        return;
+        return Ok(());
     };
+    let edge_count = rings.iter().try_fold(0_u64, |total, ring| {
+        total
+            .checked_add(u64::try_from(ring.len()).map_err(|_| anyhow!("WMF edge count overflow"))?)
+            .ok_or_else(|| anyhow!("WMF edge count overflow"))
+    })?;
     let start_y = min_y.max(state.clip.top).max(0);
     let end_y = max_y
         .min(state.clip.bottom.saturating_sub(1))
         .min(canvas.height as i32 - 1);
 
     for y in start_y..=end_y {
+        canvas.charge_work(edge_count)?;
         let scan_y = f64::from(y) + 0.5;
         let mut crossings = Vec::<(f64, i32)>::new();
         for ring in rings {
@@ -501,7 +553,7 @@ fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32
                 for pair in crossings.chunks_exact(2) {
                     let x0 = pair[0].0.ceil() as i32;
                     let x1 = pair[1].0.floor() as i32;
-                    canvas.span(state.clip, y, x0, x1, color);
+                    canvas.span(state.clip, y, x0, x1, color)?;
                 }
             }
             WINDING => {
@@ -514,7 +566,13 @@ fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32
                         start = Some(x);
                     } else if before != 0 && winding == 0 {
                         if let Some(from) = start.take() {
-                            canvas.span(state.clip, y, from.ceil() as i32, x.floor() as i32, color);
+                            canvas.span(
+                                state.clip,
+                                y,
+                                from.ceil() as i32,
+                                x.floor() as i32,
+                                color,
+                            )?;
                         }
                     }
                 }
@@ -522,6 +580,7 @@ fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Result<()> {
@@ -879,11 +938,11 @@ pub fn rasterize_wmf_preview(
                             &state,
                             std::slice::from_ref(&points),
                             state.brush.color,
-                        );
+                        )?;
                     }
-                    draw_polyline(&mut canvas, &state, &points, true);
+                    draw_polyline(&mut canvas, &state, &points, true)?;
                 } else {
-                    draw_polyline(&mut canvas, &state, &points, false);
+                    draw_polyline(&mut canvas, &state, &points, false)?;
                 }
             }
             META_POLYPOLYGON => {
@@ -929,10 +988,10 @@ pub fn rasterize_wmf_preview(
                     cursor = end;
                 }
                 if state.brush.style != BS_NULL {
-                    fill_rings(&mut canvas, &state, &rings, state.brush.color);
+                    fill_rings(&mut canvas, &state, &rings, state.brush.color)?;
                 }
                 for ring in &rings {
-                    draw_polyline(&mut canvas, &state, ring, true);
+                    draw_polyline(&mut canvas, &state, ring, true)?;
                 }
             }
             META_RECTANGLE => {
@@ -1090,6 +1149,15 @@ mod tests {
         let clipped = clip_line_to_rect(rect, i32::MIN, i32::MIN, i32::MAX, i32::MAX)
             .expect("extreme diagonal intersects bounded canvas");
         assert_eq!(clipped, (0, 0, 99, 99));
+    }
+
+    #[test]
+    fn raster_work_budget_fails_closed() {
+        let mut canvas = Canvas::new(1, 1).expect("bounded canvas");
+        canvas
+            .charge_work(MAX_RASTER_WORK_UNITS)
+            .expect("exact work limit");
+        assert!(canvas.charge_work(1).is_err());
     }
 
     #[test]
