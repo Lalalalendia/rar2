@@ -9,6 +9,15 @@ on:
       - "tools/verify_rescue_cfb_stream_export.py"
       - "tools/test_rescue_cfb_stream_identity.py"
       - ".github/workflows/rescue-cfb-stream-identity-v1.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/corpus/cfb_physical.py"
+      - "tools/corpus/cfb_physical_diff.py"
+      - "tools/rescue_cfb_stream_export.py"
+      - "tools/verify_rescue_cfb_stream_export.py"
+      - "tools/test_rescue_cfb_stream_identity.py"
+      - ".github/workflows/rescue-cfb-stream-identity-v1.yml"
   workflow_dispatch:
 
 permissions:
@@ -43,3 +52,52 @@ jobs:
             tools/rescue_cfb_stream_export.py \
             tools/verify_rescue_cfb_stream_export.py \
             tools/test_rescue_cfb_stream_identity.py
+
+      - name: Emit source-safe SID collision receipt
+        run: |
+          mkdir -p artifacts
+          python - <<'PY'
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+
+          from tools.test_rescue_cfb_stream_identity import collision_fixture
+          from tools.rescue_cfb_stream_export import export_file
+          from tools.verify_rescue_cfb_stream_export import verify_files
+
+          with tempfile.TemporaryDirectory() as directory:
+              root = Path(directory)
+              source = root / "ContentsCaseCollision.pub"
+              artifact_dir = root / "streams"
+              manifest_path = root / "manifest.json"
+              source.write_bytes(collision_fixture())
+              export_file(source, artifact_dir, manifest_path)
+              receipt = verify_files(source, artifact_dir, manifest_path)
+
+          safe = {
+              "schema_version": "chaptera.rescue-cfb-stream-identity-receipt.v1",
+              "source_head": os.environ["GITHUB_SHA"],
+              "source_sha256": receipt["source_sha256"],
+              "source_byte_len": receipt["source_byte_len"],
+              "identity": receipt["identity"],
+              "verified_stream_count": receipt["verified_stream_count"],
+              "verified_streams": receipt["verified_streams"],
+              "source_safe": receipt["source_safe"],
+              "pass": receipt["pass"],
+          }
+          Path("artifacts/rescue-cfb-stream-identity-v1.json").write_text(
+              json.dumps(safe, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          assert safe["verified_stream_count"] == 2
+          assert safe["pass"] is True
+          assert safe["source_safe"] is True
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rescue-cfb-stream-identity-v1
+          path: artifacts/rescue-cfb-stream-identity-v1.json
+          if-no-files-found: error
+          retention-days: 14
