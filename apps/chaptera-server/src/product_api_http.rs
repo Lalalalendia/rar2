@@ -18,6 +18,7 @@ use chaptera_cdm_model::{
 };
 use pub_editor::{EditOperation, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor};
 use pub_reader::PubResolvedGraph;
+use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -27,6 +28,7 @@ use crate::{
     authz_runtime::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
+    reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
         EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorRevisionEventV1,
@@ -92,6 +94,10 @@ impl ProductApiHttpState {
 pub fn router(state: ProductApiHttpState) -> Router {
     Router::new()
         .route("/v1/documents/{document_id}/current", get(current_document))
+        .route(
+            "/v1/reader/documents/{document_id}/scene",
+            get(reader_scene),
+        )
         .route("/v1/documents/{document_id}/commit", post(commit_move_node))
         .with_state(state)
 }
@@ -225,6 +231,78 @@ async fn current_document(
         project: receipt.project,
         authoring_graph,
     }))
+}
+
+async fn reader_scene(
+    State(state): State<ProductApiHttpState>,
+    Path(document_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+) -> Result<Json<ReaderSceneV1>, ProductApiError> {
+    let principal = state
+        .auth
+        .authenticate_read_request(&headers, &jar)
+        .await
+        .map_err(ProductApiError::Auth)?;
+
+    let source = state
+        .source
+        .resolve_by_document_id(&document_id)
+        .await
+        .map_err(ProductApiError::Source)?;
+
+    state
+        .authz
+        .authorize(
+            &source.tenant_id,
+            &document_id,
+            &principal.principal_id,
+            CAP_VIEW,
+            "reader-scene",
+            now_ms()?,
+        )
+        .await
+        .map_err(ProductApiError::Authz)?;
+
+    let head = current_head(&state.revisions, &source).await?;
+    if head.revision_id != source.baseline_revision_id {
+        return Err(ProductApiError::conflict(
+            "reader_scene_revision_not_source_only",
+            "read-only Cloud Reader V0 refuses edited revisions until authoritative revision-to-Viewer scene replay is wired",
+        ));
+    }
+
+    let materialized = state
+        .materializer
+        .materialize_state(&source.tenant_id, &document_id, &head.revision_id)
+        .await
+        .map_err(ProductApiError::Materializer)?;
+
+    let geometry = open_pub_geometry(
+        &materialized.source_bytes,
+        viewer_geometry_environment_v0_1(),
+    )
+    .map_err(|error| {
+        ProductApiError::unprocessable(
+            "reader_scene_open_failed",
+            format!("source-neutral Viewer could not open durable PUB source: {error}"),
+        )
+    })?;
+
+    let scene = from_viewer_geometry(
+        document_id,
+        source.source_sha256,
+        head.revision_id,
+        &geometry,
+    )
+    .map_err(|error| {
+        ProductApiError::internal(
+            "reader_scene_projection_failed",
+            format!("source-neutral Reader scene projection failed: {error}"),
+        )
+    })?;
+
+    Ok(Json(scene))
 }
 
 async fn commit_move_node(
@@ -608,6 +686,14 @@ impl ProductApiError {
     fn conflict(code: &'static str, message: impl Into<String>) -> Self {
         Self::Http {
             status: StatusCode::CONFLICT,
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn unprocessable(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Http {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
             code,
             message: message.into(),
         }
@@ -1057,6 +1143,43 @@ mod tests {
         let opened = json_body(opened).await;
         assert_eq!(opened["revision_id"], baseline.service_revision_id);
 
+        let reader_scene = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(reader_scene.status(), StatusCode::OK);
+        let reader_scene = json_body(reader_scene).await;
+        assert_eq!(
+            reader_scene["protocol_version"],
+            crate::reader_scene_v1::READER_SCENE_V1
+        );
+        assert_eq!(reader_scene["source_hash"], source_sha256);
+        assert_eq!(reader_scene["revision_id"], baseline.service_revision_id);
+        assert_eq!(reader_scene["scene_authority"], "server_viewer_projection");
+        let reader_pages = reader_scene["pages"]
+            .as_array()
+            .expect("Reader pages array");
+        let reader_nodes = reader_scene["nodes"]
+            .as_array()
+            .expect("Reader nodes array");
+        assert!(!reader_pages.is_empty());
+        assert!(!reader_nodes.is_empty());
+        assert!(reader_nodes.iter().all(|node| {
+            reader_pages
+                .iter()
+                .any(|page| page["page_id"] == node["page_id"])
+        }));
+        assert!(reader_scene.get("geometry").is_none());
+        assert!(reader_scene.get("project").is_none());
+        assert!(reader_scene.get("authoring_graph").is_none());
+
         let source_digest = Sha256Digest::from_str(&source_sha256).unwrap();
         let session = open_mature_0x2c_editor(&source_bytes, source_digest).unwrap();
         let (node_id, before_x_emu, before_y_emu, x_emu, y_emu) = session
@@ -1126,6 +1249,24 @@ mod tests {
         let child_revision = accepted["revision_id"].as_str().unwrap().to_owned();
         assert_ne!(child_revision, baseline.service_revision_id);
         assert_eq!(accepted["replayed"], false);
+
+        let reader_after_edit = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/v1/reader/documents/{document_id}/scene"),
+                &issued.session_token,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(reader_after_edit.status(), StatusCode::CONFLICT);
+        let reader_after_edit = json_body(reader_after_edit).await;
+        assert_eq!(
+            reader_after_edit["error"]["code"],
+            "reader_scene_revision_not_source_only"
+        );
 
         let retry = app
             .clone()
