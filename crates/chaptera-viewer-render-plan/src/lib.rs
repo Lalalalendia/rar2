@@ -832,10 +832,9 @@ mod tests {
         TableCellId,
     };
     use pub_viewer::{
-        ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1,
-        ViewerImageSourceWindowV1, ViewerNodePaint, ViewerPage, ViewerSolidLine, ViewerSource,
-        ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
-        viewer_story_text_sha256,
+        ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
+        ViewerNodePaint, ViewerPage, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
+        ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
     };
 
     fn canonical(byte: u8) -> CanonicalId {
