@@ -200,11 +200,15 @@ mod windows {
             return Err("contained worker left unmatched image blobs".to_owned());
         }
 
-        if visual.document.source.byte_len != source.byte_len {
-            return Err("contained Viewer source length does not match admitted source".to_owned());
+        if visual.document.source.byte_len != source.byte_len
+            || visual.document.source.source_hash.to_string() != source.sha256_hex
+        {
+            return Err("contained Viewer source identity does not match admitted source".to_owned());
         }
-        if resolved_graph.source.byte_len != source.byte_len {
-            return Err("contained editor graph source length does not match admitted source".to_owned());
+        if resolved_graph.source.source_hash != visual.document.source.source_hash
+            || resolved_graph.document.source_hash != visual.document.source.source_hash
+        {
+            return Err("contained editor graph source identity does not match Viewer".to_owned());
         }
 
         Ok(DesktopContainedOpen {
