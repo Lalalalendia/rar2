@@ -174,6 +174,10 @@ jobs:
               logical_stream_read_count=0
               logical_stream_read_failures=0
               logical_stream_length_mismatches=0
+              mismatch_top_level_counts={}
+              non_objects_length_mismatch_count=0
+              root_contents_expected_len=None
+              root_contents_actual_len=None
               for parts in ole.listdir(streams=True,storages=False):
                   logical_stream_read_count += 1
                   try:
@@ -181,8 +185,15 @@ jobs:
                       live_stream_sids.add(sid)
                       expected=int(ole.get_size(parts))
                       actual=len(ole.openstream(parts).read())
+                      if list(parts) == ["Contents"]:
+                          root_contents_expected_len=expected
+                          root_contents_actual_len=actual
                       if actual != expected:
                           logical_stream_length_mismatches += 1
+                          category="objects" if parts and parts[0] == "Objects" else "other"
+                          mismatch_top_level_counts[category]=mismatch_top_level_counts.get(category,0)+1
+                          if category != "objects":
+                              non_objects_length_mismatch_count += 1
                   except Exception:
                       logical_stream_read_failures += 1
 
@@ -282,6 +293,14 @@ jobs:
                   "logical_stream_read_count":logical_stream_read_count,
                   "logical_stream_read_failure_count":logical_stream_read_failures,
                   "logical_stream_length_mismatch_count":logical_stream_length_mismatches,
+                  "mismatch_top_level_counts":mismatch_top_level_counts,
+                  "non_objects_length_mismatch_count":non_objects_length_mismatch_count,
+                  "root_contents_expected_len":root_contents_expected_len,
+                  "root_contents_actual_len":root_contents_actual_len,
+                  "root_contents_matches_declared_len":(
+                      root_contents_expected_len is not None
+                      and root_contents_expected_len == root_contents_actual_len
+                  ),
               },indent=2,sort_keys=True))
           PY
 
@@ -306,11 +325,14 @@ jobs:
           assert reach["invalid_entries"].get("384") == 1431327565, reach
           assert reach["logical_stream_read_count"] > 0, reach
           assert reach["logical_stream_read_failure_count"] == 0, reach
-          assert reach["logical_stream_length_mismatch_count"] == 0, reach
-          assert reach["live_required_transition_error_count"] == 0, reach
-          assert reach["mini_sector_384_referenced_by_live_stream"] is False, reach
-          assert reach["mini_sector_384_referenced_by_orphan_stream"] is True, reach
-          assert reach["orphan_required_transition_error_count"] > 0, reach
+          assert reach["logical_stream_length_mismatch_count"] > 0, reach
+          assert reach["non_objects_length_mismatch_count"] == 0, reach
+          assert reach["mismatch_top_level_counts"].get("objects", 0) == reach["logical_stream_length_mismatch_count"], reach
+          assert reach["root_contents_matches_declared_len"] is True, reach
+          assert reach["root_contents_expected_len"] > 0, reach
+          assert reach["live_required_transition_error_count"] > 0, reach
+          assert reach["mini_sector_384_referenced_by_live_stream"] is True, reach
+          assert reach["orphan_stream_sid_count"] == 0, reach
           # Report may retain only structural metadata/error text, never source bytes or recovered story text.
           forbidden=["PERLOST.PUB", "PageWiz/", "recovered_text", "story_text"]
           raw=p.read_text()
