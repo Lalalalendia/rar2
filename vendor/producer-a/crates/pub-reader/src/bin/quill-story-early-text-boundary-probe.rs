@@ -415,13 +415,13 @@ fn scan_strs_plc_candidates(
         let (record_sizes, records_exact) =
             structured_record_sizes_exact(strs, positions_end, grounded_count);
 
-        let in_btep = btep.map(|set| story_ends.iter().filter(|end| set.contains(end)).count());
-        let in_btec = btec.map(|set| story_ends.iter().filter(|end| set.contains(end)).count());
+        let in_btep = btep.map(|set| story_ends.iter().filter(|end| set.contains(*end)).count());
+        let in_btec = btec.map(|set| story_ends.iter().filter(|end| set.contains(*end)).count());
         let in_both = match (btep, btec) {
             (Some(left), Some(right)) => Some(
                 story_ends
                     .iter()
-                    .filter(|end| left.contains(end) && right.contains(end))
+                    .filter(|end| left.contains(*end) && right.contains(*end))
                     .count(),
             ),
             _ => None,
