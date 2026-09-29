@@ -51,10 +51,9 @@ pub fn install_with_additional(
         let mut data = egui::FontData::from_owned(font.bytes.to_vec());
         data.index = font.face_index;
         fonts.font_data.insert(key.clone(), Arc::new(data));
-        fonts.families.insert(
-            egui::FontFamily::Name(font.resource_id.into()),
-            vec![key],
-        );
+        fonts
+            .families
+            .insert(egui::FontFamily::Name(font.resource_id.into()), vec![key]);
     }
 
     ctx.set_fonts(fonts);
