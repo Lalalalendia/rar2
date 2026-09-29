@@ -285,13 +285,11 @@ impl SqlitePublicRateLimitAuthority {
             .await
             .map_err(sqlite_error)?;
 
-        sqlx::query(
-            "DELETE FROM public_rate_limit_state WHERE last_seen_at_ms < ?",
-        )
-        .bind(cleanup_before_ms)
-        .execute(&mut *tx)
-        .await
-        .map_err(sqlite_error)?;
+        sqlx::query("DELETE FROM public_rate_limit_state WHERE last_seen_at_ms < ?")
+            .bind(cleanup_before_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(sqlite_error)?;
 
         let existing = sqlx::query(
             r#"
@@ -323,19 +321,16 @@ impl SqlitePublicRateLimitAuthority {
                 });
             }
         } else {
-            let entries: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM public_rate_limit_state",
-            )
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(sqlite_error)?;
-            if entries >= self.config.max_entries {
-                let oldest: Option<i64> = sqlx::query_scalar(
-                    "SELECT MIN(last_seen_at_ms) FROM public_rate_limit_state",
-                )
+            let entries: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM public_rate_limit_state")
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(sqlite_error)?;
+            if entries >= self.config.max_entries {
+                let oldest: Option<i64> =
+                    sqlx::query_scalar("SELECT MIN(last_seen_at_ms) FROM public_rate_limit_state")
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(sqlite_error)?;
                 let retry_at_ms = oldest
                     .unwrap_or(now_ms)
                     .saturating_add(retention_ms)
@@ -415,10 +410,7 @@ impl SqlitePublicRateLimitAuthority {
     }
 }
 
-fn duration_ms(
-    duration: Duration,
-    name: &'static str,
-) -> Result<i64, PublicRateLimitError> {
+fn duration_ms(duration: Duration, name: &'static str) -> Result<i64, PublicRateLimitError> {
     i64::try_from(duration.as_millis()).map_err(|_| {
         PublicRateLimitError::new(
             "public_rate_duration_overflow",
@@ -629,12 +621,11 @@ mod tests {
 
         let options = SqliteConnectOptions::new().filename(&path);
         let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
-        let row: (Vec<u8>, String) = sqlx::query_as(
-            "SELECT subject_key, policy_class FROM public_rate_limit_state",
-        )
-        .fetch_one(&mut connection)
-        .await
-        .unwrap();
+        let row: (Vec<u8>, String) =
+            sqlx::query_as("SELECT subject_key, policy_class FROM public_rate_limit_state")
+                .fetch_one(&mut connection)
+                .await
+                .unwrap();
         assert_eq!(row.0.len(), 32);
         assert_eq!(row.1, "reader_session_open");
         assert_ne!(row.0, ip.to_string().as_bytes());
