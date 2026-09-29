@@ -90,3 +90,22 @@ jobs:
     needs: classify
     uses: ./.github/workflows/reader-consumer-preflight.yml
 
+  reader-windows:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.reader_windows == 'true'
+    uses: ./.github/workflows/chaptera-reader-windows.yml
+
+  editor-windows:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.editor_windows == 'true'
+    uses: ./.github/workflows/chaptera-desktop-windows.yml
+
+  visual-oracle:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.visual_oracle == 'true'
+    uses: ./.github/workflows/carlton-reader-visual-oracle.yml
+
+  typography:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.typography == 'true'
+    uses: ./.github/workflows/reader-typography-golden.yml
