@@ -29,7 +29,8 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderPlanErrorV1,
-    build_page_render_plan_with_text_layout_resolver_v1, build_page_render_plan_with_text_layout_v1,
+    build_page_render_plan_with_text_layout_resolver_v1,
+    build_page_render_plan_with_text_layout_v1,
 };
 use eframe::egui;
 use pub_interaction::{
@@ -117,12 +118,9 @@ fn build_desktop_page_render_plan_with_source_fonts(
     source_fonts: &source_font::DesktopSourceFontRegistry,
 ) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
     let fallback = desktop_text_font_resource();
-    build_page_render_plan_with_text_layout_resolver_v1(
-        visual,
-        page_index,
-        &fallback,
-        |fragment| source_fonts.resource_for_fragment(fragment),
-    )
+    build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
+        source_fonts.resource_for_fragment(fragment)
+    })
 }
 
 fn text_layout_disposition_counts(plan: &PageRenderPlanV1) -> (usize, usize) {
@@ -3889,11 +3887,7 @@ impl ViewerApp {
             .get(page_index)
             .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
         let render_plan = if self.source_fonts_active {
-            build_desktop_page_render_plan_with_source_fonts(
-                visual,
-                page_index,
-                &self.source_fonts,
-            )
+            build_desktop_page_render_plan_with_source_fonts(visual, page_index, &self.source_fonts)
         } else {
             build_desktop_page_render_plan(visual, page_index)
         }
