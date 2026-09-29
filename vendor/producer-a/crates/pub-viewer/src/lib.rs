@@ -2493,6 +2493,7 @@ mod tests {
                         officeart_shape_type: None,
                         officeart_spid: None,
                         image_slot: None,
+                        legacy_ole: None,
                         explicit_image_crop: None,
                         explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                         effective_paint: None,
@@ -2525,6 +2526,34 @@ mod tests {
             styles: BTreeMap::new(),
             extensions: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn inert_legacy_ole_preserves_geometry_without_shape_paint() {
+        let mut graph = resolved_graph_fixture();
+        let node_id = *graph.nodes.keys().next().expect("fixture node");
+        let expected_bounds = {
+            let node = graph.nodes.get_mut(&node_id).expect("fixture node");
+            node.kind = NodeKind::Unsupported;
+            node.payload.story_frame = None;
+            node.payload.legacy_ole = Some(pub_reader::PubLegacyOleSource {
+                storage_number: 73,
+                raw_flag: 0x8000,
+            });
+            node.header.bounds
+        };
+
+        let authoring = bounded_authoring_slice_from_resolved(&graph).expect("authoring slice");
+        assert_eq!(authoring.node_geometry.len(), 1);
+        assert_eq!(authoring.node_geometry[0].node_id, node_id);
+        assert_eq!(authoring.node_geometry[0].bounds, expected_bounds);
+
+        let node = graph.nodes.get(&node_id).expect("fixture node");
+        assert!(
+            viewer_node_paint_from_canonical_bridge(node)
+                .expect("paint projection")
+                .is_none()
+        );
     }
 
     fn linked_resolved_graph_fixture(text: &str) -> PubResolvedGraph {
