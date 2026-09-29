@@ -13,6 +13,12 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_README = ROOT / "packages" / "product" / "reader-portable" / "v1" / "README.md"
 README_CONTRACT = "chaptera.reader-portable-readme.v1"
+RUNTIME_RECEIPT_SCHEMA = "chaptera.desktop-open-runtime-stage.v1"
+RUNTIME_ENTRIES = (
+    "chaptera-desktop-open-worker.exe",
+    "chaptera-desktop-open-sandbox-host.exe",
+    "chaptera-desktop-open-runtime.json",
+)
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 
 
@@ -32,14 +38,60 @@ def zip_entry(name: str, *, executable: bool = False) -> zipfile.ZipInfo:
     return info
 
 
+def _load_runtime(runtime_dir: pathlib.Path) -> dict[str, bytes]:
+    files = {name: runtime_dir / name for name in RUNTIME_ENTRIES}
+    for name, path in files.items():
+        if not path.is_file():
+            raise RuntimeError(f"desktop-open runtime entry is missing: {name}")
+
+    worker = files["chaptera-desktop-open-worker.exe"].read_bytes()
+    host = files["chaptera-desktop-open-sandbox-host.exe"].read_bytes()
+    for name, payload in (
+        ("chaptera-desktop-open-worker.exe", worker),
+        ("chaptera-desktop-open-sandbox-host.exe", host),
+    ):
+        if len(payload) < 2 or payload[:2] != b"MZ":
+            raise RuntimeError(f"desktop-open runtime executable is not PE: {name}")
+
+    receipt_bytes = files["chaptera-desktop-open-runtime.json"].read_bytes()
+    try:
+        receipt = json.loads(receipt_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("desktop-open runtime receipt must be valid UTF-8 JSON") from exc
+    if receipt.get("schema_version") != RUNTIME_RECEIPT_SCHEMA:
+        raise RuntimeError("desktop-open runtime receipt schema mismatch")
+
+    expected = {
+        "worker": ("chaptera-desktop-open-worker.exe", worker),
+        "sandbox_host": ("chaptera-desktop-open-sandbox-host.exe", host),
+    }
+    for key, (file_name, payload) in expected.items():
+        record = receipt.get(key)
+        if not isinstance(record, dict):
+            raise RuntimeError(f"desktop-open runtime receipt missing {key}")
+        if record.get("file_name") != file_name:
+            raise RuntimeError(f"desktop-open runtime receipt filename mismatch for {key}")
+        if record.get("sha256") != hashlib.sha256(payload).hexdigest():
+            raise RuntimeError(f"desktop-open runtime receipt hash mismatch for {key}")
+        if record.get("byte_len") != len(payload):
+            raise RuntimeError(f"desktop-open runtime receipt size mismatch for {key}")
+
+    return {
+        "chaptera-desktop-open-worker.exe": worker,
+        "chaptera-desktop-open-sandbox-host.exe": host,
+        "chaptera-desktop-open-runtime.json": receipt_bytes,
+    }
+
+
 def package_reader(
     reader_exe: pathlib.Path,
     output_zip: pathlib.Path,
     *,
+    runtime_dir: pathlib.Path,
     binary_entry: str = "Chaptera-Reader.exe",
     readme: pathlib.Path = DEFAULT_README,
     readme_entry: str = "README.md",
-) -> dict[str, str | int]:
+) -> dict[str, object]:
     if not reader_exe.is_file():
         raise RuntimeError(f"Reader executable does not exist: {reader_exe}")
     binary = reader_exe.read_bytes()
@@ -55,6 +107,8 @@ def package_reader(
     if README_CONTRACT not in readme_text:
         raise RuntimeError("Reader README contract marker is missing")
 
+    runtime = _load_runtime(runtime_dir)
+
     for label, value in (("binary_entry", binary_entry), ("readme_entry", readme_entry)):
         pure = pathlib.PurePosixPath(value.replace("\\", "/"))
         if pure.is_absolute() or ".." in pure.parts or len(pure.parts) != 1:
@@ -68,13 +122,23 @@ def package_reader(
     with zipfile.ZipFile(output_zip, "w") as archive:
         archive.writestr(zip_entry(binary_entry, executable=True), binary)
         archive.writestr(zip_entry(readme_entry), readme_bytes)
+        for name in RUNTIME_ENTRIES:
+            archive.writestr(zip_entry(name, executable=name.endswith(".exe")), runtime[name])
 
-    result = {
+    runtime_manifest = {
+        name: {
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "byte_len": len(payload),
+        }
+        for name, payload in runtime.items()
+    }
+    result: dict[str, object] = {
         "schema_version": "chaptera.reader-portable-package.v1",
         "product_id": "chaptera.reader",
         "zip": str(output_zip),
         "binary_entry": binary_entry,
         "readme_entry": readme_entry,
+        "runtime_entries": runtime_manifest,
         "binary_sha256": hashlib.sha256(binary).hexdigest(),
         "zip_sha256": sha256_file(output_zip),
         "binary_size": len(binary),
@@ -86,6 +150,7 @@ def package_reader(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reader-exe", required=True, type=pathlib.Path)
+    parser.add_argument("--runtime-dir", required=True, type=pathlib.Path)
     parser.add_argument("--output-zip", required=True, type=pathlib.Path)
     parser.add_argument("--manifest", required=True, type=pathlib.Path)
     parser.add_argument("--readme", type=pathlib.Path, default=DEFAULT_README)
@@ -94,6 +159,7 @@ def main() -> int:
     result = package_reader(
         args.reader_exe,
         args.output_zip,
+        runtime_dir=args.runtime_dir,
         readme=args.readme,
     )
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
