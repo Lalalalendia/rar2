@@ -55,11 +55,14 @@ jobs:
           fi
           rustfmt --edition 2024 --check "${changed_rust[@]}"
 
-      - name: Check shared Reader seam
-        run: |
-          cargo check -p chaptera-desktop --all-targets
-          cargo check --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --all-targets --features projected-scene-instances
-          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer --all-targets
+      - name: Check desktop root seam
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Check render-plan seam
+        run: cargo check --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --all-targets --features projected-scene-instances
+
+      - name: Check vendor Reader seam
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer --all-targets
 
       - name: Clippy shared Reader seam
         run: |
