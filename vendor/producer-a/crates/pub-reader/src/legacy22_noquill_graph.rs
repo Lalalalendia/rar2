@@ -4,6 +4,7 @@ use super::{
     PubNodePayload, PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource,
     PubTableCellCoordinates, PubTableCellSource, PubTableSource, PubTableStoryOwnershipSource,
     ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref,
+    validate_wmf_metafile,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
@@ -24,6 +25,8 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
 const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0000;
+const LEGACY_IMAGE_TYPE: u16 = 0x0002;
+const LEGACY_IMAGE_DATA_TYPE: u16 = 0x0021;
 const LEGACY_OLE_TYPE: u16 = 0x0003;
 const LEGACY_OLE_DATA_TYPE: u16 = 0x0022;
 const LEGACY_OLE_DATA_LEN: usize = 18;
@@ -38,6 +41,12 @@ const LEGACY_SHAPE_XS_OFFSET: usize = 0x06;
 const LEGACY_SHAPE_YS_OFFSET: usize = 0x0a;
 const LEGACY_SHAPE_XE_OFFSET: usize = 0x0e;
 const LEGACY_SHAPE_YE_OFFSET: usize = 0x12;
+const LEGACY_IMAGE_PAYLOAD_OFFSET: usize = 0x08;
+const WMF_PLACEABLE_KEY: u32 = 0x9ac6_cdd7;
+const WMF_PLACEABLE_HEADER_BYTES: usize = 22;
+const WMF_META_HEADER_BYTES: usize = 18;
+const WMF_MIN_RECORD_WORDS: usize = 3;
+const WMF_MAX_RECORDS: usize = 1_000_000;
 
 #[derive(Debug, Clone)]
 struct LegacyIdList {
@@ -376,9 +385,23 @@ fn materialize_legacy_noquill_child(
     }
 
     let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
+    let is_legacy_image = child_entry.chunk_type == LEGACY_IMAGE_TYPE;
     let is_group = child_entry.chunk_type == LEGACY_GROUP_TYPE;
     let is_legacy_ole = child_entry.chunk_type == LEGACY_OLE_TYPE;
     let is_table = child_entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE;
+    let legacy_image_source = if is_legacy_image {
+        let Some((_, source)) = legacy_image_wmf_profile(contents, directory, child_object_id) else {
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(child_object_id),
+                raw_type: Some(child_entry.chunk_type),
+                reason: "legacy_image_native_wmf_not_admitted_v1".into(),
+            });
+            return Ok(());
+        };
+        Some(source)
+    } else {
+        None
+    };
     let (legacy_ole, legacy_ole_source) = if is_legacy_ole {
         let Some(profile) = legacy_ole_profile(contents, directory, child_object_id) else {
             diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
@@ -393,6 +416,7 @@ fn materialize_legacy_noquill_child(
         (None, None)
     };
     if !is_text_shape
+        && !is_legacy_image
         && !is_group
         && !is_legacy_ole
         && !is_table
@@ -506,6 +530,17 @@ fn materialize_legacy_noquill_child(
             ReadConfidence::Exact,
         ),
     ];
+    if let Some(source) = legacy_image_source {
+        source_refs.push(source_ref(
+            &graph.source,
+            &source,
+            Some(format!("contents/0x22/object/{child_object_id}")),
+            Some("legacy_image_native_wmf".into()),
+            SourceRole::Semantic,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ));
+    }
     if let Some(source) = legacy_ole_source {
         source_refs.push(source_ref(
             &graph.source,
@@ -523,6 +558,8 @@ fn materialize_legacy_noquill_child(
         Node {
             kind: if is_group {
                 NodeKind::Group
+            } else if is_legacy_image {
+                NodeKind::Image
             } else if is_legacy_ole {
                 NodeKind::Unsupported
             } else if is_table {
@@ -1159,6 +1196,158 @@ fn legacy_ole_profile(
     let chunk = chunk_bytes(contents, child).ok()?;
     let profile = parse_legacy_ole_data_chunk(chunk)?;
     Some((profile, child.chunk_source.clone()))
+}
+
+pub fn read_legacy_noquill_image_wmf<R: Read + Seek>(
+    mut reader: R,
+    image_object_id: u16,
+) -> Result<Vec<u8>> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut pub_bytes = Vec::new();
+    reader.read_to_end(&mut pub_bytes)?;
+    let contents = match pub_cfb::read_stream_reader(
+        Cursor::new(pub_bytes.as_slice()),
+        CONTENTS_STREAM_PATH,
+    ) {
+        Ok(contents) => contents,
+        Err(strict_error) => {
+            let recovered = pub_cfb::recover_root_regular_stream_reader(
+                Cursor::new(pub_bytes.as_slice()),
+                CONTENTS_STREAM_PATH,
+            )
+            .with_context(|| {
+                format!(
+                    "strict CFB read failed ({strict_error}); bounded root Contents recovery failed"
+                )
+            })?;
+            if recovered.root_entry_names.iter().any(|name| {
+                name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher")
+            }) {
+                bail!(
+                    "bounded root Contents recovery is forbidden when Quill or Escher is present"
+                );
+            }
+            recovered.bytes
+        }
+    };
+    let directory = parse_legacy_0x22_directory(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
+        .context("parse legacy no-Quill 0x22 Contents directory for image")?;
+    let image = directory
+        .entry_by_object_id(image_object_id)
+        .with_context(|| format!("missing legacy IMAGE object {image_object_id}"))?;
+    if image.chunk_type != LEGACY_IMAGE_TYPE {
+        bail!(
+            "legacy object {image_object_id} has type {:#06x}, expected IMAGE 0x0002",
+            image.chunk_type
+        );
+    }
+    let (wmf, _) = legacy_image_wmf_profile(&contents, &directory, image_object_id)
+        .context("legacy IMAGE has no bounded direct native WMF profile")?;
+    Ok(wmf)
+}
+
+fn legacy_image_wmf_profile(
+    contents: &[u8],
+    directory: &Legacy0x22Directory,
+    image_object_id: u16,
+) -> Option<(Vec<u8>, RawSpan)> {
+    let children = directory
+        .entries_by_parent_id(image_object_id)
+        .filter(|entry| entry.chunk_type == LEGACY_IMAGE_DATA_TYPE)
+        .collect::<Vec<_>>();
+    if children.len() != 1 {
+        return None;
+    }
+    let child = children[0];
+    let chunk = chunk_bytes(contents, child).ok()?;
+    let wmf = recover_legacy_image_wmf_from_chunk(chunk)?;
+    let source = RawSpan {
+        stream: child.chunk_source.stream.clone(),
+        offset: child
+            .chunk_source
+            .offset
+            .checked_add(LEGACY_IMAGE_PAYLOAD_OFFSET as u64)?,
+        len: u64::try_from(wmf.len()).ok()?,
+    };
+    Some((wmf, source))
+}
+
+fn recover_legacy_image_wmf_from_chunk(chunk: &[u8]) -> Option<Vec<u8>> {
+    let declared_len = usize::try_from(read_u32(chunk, 0x04)?).ok()?;
+    let payload_end = LEGACY_IMAGE_PAYLOAD_OFFSET.checked_add(declared_len)?;
+    let payload = chunk.get(LEGACY_IMAGE_PAYLOAD_OFFSET..payload_end)?;
+
+    if validate_wmf_metafile(payload).is_ok() {
+        return Some(payload.to_vec());
+    }
+
+    let header_offset = wmf_header_offset(payload);
+    if let Some(declared_words) = read_u32(payload, header_offset.checked_add(6)?) {
+        if let Ok(declared_words) = usize::try_from(declared_words) {
+            if let Some(meta_bytes) = declared_words.checked_mul(2) {
+                if let Some(prefix_end) = header_offset.checked_add(meta_bytes) {
+                    if let Some(prefix) = payload.get(..prefix_end) {
+                        if validate_wmf_metafile(prefix).is_ok() {
+                            return Some(prefix.to_vec());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    first_eof_wmf_candidate(payload)
+}
+
+fn first_eof_wmf_candidate(payload: &[u8]) -> Option<Vec<u8>> {
+    let header_offset = wmf_header_offset(payload);
+    let mut offset = header_offset.checked_add(WMF_META_HEADER_BYTES)?;
+    if offset > payload.len() {
+        return None;
+    }
+
+    for _ in 0..WMF_MAX_RECORDS {
+        if offset >= payload.len() {
+            return None;
+        }
+        let record_words = usize::try_from(read_u32(payload, offset)?).ok()?;
+        if record_words < WMF_MIN_RECORD_WORDS {
+            return None;
+        }
+        let record_bytes = record_words.checked_mul(2)?;
+        let record_end = offset.checked_add(record_bytes)?;
+        if record_end > payload.len() {
+            return None;
+        }
+        let function = read_u16(payload, offset.checked_add(4)?)?;
+        offset = record_end;
+        if function == 0 {
+            let meta_len = offset.checked_sub(header_offset)?;
+            if meta_len % 2 != 0 {
+                return None;
+            }
+            let words = u32::try_from(meta_len / 2).ok()?;
+            let mut prefix = payload.get(..offset)?.to_vec();
+            write_u32(&mut prefix, header_offset.checked_add(6)?, words)?;
+            return validate_wmf_metafile(&prefix).is_ok().then_some(prefix);
+        }
+    }
+    None
+}
+
+fn wmf_header_offset(payload: &[u8]) -> usize {
+    if read_u32(payload, 0) == Some(WMF_PLACEABLE_KEY) {
+        WMF_PLACEABLE_HEADER_BYTES
+    } else {
+        0
+    }
+}
+
+fn write_u32(bytes: &mut [u8], offset: usize, value: u32) -> Option<()> {
+    let end = offset.checked_add(4)?;
+    let dst = bytes.get_mut(offset..end)?;
+    dst.copy_from_slice(&value.to_le_bytes());
+    Some(())
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
