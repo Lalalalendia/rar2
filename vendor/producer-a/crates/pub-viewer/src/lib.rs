@@ -1312,8 +1312,10 @@ fn open_legacy_0x22_noquill_bundle(
         .iter()
         .map(|page| page.id)
         .collect::<Vec<_>>();
-    let authoring =
-        bounded_legacy_noquill_authoring_slice_from_resolved_pages(&resolved.graph, &effective_page_ids)?;
+    let authoring = bounded_legacy_noquill_authoring_slice_from_resolved_pages(
+        &resolved.graph,
+        &effective_page_ids,
+    )?;
     let projection = project_bounded(authoring);
 
     document
@@ -2276,9 +2278,7 @@ fn bounded_legacy_noquill_authoring_slice_from_resolved_pages(
         projected_ids.insert(node.header.id);
     }
 
-    authoring
-        .node_geometry
-        .sort_by_key(|node| node.node_id);
+    authoring.node_geometry.sort_by_key(|node| node.node_id);
     Ok(authoring)
 }
 
