@@ -24,6 +24,13 @@ jobs:
         with:
           toolchain: "1.94.1"
 
+      - name: Validate physical Open With receipt harness syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $source = Get-Content -Raw "tools/windows/reader_open_with_double_activation_receipt.ps1"
+          [void][scriptblock]::Create($source)
+
       - name: Build current Reader-only binary
         shell: pwsh
         run: |
