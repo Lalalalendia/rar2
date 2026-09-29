@@ -42,6 +42,11 @@ jobs:
             > /tmp/legacy22-train.diff
           git apply --3way /tmp/legacy22-train.diff
 
+          # Historical PRs carry their own workflow files. Product code is the
+          # migration target; keep rar2 workflow surfaces unchanged because the
+          # GitHub App does not have workflow-write permission.
+          git restore --source=HEAD -- .github/workflows
+
           python - <<'PY'
           from pathlib import Path
           p=Path("vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs")
