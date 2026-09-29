@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use pub_contents::{
     detect_family, parse_legacy_0x22_directory, parse_legacy_0x22_resolved_tables,
-    parse_legacy_0x22_table_catalog, parse_legacy_0x22_text_info_map, parse_preamble,
-    ContentsFamily, Legacy0x22TableCatalogReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
+    parse_legacy_0x22_table_catalog, parse_legacy_0x22_table_text_map,
+    parse_legacy_0x22_text_info_map, parse_preamble, ContentsFamily,
+    Legacy0x22TableCatalogReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
 };
 use pub_core::StreamPath;
 use pub_model::Sha256Digest;
@@ -175,6 +176,117 @@ fn owner_partition_profiles(
     )
 }
 
+fn alternate_profile_text_join(
+    contents: &[u8],
+    directory: &pub_contents::Legacy0x22Directory,
+    target_ids: &BTreeSet<u16>,
+) -> serde_json::Value {
+    let Ok(text_map) =
+        parse_legacy_0x22_table_text_map(StreamPath(CONTENTS_STREAM_PATH.into()), contents)
+    else {
+        return json!({
+            "text_map_ok": false,
+            "target_count": target_ids.len(),
+        });
+    };
+
+    let text_info = text_map.text_info.as_ref();
+    let text_by_id = text_map
+        .tables
+        .iter()
+        .map(|table| (table.effective_text_id, table))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut candidate_profile_count = 0usize;
+    let mut explicit_owner_count = 0usize;
+    let mut synthetic_selector_count = 0usize;
+    let mut text_identity_hit_count = 0usize;
+    let mut cell_count_hit_count = 0usize;
+    let mut local_selector_matches_text_ordinal_count = 0usize;
+    let mut duplicate_candidate_text_ids = BTreeMap::<u32, usize>::new();
+    let mut candidate_text_ids = BTreeMap::<u32, usize>::new();
+
+    for target_id in target_ids {
+        let Some(entry) = directory.entry_by_object_id(*target_id) else {
+            continue;
+        };
+        let Ok(start) = usize::try_from(entry.chunk_source.offset) else {
+            continue;
+        };
+        let Ok(len) = usize::try_from(entry.chunk_source.len) else {
+            continue;
+        };
+        let Some(end) = start.checked_add(len) else {
+            continue;
+        };
+        let Some(chunk) = contents.get(start..end) else {
+            continue;
+        };
+
+        let Some(columns) = read_u16(chunk, 74) else {
+            continue;
+        };
+        let Some(rows) = read_u16(chunk, 80) else {
+            continue;
+        };
+        if columns == 0 || rows == 0 {
+            continue;
+        }
+        candidate_profile_count += 1;
+
+        let explicit_owner = text_info
+            .and_then(|map| map.end_for_owner(*target_id))
+            .is_some();
+        let effective_text_id = if explicit_owner {
+            explicit_owner_count += 1;
+            u32::from(*target_id)
+        } else {
+            let Some(local_selector) = read_u16(chunk, 70) else {
+                continue;
+            };
+            synthetic_selector_count += 1;
+            65_536 + u32::from(local_selector)
+        };
+
+        let seen = candidate_text_ids.entry(effective_text_id).or_default();
+        *seen += 1;
+        if *seen > 1 {
+            *duplicate_candidate_text_ids
+                .entry(effective_text_id)
+                .or_default() += 1;
+        }
+
+        let Some(text_table) = text_by_id.get(&effective_text_id) else {
+            continue;
+        };
+        text_identity_hit_count += 1;
+
+        if !explicit_owner
+            && effective_text_id == text_table.default_text_id
+            && u32::from(read_u16(chunk, 70).unwrap_or_default()) == text_table.ordinary_shape_index
+        {
+            local_selector_matches_text_ordinal_count += 1;
+        }
+
+        let slots = usize::from(columns) * usize::from(rows);
+        if slots == text_table.cells.len() {
+            cell_count_hit_count += 1;
+        }
+    }
+
+    json!({
+        "text_map_ok": true,
+        "target_count": target_ids.len(),
+        "candidate_profile_count": candidate_profile_count,
+        "explicit_owner_count": explicit_owner_count,
+        "synthetic_selector_count": synthetic_selector_count,
+        "text_identity_hit_count": text_identity_hit_count,
+        "cell_count_hit_count": cell_count_hit_count,
+        "local_selector_matches_text_ordinal_count": local_selector_matches_text_ordinal_count,
+        "duplicate_candidate_text_ids": duplicate_candidate_text_ids,
+    })
+}
+
 fn materialized_object_profiles(stream: StreamPath, contents: &[u8]) -> BTreeMap<String, usize> {
     let mut profiles = BTreeMap::new();
     if let Ok(catalog) = parse_legacy_0x22_table_catalog(stream, contents) {
@@ -262,6 +374,7 @@ fn main() -> Result<()> {
     let mut placeholder_chunk_count = 0usize;
     let mut cfb_contents_unavailable = 0usize;
     let mut directory_unavailable = 0usize;
+    let mut alternate_profile_text_join_files = Vec::new();
     let mut errors = BTreeMap::<String, ErrorAggregate>::new();
 
     for path in paths {
@@ -304,6 +417,11 @@ fn main() -> Result<()> {
         reader_target_residual_count += reader_target_count;
         if reader_target_count > 0 {
             reader_target_files += 1;
+            alternate_profile_text_join_files.push(alternate_profile_text_join(
+                &contents,
+                &directory,
+                &reader_target_ids,
+            ));
         }
 
         match parse_legacy_0x22_resolved_tables(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
@@ -409,6 +527,42 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
 
+    let alternate_profile_text_join = json!({
+        "file_count": alternate_profile_text_join_files.len(),
+        "target_count": alternate_profile_text_join_files
+            .iter()
+            .map(|row| row["target_count"].as_u64().unwrap_or_default())
+            .sum::<u64>(),
+        "candidate_profile_count": alternate_profile_text_join_files
+            .iter()
+            .map(|row| row["candidate_profile_count"].as_u64().unwrap_or_default())
+            .sum::<u64>(),
+        "explicit_owner_count": alternate_profile_text_join_files
+            .iter()
+            .map(|row| row["explicit_owner_count"].as_u64().unwrap_or_default())
+            .sum::<u64>(),
+        "synthetic_selector_count": alternate_profile_text_join_files
+            .iter()
+            .map(|row| row["synthetic_selector_count"].as_u64().unwrap_or_default())
+            .sum::<u64>(),
+        "text_identity_hit_count": alternate_profile_text_join_files
+            .iter()
+            .map(|row| row["text_identity_hit_count"].as_u64().unwrap_or_default())
+            .sum::<u64>(),
+        "cell_count_hit_count": alternate_profile_text_join_files
+            .iter()
+            .map(|row| row["cell_count_hit_count"].as_u64().unwrap_or_default())
+            .sum::<u64>(),
+        "local_selector_matches_text_ordinal_count": alternate_profile_text_join_files
+            .iter()
+            .map(|row| {
+                row["local_selector_matches_text_ordinal_count"]
+                    .as_u64()
+                    .unwrap_or_default()
+            })
+            .sum::<u64>(),
+    });
+
     let receipt = json!({
         "schema": "chaptera.legacy22-table-resolution-census.v1",
         "corpus_file_count": corpus_file_count,
@@ -427,6 +581,7 @@ fn main() -> Result<()> {
         "cfb_contents_unavailable": cfb_contents_unavailable,
         "directory_unavailable": directory_unavailable,
         "error_classes": error_classes,
+        "alternate_profile_text_join": alternate_profile_text_join,
         "source_safe": true,
     });
 
