@@ -20,6 +20,30 @@ META_HEADER_WORDS = 9
 META_EOF = 0x0000
 MAX_RECORDS = 1_000_000
 
+META_CREATEPENINDIRECT = 0x02FA
+META_CREATEBRUSHINDIRECT = 0x02FC
+META_DIBCREATEPATTERNBRUSH = 0x0142
+META_CREATEREGION = 0x06FF
+META_DELETEOBJECT = 0x01F0
+META_SELECTCLIPREGION = 0x012C
+META_SELECTOBJECT = 0x012D
+META_POLYGON = 0x0324
+META_POLYLINE = 0x0325
+META_RECTANGLE = 0x041B
+META_POLYPOLYGON = 0x0538
+
+SUPPORTED_DRAW_FUNCTIONS = {
+    META_POLYGON,
+    META_POLYLINE,
+    META_RECTANGLE,
+    META_POLYPOLYGON,
+}
+FILL_DRAW_FUNCTIONS = {
+    META_POLYGON,
+    META_RECTANGLE,
+    META_POLYPOLYGON,
+}
+
 
 class ParseError(ValueError):
     pass
@@ -30,6 +54,20 @@ def u16(raw: bytes, offset: int) -> int:
     if offset < 0 or end > len(raw):
         raise ParseError(f"u16_oob@{offset}")
     return int.from_bytes(raw[offset:end], "little", signed=False)
+
+
+def i16(raw: bytes, offset: int) -> int:
+    end = offset + 2
+    if offset < 0 or end > len(raw):
+        raise ParseError(f"i16_oob@{offset}")
+    return int.from_bytes(raw[offset:end], "little", signed=True)
+
+
+def i32(raw: bytes, offset: int) -> int:
+    end = offset + 4
+    if offset < 0 or end > len(raw):
+        raise ParseError(f"i32_oob@{offset}")
+    return int.from_bytes(raw[offset:end], "little", signed=True)
 
 
 def u32(raw: bytes, offset: int) -> int:
@@ -178,6 +216,248 @@ def parse_wmf(raw: bytes) -> dict:
     }
 
 
+
+def wmf_records(raw: bytes) -> tuple[dict, list[tuple[int, bytes]]]:
+    parsed = parse_wmf(raw)
+    header_offset = PLACEABLE_HEADER_BYTES if parsed["placeable"] else 0
+    metafile_end = header_offset + parsed["declared_bytes"]
+    offset = header_offset + META_HEADER_BYTES
+    records: list[tuple[int, bytes]] = []
+
+    while offset < metafile_end:
+        record_words = u32(raw, offset)
+        record_end = offset + record_words * 2
+        function = u16(raw, offset + 4)
+        records.append((function, raw[offset + 6 : record_end]))
+        offset = record_end
+        if function == META_EOF:
+            break
+
+    return parsed, records
+
+
+def dib_pattern_brush_profile(params: bytes) -> dict:
+    profile = {
+        "payload_bytes": len(params),
+        "style": u16(params, 0) if len(params) >= 2 else None,
+        "color_usage": u16(params, 2) if len(params) >= 4 else None,
+        "dib_bytes": max(0, len(params) - 4),
+        "dib_header_bytes": None,
+        "width": None,
+        "height": None,
+        "planes": None,
+        "bit_count": None,
+        "compression": None,
+        "image_bytes": None,
+        "colors_used": None,
+    }
+    target = params[4:] if len(params) >= 4 else b""
+    if len(target) < 4:
+        return profile
+
+    header_bytes = u32(target, 0)
+    profile["dib_header_bytes"] = header_bytes
+    if header_bytes >= 40 and len(target) >= 40:
+        profile.update(
+            {
+                "width": i32(target, 4),
+                "height": i32(target, 8),
+                "planes": u16(target, 12),
+                "bit_count": u16(target, 14),
+                "compression": u32(target, 16),
+                "image_bytes": u32(target, 20),
+                "colors_used": u32(target, 32),
+            }
+        )
+    return profile
+
+
+def region_profile(params: bytes) -> dict:
+    profile = {
+        "payload_bytes": len(params),
+        "object_type": None,
+        "region_size": None,
+        "scan_count": None,
+        "max_scan": None,
+        "parsed_scan_count": 0,
+        "total_scan_coordinates": 0,
+        "max_scan_coordinates": 0,
+        "scan_structure": "header_truncated",
+        "exact_payload_consumed": False,
+    }
+    if len(params) < 22:
+        return profile
+
+    object_type = i16(params, 2)
+    region_size = i16(params, 8)
+    scan_count = i16(params, 10)
+    max_scan = i16(params, 12)
+    profile.update(
+        {
+            "object_type": object_type,
+            "region_size": region_size,
+            "scan_count": scan_count,
+            "max_scan": max_scan,
+        }
+    )
+    if scan_count < 0:
+        profile["scan_structure"] = "negative_scan_count"
+        return profile
+
+    cursor = 22
+    total_coordinates = 0
+    max_coordinates = 0
+    for _ in range(scan_count):
+        if cursor + 8 > len(params):
+            profile["scan_structure"] = "scan_header_truncated"
+            return profile
+        count = u16(params, cursor)
+        if count % 2 != 0:
+            profile["scan_structure"] = "odd_scan_coordinate_count"
+            return profile
+        scan_end = cursor + 8 + count * 2
+        if scan_end > len(params):
+            profile["scan_structure"] = "scan_points_truncated"
+            return profile
+        count2 = u16(params, cursor + 6 + count * 2)
+        if count2 != count:
+            profile["scan_structure"] = "scan_count2_mismatch"
+            return profile
+        total_coordinates += count
+        max_coordinates = max(max_coordinates, count)
+        profile["parsed_scan_count"] += 1
+        cursor = scan_end
+
+    profile["total_scan_coordinates"] = total_coordinates
+    profile["max_scan_coordinates"] = max_coordinates
+    profile["exact_payload_consumed"] = cursor == len(params)
+    profile["scan_structure"] = (
+        "valid_exact" if profile["exact_payload_consumed"] else "valid_with_tail"
+    )
+    return profile
+
+
+def _profile_key(payload: dict) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def classify_special_object_selections(raw: bytes) -> list[dict]:
+    parsed, records = wmf_records(raw)
+    object_slots: list[dict | None] = [None] * max(1, int(parsed["object_count"]))
+    active: dict[str, dict | None] = {"pattern_brush": None, "region": None}
+    completed: list[dict] = []
+
+    def allocate(kind: str, creation_profile: dict) -> None:
+        for index, slot in enumerate(object_slots):
+            if slot is None:
+                object_slots[index] = {
+                    "kind": kind,
+                    "creation_profile": creation_profile,
+                }
+                return
+        object_slots.append({"kind": kind, "creation_profile": creation_profile})
+
+    def close(kind: str) -> None:
+        current = active.get(kind)
+        if current is None:
+            return
+        current["function_counts"] = dict(current["function_counts"].most_common())
+        current["supported_draw_counts"] = dict(
+            current["supported_draw_counts"].most_common()
+        )
+        current["fill_draw_counts"] = dict(current["fill_draw_counts"].most_common())
+        completed.append(current)
+        active[kind] = None
+
+    for function, params in records:
+        selected = None
+        selected_index = None
+        if function in (META_SELECTOBJECT, META_SELECTCLIPREGION) and len(params) >= 2:
+            selected_index = u16(params, 0)
+            if selected_index < len(object_slots):
+                selected = object_slots[selected_index]
+
+        if function == META_SELECTOBJECT and selected is not None:
+            if selected["kind"] in ("brush", "pattern_brush"):
+                close("pattern_brush")
+            elif selected["kind"] == "region":
+                close("region")
+        elif function == META_SELECTCLIPREGION:
+            close("region")
+        elif function == META_DELETEOBJECT and len(params) >= 2:
+            delete_index = u16(params, 0)
+            for kind in ("pattern_brush", "region"):
+                current = active.get(kind)
+                if current is not None and current["object_index"] == delete_index:
+                    close(kind)
+
+        for current in active.values():
+            if current is None:
+                continue
+            key = f"0x{function:04x}"
+            current["record_count"] += 1
+            current["function_counts"][key] += 1
+            if len(current["first_functions"]) < 16:
+                current["first_functions"].append(key)
+            if function in SUPPORTED_DRAW_FUNCTIONS:
+                current["supported_draw_counts"][key] += 1
+            if function in FILL_DRAW_FUNCTIONS:
+                current["fill_draw_counts"][key] += 1
+
+        if function == META_CREATEPENINDIRECT:
+            allocate("pen", {"payload_bytes": len(params)})
+        elif function == META_CREATEBRUSHINDIRECT:
+            allocate("brush", {"payload_bytes": len(params)})
+        elif function == META_DIBCREATEPATTERNBRUSH:
+            allocate("pattern_brush", dib_pattern_brush_profile(params))
+        elif function == META_CREATEREGION:
+            allocate("region", region_profile(params))
+        elif function == META_DELETEOBJECT and len(params) >= 2:
+            delete_index = u16(params, 0)
+            if delete_index < len(object_slots):
+                object_slots[delete_index] = None
+        elif function in (META_SELECTOBJECT, META_SELECTCLIPREGION):
+            if selected is None or selected_index is None:
+                continue
+            kind = selected["kind"]
+            if kind == "pattern_brush" and function == META_SELECTOBJECT:
+                active["pattern_brush"] = {
+                    "kind": kind,
+                    "selection_record": "META_SELECTOBJECT",
+                    "object_index": selected_index,
+                    "creation_profile": selected["creation_profile"],
+                    "record_count": 0,
+                    "first_functions": [],
+                    "function_counts": Counter(),
+                    "supported_draw_counts": Counter(),
+                    "fill_draw_counts": Counter(),
+                }
+            elif kind == "region":
+                active["region"] = {
+                    "kind": kind,
+                    "selection_record": (
+                        "META_SELECTCLIPREGION"
+                        if function == META_SELECTCLIPREGION
+                        else "META_SELECTOBJECT"
+                    ),
+                    "object_index": selected_index,
+                    "creation_profile": selected["creation_profile"],
+                    "record_count": 0,
+                    "first_functions": [],
+                    "function_counts": Counter(),
+                    "supported_draw_counts": Counter(),
+                    "fill_draw_counts": Counter(),
+                }
+
+        if function == META_EOF:
+            close("pattern_brush")
+            close("region")
+
+    close("pattern_brush")
+    close("region")
+    return completed
+
+
 def error_code(exc: Exception) -> str:
     text = str(exc)
     return text.split(":", 1)[0] if text else exc.__class__.__name__
@@ -217,10 +497,22 @@ def profile_corpus(corpus_dir: Path) -> dict:
     record_counts: list[int] = []
     declared_sizes: list[int] = []
     valid_wmf_count = 0
+    special_selection_events = Counter()
+    special_selection_stream_counts = Counter()
+    special_selection_file_counts = Counter()
+    special_creation_profiles = {
+        "pattern_brush": Counter(),
+        "region": Counter(),
+    }
+    special_followup_profiles = {
+        "pattern_brush": Counter(),
+        "region": Counter(),
+    }
 
     for path in paths:
         file_has_olepres = False
         file_functions: set[int] = set()
+        file_special_kinds: set[str] = set()
         try:
             with olefile.OleFileIO(str(path)) as ole:
                 for parts in ole.listdir(streams=True, storages=False):
@@ -273,6 +565,31 @@ def profile_corpus(corpus_dir: Path) -> dict:
                     for fn in wmf["functions"]:
                         function_counts[f"0x{fn:04x}"] += 1
                     file_functions.update(unique_functions)
+
+                    selections = classify_special_object_selections(pres["data"])
+                    stream_special_kinds = set()
+                    for selection in selections:
+                        kind = selection["kind"]
+                        mode = selection["selection_record"]
+                        event_key = f"{kind}:{mode}"
+                        special_selection_events[event_key] += 1
+                        stream_special_kinds.add(event_key)
+                        special_creation_profiles[kind][
+                            _profile_key(selection["creation_profile"])
+                        ] += 1
+                        followup = {
+                            "selection_record": mode,
+                            "record_count": selection["record_count"],
+                            "first_functions": selection["first_functions"],
+                            "supported_draw_counts": selection["supported_draw_counts"],
+                            "fill_draw_counts": selection["fill_draw_counts"],
+                        }
+                        special_followup_profiles[kind][_profile_key(followup)] += 1
+                    for event_key in stream_special_kinds:
+                        special_selection_stream_counts[event_key] += 1
+                    file_functions.update(unique_functions)
+                    if stream_special_kinds:
+                        file_special_kinds.update(stream_special_kinds)
         except Exception:
             cfb_errors += 1
             continue
@@ -281,6 +598,14 @@ def profile_corpus(corpus_dir: Path) -> dict:
             files_with_olepres += 1
         for fn in file_functions:
             function_file_counts[f"0x{fn:04x}"] += 1
+        for event_key in file_special_kinds:
+            special_selection_file_counts[event_key] += 1
+
+    def profile_rows(counter: Counter) -> list[dict]:
+        rows = []
+        for encoded, count in counter.most_common():
+            rows.append({"profile": json.loads(encoded), "count": count})
+        return rows
 
     return {
         "schema": "chaptera.olepres-wmf-census.v1",
@@ -324,6 +649,21 @@ def profile_corpus(corpus_dir: Path) -> dict:
             {"functions": profile.split(",") if profile else [], "count": count}
             for profile, count in function_set_profiles.most_common(50)
         ],
+        "selected_special_object_census": {
+            "selection_event_counts": dict(special_selection_events.most_common()),
+            "selection_stream_counts": dict(
+                special_selection_stream_counts.most_common()
+            ),
+            "selection_file_counts": dict(special_selection_file_counts.most_common()),
+            "creation_profiles": {
+                kind: profile_rows(counter)
+                for kind, counter in special_creation_profiles.items()
+            },
+            "followup_profiles": {
+                kind: profile_rows(counter)
+                for kind, counter in special_followup_profiles.items()
+            },
+        },
         "evidence_boundary": (
             "source-free aggregate census of persisted OlePres WMF wire structure; "
             "no presentation/native bytes or source paths are retained"
