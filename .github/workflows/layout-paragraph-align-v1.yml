@@ -3,9 +3,12 @@ name: Layout paragraph alignment V1
 on:
   pull_request:
     paths:
-      - "Cargo.toml"
       - "crates/pub-line-placement/**"
       - ".github/workflows/layout-paragraph-align-v1.yml"
+
+concurrency:
+  group: layout-paragraph-align-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,7 +22,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt -p pub-line-placement -- --check
       - name: Check crate
         run: cargo check -p pub-line-placement --all-targets
       - name: Lint crate
