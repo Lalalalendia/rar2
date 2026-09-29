@@ -8806,6 +8806,21 @@ mod tests {
 
         let fallback_resource = desktop_text_font_resource();
         let mut selected = None;
+        let resolved_families = registry
+            .resolved_families()
+            .map(|(source, resolved, sha256)| {
+                serde_json::json!({
+                    "source_family": source,
+                    "resolved_family": resolved,
+                    "sha256": sha256,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut candidate_counts = serde_json::Map::new();
+        candidate_counts.insert("text_fragments".to_owned(), 0_u64.into());
+        candidate_counts.insert("source_resource_fragments".to_owned(), 0_u64.into());
+        candidate_counts.insert("source_shared_resolved".to_owned(), 0_u64.into());
+        candidate_counts.insert("fallback_shared_resolved_same_node".to_owned(), 0_u64.into());
 
         'pages: for page_index in 0..visual.document.pages.len() {
             let source_plan =
@@ -8818,6 +8833,14 @@ mod tests {
                 let Some(source_text) = source_node.text.as_ref() else {
                     continue;
                 };
+                if let Some(value) = candidate_counts.get_mut("text_fragments") {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
+                if registry.resource_for_fragment(source_text).is_some()
+                    && let Some(value) = candidate_counts.get_mut("source_resource_fragments")
+                {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
                 let Some(source_layout) = source_text.layout.as_ref() else {
                     continue;
                 };
@@ -8831,6 +8854,9 @@ mod tests {
                 };
                 if font_resource_id == fallback_resource.resource_id {
                     continue;
+                }
+                if let Some(value) = candidate_counts.get_mut("source_shared_resolved") {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
                 }
 
                 let Some(source_resource) = registry.resource_for_fragment(source_text) else {
@@ -8857,6 +8883,11 @@ mod tests {
                     chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved { .. }
                 ) {
                     continue;
+                }
+                if let Some(value) =
+                    candidate_counts.get_mut("fallback_shared_resolved_same_node")
+                {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
                 }
 
                 let source_family = source_text
@@ -8936,9 +8967,13 @@ mod tests {
             }
         }
 
-        let receipt = selected.expect(
-            "SampleNewsletter must expose one single-frame fragment with both source-font and fallback shared layouts",
-        );
+        let receipt = selected.unwrap_or_else(|| {
+            panic!(
+                "SampleNewsletter has no joint source-font/fallback SharedResolved witness; resolved_families={} candidate_counts={}",
+                serde_json::to_string(&resolved_families).expect("serialize resolved families"),
+                serde_json::Value::Object(candidate_counts)
+            )
+        });
         assert_eq!(
             format!(
                 "{:x}",
