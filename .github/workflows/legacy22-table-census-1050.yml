@@ -50,6 +50,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.94.1'
+          components: rustfmt
 
       - name: Build cache key
         id: cache-key
