@@ -1,12 +1,7 @@
 name: CHAPTERA-WIN-PATH-IDENTITY-01
 
 on:
-  pull_request:
-    paths:
-      - "crates/chaptera-suite-handoff/**"
-      - "apps/chaptera-desktop/**"
-      - "apps/chaptera-rescue/**"
-      - ".github/workflows/chaptera-win-path-identity.yml"
+  workflow_call:
   workflow_dispatch:
 
 permissions:
