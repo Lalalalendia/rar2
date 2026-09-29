@@ -121,6 +121,8 @@ pub fn paint_document_node_foreground(
         }
     }
 
+    paint_bounded_table_text(painter, node, node_rect, scene_scale);
+
     let Some(fragment) = node
         .text
         .as_ref()
@@ -201,6 +203,58 @@ pub fn paint_document_node_foreground(
     NodePaintOutcome {
         text_clipped,
         text_metrics: Some(text_metrics),
+    }
+}
+
+fn paint_bounded_table_text(
+    painter: &egui::Painter,
+    node: &NodeRenderPlanV1,
+    node_rect: egui::Rect,
+    scene_scale: f32,
+) {
+    let Some(table) = node.table.as_ref() else {
+        return;
+    };
+    if !scene_scale.is_finite() || scene_scale <= 0.0 {
+        return;
+    }
+
+    let font_id = crate::fallback_font::font_id_for_scene_scale(scene_scale);
+    for cell in &table.cells {
+        let Some(bounds) = cell.bounds else {
+            continue;
+        };
+        let relative_x = bounds.x.get() - node.bounds.x.get();
+        let relative_y = bounds.y.get() - node.bounds.y.get();
+        let cell_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                node_rect.left() + relative_x as f32 * scene_scale,
+                node_rect.top() + relative_y as f32 * scene_scale,
+            ),
+            egui::vec2(
+                bounds.width.get() as f32 * scene_scale,
+                bounds.height.get() as f32 * scene_scale,
+            ),
+        );
+        if !cell_rect.is_positive() {
+            continue;
+        }
+
+        let clip_rect = cell_rect.shrink(2.0);
+        if !clip_rect.is_positive() || cell.text.is_empty() {
+            continue;
+        }
+
+        let text = cell.text.replace('\r', "\n");
+        let job = egui::text::LayoutJob::simple(
+            text,
+            font_id.clone(),
+            egui::Color32::BLACK,
+            clip_rect.width().max(1.0),
+        );
+        let cell_painter = painter.with_clip_rect(clip_rect);
+        let galley = cell_painter.layout_job(job);
+        cell_painter.galley(clip_rect.min, galley, egui::Color32::BLACK);
     }
 }
 
