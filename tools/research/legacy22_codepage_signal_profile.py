@@ -195,7 +195,7 @@ def parse_font_pointer_list(contents: bytes):
             records.append({
                 "ordinal": i,
                 "byte_len": len(rec),
-                "sha256": sha256_bytes(rec),
+                "sha256": sha256(rec),
                 "ascii_candidates": printable_candidates(rec),
                 "utf16le_candidates": utf16le_candidates(rec),
                 "head_hex": rec[:32].hex(),
