@@ -869,8 +869,14 @@ fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<
     let admitted = chaptera_suite_handoff::AdmittedSource::open(path)?;
     let source_sha256 = admitted.sha256().to_owned();
     let source_byte_len = admitted.bytes().len();
+
+    #[cfg(target_os = "windows")]
+    let visual = contained_open::open_admitted_source(admitted.bytes())?.visual;
+
+    #[cfg(not(target_os = "windows"))]
     let visual = diagnostic_sweep::open_for_product(admitted.bytes())
         .map_err(|error| format!("open {}: {error}", path.display()))?;
+
     let page_count = visual.document.pages.len();
 
     let write_receipt = |completed: bool, source_unchanged: bool| -> Result<(), String> {
