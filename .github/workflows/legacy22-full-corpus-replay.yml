@@ -26,7 +26,6 @@ env:
 
 jobs:
   replay:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     name: Replay 625 strict PUB
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -523,6 +522,7 @@ jobs:
           reader = summary["reader"]
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
+          assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
           assert reader["opened_by_family"].get("0x22") == 226, reader["opened_by_family"]
 
           legacy_open = [
