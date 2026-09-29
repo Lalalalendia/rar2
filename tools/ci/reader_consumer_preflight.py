@@ -87,13 +87,14 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         affected.add("pub-viewer")
 
     render_plan = any(p.startswith("crates/chaptera-viewer-render-plan/") for p in paths)
-    desktop = any(
+    desktop_direct = any(
         p in {
             "apps/chaptera-desktop/src/render_backend.rs",
             "apps/chaptera-desktop/src/main.rs",
         }
         for p in paths
     )
+    desktop = desktop_direct
     if any(p in {"Cargo.toml", "Cargo.lock"} for p in paths):
         render_plan = True
         desktop = True
@@ -241,20 +242,22 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         )
 
     if desktop:
-        commands.extend(
-            [
-                {
-                    "id": "desktop-reader-check",
-                    "argv": [
-                        "cargo",
-                        "check",
-                        "-p",
-                        "chaptera-desktop",
-                        "--features",
-                        "reader-only",
-                        "--all-targets",
-                    ],
-                },
+        commands.append(
+            {
+                "id": "desktop-reader-check",
+                "argv": [
+                    "cargo",
+                    "check",
+                    "-p",
+                    "chaptera-desktop",
+                    "--features",
+                    "reader-only",
+                    "--all-targets",
+                ],
+            }
+        )
+        if desktop_direct:
+            commands.append(
                 {
                     "id": "desktop-reader-clippy",
                     "argv": [
@@ -269,18 +272,19 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "-D",
                         "warnings",
                     ],
-                },
-                {
-                    "id": "desktop-editor-check",
-                    "argv": [
-                        "cargo",
-                        "check",
-                        "-p",
-                        "chaptera-desktop",
-                        "--all-targets",
-                    ],
-                },
-            ]
+                }
+            )
+        commands.append(
+            {
+                "id": "desktop-editor-check",
+                "argv": [
+                    "cargo",
+                    "check",
+                    "-p",
+                    "chaptera-desktop",
+                    "--all-targets",
+                ],
+            }
         )
 
     if mobile_reader:
@@ -301,6 +305,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         "affected_vendor_packages": packages,
         "render_plan": render_plan,
         "desktop_reader_integration": desktop,
+        "desktop_clippy_direct_change": desktop_direct,
         "mobile_reader_integration": mobile_reader,
         "commands": commands,
     }
