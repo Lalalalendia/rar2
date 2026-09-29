@@ -15,6 +15,7 @@ env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
   LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
   PERLOST_SHA: d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f
+  OPNHOUS_BAD_SHA: 227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e
 
 jobs:
   probe:
@@ -304,6 +305,42 @@ jobs:
               },indent=2,sort_keys=True))
           PY
 
+      - name: Compare malformed OPNHOUS negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${OPNHOUS_BAD_SHA}.pub"
+          test -f "$p"
+          echo "${OPNHOUS_BAD_SHA}  $p" | sha256sum -c -
+
+          cargo run \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin perlost-structural-probe \
+            -- "$p" > /tmp/opnhous-negative-reader.json
+
+          python - <<'PY' > /tmp/opnhous-negative-cfb.json
+          import json
+          import olefile
+          from pathlib import Path
+
+          p=Path("corpus-src/pub-corpus/corpus/native/unclassified/227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e.pub")
+          out={"olefile_opened":False,"has_root_contents":False,"contents_len":None,"error":None}
+          try:
+              with olefile.OleFileIO(str(p)) as ole:
+                  out["olefile_opened"]=True
+                  out["has_root_contents"]=ole.exists(["Contents"])
+                  if out["has_root_contents"]:
+                      out["contents_len"]=len(ole.openstream(["Contents"]).read())
+                  out["parsing_issue_count"]=len(getattr(ole,"parsing_issues",[]))
+          except Exception as exc:
+              out["error"]=f"{type(exc).__name__}: {exc}"
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+          cat /tmp/opnhous-negative-reader.json
+          cat /tmp/opnhous-negative-cfb.json
+
       - name: Guard source-safe report
         shell: bash
         run: |
@@ -338,7 +375,19 @@ jobs:
           raw=p.read_text()
           for token in forbidden:
               assert token not in raw, token
-          print(json.dumps({"reader":d,"pub_cfb":cfb.strip(),"olefile":ole,"minifat_reachability":reach}, indent=2, sort_keys=True))
+
+          negative_reader=json.loads(Path("/tmp/opnhous-negative-reader.json").read_text())
+          negative_cfb=json.loads(Path("/tmp/opnhous-negative-cfb.json").read_text())
+          assert negative_reader["source_sha256"] == "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e", negative_reader
+          assert negative_reader["open"]["opened"] is False, negative_reader
+          print(json.dumps({
+              "reader":d,
+              "pub_cfb":cfb.strip(),
+              "olefile":ole,
+              "minifat_reachability":reach,
+              "opnhous_negative_reader":negative_reader,
+              "opnhous_negative_cfb":negative_cfb,
+          }, indent=2, sort_keys=True))
           PY
 
       - uses: actions/upload-artifact@v4
@@ -349,5 +398,7 @@ jobs:
             /tmp/perlost-cfb.txt
             /tmp/perlost-olefile.json
             /tmp/perlost-minifat-reachability.json
+            /tmp/opnhous-negative-reader.json
+            /tmp/opnhous-negative-cfb.json
           if-no-files-found: error
           retention-days: 30
