@@ -157,7 +157,7 @@ struct GuestOpenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    scene: Option<ReaderSceneV1>,
+    scene: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -471,7 +471,10 @@ async fn open_session(
         classification,
         expires_at_ms: opened.expires_at_ms,
         terminal_code: None,
-        scene: Some(scene),
+        scene: Some(
+            serde_json::to_value(&scene)
+                .map_err(|_| GuestReaderError::internal("guest_reader_scene_serialize_failed"))?,
+        ),
     }))
 }
 
@@ -1034,7 +1037,7 @@ fn open_response_from_stored(
     let scene = session
         .scene_json
         .as_deref()
-        .map(serde_json::from_slice::<ReaderSceneV1>)
+        .map(serde_json::from_slice::<Value>)
         .transpose()
         .map_err(|_| GuestReaderError::internal("guest_scene_corrupt"))?;
     let classification = match session.classification.as_deref() {
