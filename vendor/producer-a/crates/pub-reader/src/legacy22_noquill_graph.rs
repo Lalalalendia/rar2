@@ -794,4 +794,134 @@ mod tests {
         assert!(!is_legacy_simple_geometry_shape_type(LEGACY_GROUP_TYPE));
         assert_eq!(LEGACY_GROUP_MAX_DEPTH, 100);
     }
+
+
+    #[test]
+    fn group_materialization_preserves_parent_hierarchy() {
+        let source_hash: Sha256Digest =
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap();
+        let document_id = DocumentId::from_canonical(
+            derive_pub_id(&source_hash, "test/document", ROLE_DOCUMENT).unwrap(),
+        );
+        let page_id = derive_legacy_page_id(&source_hash, 1).unwrap();
+        let page = Page {
+            id: page_id,
+            size: Size2D::new(LengthEmu::new(1000), LengthEmu::new(1000)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+        let source = SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("0x22-noquill".into()),
+            adapter_version: "test".into(),
+            source_hash,
+        };
+        let mut graph = PubSourceGraph::empty(
+            source,
+            Document {
+                id: document_id,
+                format_origin: "pub".into(),
+                source_hash,
+                pages: vec![page_id],
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+        );
+        graph.pages.insert(page_id, page.clone());
+
+        let stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let span = |offset: u64, len: u64| RawSpan {
+            stream: stream.clone(),
+            offset,
+            len,
+        };
+        let directory = Legacy0x22Directory {
+            trailer_offset: 96,
+            trailer_offset_source: span(96, 4),
+            entry_count: 2,
+            entry_count_source: span(96, 2),
+            entries: vec![
+                Legacy0x22DirectoryEntry {
+                    directory_index: 0,
+                    entry_source: span(98, 10),
+                    service_word: 0,
+                    service_word_source: span(98, 2),
+                    object_id: 10,
+                    object_id_source: span(100, 2),
+                    parent_id: 1,
+                    parent_id_source: span(102, 2),
+                    chunk_offset: 0,
+                    chunk_offset_source: span(104, 4),
+                    chunk_type: LEGACY_GROUP_TYPE,
+                    chunk_type_source: span(0, 2),
+                    chunk_source: span(0, 32),
+                },
+                Legacy0x22DirectoryEntry {
+                    directory_index: 1,
+                    entry_source: span(108, 10),
+                    service_word: 0,
+                    service_word_source: span(108, 2),
+                    object_id: 11,
+                    object_id_source: span(110, 2),
+                    parent_id: 10,
+                    parent_id_source: span(112, 2),
+                    chunk_offset: 32,
+                    chunk_offset_source: span(114, 4),
+                    chunk_type: 0x0005,
+                    chunk_type_source: span(32, 2),
+                    chunk_source: span(32, 32),
+                },
+            ],
+        };
+        let mut contents = vec![0_u8; 64];
+        contents[0..2].copy_from_slice(&LEGACY_GROUP_TYPE.to_le_bytes());
+        contents[32..34].copy_from_slice(&0x0005_u16.to_le_bytes());
+        for base in [0_usize, 32] {
+            contents[base + LEGACY_SHAPE_XS_OFFSET..base + LEGACY_SHAPE_XS_OFFSET + 4]
+                .copy_from_slice(&(-100_i32).to_le_bytes());
+            contents[base + LEGACY_SHAPE_YS_OFFSET..base + LEGACY_SHAPE_YS_OFFSET + 4]
+                .copy_from_slice(&(-100_i32).to_le_bytes());
+            contents[base + LEGACY_SHAPE_XE_OFFSET..base + LEGACY_SHAPE_XE_OFFSET + 4]
+                .copy_from_slice(&(100_i32).to_le_bytes());
+            contents[base + LEGACY_SHAPE_YE_OFFSET..base + LEGACY_SHAPE_YE_OFFSET + 4]
+                .copy_from_slice(&(100_i32).to_le_bytes());
+        }
+
+        let mut diagnostics = Vec::new();
+        let mut group_stack = BTreeSet::new();
+        materialize_legacy_noquill_child(
+            &mut graph,
+            &source_hash,
+            &contents,
+            &stream,
+            &directory,
+            &page,
+            1,
+            page_id.into_canonical(),
+            10,
+            &BTreeMap::new(),
+            &mut diagnostics,
+            &mut group_stack,
+            0,
+        )
+        .unwrap();
+
+        assert!(diagnostics.is_empty());
+        let group_id = derive_legacy_node_id(&source_hash, 10).unwrap();
+        let child_id = derive_legacy_node_id(&source_hash, 11).unwrap();
+        assert_eq!(graph.nodes[&group_id].kind, NodeKind::Group);
+        assert_eq!(
+            graph.nodes[&group_id].header.parent_id,
+            page_id.into_canonical()
+        );
+        assert_eq!(graph.nodes[&child_id].kind, NodeKind::Shape);
+        assert_eq!(
+            graph.nodes[&child_id].header.parent_id,
+            group_id.into_canonical()
+        );
+    }
 }
