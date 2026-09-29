@@ -22,6 +22,7 @@ def main():
         ["vendor/producer-a/crates/pub-contents/src/palette.rs"],
         tier_a=True,
         reader_windows=True,
+        reader_windows_full=False,
         editor_windows=False,
         android_core=True,
         android=False,
@@ -34,6 +35,7 @@ def main():
         ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
         tier_a=True,
         reader_windows=True,
+        reader_windows_full=False,
         visual_oracle=True,
         typography_golden=True,
         android_core=True,
@@ -45,6 +47,7 @@ def main():
         ["crates/chaptera-viewer-render-plan/src/lib.rs"],
         tier_a=True,
         reader_windows=True,
+        reader_windows_full=False,
         editor_windows=False,
         visual_oracle=True,
         typography_golden=True,
@@ -89,6 +92,7 @@ def main():
         tier_a=False,
         update_accept=True,
         reader_windows=True,
+        reader_windows_full=True,
         installer=False,
     )
     assert_scope(
@@ -102,6 +106,7 @@ def main():
         ["apps/chaptera-desktop/src/reader_product_ui.rs"],
         tier_a=True,
         reader_windows=True,
+        reader_windows_full=True,
         editor_windows=False,
     )
     assert_scope(
@@ -111,9 +116,18 @@ def main():
         editor_windows=False,
     )
     assert_scope(
+        ["Cargo.toml"],
+        tier_a=True,
+        reader_windows=True,
+        reader_windows_full=True,
+        editor_windows=True,
+        android_core=True,
+    )
+    assert_scope(
         ["docs/notes.md"],
         tier_a=False,
         reader_windows=False,
+        reader_windows_full=False,
         editor_windows=False,
         visual_oracle=False,
         typography_golden=False,
