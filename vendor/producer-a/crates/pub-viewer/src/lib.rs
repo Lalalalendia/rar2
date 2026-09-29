@@ -25,7 +25,8 @@ pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceRole, StoryFrame, StoryId, TableCellAddress, TableCellId,
+    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryFrame, StoryId,
+    TableCellAddress, TableCellId, derive_source_canonical_id,
 };
 use pub_paint_bridge::{
     PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
@@ -39,6 +40,8 @@ use pub_presentation_profile::{
     carlton_admitted_carrier_page_seq_nums_v1, reference_fixture_profile_known_v1,
     select_carlton_customer_page_seq_nums_v1, select_reference_fixture_customer_page_seq_nums_v1,
 };
+#[cfg(test)]
+use pub_reader::LegacyOleCachedPresentation;
 #[cfg(feature = "cmo-slot-compose")]
 use pub_reader::build_mature_0x2c_cmo_projection_bridge_v1;
 pub use pub_reader::{
@@ -49,17 +52,20 @@ pub use pub_reader::{
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
-    FailureTelemetryChoice, PubAssetExportDiagnostic, PubBridgeDiagnostic,
+    FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
+    LegacyOleCachedPresentationSelection, PubAssetExportDiagnostic, PubBridgeDiagnostic,
     PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, analyze_mature_0x2c_page_roles, build_failure_envelope,
+    PubSourceGraphBuild, WmfPreviewRgba, analyze_mature_0x2c_page_roles, build_failure_envelope,
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    derive_pub_page_id, materialize_bounded_simple_table_cells, resolve_pub_source_graph,
+    derive_pub_page_id, materialize_bounded_simple_table_cells, rasterize_wmf_preview,
+    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 pub const VIEWER_DOCUMENT_SCHEMA_V0_1: &str = "0.1";
@@ -69,6 +75,7 @@ pub const VIEWER_FAILURE_REPORT_SCHEMA_V0_1: &str = "chaptera-viewer-failure-rep
 pub const VIEWER_FALLBACK_TEXT_METRICS_REVISION_V0_1: &str = "viewer-fallback-text-metrics-v0.1";
 const VIEWER_FALLBACK_SCALAR_ADVANCE_EMU_V0_1: i64 = 57_150;
 const VIEWER_FALLBACK_LINE_HEIGHT_EMU_V0_1: i64 = 142_875;
+const MAX_LEGACY_OLE_PREVIEW_PNG_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(feature = "cmo-slot-compose")]
 const CARLTON_MARCH_PRESENTATION_PROFILE_V1: &str = "carlton-school-jotter/march-2026/v1";
 
@@ -746,6 +753,243 @@ pub struct ViewerDiagnostic {
     pub message: String,
 }
 
+fn encode_legacy_ole_preview_png(preview: &WmfPreviewRgba) -> Result<Vec<u8>> {
+    let pixel_count = u64::from(preview.width)
+        .checked_mul(u64::from(preview.height))
+        .ok_or_else(|| anyhow!("legacy OLE preview pixel count overflow"))?;
+    let expected_len = usize::try_from(
+        pixel_count
+            .checked_mul(4)
+            .ok_or_else(|| anyhow!("legacy OLE preview RGBA byte count overflow"))?,
+    )
+    .map_err(|_| anyhow!("legacy OLE preview RGBA byte count does not fit address space"))?;
+    if preview.width == 0 || preview.height == 0 || preview.rgba.len() != expected_len {
+        return Err(anyhow!("legacy OLE preview RGBA buffer is inconsistent"));
+    }
+
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, preview.width, preview.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .context("write legacy OLE preview PNG header")?;
+        writer
+            .write_image_data(&preview.rgba)
+            .context("write legacy OLE preview PNG samples")?;
+        writer.finish().context("finalize legacy OLE preview PNG")?;
+    }
+    if encoded.len() > MAX_LEGACY_OLE_PREVIEW_PNG_BYTES {
+        return Err(anyhow!("legacy OLE preview PNG exceeds bounded size"));
+    }
+    Ok(encoded)
+}
+
+fn legacy_ole_preview_resource_id(
+    source_hash: &Sha256Digest,
+    storage_number: u16,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let digest = Sha256::digest(wmf_bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
+        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    let source_object_key = format!(
+        "legacy-ole-preview/object-{storage_number}/wmf-sha256-{wmf_sha256}/{}",
+        LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &source_object_key,
+        semantic_role: "viewer.legacy-ole-preview-v1",
+    })
+    .map_err(|error| anyhow!("derive legacy OLE preview resource identity: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+fn viewer_legacy_ole_preview_image_from_scan(
+    source_hash: &Sha256Digest,
+    node_ids: &[NodeId],
+    storage_number: u16,
+    scan: &LegacyOleCachedPresentationScan,
+    diagnostics: &mut Vec<ViewerDiagnostic>,
+) -> Option<ViewerEmbeddedImage> {
+    if node_ids.is_empty() {
+        return None;
+    }
+
+    if !scan.diagnostics.is_empty() {
+        diagnostics.push(ViewerDiagnostic {
+            code: "viewer.legacy_ole.preview_sibling_rejected".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{} persisted cached OLE presentation sibling(s) were rejected by bounded validation; source carrier details remain private.",
+                scan.diagnostics.len()
+            ),
+        });
+    }
+
+    let presentation = match select_unambiguous_legacy_ole_cached_presentation(scan) {
+        LegacyOleCachedPresentationSelection::None => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_ole.preview_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "No validated persisted cached OLE presentation is available for this inert object."
+                        .to_owned(),
+            });
+            return None;
+        }
+        LegacyOleCachedPresentationSelection::Ambiguous { candidate_count } => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_ole.preview_ambiguous".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message: format!(
+                    "{candidate_count} distinct validated cached OLE presentations are available; Viewer V1 does not invent a sibling-selection rule."
+                ),
+            });
+            return None;
+        }
+        LegacyOleCachedPresentationSelection::Selected {
+            presentation,
+            equivalent_candidate_count,
+        } => {
+            if equivalent_candidate_count > 1 {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_ole.preview_equivalent_duplicates".to_owned(),
+                    severity: ViewerDiagnosticSeverity::Info,
+                    message: format!(
+                        "{} additional cached OLE presentation sibling(s) are metadata-and-byte equivalent to the selected preview.",
+                        equivalent_candidate_count - 1
+                    ),
+                });
+            }
+            presentation
+        }
+    };
+
+    let preview = match rasterize_wmf_preview(
+        &presentation.data,
+        presentation.width,
+        presentation.height,
+    ) {
+        Ok(preview) => preview,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_ole.preview_raster_unsupported".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "The selected cached OLE presentation is structurally valid but outside the bounded Viewer raster profile."
+                        .to_owned(),
+            });
+            return None;
+        }
+    };
+    let png = match encode_legacy_ole_preview_png(&preview) {
+        Ok(png) => png,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_ole.preview_encode_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "The bounded cached OLE preview could not be materialized as a Viewer image resource."
+                        .to_owned(),
+            });
+            return None;
+        }
+    };
+    let resource_id = match legacy_ole_preview_resource_id(
+        source_hash,
+        storage_number,
+        &presentation.data,
+    ) {
+        Ok(resource_id) => resource_id,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_ole.preview_identity_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "The bounded cached OLE preview could not receive a deterministic Viewer resource identity."
+                        .to_owned(),
+            });
+            return None;
+        }
+    };
+
+    Some(ViewerEmbeddedImage {
+        resource_id,
+        mime: "image/png".to_owned(),
+        node_ids: node_ids.to_vec(),
+        placements: Vec::new(),
+        bytes: png,
+    })
+}
+
+fn viewer_legacy_ole_cached_preview_images(
+    bytes: &[u8],
+    source_hash: &Sha256Digest,
+    graph: &PubResolvedGraph,
+    scene: &BoundedResolvedScene,
+    diagnostics: &mut Vec<ViewerDiagnostic>,
+) -> Vec<ViewerEmbeddedImage> {
+    let renderable_node_ids = scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let mut uses_by_storage = BTreeMap::<u16, Vec<NodeId>>::new();
+
+    for node in graph.nodes.values() {
+        if node.kind != NodeKind::Unsupported || !renderable_node_ids.contains(&node.header.id) {
+            continue;
+        }
+        let Some(legacy_ole) = node.payload.legacy_ole.as_ref() else {
+            continue;
+        };
+        uses_by_storage
+            .entry(legacy_ole.storage_number)
+            .or_default()
+            .push(node.header.id);
+    }
+
+    let mut images = Vec::<ViewerEmbeddedImage>::new();
+    for (storage_number, mut node_ids) in uses_by_storage {
+        node_ids.sort();
+        node_ids.dedup();
+
+        let scan = match scan_legacy_ole_cached_presentations(Cursor::new(bytes), storage_number) {
+            Ok(scan) => scan,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_ole.preview_scan_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "Persisted cached OLE presentations could not be scanned within bounded Reader limits for this inert object."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+
+        if let Some(image) = viewer_legacy_ole_preview_image_from_scan(
+            source_hash,
+            &node_ids,
+            storage_number,
+            &scan,
+            diagnostics,
+        ) {
+            images.push(image);
+        }
+    }
+
+    images
+}
+
 struct Mature0x2cPipeline {
     source_hash: Sha256Digest,
     source: PubSourceGraphBuild,
@@ -949,11 +1193,20 @@ fn open_legacy_0x22_noquill_bundle(
             .map(map_scene_diagnostic),
     );
 
+    let preview_source_hash = document.source.source_hash;
+    let images = viewer_legacy_ole_cached_preview_images(
+        bytes,
+        &preview_source_hash,
+        &resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    );
+
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Legacy no-Quill text and text-box geometry are recovered only where grounded. Exact source typography, non-ASCII codepages, images, effects, groups and unsupported legacy object kinds remain explicit fidelity gaps."
+            message: "Legacy no-Quill text and text-box geometry are recovered only where grounded. Exact source typography, non-ASCII codepages, ordinary legacy image classes, effects, groups and unsupported legacy object kinds remain explicit fidelity gaps; cached OLE previews are shown only when one persisted presentation validates."
                 .to_owned(),
         });
     }
@@ -971,7 +1224,7 @@ fn open_legacy_0x22_noquill_bundle(
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
-        images: Vec::new(),
+        images,
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -1071,11 +1324,20 @@ fn open_legacy_0x22_quill_bundle(
             .map(map_scene_diagnostic),
     );
 
+    let preview_source_hash = document.source.source_hash;
+    let images = viewer_legacy_ole_cached_preview_images(
+        bytes,
+        &preview_source_hash,
+        &resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    );
+
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Legacy object positions and sizes are resolved for the admitted old-0x22 text-box profile. Unsupported legacy object kinds, exact source typography, images, effects, groups and version-sensitive transforms are not claimed by this bounded Reader path."
+            message: "Legacy object positions and sizes are resolved for the admitted old-0x22 text-box profile. Unsupported legacy object kinds, exact source typography, ordinary legacy image classes, effects, groups and version-sensitive transforms remain outside this bounded path; cached OLE previews are shown only when one persisted presentation validates."
                 .to_owned(),
         });
     }
@@ -1093,7 +1355,7 @@ fn open_legacy_0x22_quill_bundle(
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
-        images: Vec::new(),
+        images,
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2799,6 +3061,183 @@ mod tests {
                 .expect("paint projection")
                 .is_none()
         );
+    }
+
+    fn minimal_legacy_ole_cached_presentation(stream_ordinal: u16) -> LegacyOleCachedPresentation {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1_u16.to_le_bytes());
+        data.extend_from_slice(&9_u16.to_le_bytes());
+        data.extend_from_slice(&0x0300_u16.to_le_bytes());
+        data.extend_from_slice(&12_u32.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&3_u32.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&3_u32.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+
+        let wmf = pub_reader::validate_wmf_metafile(&data).expect("minimal WMF");
+        LegacyOleCachedPresentation {
+            stream_path: format!("/Objects/Object 73/\u{2}OlePres{stream_ordinal:03}"),
+            stream_name: format!("\u{2}OlePres{stream_ordinal:03}"),
+            stream_ordinal,
+            clipboard_format: 3,
+            aspect: 1,
+            lindex: u32::MAX,
+            advf: 2,
+            width: 8,
+            height: 8,
+            wmf,
+            data,
+        }
+    }
+
+    #[test]
+    fn unique_valid_legacy_ole_preview_becomes_deterministic_png_overlay() {
+        let source_hash = Sha256Digest::from_bytes([0xAB; 32]);
+        let node_id = NodeId::from_canonical(id(42));
+        let scan = LegacyOleCachedPresentationScan {
+            presentations: vec![minimal_legacy_ole_cached_presentation(1)],
+            diagnostics: Vec::new(),
+        };
+        let mut diagnostics = Vec::new();
+
+        let image = viewer_legacy_ole_preview_image_from_scan(
+            &source_hash,
+            &[node_id],
+            73,
+            &scan,
+            &mut diagnostics,
+        )
+        .expect("unique preview");
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(image.mime, "image/png");
+        assert_eq!(image.node_ids, vec![node_id]);
+        assert!(image.placements.is_empty());
+        assert!(image.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+        let repeated = viewer_legacy_ole_preview_image_from_scan(
+            &source_hash,
+            &[node_id],
+            73,
+            &scan,
+            &mut Vec::new(),
+        )
+        .expect("same unique preview");
+        assert_eq!(repeated.resource_id, image.resource_id);
+        assert_eq!(repeated.bytes, image.bytes);
+
+        let same_wmf_other_ordinal = minimal_legacy_ole_cached_presentation(2);
+        let equivalent_id =
+            legacy_ole_preview_resource_id(&source_hash, 73, &same_wmf_other_ordinal.data)
+                .expect("equivalent presentation identity");
+        assert_eq!(equivalent_id, image.resource_id);
+
+        let other_payload_id = legacy_ole_preview_resource_id(&source_hash, 73, b"different-wmf")
+            .expect("different WMF identity");
+        assert_ne!(other_payload_id, image.resource_id);
+    }
+
+    #[test]
+    fn equivalent_legacy_ole_siblings_render_but_distinct_siblings_fail_closed() {
+        let source_hash = Sha256Digest::from_bytes([0xCD; 32]);
+        let node_id = NodeId::from_canonical(id(43));
+
+        let equivalent = LegacyOleCachedPresentationScan {
+            presentations: vec![
+                minimal_legacy_ole_cached_presentation(1),
+                minimal_legacy_ole_cached_presentation(2),
+            ],
+            diagnostics: Vec::new(),
+        };
+        let mut equivalent_diagnostics = Vec::new();
+        assert!(
+            viewer_legacy_ole_preview_image_from_scan(
+                &source_hash,
+                &[node_id],
+                73,
+                &equivalent,
+                &mut equivalent_diagnostics,
+            )
+            .is_some()
+        );
+        assert!(equivalent_diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "viewer.legacy_ole.preview_equivalent_duplicates"
+        }));
+
+        let mut distinct = minimal_legacy_ole_cached_presentation(2);
+        distinct.width += 1;
+        let ambiguous = LegacyOleCachedPresentationScan {
+            presentations: vec![minimal_legacy_ole_cached_presentation(1), distinct],
+            diagnostics: Vec::new(),
+        };
+        let mut ambiguous_diagnostics = Vec::new();
+        assert!(
+            viewer_legacy_ole_preview_image_from_scan(
+                &source_hash,
+                &[node_id],
+                73,
+                &ambiguous,
+                &mut ambiguous_diagnostics,
+            )
+            .is_none()
+        );
+        assert!(
+            ambiguous_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "viewer.legacy_ole.preview_ambiguous")
+        );
+
+        let missing = LegacyOleCachedPresentationScan::default();
+        let mut missing_diagnostics = Vec::new();
+        assert!(
+            viewer_legacy_ole_preview_image_from_scan(
+                &source_hash,
+                &[node_id],
+                73,
+                &missing,
+                &mut missing_diagnostics,
+            )
+            .is_none()
+        );
+        assert!(
+            missing_diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "viewer.legacy_ole.preview_unavailable")
+        );
+    }
+
+    #[test]
+    fn malformed_legacy_ole_sibling_does_not_hide_one_valid_preview_or_leak_path() {
+        let source_hash = Sha256Digest::from_bytes([0xEF; 32]);
+        let node_id = NodeId::from_canonical(id(44));
+        let scan = LegacyOleCachedPresentationScan {
+            presentations: vec![minimal_legacy_ole_cached_presentation(1)],
+            diagnostics: vec![pub_reader::LegacyOleCachedPresentationDiagnostic {
+                stream_path: "/Objects/Object 73/private-carrier".to_owned(),
+                stream_name: "private-carrier".to_owned(),
+                reason: "private parser detail".to_owned(),
+            }],
+        };
+        let mut diagnostics = Vec::new();
+
+        assert!(
+            viewer_legacy_ole_preview_image_from_scan(
+                &source_hash,
+                &[node_id],
+                73,
+                &scan,
+                &mut diagnostics,
+            )
+            .is_some()
+        );
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "viewer.legacy_ole.preview_sibling_rejected")
+            .expect("source-neutral sibling diagnostic");
+        assert!(!diagnostic.message.contains("Objects/Object"));
+        assert!(!diagnostic.message.contains("private-carrier"));
+        assert!(!diagnostic.message.contains("private parser detail"));
     }
 
     fn linked_resolved_graph_fixture(text: &str) -> PubResolvedGraph {
