@@ -8,6 +8,10 @@ on:
       - 'tools/corpus/receipts/corpus-current-authority-2026-09-25.json'
       - 'tools/corpus/receipts/current-rar-1515.sha256.txt'
       - 'tools/corpus/receipts/current-rar-1521.sha256.txt'
+      - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
+      - 'tools/corpus/receipts/lalamu-materialized-35-input-2026-09-29.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-29.json'
+      - 'tools/corpus/test_corpus_current_authority_1556.py'
       - 'tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json'
       - 'tools/corpus/receipts/publisher2002-sbs-06-input-2026-09-25.json'
       - 'tools/corpus/receipts/container-net-new-407-part-*.sha256.txt'
@@ -21,6 +25,10 @@ on:
       - 'tools/corpus/receipts/corpus-current-authority-2026-09-25.json'
       - 'tools/corpus/receipts/current-rar-1515.sha256.txt'
       - 'tools/corpus/receipts/current-rar-1521.sha256.txt'
+      - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
+      - 'tools/corpus/receipts/lalamu-materialized-35-input-2026-09-29.json'
+      - 'tools/corpus/receipts/corpus-current-authority-2026-09-29.json'
+      - 'tools/corpus/test_corpus_current_authority_1556.py'
       - 'tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json'
       - 'tools/corpus/receipts/publisher2002-sbs-06-input-2026-09-25.json'
       - 'tools/corpus/receipts/container-net-new-407-part-*.sha256.txt'
@@ -39,4 +47,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python tools/corpus/test_corpus_current_authority.py
+      - run: |
+          python tools/corpus/test_corpus_current_authority.py
+          python tools/corpus/test_corpus_current_authority_1556.py
