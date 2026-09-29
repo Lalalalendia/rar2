@@ -132,6 +132,15 @@ def main():
         editor_windows=False,
     )
     assert_scope(
+        ["apps/chaptera-desktop/src/source_font.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=True,
+        typography_golden=True,
+    )
+    assert_scope(
         ["vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"],
         tier_a=False,
         reader_windows_smoke=False,
