@@ -31,6 +31,19 @@ const GIF_PAYLOAD: usize = 0x10;
 const WMF_OFFSETS: [usize; 5] = [0x08, 0x0c, 0x10, 0x14, 0x18];
 const WMF_PLACEABLE_KEY: u32 = 0x9ac6_cdd7;
 const WMF_PLACEABLE_HEADER_BYTES: usize = 22;
+const WMF_META_HEADER_BYTES: usize = 18;
+const WMF_MAX_RECORDS: usize = 1_000_000;
+const META_EOF_FUNCTION: u16 = 0x0000;
+const META_SELECTOBJECT_FUNCTION: u16 = 0x012d;
+const META_DIBCREATEPATTERNBRUSH_FUNCTION: u16 = 0x0142;
+const META_DELETEOBJECT_FUNCTION: u16 = 0x01f0;
+const META_CREATEPENINDIRECT_FUNCTION: u16 = 0x02fa;
+const META_CREATEFONTINDIRECT_FUNCTION: u16 = 0x02fb;
+const META_CREATEBRUSHINDIRECT_FUNCTION: u16 = 0x02fc;
+const META_ESCAPE_FUNCTION: u16 = 0x0626;
+const META_CREATEREGION_FUNCTION: u16 = 0x06ff;
+const META_STRETCHDIB_FUNCTION: u16 = 0x0f43;
+const POSTSCRIPT_IGNORE_ESCAPE: u16 = 0x0026;
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
@@ -44,6 +57,11 @@ fn source_hash(bytes: &[u8]) -> Sha256Digest {
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     let raw = bytes.get(offset..offset.checked_add(2)?)?;
     Some(u16::from_le_bytes([raw[0], raw[1]]))
+}
+
+fn read_i16(bytes: &[u8], offset: usize) -> Option<i16> {
+    let raw = bytes.get(offset..offset.checked_add(2)?)?;
+    Some(i16::from_le_bytes([raw[0], raw[1]]))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
@@ -515,6 +533,207 @@ fn wmf_raster_error_detail(message: &str) -> String {
     wmf_raster_error_class(message).to_owned()
 }
 
+fn sign_i16(value: Option<i16>) -> &'static str {
+    match value {
+        Some(value) if value < 0 => "negative",
+        Some(0) => "zero",
+        Some(_) => "positive",
+        None => "missing",
+    }
+}
+
+fn sign_i32(value: Option<i32>) -> &'static str {
+    match value {
+        Some(value) if value < 0 => "negative",
+        Some(0) => "zero",
+        Some(_) => "positive",
+        None => "missing",
+    }
+}
+
+fn wmf_records<'a>(wmf: &'a [u8]) -> Option<Vec<(u16, &'a [u8])>> {
+    let header_offset = wmf_header_offset(wmf);
+    let mut offset = header_offset.checked_add(WMF_META_HEADER_BYTES)?;
+    if offset > wmf.len() {
+        return None;
+    }
+    let mut records = Vec::new();
+    for _ in 0..WMF_MAX_RECORDS {
+        if offset >= wmf.len() {
+            return None;
+        }
+        let record_words = usize::try_from(read_u32(wmf, offset)?).ok()?;
+        if record_words < 3 {
+            return None;
+        }
+        let record_bytes = record_words.checked_mul(2)?;
+        let record_end = offset.checked_add(record_bytes)?;
+        if record_end > wmf.len() {
+            return None;
+        }
+        let function = read_u16(wmf, offset.checked_add(4)?)?;
+        let params = wmf.get(offset.checked_add(6)?..record_end)?;
+        records.push((function, params));
+        offset = record_end;
+        if function == META_EOF_FUNCTION {
+            return Some(records);
+        }
+    }
+    None
+}
+
+fn font_blocker_profile(params: &[u8]) -> Value {
+    let facename = params.get(18..50);
+    let nul_index = facename.and_then(|name| name.iter().position(|byte| *byte == 0));
+    let nonzero_after_nul = match (facename, nul_index) {
+        (Some(name), Some(index)) => name[index.saturating_add(1)..].iter().any(|byte| *byte != 0),
+        _ => false,
+    };
+    json!({
+        "kind": "createfontindirect",
+        "param_len": params.len(),
+        "height_sign": sign_i16(read_i16(params, 0)),
+        "width_sign": sign_i16(read_i16(params, 2)),
+        "escapement_sign": sign_i16(read_i16(params, 4)),
+        "orientation_sign": sign_i16(read_i16(params, 6)),
+        "weight": read_u16(params, 8),
+        "italic": params.get(10).copied(),
+        "underline": params.get(11).copied(),
+        "strikeout": params.get(12).copied(),
+        "charset": params.get(13).copied(),
+        "out_precision": params.get(14).copied(),
+        "clip_precision": params.get(15).copied(),
+        "quality": params.get(16).copied(),
+        "pitch_and_family": params.get(17).copied(),
+        "facename_32_present": facename.is_some(),
+        "facename_nul_index": nul_index,
+        "facename_nonzero_after_nul": nonzero_after_nul,
+    })
+}
+
+fn stretchdib_blocker_profile(params: &[u8]) -> Value {
+    const FIXED_BYTES: usize = 22;
+    let dib = params.get(FIXED_BYTES..).unwrap_or(&[]);
+    let header_size = read_u32(dib, 0);
+    json!({
+        "kind": "stretchdib",
+        "param_len": params.len(),
+        "raster_operation": read_u32(params, 0).map(|value| format!("0x{value:08x}")),
+        "color_usage": read_u16(params, 4),
+        "src_height_sign": sign_i16(read_i16(params, 6)),
+        "src_width_sign": sign_i16(read_i16(params, 8)),
+        "dest_height_sign": sign_i16(read_i16(params, 14)),
+        "dest_width_sign": sign_i16(read_i16(params, 16)),
+        "dib_len": dib.len(),
+        "dib_header_size": header_size,
+        "dib_width_sign": sign_i32(read_i32(dib, 4)),
+        "dib_height_sign": sign_i32(read_i32(dib, 8)),
+        "dib_planes": read_u16(dib, 12),
+        "dib_bit_count": read_u16(dib, 14),
+        "dib_compression": read_u32(dib, 16),
+        "dib_image_size": read_u32(dib, 20),
+        "dib_colors_used": read_u32(dib, 32),
+        "dib_is_bitmapinfoheader_or_later": header_size.is_some_and(|size| size >= 40),
+    })
+}
+
+fn postscript_ignore_blocker_profile(params: &[u8]) -> Value {
+    let byte_count = read_u16(params, 2).map(usize::from);
+    let payload_len = params.len().saturating_sub(4);
+    json!({
+        "kind": "postscript_ignore",
+        "param_len": params.len(),
+        "escape_function": read_u16(params, 0).map(|value| format!("0x{value:04x}")),
+        "byte_count": byte_count,
+        "payload_len": payload_len,
+        "byte_count_matches_payload": byte_count == Some(payload_len),
+    })
+}
+
+fn allocate_probe_object(objects: &mut Vec<Option<(u16, usize)>>, object: (u16, usize)) {
+    if let Some(slot) = objects.iter_mut().find(|slot| slot.is_none()) {
+        *slot = Some(object);
+    } else {
+        objects.push(Some(object));
+    }
+}
+
+fn selected_unsupported_blocker_profile(records: &[(u16, &[u8])]) -> Value {
+    let mut objects = Vec::<Option<(u16, usize)>>::new();
+    for (function, params) in records {
+        match *function {
+            META_CREATEPENINDIRECT_FUNCTION
+            | META_CREATEBRUSHINDIRECT_FUNCTION
+            | META_DIBCREATEPATTERNBRUSH_FUNCTION
+            | META_CREATEREGION_FUNCTION => {
+                allocate_probe_object(&mut objects, (*function, params.len()));
+            }
+            META_DELETEOBJECT_FUNCTION => {
+                let Some(index) = read_u16(params, 0).map(usize::from) else {
+                    continue;
+                };
+                if let Some(slot) = objects.get_mut(index) {
+                    *slot = None;
+                }
+            }
+            META_SELECTOBJECT_FUNCTION => {
+                let Some(index) = read_u16(params, 0).map(usize::from) else {
+                    continue;
+                };
+                let Some((creator, creator_param_len)) =
+                    objects.get(index).and_then(|slot| *slot)
+                else {
+                    continue;
+                };
+                if matches!(
+                    creator,
+                    META_DIBCREATEPATTERNBRUSH_FUNCTION | META_CREATEREGION_FUNCTION
+                ) {
+                    return json!({
+                        "kind": "selected_unsupported_object",
+                        "selected_slot": index,
+                        "creator_function": format!("0x{creator:04x}"),
+                        "creator_param_len": creator_param_len,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    json!({
+        "kind": "selected_unsupported_object",
+        "creator_function": "unresolved",
+    })
+}
+
+fn wmf_blocker_profile(wmf: &[u8], detail: &str) -> Value {
+    let Some(records) = wmf_records(wmf) else {
+        return json!({"kind": "record_walk_failed"});
+    };
+    match detail {
+        "record_function_0x02fb" => records
+            .iter()
+            .find(|(function, _)| *function == META_CREATEFONTINDIRECT_FUNCTION)
+            .map(|(_, params)| font_blocker_profile(params))
+            .unwrap_or_else(|| json!({"kind": "createfontindirect", "record": "missing"})),
+        "record_function_0x0f43" => records
+            .iter()
+            .find(|(function, _)| *function == META_STRETCHDIB_FUNCTION)
+            .map(|(_, params)| stretchdib_blocker_profile(params))
+            .unwrap_or_else(|| json!({"kind": "stretchdib", "record": "missing"})),
+        "escape_function_0x0026" => records
+            .iter()
+            .find(|(function, params)| {
+                *function == META_ESCAPE_FUNCTION
+                    && read_u16(params, 0) == Some(POSTSCRIPT_IGNORE_ESCAPE)
+            })
+            .map(|(_, params)| postscript_ignore_blocker_profile(params))
+            .unwrap_or_else(|| json!({"kind": "postscript_ignore", "record": "missing"})),
+        "select_unsupported_object" => selected_unsupported_blocker_profile(&records),
+        _ => json!({"kind": "other", "detail": detail}),
+    }
+}
+
 fn wmf_raster_profile(chunk: &[u8]) -> Value {
     let Some((recovery_class, wmf)) = recovered_wmf_candidate(chunk) else {
         return json!({
@@ -536,12 +755,15 @@ fn wmf_raster_profile(chunk: &[u8]) -> Value {
         }),
         Err(error) => {
             let message = error.to_string();
+            let detail = wmf_raster_error_detail(&message);
+            let blocker_profile = wmf_blocker_profile(&wmf, &detail);
             json!({
                 "candidate": true,
                 "recovery_class": recovery_class,
                 "raster_success": false,
                 "raster_error_class": wmf_raster_error_class(&message),
-                "raster_error_detail": wmf_raster_error_detail(&message),
+                "raster_error_detail": detail,
+                "raster_blocker_profile": blocker_profile,
             })
         }
     }
