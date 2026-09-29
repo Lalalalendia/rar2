@@ -120,10 +120,17 @@ jobs:
           $ErrorActionPreference = "Stop"
           function Assert-TestSignature([string]$Path) {
             $sig = Get-AuthenticodeSignature -LiteralPath $Path
-            if ($sig.Status -ne "Valid") { throw "signature is not valid for ${Path}: $($sig.Status) $($sig.StatusMessage)" }
             if (-not $sig.SignerCertificate) { throw "missing signer certificate for $Path" }
             if ($sig.SignerCertificate.Thumbprint -ne $env:CHAPTERA_TEST_SIGN_THUMBPRINT) { throw "unexpected signer for $Path" }
-            return [ordered]@{ path = $Path; status = [string]$sig.Status; thumbprint = $sig.SignerCertificate.Thumbprint }
+            if ($sig.Status -notin @("Valid", "NotTrusted")) {
+              throw "test signature integrity failed for ${Path}: $($sig.Status) $($sig.StatusMessage)"
+            }
+            return [ordered]@{
+              path = $Path
+              integrity_verified = $true
+              trust_status = [string]$sig.Status
+              thumbprint = $sig.SignerCertificate.Thumbprint
+            }
           }
 
           $stagedReader = (Resolve-Path "stage/chaptera-reader/Chaptera-Reader.exe").Path
@@ -136,7 +143,9 @@ jobs:
           $stream = [System.IO.File]::Open($tampered, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
           try { $stream.WriteByte(0) } finally { $stream.Dispose() }
           $tamperedSig = Get-AuthenticodeSignature -LiteralPath $tampered
-          if ($tamperedSig.Status -eq "Valid") { throw "post-sign mutation unexpectedly retained a valid signature" }
+          if ($tamperedSig.Status -ne "HashMismatch") {
+            throw "post-sign mutation did not produce HashMismatch: $($tamperedSig.Status) $($tamperedSig.StatusMessage)"
+          }
 
           $installRoot = Join-Path $env:LOCALAPPDATA "Programs\Chaptera PUB Reader"
           Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -174,6 +183,8 @@ jobs:
             setup = $setupReceipt
             installed_reader = $installedReceipt
             generated_uninstaller = $uninstallerReceipt
+            test_signature_integrity_verified = $true
+            public_trust_verified = $false
             post_sign_mutation_status = [string]$tamperedSig.Status
             post_sign_mutation_rejected = $true
             tuf_target = $target
