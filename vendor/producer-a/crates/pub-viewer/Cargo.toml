@@ -21,3 +21,4 @@ pub-reader={path="../pub-reader"}
 serde.workspace=true
 serde_json.workspace=true
 sha2.workspace=true
+# CI measurement probe: fidelity runner reuse 115
