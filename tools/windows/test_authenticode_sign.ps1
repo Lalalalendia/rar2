@@ -15,8 +15,14 @@ if (-not (Test-Path -LiteralPath $File)) { throw "signing target missing: $File"
 & $signtool sign /sha1 $thumbprint /fd SHA256 $File
 if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE for $File" }
 
-$verifyOutput = @(& $signtool verify /pa /all /v $File 2>&1)
-$verifyExit = $LASTEXITCODE
+$savedErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+  $verifyOutput = @(& $signtool verify /pa /all /v $File 2>&1)
+  $verifyExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $savedErrorActionPreference
+}
 $verifyText = $verifyOutput -join [Environment]::NewLine
 $verifyOutput | ForEach-Object { Write-Output $_ }
 
