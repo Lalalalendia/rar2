@@ -252,6 +252,14 @@ pub enum QuillStoryFailureEvidence {
         required_fits_before_next_boundary: bool,
         strs_declared_count: Option<u32>,
         strs_service_span: Option<u32>,
+        strs_header_word2: Option<u32>,
+        strs_descriptor_length: u32,
+        strs_early_record_count_from_22x8: Option<u32>,
+        strs_early_record_count_matches_syid_span: Option<bool>,
+        strs_early_u32_sum_text_match_offsets: Vec<u8>,
+        strs_early_u32_syid_match_offsets: Vec<u8>,
+        strs_early_u16_sum_text_match_offsets: Vec<u8>,
+        strs_early_u16_syid_match_offsets: Vec<u8>,
         strs_count_matches: Option<bool>,
         text_descriptor_length: u32,
     },
@@ -278,6 +286,145 @@ fn descriptor_u32_at(
         .checked_add(relative)?;
     let raw = bytes.get(start..start.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+
+#[derive(Debug, Default)]
+struct EarlyStrsProbe {
+    record_count: Option<u32>,
+    record_count_matches_syid_span: Option<bool>,
+    u32_sum_text_match_offsets: Vec<u8>,
+    u32_syid_match_offsets: Vec<u8>,
+    u16_sum_text_match_offsets: Vec<u8>,
+    u16_syid_match_offsets: Vec<u8>,
+}
+
+fn bounded_syid_ids_by_descriptor_span(
+    bytes: &[u8],
+    descriptor: &QuillChunkDescriptor,
+) -> Option<Vec<u32>> {
+    let (start, len) = chunk_range(bytes, descriptor).ok()?;
+    if len < 8 || (len - 8) % 4 != 0 {
+        return None;
+    }
+    let count = (len - 8) / 4;
+    let mut ids = Vec::with_capacity(count);
+    for index in 0..count {
+        let relative = 8_usize.checked_add(index.checked_mul(4)?)?;
+        let absolute = start.checked_add(relative)?;
+        let raw = bytes.get(absolute..absolute.checked_add(4)?)?;
+        ids.push(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]));
+    }
+    Some(ids)
+}
+
+fn probe_early_strs_records(
+    bytes: &[u8],
+    syid_descriptor: &QuillChunkDescriptor,
+    strs_descriptor: &QuillChunkDescriptor,
+    text_descriptor: &QuillChunkDescriptor,
+) -> EarlyStrsProbe {
+    let Some(syid_ids) = bounded_syid_ids_by_descriptor_span(bytes, syid_descriptor) else {
+        return EarlyStrsProbe::default();
+    };
+    let Ok((start, len)) = chunk_range(bytes, strs_descriptor) else {
+        return EarlyStrsProbe::default();
+    };
+    if len < 22 || (len - 22) % 8 != 0 {
+        return EarlyStrsProbe::default();
+    }
+    let record_count = (len - 22) / 8;
+    let Ok(record_count_u32) = u32::try_from(record_count) else {
+        return EarlyStrsProbe::default();
+    };
+    let text_len = u64::from(text_descriptor.data_length.value);
+    let text_units = (text_len % 2 == 0).then_some(text_len / 2);
+
+    let mut out = EarlyStrsProbe {
+        record_count: Some(record_count_u32),
+        record_count_matches_syid_span: Some(record_count == syid_ids.len()),
+        ..EarlyStrsProbe::default()
+    };
+
+    for field_offset in 0_usize..=4 {
+        let mut values = Vec::with_capacity(record_count);
+        let mut sum = 0_u64;
+        let mut valid = true;
+        for index in 0..record_count {
+            let Some(relative) = 22_usize
+                .checked_add(index.saturating_mul(8))
+                .and_then(|value| value.checked_add(field_offset))
+            else {
+                valid = false;
+                break;
+            };
+            let Some(absolute) = start.checked_add(relative) else {
+                valid = false;
+                break;
+            };
+            let Some(raw) = bytes.get(absolute..absolute.saturating_add(4)) else {
+                valid = false;
+                break;
+            };
+            let value = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+            let Some(next_sum) = sum.checked_add(u64::from(value)) else {
+                valid = false;
+                break;
+            };
+            sum = next_sum;
+            values.push(value);
+        }
+        if !valid {
+            continue;
+        }
+        if text_units == Some(sum) {
+            out.u32_sum_text_match_offsets.push(field_offset as u8);
+        }
+        if values == syid_ids {
+            out.u32_syid_match_offsets.push(field_offset as u8);
+        }
+    }
+
+    for field_offset in 0_usize..=6 {
+        let mut values = Vec::with_capacity(record_count);
+        let mut sum = 0_u64;
+        let mut valid = true;
+        for index in 0..record_count {
+            let Some(relative) = 22_usize
+                .checked_add(index.saturating_mul(8))
+                .and_then(|value| value.checked_add(field_offset))
+            else {
+                valid = false;
+                break;
+            };
+            let Some(absolute) = start.checked_add(relative) else {
+                valid = false;
+                break;
+            };
+            let Some(raw) = bytes.get(absolute..absolute.saturating_add(2)) else {
+                valid = false;
+                break;
+            };
+            let value = u16::from_le_bytes([raw[0], raw[1]]);
+            let Some(next_sum) = sum.checked_add(u64::from(value)) else {
+                valid = false;
+                break;
+            };
+            sum = next_sum;
+            values.push(u32::from(value));
+        }
+        if !valid {
+            continue;
+        }
+        if text_units == Some(sum) {
+            out.u16_sum_text_match_offsets.push(field_offset as u8);
+        }
+        if values == syid_ids {
+            out.u16_syid_match_offsets.push(field_offset as u8);
+        }
+    }
+
+    out
 }
 
 fn next_descriptor_boundary(
@@ -353,6 +500,9 @@ fn probe_syid_id_array_evidence(
         next_descriptor_boundary(bytes, descriptors, syid_descriptor.data_offset.value);
     let strs_declared_count = descriptor_u32_at(bytes, strs_descriptor, 0);
     let strs_service_span = descriptor_u32_at(bytes, strs_descriptor, 4);
+    let strs_header_word2 = descriptor_u32_at(bytes, strs_descriptor, 8);
+    let early_strs =
+        probe_early_strs_records(bytes, syid_descriptor, strs_descriptor, text_descriptor);
 
     Some(QuillStoryFailureEvidence::SyidIdArray {
         declared_count: count,
@@ -364,6 +514,14 @@ fn probe_syid_id_array_evidence(
         required_fits_before_next_boundary: required_chunk_length <= available_to_next_boundary,
         strs_declared_count,
         strs_service_span,
+        strs_header_word2,
+        strs_descriptor_length: strs_descriptor.data_length.value,
+        strs_early_record_count_from_22x8: early_strs.record_count,
+        strs_early_record_count_matches_syid_span: early_strs.record_count_matches_syid_span,
+        strs_early_u32_sum_text_match_offsets: early_strs.u32_sum_text_match_offsets,
+        strs_early_u32_syid_match_offsets: early_strs.u32_syid_match_offsets,
+        strs_early_u16_sum_text_match_offsets: early_strs.u16_sum_text_match_offsets,
+        strs_early_u16_syid_match_offsets: early_strs.u16_syid_match_offsets,
         strs_count_matches: strs_declared_count.map(|value| value == count),
         text_descriptor_length: text_descriptor.data_length.value,
     })
