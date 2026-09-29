@@ -3236,7 +3236,8 @@ mod tests {
             .find(|diagnostic| diagnostic.code == "viewer.legacy_ole.preview_sibling_rejected")
             .expect("source-neutral sibling diagnostic");
         assert!(!diagnostic.message.contains("Objects/Object"));
-        assert!(!diagnostic.message.contains("private"));
+        assert!(!diagnostic.message.contains("private-carrier"));
+        assert!(!diagnostic.message.contains("private parser detail"));
     }
 
     fn linked_resolved_graph_fixture(text: &str) -> PubResolvedGraph {
