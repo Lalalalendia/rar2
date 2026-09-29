@@ -356,9 +356,7 @@ mod platform {
         Ok(job)
     }
 
-    fn encode_environment(
-        mut entries: Vec<(OsString, OsString)>,
-    ) -> Vec<u16> {
+    fn encode_environment(mut entries: Vec<(OsString, OsString)>) -> Vec<u16> {
         entries.sort_by(|a, b| {
             a.0.to_string_lossy()
                 .to_uppercase()
@@ -384,9 +382,7 @@ mod platform {
         // needed by the process/runtime itself.
         let entries = ["SystemRoot", "WINDIR"]
             .into_iter()
-            .filter_map(|key| {
-                std::env::var_os(key).map(|value| (OsString::from(key), value))
-            })
+            .filter_map(|key| std::env::var_os(key).map(|value| (OsString::from(key), value)))
             .collect::<Vec<_>>();
         encode_environment(entries)
     }
@@ -645,9 +641,7 @@ mod platform {
         };
         if ok == 0 {
             let first_error = unsafe { GetLastError() };
-            if first_error == 203
-                && std::env::var_os("CHAPTERA_SANDBOX_DIAG_203").is_some()
-            {
+            if first_error == 203 && std::env::var_os("CHAPTERA_SANDBOX_DIAG_203").is_some() {
                 // Diagnostic only: the probe executable is Chaptera-owned and no
                 // untrusted PUB bytes have been written yet. Retry once with the
                 // full parent environment to distinguish environment-block
