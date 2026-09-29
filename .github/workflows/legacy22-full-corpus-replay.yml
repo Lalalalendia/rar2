@@ -8,6 +8,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/family_classifier.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_graph.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/legacy22_raw0022_companion_profile.rs"
       - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
   workflow_dispatch:
 
@@ -47,6 +48,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+          components: rustfmt, clippy
 
       - name: Install pinned CFB parser
         run: python -m pip install --disable-pip-version-check olefile==0.47
@@ -60,6 +62,29 @@ jobs:
             --release \
             --bin corpus-reader-receipt
 
+      - name: Validate raw0022 companion profiler
+        run: |
+          set -euo pipefail
+          rustfmt \
+            --check \
+            --edition 2021 \
+            vendor/producer-a/crates/pub-reader/src/bin/legacy22_raw0022_companion_profile.rs
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin legacy22_raw0022_companion_profile
+          cargo clippy \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin legacy22_raw0022_companion_profile \
+            -- \
+            -D warnings
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin legacy22_raw0022_companion_profile
+
       - name: Replay full pinned corpus
         run: |
           set -euo pipefail
@@ -71,6 +96,194 @@ jobs:
             --rar-ref "rar2:${GITHUB_SHA}" \
             --out out/legacy625 \
             --workers 4
+
+      - name: Classify raw 0x0022 companions
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from collections import Counter, defaultdict
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
+          paths = sorted(corpus.glob("*.pub"))
+          assert len(paths) == 625, len(paths)
+
+          exe = (
+              Path(os.environ["CARGO_TARGET_DIR"])
+              / "release"
+              / "legacy22_raw0022_companion_profile"
+          )
+
+          def run(path, out_dir):
+              target = out_dir / f"{path.stem}.json"
+              cp = subprocess.run(
+                  [str(exe), str(path), str(target)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=45,
+                  check=False,
+              )
+              if cp.returncode != 0:
+                  raise RuntimeError(
+                      f"{path.name}: profiler rc={cp.returncode}: {cp.stderr[-2000:]}"
+                  )
+              return json.loads(target.read_text())
+
+          rows = []
+          with tempfile.TemporaryDirectory(prefix="legacy22-raw0022-") as td:
+              out_dir = Path(td)
+              with ThreadPoolExecutor(max_workers=8) as pool:
+                  futures = {pool.submit(run, path, out_dir): path for path in paths}
+                  for future in as_completed(futures):
+                      rows.append(future.result())
+
+          rows.sort(key=lambda row: row["source_sha256"])
+          eligible = [row for row in rows if row.get("eligible_reader_open") is True]
+          affected = [row for row in eligible if int(row.get("candidate_count") or 0) > 0]
+
+          candidates = []
+          for row in affected:
+              for item in row.get("candidates") or []:
+                  candidates.append({"source_sha256": row["source_sha256"], **item})
+
+          assert len(candidates) == 305, len(candidates)
+          assert len(affected) == 102, len(affected)
+          assert all(
+              int(item["child_parent_id"]) == int(item["parent_object_id"])
+              for item in candidates
+          )
+
+          child_lengths = Counter(str(item["child_chunk_len"]) for item in candidates)
+          child_service_words = Counter(str(item["child_service_word"]) for item in candidates)
+          child_exact = Counter(str(item["child_chunk_sha256"]) for item in candidates)
+          child_prefix = Counter(str(item["child_prefix32_sha256"]) for item in candidates)
+          child_suffix = Counter(str(item["child_suffix32_sha256"]) for item in candidates)
+          parent_profiles = Counter(
+              f"{item['parent_chunk_len']}:{item['parent_service_word']}"
+              for item in candidates
+          )
+          parent_child_pairs = Counter(
+              (
+                  str(item["parent_normalized_chunk_sha256"]),
+                  str(item["child_chunk_sha256"]),
+              )
+              for item in candidates
+          )
+
+          u16_values = defaultdict(Counter)
+          u32_values = defaultdict(Counter)
+          for item in candidates:
+              for offset, value in (item.get("child_u16_first64") or {}).items():
+                  u16_values[offset][str(value)] += 1
+              for offset, value in (item.get("child_u32_first64") or {}).items():
+                  u32_values[offset][str(value)] += 1
+
+          def summarize(values):
+              result = {}
+              for offset in sorted(values, key=lambda value: int(value, 16)):
+                  counter = values[offset]
+                  result[offset] = {
+                      "observed_count": sum(counter.values()),
+                      "distinct_count": len(counter),
+                      "invariant": len(counter) == 1,
+                      "top_values": [
+                          {"value": value, "count": count}
+                          for value, count in counter.most_common(12)
+                      ],
+                  }
+              return result
+
+          u16_summary = summarize(u16_values)
+          u32_summary = summarize(u32_values)
+
+          summary = {
+              "schema": "chaptera.legacy22-raw0022-companion-census.v1",
+              "corpus_file_count": len(paths),
+              "eligible_noquill_reader_file_count": len(eligible),
+              "candidate_count": len(candidates),
+              "candidate_file_count": len(affected),
+              "child_parent_identity_match_count": sum(
+                  int(item["child_parent_id"]) == int(item["parent_object_id"])
+                  for item in candidates
+              ),
+              "child_chunk_length_counts": dict(
+                  sorted(child_lengths.items(), key=lambda item: int(item[0]))
+              ),
+              "child_service_word_counts": dict(
+                  sorted(child_service_words.items(), key=lambda item: int(item[0]))
+              ),
+              "child_exact_cluster_count": len(child_exact),
+              "child_exact_singleton_count": sum(
+                  count == 1 for count in child_exact.values()
+              ),
+              "largest_child_exact_cluster_size": max(child_exact.values(), default=0),
+              "child_prefix32_cluster_count": len(child_prefix),
+              "child_suffix32_cluster_count": len(child_suffix),
+              "parent_profile_counts": dict(parent_profiles.most_common()),
+              "parent_child_pair_cluster_count": len(parent_child_pairs),
+              "parent_child_pair_singleton_count": sum(
+                  count == 1 for count in parent_child_pairs.values()
+              ),
+              "largest_parent_child_pair_cluster_size": max(
+                  parent_child_pairs.values(), default=0
+              ),
+              "child_u16_first64_offsets": u16_summary,
+              "child_u32_first64_offsets": u32_summary,
+              "child_u16_invariant_offsets": [
+                  offset
+                  for offset, profile in u16_summary.items()
+                  if profile["invariant"]
+                  and profile["observed_count"] == len(candidates)
+              ],
+              "child_u32_invariant_offsets": [
+                  offset
+                  for offset, profile in u32_summary.items()
+                  if profile["invariant"]
+                  and profile["observed_count"] == len(candidates)
+              ],
+              "child_u16_low_cardinality_offsets": [
+                  offset
+                  for offset, profile in u16_summary.items()
+                  if profile["observed_count"] == len(candidates)
+                  and profile["distinct_count"] <= 8
+              ],
+              "child_u32_low_cardinality_offsets": [
+                  offset
+                  for offset, profile in u32_summary.items()
+                  if profile["observed_count"] == len(candidates)
+                  and profile["distinct_count"] <= 8
+              ],
+              "top_child_exact_clusters": [
+                  {"chunk_sha256": key, "count": count}
+                  for key, count in child_exact.most_common(30)
+              ],
+              "top_parent_child_pair_clusters": [
+                  {
+                      "parent_normalized_chunk_sha256": parent_hash,
+                      "child_chunk_sha256": child_hash,
+                      "count": count,
+                  }
+                  for (parent_hash, child_hash), count
+                  in parent_child_pairs.most_common(30)
+              ],
+              "evidence_boundary": (
+                  "source-free structural census of the single raw 0x0022 child "
+                  "owned by matching-parent PAGE-list positive raw 0x0003 candidates; "
+                  "scalar offsets are observations only and carry no semantic names"
+              ),
+          }
+
+          Path("out/legacy625/raw0022-companion-census.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
 
       - name: Guard legacy22 product depth
         run: |
