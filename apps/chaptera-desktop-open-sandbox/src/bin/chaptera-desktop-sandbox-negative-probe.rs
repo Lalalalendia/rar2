@@ -36,8 +36,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let forbidden_file_read_denied = std::fs::read(&request.forbidden_file).is_err();
 
     let address: SocketAddr = "1.1.1.1:80".parse()?;
-    let network_connect_denied =
-        TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err();
+    // With zero AppContainer network capabilities, Windows may reject Winsock
+    // initialization itself before TcpStream can return an io::Error. Rust's
+    // Windows std::net bootstrap currently asserts on that WSAStartup failure,
+    // so contain that exact negative operation and treat either an io::Error or
+    // the runtime-unavailable panic as proof that no TCP connection was created.
+    let network_attempt =
+        std::panic::catch_unwind(|| TcpStream::connect_timeout(&address, Duration::from_secs(2)));
+    let network_connect_denied = !matches!(network_attempt, Ok(Ok(_)));
 
     let child_process_spawn_denied = Command::new("C:\\Windows\\System32\\cmd.exe")
         .args(["/C", "exit", "0"])
