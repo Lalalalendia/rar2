@@ -144,24 +144,24 @@ pub fn read_direct_child_streams_with_prefix_reader<R: Read + Seek>(
         );
     }
 
-    let total_bytes = candidates.iter().try_fold(
-        0usize,
-        |total, (path, _, len)| -> Result<usize> {
-            let len =
-                usize::try_from(*len).context("размер CFB stream не помещается в usize")?;
-            if len > max_stream_bytes {
-                anyhow::bail!(
-                    "CFB stream {} превышает bounded size: {} > {}",
-                    path.display(),
-                    len,
-                    max_stream_bytes
-                );
-            }
-            total
-                .checked_add(len)
-                .context("суммарный размер matching CFB streams переполнен")
-        },
-    )?;
+    let total_bytes =
+        candidates
+            .iter()
+            .try_fold(0usize, |total, (path, _, len)| -> Result<usize> {
+                let len =
+                    usize::try_from(*len).context("размер CFB stream не помещается в usize")?;
+                if len > max_stream_bytes {
+                    anyhow::bail!(
+                        "CFB stream {} превышает bounded size: {} > {}",
+                        path.display(),
+                        len,
+                        max_stream_bytes
+                    );
+                }
+                total
+                    .checked_add(len)
+                    .context("суммарный размер matching CFB streams переполнен")
+            })?;
     if total_bytes > max_total_bytes {
         anyhow::bail!(
             "суммарный размер matching streams under {} превышает bounded size: {} > {}",
