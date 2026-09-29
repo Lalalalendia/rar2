@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use pub_contents::{
     detect_family, parse_legacy_0x22_directory, parse_legacy_0x22_resolved_tables,
-    parse_legacy_0x22_table_catalog, parse_preamble, ContentsFamily,
-    Legacy0x22TableCatalogReadError, Legacy0x22TableTextReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
+    parse_legacy_0x22_table_catalog, parse_legacy_0x22_text_info_map, parse_preamble, ContentsFamily,
+    Legacy0x22TableCatalogReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
 };
 use pub_core::StreamPath;
 use pub_model::Sha256Digest;
@@ -28,17 +28,13 @@ struct ErrorAggregate {
     reader_target_per_file_counts: BTreeMap<usize, usize>,
     revision_counts: BTreeMap<u16, usize>,
     raw_header_profile_counts: BTreeMap<String, usize>,
+    owner_backed_raw_0001_count: usize,
+    non_owner_raw_0001_count: usize,
+    reader_target_owner_overlap_count: usize,
+    owner_backed_header_profile_counts: BTreeMap<String, usize>,
+    non_owner_header_profile_counts: BTreeMap<String, usize>,
     materialized_object_profile_counts: BTreeMap<String, usize>,
-    count_pair_candidate_counts: BTreeMap<String, usize>,
     example_source_sha256: Vec<String>,
-}
-
-#[derive(Default)]
-struct CountPairScore {
-    sum_hits: usize,
-    monotonic_hits: usize,
-    geometry_hits: usize,
-    value_counts: BTreeMap<String, usize>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -48,6 +44,79 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn source_hash(bytes: &[u8]) -> Sha256Digest {
     Sha256Digest::from_bytes(Sha256::digest(bytes).into())
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let raw = bytes.get(offset..offset.checked_add(2)?)?;
+    Some(u16::from_le_bytes([raw[0], raw[1]]))
+}
+
+fn reader_raw_0001_target_ids(bytes: &[u8]) -> BTreeSet<u16> {
+    let Ok(source) =
+        build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash(bytes))
+    else {
+        return BTreeSet::new();
+    };
+
+    source
+        .diagnostics
+        .into_iter()
+        .filter_map(|diagnostic| match diagnostic {
+            PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id,
+                raw_type: Some(LEGACY_0X22_TABLE_CHUNK_TYPE),
+                reason,
+            } if reason == "legacy_table_not_resolved_v1" => u16::try_from(object_id).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+fn legacy_table_owner_ids(contents: &[u8]) -> BTreeSet<u16> {
+    let Ok(Some(text_info)) =
+        parse_legacy_0x22_text_info_map(StreamPath(CONTENTS_STREAM_PATH.into()), contents)
+    else {
+        return BTreeSet::new();
+    };
+
+    text_info
+        .ends
+        .into_iter()
+        .filter_map(|owner| {
+            let owner_offset = usize::try_from(owner.owner_id_source.offset).ok()?;
+            let owner_class = read_u16(contents, owner_offset.checked_add(2)?)?;
+            (owner_class == 0).then_some(owner.owner_id)
+        })
+        .collect()
+}
+
+fn raw_header_profile(
+    contents: &[u8],
+    entry: &pub_contents::Legacy0x22DirectoryEntry,
+) -> Option<String> {
+    let start = usize::try_from(entry.chunk_source.offset).ok()?;
+    let len = usize::try_from(entry.chunk_source.len).ok()?;
+    let chunk = contents.get(start..start.checked_add(len)?)?;
+    let values = [44usize, 46, 48, 50, 52, 54, 56, 58, 60]
+        .into_iter()
+        .map(|offset| {
+            read_u16(chunk, offset)
+                .map(|value| format!("{offset}:{value}"))
+                .unwrap_or_else(|| format!("{offset}:missing"))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let data_delta = chunk.get(3).copied().unwrap_or(0);
+    let data_offset = usize::from(data_delta);
+    let list_count = read_u16(chunk, data_offset)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "missing".into());
+    let list_record_size = read_u16(chunk, data_offset + 4)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "missing".into());
+    Some(format!(
+        "len={len}:data={data_delta}:count={list_count}:record={list_record_size}:{values}"
+    ))
 }
 
 fn raw_header_profiles(
@@ -60,44 +129,54 @@ fn raw_header_profiles(
         .iter()
         .filter(|entry| entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE)
     {
-        let Ok(start) = usize::try_from(entry.chunk_source.offset) else {
-            continue;
-        };
-        let Ok(len) = usize::try_from(entry.chunk_source.len) else {
-            continue;
-        };
-        let Some(chunk) = contents.get(start..start.saturating_add(len)) else {
-            continue;
-        };
-        let values = [44usize, 46, 48, 50, 52, 54, 56, 58, 60]
-            .into_iter()
-            .map(|offset| {
-                read_u16(chunk, offset)
-                    .map(|value| format!("{offset}:{value}"))
-                    .unwrap_or_else(|| format!("{offset}:missing"))
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        let data_delta = chunk.get(3).copied().unwrap_or(0);
-        let data_offset = usize::from(data_delta);
-        let list_count = read_u16(chunk, data_offset)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "missing".into());
-        let list_record_size = read_u16(chunk, data_offset + 4)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "missing".into());
-        let key = format!(
-            "len={len}:data={data_delta}:count={list_count}:record={list_record_size}:{values}"
-        );
-        *profiles.entry(key).or_default() += 1;
+        if let Some(profile) = raw_header_profile(contents, entry) {
+            *profiles.entry(profile).or_default() += 1;
+        }
     }
     profiles
 }
 
-fn materialized_object_profiles(
-    stream: StreamPath,
+fn owner_partition_profiles(
     contents: &[u8],
-) -> BTreeMap<String, usize> {
+    directory: &pub_contents::Legacy0x22Directory,
+    table_owner_ids: &BTreeSet<u16>,
+) -> (
+    usize,
+    usize,
+    BTreeMap<String, usize>,
+    BTreeMap<String, usize>,
+) {
+    let mut owner_count = 0usize;
+    let mut non_owner_count = 0usize;
+    let mut owner_profiles = BTreeMap::new();
+    let mut non_owner_profiles = BTreeMap::new();
+
+    for entry in directory
+        .entries
+        .iter()
+        .filter(|entry| entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE)
+    {
+        let Some(profile) = raw_header_profile(contents, entry) else {
+            continue;
+        };
+        if table_owner_ids.contains(&entry.object_id) {
+            owner_count += 1;
+            *owner_profiles.entry(profile).or_default() += 1;
+        } else {
+            non_owner_count += 1;
+            *non_owner_profiles.entry(profile).or_default() += 1;
+        }
+    }
+
+    (
+        owner_count,
+        non_owner_count,
+        owner_profiles,
+        non_owner_profiles,
+    )
+}
+
+fn materialized_object_profiles(stream: StreamPath, contents: &[u8]) -> BTreeMap<String, usize> {
     let mut profiles = BTreeMap::new();
     if let Ok(catalog) = parse_legacy_0x22_table_catalog(stream, contents) {
         for table in catalog.table_chunks {
@@ -122,11 +201,22 @@ fn table_error_detail(error: &Legacy0x22TableCatalogReadError) -> Option<String>
         Legacy0x22TableCatalogReadError::TableCountMismatch {
             object_tables,
             text_tables,
-        } => Some(format!("object_tables={object_tables}:text_tables={text_tables}")),
+        } => Some(format!(
+            "object_tables={object_tables}:text_tables={text_tables}"
+        )),
         Legacy0x22TableCatalogReadError::TooFewTableRecords {
             count, required, ..
         } => Some(format!("count={count}:required={required}")),
         _ => None,
+    }
+}
+
+fn table_error_kind(error: &Legacy0x22TableCatalogReadError) -> &'static str {
+    match error {
+        Legacy0x22TableCatalogReadError::TableCountMismatch { .. } => "table_count_mismatch",
+        Legacy0x22TableCatalogReadError::TooFewTableRecords { .. } => "too_few_table_records",
+        Legacy0x22TableCatalogReadError::Text(_) => "table_text_error",
+        _ => "other",
     }
 }
 
@@ -211,15 +301,14 @@ fn main() -> Result<()> {
         raw_0001_physical_count += raw_0001_count;
         let reader_target_ids = reader_raw_0001_target_ids(&bytes);
         let reader_target_count = reader_target_ids.len();
+        let table_owner_ids = legacy_table_owner_ids(&contents);
         reader_target_residual_count += reader_target_count;
         if reader_target_count > 0 {
             reader_target_files += 1;
         }
 
-        match parse_legacy_0x22_resolved_tables(
-            StreamPath(CONTENTS_STREAM_PATH.into()),
-            &contents,
-        ) {
+        match parse_legacy_0x22_resolved_tables(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
+        {
             Ok(catalog) => {
                 resolver_ok_files += 1;
                 if reader_target_count > 0 {
@@ -242,27 +331,36 @@ fn main() -> Result<()> {
                     *aggregate.revision_counts.entry(revision).or_default() += 1;
                 }
                 for (profile, count) in raw_header_profiles(&contents, &directory) {
-                    *aggregate.raw_header_profile_counts.entry(profile).or_default() += count;
+                    *aggregate
+                        .raw_header_profile_counts
+                        .entry(profile)
+                        .or_default() += count;
                 }
-                for (profile, count) in materialized_object_profiles(
-                    StreamPath(CONTENTS_STREAM_PATH.into()),
-                    &contents,
-                ) {
+                let (owner_count, non_owner_count, owner_profiles, non_owner_profiles) =
+                    owner_partition_profiles(&contents, &directory, &table_owner_ids);
+                aggregate.owner_backed_raw_0001_count += owner_count;
+                aggregate.non_owner_raw_0001_count += non_owner_count;
+                aggregate.reader_target_owner_overlap_count +=
+                    reader_target_ids.intersection(&table_owner_ids).count();
+                for (profile, count) in owner_profiles {
+                    *aggregate
+                        .owner_backed_header_profile_counts
+                        .entry(profile)
+                        .or_default() += count;
+                }
+                for (profile, count) in non_owner_profiles {
+                    *aggregate
+                        .non_owner_header_profile_counts
+                        .entry(profile)
+                        .or_default() += count;
+                }
+                for (profile, count) in
+                    materialized_object_profiles(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
+                {
                     *aggregate
                         .materialized_object_profile_counts
                         .entry(profile)
                         .or_default() += count;
-                }
-                for candidate in count_pair_scores(&contents, &directory, &reader_target_ids) {
-                    let first = candidate["first_offset"].as_u64().unwrap_or_default();
-                    let second = candidate["second_offset"].as_u64().unwrap_or_default();
-                    let sum_hits = candidate["sum_hits"].as_u64().unwrap_or_default();
-                    let monotonic_hits = candidate["monotonic_hits"].as_u64().unwrap_or_default();
-                    let geometry_hits = candidate["geometry_hits"].as_u64().unwrap_or_default();
-                    let key = format!(
-                        "{first}:{second}:sum={sum_hits}:monotonic={monotonic_hits}:geometry={geometry_hits}"
-                    );
-                    *aggregate.count_pair_candidate_counts.entry(key).or_default() += 1;
                 }
                 *aggregate
                     .raw_0001_per_file_counts
@@ -301,8 +399,12 @@ fn main() -> Result<()> {
                 "reader_target_per_file_counts": aggregate.reader_target_per_file_counts,
                 "revision_counts": aggregate.revision_counts,
                 "raw_header_profile_counts": aggregate.raw_header_profile_counts,
+                "owner_backed_raw_0001_count": aggregate.owner_backed_raw_0001_count,
+                "non_owner_raw_0001_count": aggregate.non_owner_raw_0001_count,
+                "reader_target_owner_overlap_count": aggregate.reader_target_owner_overlap_count,
+                "owner_backed_header_profile_counts": aggregate.owner_backed_header_profile_counts,
+                "non_owner_header_profile_counts": aggregate.non_owner_header_profile_counts,
                 "materialized_object_profile_counts": aggregate.materialized_object_profile_counts,
-                "count_pair_candidate_counts": aggregate.count_pair_candidate_counts,
                 "example_source_sha256": aggregate.example_source_sha256,
             })
         })
