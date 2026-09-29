@@ -12,6 +12,12 @@
   #define OutputDir "..\..\dist"
 #endif
 
+#ifdef ChapteraTestSigning
+  #define ReaderPayloadFlags "ignoreversion signonce"
+#else
+  #define ReaderPayloadFlags "ignoreversion"
+#endif
+
 [Setup]
 AppId={{5D0E0D1E-DF1D-49E0-8A43-95F1778BFA21}
 AppName={#MyAppName}
@@ -32,6 +38,10 @@ UninstallDisplayIcon={app}\current\chaptera-reader.exe
 ChangesAssociations=yes
 CloseApplications=yes
 SetupLogging=yes
+#ifdef ChapteraTestSigning
+SignTool=chapteratest
+SignedUninstaller=yes
+#endif
 
 [Dirs]
 Name: "{app}\current"
@@ -39,7 +49,7 @@ Name: "{app}\.staging"
 Name: "{app}\.rollback"
 
 [Files]
-Source: "{#SourceDir}\Chaptera-Reader.exe"; DestDir: "{app}\current"; DestName: "chaptera-reader.exe"; Flags: ignoreversion
+Source: "{#SourceDir}\Chaptera-Reader.exe"; DestDir: "{app}\current"; DestName: "chaptera-reader.exe"; Flags: {#ReaderPayloadFlags}
 Source: "{#SourceDir}\README.md"; DestDir: "{app}\current"; Flags: ignoreversion
 
 [Icons]
