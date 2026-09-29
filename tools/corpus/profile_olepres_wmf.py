@@ -331,6 +331,28 @@ def region_profile(params: bytes) -> dict:
     profile["total_scan_coordinates"] = total_coordinates
     profile["max_scan_coordinates"] = max_coordinates
     profile["exact_payload_consumed"] = cursor == len(params)
+
+    tail = params[cursor:]
+    profile["tail_bytes"] = len(tail)
+    profile["tail_scan_candidate"] = None
+    if len(tail) == 8:
+        tail_count = u16(tail, 0)
+        tail_top = u16(tail, 2)
+        tail_bottom = u16(tail, 4)
+        tail_count2 = u16(tail, 6)
+        profile["tail_scan_candidate"] = {
+            "count": tail_count,
+            "count2_matches": tail_count2 == tail_count,
+            "zero_count": tail_count == 0,
+            "vertical_relation": (
+                "ascending"
+                if tail_bottom > tail_top
+                else "equal"
+                if tail_bottom == tail_top
+                else "descending"
+            ),
+        }
+
     profile["scan_structure"] = (
         "valid_exact" if profile["exact_payload_consumed"] else "valid_with_tail"
     )
