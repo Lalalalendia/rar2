@@ -1,0 +1,127 @@
+name: Legacy22 Quill3 PageList discriminator
+
+on:
+  push:
+    branches:
+      - research/legacy22-quill3-pagelist-20260929
+    paths:
+      - ".github/workflows/legacy22-quill3-pagelist.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout rar2 candidate
+        uses: actions/checkout@v4
+
+      - name: Checkout exact materialized corpus
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: main
+          path: corpus-src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Install exact CFB dependency
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Build current Reader receipt
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --release --bin corpus-reader-receipt
+
+      - name: Inspect Quill3 old-family PageLists
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/quill3
+          python - <<'PY'
+          import hashlib, io, json, struct, subprocess
+          from pathlib import Path
+          import olefile
+
+          ROOT=Path('corpus-src/pub-corpus/corpus/native/unclassified')
+          TARGETS={
+            'Clubbooklet2008.pub':'2b1a2c5183d2fa83fdf9b0e0bf386bc0861b034e08f00fb3fc4171857c097576',
+            'CopyofConsultantIPAchartrevised.pub':'e937b30923b86a7a4eebf7a4fa6870a737cee513bbeadb7b04f0f9b757bcddcd',
+            'PETA2.pub':'1b3d00a67c370d9938f67c198ba1ba90f0e962d95c7db9557e9a3e2cdf134886',
+          }
+          reader=Path('vendor/producer-a/target/release/corpus-reader-receipt')
+          if not reader.exists():
+              reader=Path('target/release/corpus-reader-receipt')
+
+          def u16(b,o): return struct.unpack_from('<H',b,o)[0]
+          def u32(b,o): return struct.unpack_from('<I',b,o)[0]
+
+          rows=[]
+          for label,sha in TARGETS.items():
+              path=ROOT/f'{sha}.pub'
+              data=path.read_bytes()
+              assert hashlib.sha256(data).hexdigest()==sha
+              with olefile.OleFileIO(io.BytesIO(data)) as ole:
+                  contents=ole.openstream(['Contents']).read()
+                  streams=['/'.join(x) for x in ole.listdir(streams=True,storages=False)]
+              trailer=u32(contents,0x16)
+              count=u16(contents,trailer)
+              entries=[]
+              for i in range(count):
+                  off=trailer+2+i*10
+                  service=u16(contents,off)
+                  oid=u16(contents,off+2)
+                  parent=u16(contents,off+4)
+                  chunk_off=u32(contents,off+6)
+                  ctype=u16(contents,chunk_off)
+                  entries.append({'index':i,'service_word':service,'object_id':oid,'parent_id':parent,'chunk_offset':chunk_off,'chunk_type':ctype})
+              docs=[e for e in entries if e['chunk_type']==0x0015]
+              assert len(docs)==1,(label,docs)
+              doc=docs[0]
+              ds=doc['chunk_offset']
+              delta=contents[ds+3]
+              ls=ds+delta
+              list_count=u16(contents,ls)
+              max_count=u16(contents,ls+2)
+              rec_size=u16(contents,ls+4)
+              ids=[u16(contents,ls+10+i*rec_size) for i in range(list_count)]
+              byid={e['object_id']:e for e in entries}
+              plist=[]
+              for ordinal,oid in enumerate(ids):
+                  e=byid.get(oid)
+                  plist.append({'ordinal':ordinal,'object_id':oid,'entry':e})
+              all_pages=[e for e in entries if e['chunk_type']==0x0014]
+              missing_pages=[e for e in all_pages if e['object_id'] not in ids]
+              non_page=[p for p in plist if not p['entry'] or p['entry']['chunk_type']!=0x0014]
+              proc=subprocess.run([str(reader),str(path)],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+              reader_payload=None
+              if proc.stdout.strip():
+                  try: reader_payload=json.loads(proc.stdout)
+                  except Exception: reader_payload={'raw_stdout':proc.stdout[-4000:]}
+              rows.append({
+                  'label':label,'sha256':sha,'byte_len':len(data),'streams':streams,
+                  'trailer_offset':trailer,'directory_count':count,
+                  'document_object_id':doc['object_id'],'document_parent_id':doc['parent_id'],
+                  'document_page_list':{'count':list_count,'max_count':max_count,'record_size':rec_size,'ids':ids,'entries':plist},
+                  'all_page_entries':all_pages,'page_entries_not_in_document_list':missing_pages,
+                  'non_page_document_list_entries':non_page,
+                  'directory_type_counts':{str(t):sum(1 for e in entries if e['chunk_type']==t) for t in sorted({e['chunk_type'] for e in entries})},
+                  'reader_returncode':proc.returncode,'reader_receipt':reader_payload,'reader_stderr':proc.stderr[-6000:]
+              })
+          Path('out/quill3/report.json').write_text(json.dumps(rows,indent=2,sort_keys=True))
+          print(json.dumps(rows,indent=2,sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy22-quill3-pagelist-${{ github.run_id }}
+          path: out/quill3/report.json
+          if-no-files-found: error
+          retention-days: 30
