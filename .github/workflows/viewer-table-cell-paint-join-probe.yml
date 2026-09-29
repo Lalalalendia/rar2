@@ -1,0 +1,33 @@
+name: VIEWER-TABLE-CELL-PAINT-01A
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
+      - ".github/workflows/viewer-table-cell-paint-join-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sample-join-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Decode pinned Sample.pub
+        shell: bash
+        run: |
+          base64 -d vendor/producer-a/crates/pub-reader/tests/fixtures/Sample.pub.b64 > "$RUNNER_TEMP/Sample.pub"
+          echo "CHAPTERA_TABLE_CELL_PAINT_FIXTURE=$RUNNER_TEMP/Sample.pub" >> "$GITHUB_ENV"
+          echo "CHAPTERA_TABLE_CELL_PAINT_RECEIPT=$RUNNER_TEMP/table-cell-officeart-join.json" >> "$GITHUB_ENV"
+      - name: Run exact table-cell OfficeArt join probe
+        run: cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+      - uses: actions/upload-artifact@v4
+        with:
+          name: table-cell-officeart-join
+          path: ${{ env.CHAPTERA_TABLE_CELL_PAINT_RECEIPT }}
+          if-no-files-found: error
+          retention-days: 7
