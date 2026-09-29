@@ -47,6 +47,7 @@ const server = createServer(async (req, res) => {
       requests.push({ path: req.url, method: req.method, headers: req.headers, body });
       let payload = {};
       let status = 200;
+      let redirect;
       if (url.pathname === "/v1/reader/guest-sessions") {
         const session_id = "guest:" + (++nextSession).toString().padStart(32, "0");
         const scenario = nextScenario;
@@ -57,19 +58,21 @@ const server = createServer(async (req, res) => {
           open_path: "/v1/reader/guest-sessions/" + session_id + "/open", ...scenario.issue
         };
         status = scenario.issueStatus ?? 200;
+        redirect = scenario.issueRedirect;
       } else if (url.pathname.startsWith("/v1/reader/guest-sessions/")) {
         const [, session_id, action] = url.pathname.match(/guest-sessions\/([^/]+)\/(content|open)$/) ?? [];
         const scenario = sessions.get(session_id) ?? {};
         payload = { protocol_version: "chaptera.reader-guest-session.v1", session_id };
-        if (action === "content") Object.assign(payload, { state: "uploaded" }, scenario.upload);
+        if (action === "content") { Object.assign(payload, { state: "uploaded" }, scenario.upload); redirect = scenario.uploadRedirect; }
         else {
           if (scenario.wait) await scenario.wait;
           status = scenario.openStatus ?? 200;
           Object.assign(payload, { classification: "partial", scene: fixture() }, scenario.open);
+          redirect = scenario.openRedirect;
         }
       } else if (url.pathname.startsWith("/v1/reader/documents/")) payload = nextScenario.saved ?? fixture("Saved document.");
       else status = 404;
-      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.writeHead(redirect ? 307 : status, { "content-type": "application/json", "cache-control": "no-store", ...(redirect ? { location: redirect } : {}) });
       res.end(JSON.stringify(payload));
       return;
     }
@@ -105,7 +108,7 @@ try {
     const nativeFetch = window.fetch;
     window.__fetchOptions = [];
     window.fetch = (url, options = {}) => {
-      window.__fetchOptions.push({ url, credentials: options.credentials, method: options.method ?? "GET" });
+      window.__fetchOptions.push({ url, credentials: options.credentials, redirect: options.redirect, method: options.method ?? "GET" });
       return nativeFetch(url, options);
     };
     window.__clipboard = [];
@@ -136,6 +139,7 @@ try {
     assert.equal(guest[2].headers["x-chaptera-reader-session"], "synthetic-token-1");
     const options = await page.evaluate(() => window.__fetchOptions);
     assert.ok(options.every((option) => option.credentials === "omit"));
+    assert.ok(options.every((option) => option.redirect === "error"));
     assert.deepEqual(await page.evaluate(() => ({ local: { ...localStorage }, session: { ...sessionStorage } })), { local: {}, session: {} });
   });
 
@@ -236,6 +240,15 @@ try {
       await status(page, /incompatible/);
       assert.equal(await page.locator("#reader").isVisible(), false);
     }
+  });
+
+  await check("guest redirects cannot forward raw bytes or capability headers", async () => {
+    for (const key of ["issueRedirect", "uploadRedirect", "openRedirect"]) {
+      await open(page, { [key]: "https://foreign.example/receive" });
+      await status(page, /Opening failed/);
+      assert.equal(await page.locator("#reader").isVisible(), false);
+    }
+    assert.deepEqual(unexpectedRequests, []);
   });
 
   await check("cancelled open cannot replace a later reading session", async () => {
