@@ -76,6 +76,7 @@ on:
       - ".github/workflows/reader-pr-ci.yml"
       - ".github/workflows/reader-consumer-preflight.yml"
       - ".github/workflows/chaptera-reader-windows.yml"
+      - ".github/workflows/chaptera-reader-windows-smoke.yml"
       - ".github/workflows/chaptera-desktop-windows.yml"
       - ".github/workflows/chaptera-local-portable-windows.yml"
       - ".github/workflows/carlton-reader-visual-oracle.yml"
@@ -103,6 +104,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tier_a: ${{ steps.scope.outputs.tier_a }}
+      reader_windows_smoke: ${{ steps.scope.outputs.reader_windows_smoke }}
       reader_windows: ${{ steps.scope.outputs.reader_windows }}
       editor_windows: ${{ steps.scope.outputs.editor_windows }}
       visual_oracle: ${{ steps.scope.outputs.visual_oracle }}
@@ -161,6 +163,12 @@ jobs:
     needs: classify
     if: needs.classify.outputs.tier_a == 'true'
     uses: ./.github/workflows/reader-consumer-preflight.yml
+
+  reader-windows-smoke:
+    name: Reader Windows shared-core smoke
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.reader_windows_smoke == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-windows-smoke.yml
 
   reader-windows:
     name: Reader Windows product
