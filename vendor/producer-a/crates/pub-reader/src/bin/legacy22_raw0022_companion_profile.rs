@@ -286,6 +286,13 @@ mod tests {
     }
 
     #[test]
+    fn eighteen_byte_companion_exposes_nine_u16_and_four_u32_words() {
+        let bytes = [0_u8; 18];
+        assert_eq!(scalar_u16_profile(&bytes).len(), 9);
+        assert_eq!(scalar_u32_profile(&bytes).len(), 4);
+    }
+
+    #[test]
     fn normalized_parent_hash_zeroes_only_geometry_carrier() {
         let mut chunk = vec![0x5a_u8; 0x20];
         let before = sha256_hex(&chunk);
