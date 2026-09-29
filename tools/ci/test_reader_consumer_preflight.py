@@ -54,12 +54,8 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("desktop-editor-check", ids)
         self.assertNotIn("desktop-reader-clippy-delta", ids)
         self.assertIn("mobile-reader-core-check", ids)
-        clippy = next(command for command in plan["commands"] if command["id"] == "desktop-reader-clippy-delta")
-        self.assertIn("tools/ci/check_desktop_clippy_delta.py", clippy["argv"])
-        self.assertIn("--path", clippy["argv"])
-        self.assertIn("apps/chaptera-desktop/src/render_backend.rs", clippy["argv"])
         self.assertTrue(plan["desktop_reader_integration"])
-        self.assertTrue(plan["desktop_reader_clippy"])
+        self.assertFalse(plan["desktop_reader_clippy"])
         self.assertTrue(plan["mobile_reader_integration"])
         reader_check = next(command for command in plan["commands"] if command["id"] == "desktop-reader-check")
         editor_check = next(command for command in plan["commands"] if command["id"] == "desktop-editor-check")
@@ -106,8 +102,12 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertNotIn("--bin", reader_check["argv"])
         self.assertIn("--all-targets", editor_check["argv"])
         self.assertNotIn("--bin", editor_check["argv"])
+        clippy = next(command for command in plan["commands"] if command["id"] == "desktop-reader-clippy-delta")
+        self.assertIn("tools/ci/check_desktop_clippy_delta.py", clippy["argv"])
+        self.assertIn("--path", clippy["argv"])
+        self.assertIn("apps/chaptera-desktop/src/render_backend.rs", clippy["argv"])
         self.assertTrue(plan["desktop_reader_integration"])
-        self.assertFalse(plan["desktop_reader_clippy"])
+        self.assertTrue(plan["desktop_reader_clippy"])
 
     def test_root_workspace_change_keeps_desktop_all_targets(self) -> None:
         plan = MODULE.build_plan(
