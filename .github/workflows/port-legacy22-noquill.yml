@@ -33,11 +33,14 @@ jobs:
           git config user.name "chaptera-port-bot"
           git config user.email "chaptera-port-bot@users.noreply.github.com"
 
-          curl -L --fail --retry 3 https://github.com/HeisLuka/rar/pull/1307.diff -o /tmp/1307.diff
-          git apply --3way /tmp/1307.diff
-
-          curl -L --fail --retry 3 https://github.com/HeisLuka/rar/pull/1311.diff -o /tmp/1311.diff
-          git apply --3way /tmp/1311.diff
+          git remote add historical https://github.com/HeisLuka/rar.git
+          git fetch --no-tags historical \
+            b9c5eb03db41f57aed3fe56380982bb028faa031 \
+            aa2df26384fe6fe29e88dcd0ee9fdda908d4c82a
+          git diff --binary \
+            b9c5eb03db41f57aed3fe56380982bb028faa031..aa2df26384fe6fe29e88dcd0ee9fdda908d4c82a \
+            > /tmp/legacy22-train.diff
+          git apply --3way /tmp/legacy22-train.diff
 
           python - <<'PY'
           from pathlib import Path
