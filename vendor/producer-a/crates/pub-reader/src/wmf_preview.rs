@@ -676,7 +676,7 @@ pub fn rasterize_wmf_preview(
     let mut canvas = Canvas::new(width, height)?;
     let mut state = PlaybackState::new(width, height);
     let mut state_stack = Vec::<PlaybackState>::new();
-    let mut objects = vec![None; object_count.max(1)];
+    let mut objects = vec![None; object_count];
 
     let mut offset = 18usize;
     let mut records = 0usize;
@@ -1059,6 +1059,13 @@ mod tests {
         assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
         let corner = ((5 * 100 + 5) * 4) as usize;
         assert_eq!(&image.rgba[corner..corner + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_object_creation_when_header_declares_zero_slots() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&0_u16.to_le_bytes());
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
