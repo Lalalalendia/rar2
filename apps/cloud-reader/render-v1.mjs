@@ -49,6 +49,34 @@ function rgb(value) {
   return "rgb(" + value.map(Number).join(" ") + ")";
 }
 
+function fontDataUrl(resource) {
+  if (resource?.availability !== "inline_data_url") return null;
+  const value = resource.inline_data_url;
+  if (typeof value !== "string") return null;
+  if (!/^data:font\/(?:ttf|otf);base64,[A-Za-z0-9+/=]+$/.test(value)) return null;
+  return value;
+}
+
+async function installFonts(payload) {
+  const installed = new Map();
+  if (typeof FontFace !== "function" || !document.fonts) return installed;
+
+  for (const resource of payload.fonts ?? []) {
+    const href = fontDataUrl(resource);
+    if (!href) continue;
+    const family = "ChapteraReader_" + String(resource.expected_sha256 ?? "").slice(0, 16);
+    try {
+      const face = new FontFace(family, "url(" + href + ")");
+      await face.load();
+      document.fonts.add(face);
+      installed.set(resource.resource_id, Object.freeze({ family, resource }));
+    } catch {
+      // Fail closed to the explicit preview-only path below.
+    }
+  }
+  return installed;
+}
+
 function imageDataUrl(resource) {
   if (resource?.availability !== "inline_data_url") return null;
   const value = resource.inline_data_url;
@@ -103,7 +131,38 @@ function nodeTransform(node) {
   return "matrix(" + [a, b, c, d, tx, ty].join(" ") + ")";
 }
 
-function appendText(group, node) {
+export function resolvedTextLinePaintPlan(node) {
+  const layout = node?.text_layout;
+  if (!layout || layout.disposition !== "shared_resolved") return null;
+  const bounds = node.bounds;
+  const x = safeInteger(bounds.x, "text.bounds.x");
+  const y = safeInteger(bounds.y, "text.bounds.y");
+  const width = safeInteger(bounds.width, "text.bounds.width");
+  const height = safeInteger(bounds.height, "text.bounds.height");
+  const fontSize = safeInteger(layout.font_size_emu, "text.font_size_emu");
+  const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
+  if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
+
+  const lines = [...(layout.lines ?? [])]
+    .sort((left, right) => left.line_index - right.line_index)
+    .map((line) => ({
+      line_index: safeInteger(line.line_index, "text.line_index"),
+      x,
+      y: y + safeInteger(line.line_index, "text.line_index") * lineHeight,
+      text: String(line.text ?? ""),
+      measured_width_emu: safeInteger(line.measured_width_emu, "text.measured_width_emu"),
+      line_height_emu: safeInteger(line.line_height_emu, "text.line_height_emu")
+    }));
+  return Object.freeze({
+    bounds: Object.freeze({ x, y, width, height }),
+    font_resource_id: layout.font_resource_id,
+    font_size_emu: fontSize,
+    line_height_emu: lineHeight,
+    lines: Object.freeze(lines)
+  });
+}
+
+function appendPreviewText(group, node) {
   if (!node.text) return;
   const bounds = node.bounds;
   const foreign = svgNode("foreignObject", {
@@ -124,6 +183,43 @@ function appendText(group, node) {
   div.textContent = node.text;
   foreign.appendChild(div);
   group.appendChild(foreign);
+}
+
+function appendText(group, defs, node, fonts, index) {
+  if (!node.text) return;
+  const plan = resolvedTextLinePaintPlan(node);
+  const installed = plan ? fonts.get(plan.font_resource_id) ?? null : null;
+  if (!plan || !installed) {
+    appendPreviewText(group, node);
+    return;
+  }
+
+  const clipId = "chaptera-reader-text-clip-" + index;
+  const clipPath = svgNode("clipPath", { id: clipId });
+  clipPath.appendChild(svgNode("rect", {
+    x: plan.bounds.x,
+    y: plan.bounds.y,
+    width: plan.bounds.width,
+    height: plan.bounds.height
+  }));
+  defs.appendChild(clipPath);
+
+  for (const line of plan.lines) {
+    const text = svgNode("text", {
+      x: line.x,
+      y: line.y,
+      "font-family": installed.family,
+      "font-size": plan.font_size_emu,
+      "dominant-baseline": "text-before-edge",
+      "clip-path": "url(#" + clipId + ")",
+      "data-text-authority": "server-shared-resolved",
+      "data-text-line-index": line.line_index,
+      "data-measured-width-emu": line.measured_width_emu
+    });
+    text.setAttribute("xml:space", "preserve");
+    text.textContent = line.text;
+    group.appendChild(text);
+  }
 }
 
 export function tableCellPaintGeometry(cell) {
@@ -201,7 +297,7 @@ function appendImage(group, defs, node, resource, clipId) {
   return true;
 }
 
-function renderNode(svg, defs, node, resources, index) {
+function renderNode(svg, defs, node, resources, fonts, index) {
   const bounds = node.bounds;
   for (const [key, value] of Object.entries(bounds)) safeInteger(value, "node.bounds." + key);
   if (bounds.width <= 0 || bounds.height <= 0) return;
@@ -265,11 +361,11 @@ function renderNode(svg, defs, node, resources, index) {
   }
 
   appendTableText(group, node);
-  appendText(group, node);
+  appendText(group, defs, node, fonts, index);
   svg.appendChild(group);
 }
 
-export function renderReaderScene(host, payload, options = {}) {
+export async function renderReaderScene(host, payload, options = {}) {
   assertReaderSceneSourceNeutral(payload);
   if (payload?.protocol_version !== "chaptera.reader-scene.v1") {
     throw new Error("renderer requires chaptera.reader-scene.v1");
@@ -281,6 +377,7 @@ export function renderReaderScene(host, payload, options = {}) {
     throw new RangeError("renderer view scale must be positive");
   }
 
+  const fonts = await installFonts(payload);
   host.replaceChildren();
   const resources = new Map((payload.resources ?? []).map((resource) => [resource.resource_id, resource]));
   const pages = [...(payload.pages ?? [])].sort((a, b) => a.order - b.order);
@@ -317,7 +414,7 @@ export function renderReaderScene(host, payload, options = {}) {
 
     for (const node of payload.nodes ?? []) {
       if (node.page_id !== pageModel.page_id) continue;
-      renderNode(svg, defs, node, resources, nodeIndex);
+      renderNode(svg, defs, node, resources, fonts, nodeIndex);
       nodeIndex += 1;
     }
     host.appendChild(svg);
