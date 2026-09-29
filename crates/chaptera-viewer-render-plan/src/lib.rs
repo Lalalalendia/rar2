@@ -789,10 +789,14 @@ mod tests {
     use pub_layout::{
         BoundedLayoutEnvironment, BoundedResolvedScene, ResolvedPhysicalNode, ResolvedSurface,
     };
-    use pub_model::{Affine2D, CanonicalId, LengthEmu, RectEmu, Sha256Digest, Size2D};
+    use pub_model::{
+        Affine2D, CanonicalId, LengthEmu, RectEmu, Sha256Digest, Size2D, TableCellAddress,
+        TableCellId,
+    };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerNodePaint, ViewerPage, ViewerSolidLine,
-        ViewerSource, ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
+        ViewerSource, ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
+        viewer_story_text_sha256,
     };
 
     fn canonical(byte: u8) -> CanonicalId {
@@ -921,6 +925,51 @@ mod tests {
         assert_eq!(typography[0].scalar_end, 2);
         assert_eq!(typography[0].text_size_emu, 24 * 12_700);
         assert!(typography[0].size_inherited);
+    }
+
+    #[test]
+    fn table_payload_reaches_render_plan_with_cell_text_and_bounds() {
+        let mut visual = fixture();
+        let node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        let cell_id = TableCellId::from_canonical(canonical(5));
+        let cell_bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(150),
+            LengthEmu::new(200),
+        );
+
+        // Mature TABLE owns its text through the table payload, not a normal
+        // StoryFrame. Keep the fixture aligned with that product boundary.
+        visual.text_fragments.clear();
+        visual.typography_runs.clear();
+        visual.tables.push(ViewerTable {
+            node_id,
+            story_id,
+            rows: 1,
+            columns: 1,
+            cells: vec![ViewerTableCell {
+                id: cell_id,
+                address: TableCellAddress { row: 0, column: 0 },
+                text: "cell".into(),
+                bounds: Some(cell_bounds),
+            }],
+        });
+
+        let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
+        let node = &plan.nodes[0];
+        assert!(node.text.is_none());
+
+        let table = node.table.as_ref().expect("table payload");
+        assert_eq!(table.story_id, story_id);
+        assert_eq!((table.rows, table.columns), (1, 1));
+        assert_eq!(table.cells.len(), 1);
+        assert_eq!(table.cells[0].id, cell_id);
+        assert_eq!(table.cells[0].row, 0);
+        assert_eq!(table.cells[0].column, 0);
+        assert_eq!(table.cells[0].text, "cell");
+        assert_eq!(table.cells[0].bounds, Some(cell_bounds));
     }
 
     #[cfg(feature = "projected-scene-instances")]
