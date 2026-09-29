@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS reader_guest_sessions (
     object_etag                 BLOB,
     source_sha256               BLOB,
     state                       TEXT NOT NULL CHECK (
-        state IN ('issued', 'stored', 'opened', 'rejected', 'expired')
+        state IN ('issued', 'stored', 'opening', 'opened', 'rejected', 'expired')
     ),
     classification              TEXT CHECK (
         classification IS NULL OR
