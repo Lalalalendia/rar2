@@ -8820,7 +8820,10 @@ mod tests {
         candidate_counts.insert("text_fragments".to_owned(), 0_u64.into());
         candidate_counts.insert("source_resource_fragments".to_owned(), 0_u64.into());
         candidate_counts.insert("source_shared_resolved".to_owned(), 0_u64.into());
-        candidate_counts.insert("fallback_shared_resolved_same_node".to_owned(), 0_u64.into());
+        candidate_counts.insert(
+            "fallback_shared_resolved_same_node".to_owned(),
+            0_u64.into(),
+        );
 
         'pages: for page_index in 0..visual.document.pages.len() {
             let source_plan =
@@ -8884,8 +8887,7 @@ mod tests {
                 ) {
                     continue;
                 }
-                if let Some(value) =
-                    candidate_counts.get_mut("fallback_shared_resolved_same_node")
+                if let Some(value) = candidate_counts.get_mut("fallback_shared_resolved_same_node")
                 {
                     *value = (value.as_u64().unwrap_or(0) + 1).into();
                 }
