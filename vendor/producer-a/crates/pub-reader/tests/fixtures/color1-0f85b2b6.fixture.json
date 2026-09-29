@@ -84,13 +84,9 @@
     "note": "This upload is a distinct byte-level revision and must not silently replace the previous manual receipt."
   },
   "current_reader_expectation": {
-    "opened": false,
-    "open_error_kind": "viewer_open_failed",
-    "open_error_signature_sha256": "c659f02436c82542dcd0b64fcd196c146b1ed2046c3f65c4924bee7529679753",
-    "diagnostic_fragments": [
-      "parse mature Story catalog 0x65",
-      "MissingDeclaredCount"
-    ],
-    "upstream_owner": "Lalalalendia/rar2#25"
+    "opened": true,
+    "minimum_paint_node_count": 8,
+    "minimum_solid_fill_count": 8,
+    "acceptance_owner": "Lalalalendia/rar2#186"
   }
 }
