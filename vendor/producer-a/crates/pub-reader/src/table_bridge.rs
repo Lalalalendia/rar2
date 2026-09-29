@@ -184,8 +184,10 @@ pub struct PubTableSource {
     pub story_id: Option<StoryId>,
     pub rows: u32,
     pub columns: u32,
-    pub cells_seq_num: u32,
-    pub tcd_story_ordinal: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cells_seq_num: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcd_story_ordinal: Option<u16>,
     pub cells: Vec<PubTableCellSource>,
     /// Present only for a complete, unmerged, unambiguous rectangular grid.
     pub simple_table: Option<SimpleRectangularTable<TableCellId>>,
@@ -424,8 +426,8 @@ pub(crate) fn build_table_source(
         story_id,
         rows,
         columns,
-        cells_seq_num,
-        tcd_story_ordinal: tcd.story_ordinal.value,
+        cells_seq_num: Some(cells_seq_num),
+        tcd_story_ordinal: Some(tcd.story_ordinal.value),
         cells: joined_cells,
         simple_table,
         layout_metrics,
