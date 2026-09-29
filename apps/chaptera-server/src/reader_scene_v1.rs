@@ -246,7 +246,10 @@ pub fn from_viewer_geometry(
                 right_q16: window.right_q16,
                 bottom_q16: window.bottom_q16,
             };
-            if source_window_by_node.insert(node_id.clone(), mapped).is_some() {
+            if source_window_by_node
+                .insert(node_id.clone(), mapped)
+                .is_some()
+            {
                 return Err(format!("duplicate image placement for node {node_id}"));
             }
         }
@@ -509,10 +512,8 @@ fn object_string(value: &Value, key: &str) -> Result<String, String> {
 
 
 fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
-    if !matches!(
-        mime,
-        "image/png" | "image/jpeg" | "image/jpg" | "image/gif"
-    ) || bytes.is_empty()
+    if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif")
+        || bytes.is_empty()
         || bytes.len() > MAX_INLINE_IMAGE_RESOURCE_BYTES
         || bytes.len() > *remaining_budget
     {
@@ -523,8 +524,7 @@ fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize)
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(((bytes.len() + 2) / 3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0];
