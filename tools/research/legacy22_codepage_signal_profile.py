@@ -246,6 +246,12 @@ def main() -> int:
                 start, end = tr
                 body = contents[start:end]
                 high = [b for b in body if b >= 0x80]
+                try:
+                    font_pointer_lists = parse_font_pointer_list(contents)
+                    font_pointer_error = None
+                except Exception as exc:
+                    font_pointer_lists = []
+                    font_pointer_error = f"{type(exc).__name__}:{exc}"
                 row.update({
                     "profile": "legacy22_noquill",
                     "contents_len": len(contents),
@@ -257,7 +263,8 @@ def main() -> int:
                     "high_byte_sha256": sha256(bytes(high)) if high else None,
                     "summary_codepage": codepage_from_property_set(ole, SUMMARY),
                     "document_summary_codepage": codepage_from_property_set(ole, DOCSUMMARY),
-                    "font_pointer_lists": parse_font_pointer_list(contents),
+                    "font_pointer_lists": font_pointer_lists,
+                    "font_pointer_error": font_pointer_error,
                 })
                 rows.append(row)
         except Exception as exc:
@@ -290,6 +297,9 @@ def main() -> int:
             high_byte_counts[f"0x{value:02x}"] += 1
         high_byte_set_counts[",".join(f"{value:02x}" for value in r["high_byte_distinct"])] += 1
     error_counts = Counter(r["error"] for r in errors)
+    font_pointer_error_counts = Counter(
+        r["font_pointer_error"] for r in rows if r.get("font_pointer_error")
+    )
 
     summary = {
         "schema": "chaptera.legacy22-codepage-signal-profile.v1",
@@ -303,6 +313,8 @@ def main() -> int:
         "high_byte_set_counts_on_non_ascii": dict(sorted(high_byte_set_counts.items())),
         "profile_error_count": len(errors),
         "profile_error_counts": dict(sorted(error_counts.items())),
+        "font_pointer_error_count": sum(font_pointer_error_counts.values()),
+        "font_pointer_error_counts": dict(sorted(font_pointer_error_counts.items())),
         "evidence_boundary": (
             "OLE Property Set PID_CODEPAGE governs strings in that property set. "
             "It is profiled here only as a persisted discriminator candidate; "
