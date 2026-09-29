@@ -28,7 +28,6 @@ pub struct BoundedWmfMetafile {
     pub info: WmfMetafileInfo,
 }
 
-
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     let raw = bytes.get(offset..offset.checked_add(2)?)?;
     Some(u16::from_le_bytes([raw[0], raw[1]]))
