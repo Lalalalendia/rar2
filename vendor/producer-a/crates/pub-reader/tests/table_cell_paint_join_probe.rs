@@ -15,7 +15,13 @@ fn source_hash(bytes: &[u8]) -> Sha256Digest {
     Sha256Digest::from_bytes(raw)
 }
 
-fn project_axis(value: i64, source_start: i64, source_end: i64, target_start: i64, target_end: i64) -> Option<i64> {
+fn project_axis(
+    value: i64,
+    source_start: i64,
+    source_end: i64,
+    target_start: i64,
+    target_end: i64,
+) -> Option<i64> {
     let source_len = i128::from(source_end) - i128::from(source_start);
     let target_len = i128::from(target_end) - i128::from(target_start);
     if source_len <= 0 || target_len <= 0 {
@@ -84,8 +90,11 @@ fn sample_table_cell_officeart_geometry_join_probe() {
             .expect("CHAPTERA_TABLE_CELL_PAINT_FIXTURE"),
     );
     let bytes = fs::read(&fixture).expect("read pinned Sample.pub");
-    let build = pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash(&bytes))
-        .expect("Sample.pub mature SourceGraph");
+    let build = pub_reader::build_mature_0x2c_source_graph(
+        Cursor::new(bytes.as_slice()),
+        source_hash(&bytes),
+    )
+    .expect("Sample.pub mature SourceGraph");
 
     let escher = pub_cfb::read_stream_reader(
         Cursor::new(bytes.as_slice()),
@@ -108,7 +117,10 @@ fn sample_table_cell_officeart_geometry_join_probe() {
             .iter()
             .filter(|field| field.id == pub_escher::PUBLISHER_FIELD_SHAPE_ID)
         {
-            by_contents_seq.entry(field.value).or_default().push(shape_index);
+            by_contents_seq
+                .entry(field.value)
+                .or_default()
+                .push(shape_index);
         }
     }
 
@@ -159,7 +171,8 @@ fn sample_table_cell_officeart_geometry_join_probe() {
             .filter(|shape| shape.parent_group_shape_source.as_ref() == Some(&owner.source))
             .filter_map(|shape| {
                 let child_anchor = shape.child_anchor.as_ref()?;
-                let projected = projected_child_bounds(child_anchor, group_rect, node.header.bounds)?;
+                let projected =
+                    projected_child_bounds(child_anchor, group_rect, node.header.bounds)?;
                 let fill_values = shape
                     .fopts
                     .iter()
@@ -265,7 +278,10 @@ fn sample_table_cell_officeart_geometry_join_probe() {
         }));
     }
 
-    assert!(!tables.is_empty(), "Sample.pub exposes at least one bounded simple table");
+    assert!(
+        !tables.is_empty(),
+        "Sample.pub exposes at least one bounded simple table"
+    );
     let receipt = serde_json::json!({
         "schema": "chaptera.pub-table-cell-officeart-join-probe.v1",
         "source_sha256": Sha256::digest(&bytes)
