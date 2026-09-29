@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use pub_contents::{
-    detect_family, parse_legacy_0x22_directory, parse_legacy_0x22_resolved_tables, ContentsFamily,
+    detect_family, parse_legacy_0x22_directory, parse_legacy_0x22_resolved_tables,
+    parse_legacy_0x22_table_catalog, parse_preamble, ContentsFamily,
     Legacy0x22TableCatalogReadError, Legacy0x22TableTextReadError, LEGACY_0X22_TABLE_CHUNK_TYPE,
 };
 use pub_core::StreamPath;
@@ -25,6 +26,9 @@ struct ErrorAggregate {
     detail_counts: BTreeMap<String, usize>,
     raw_0001_per_file_counts: BTreeMap<usize, usize>,
     reader_target_per_file_counts: BTreeMap<usize, usize>,
+    revision_counts: BTreeMap<u16, usize>,
+    raw_header_profile_counts: BTreeMap<String, usize>,
+    materialized_object_profile_counts: BTreeMap<String, usize>,
     example_source_sha256: Vec<String>,
 }
 
@@ -117,6 +121,78 @@ fn table_error_kind(error: &Legacy0x22TableCatalogReadError) -> &'static str {
     }
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let raw = bytes.get(offset..offset.checked_add(2)?)?;
+    Some(u16::from_le_bytes([raw[0], raw[1]]))
+}
+
+fn raw_header_profiles(
+    contents: &[u8],
+    directory: &pub_contents::Legacy0x22Directory,
+) -> BTreeMap<String, usize> {
+    let mut profiles = BTreeMap::new();
+    for entry in directory
+        .entries
+        .iter()
+        .filter(|entry| entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE)
+    {
+        let Ok(start) = usize::try_from(entry.chunk_source.offset) else {
+            continue;
+        };
+        let Ok(len) = usize::try_from(entry.chunk_source.len) else {
+            continue;
+        };
+        let Some(chunk) = contents.get(start..start.saturating_add(len)) else {
+            continue;
+        };
+        let values = [44usize, 46, 48, 50, 52, 54, 56, 58, 60]
+            .into_iter()
+            .map(|offset| {
+                read_u16(chunk, offset)
+                    .map(|value| format!("{offset}:{value}"))
+                    .unwrap_or_else(|| format!("{offset}:missing"))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let data_delta = chunk.get(3).copied().unwrap_or(0);
+        let data_offset = usize::from(data_delta);
+        let list_count = read_u16(chunk, data_offset)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "missing".into());
+        let list_record_size = read_u16(chunk, data_offset + 4)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "missing".into());
+        let key = format!(
+            "len={len}:data={data_delta}:count={list_count}:record={list_record_size}:{values}"
+        );
+        *profiles.entry(key).or_default() += 1;
+    }
+    profiles
+}
+
+fn materialized_object_profiles(
+    stream: StreamPath,
+    contents: &[u8],
+) -> BTreeMap<String, usize> {
+    let mut profiles = BTreeMap::new();
+    if let Ok(catalog) = parse_legacy_0x22_table_catalog(stream, contents) {
+        for table in catalog.table_chunks {
+            let key = format!(
+                "materialized={}:cols={}:rows={}:local_text={}:u16_48={}:axis_count={}:record={}",
+                table.is_materialized_grid(),
+                table.column_count,
+                table.row_count,
+                table.local_text_index,
+                table.observed_header_u16_at_48,
+                table.list_header.count,
+                table.list_header.record_size,
+            );
+            *profiles.entry(key).or_default() += 1;
+        }
+    }
+    profiles
+}
+
 fn table_error_detail(error: &Legacy0x22TableCatalogReadError) -> Option<String> {
     match error {
         Legacy0x22TableCatalogReadError::TableCountMismatch {
@@ -195,6 +271,9 @@ fn main() -> Result<()> {
             directory_unavailable += 1;
             continue;
         };
+        let revision = parse_preamble(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
+            .ok()
+            .map(|preamble| preamble.serialization_revision);
         let raw_0001_count = directory
             .entries
             .iter()
@@ -234,6 +313,21 @@ fn main() -> Result<()> {
                     aggregate.reader_target_file_count += 1;
                     aggregate.reader_target_residual_count += reader_target_count;
                 }
+                if let Some(revision) = revision {
+                    *aggregate.revision_counts.entry(revision).or_default() += 1;
+                }
+                for (profile, count) in raw_header_profiles(&contents, &directory) {
+                    *aggregate.raw_header_profile_counts.entry(profile).or_default() += count;
+                }
+                for (profile, count) in materialized_object_profiles(
+                    StreamPath(CONTENTS_STREAM_PATH.into()),
+                    &contents,
+                ) {
+                    *aggregate
+                        .materialized_object_profile_counts
+                        .entry(profile)
+                        .or_default() += count;
+                }
                 *aggregate
                     .raw_0001_per_file_counts
                     .entry(raw_0001_count)
@@ -269,6 +363,9 @@ fn main() -> Result<()> {
                 "detail_counts": aggregate.detail_counts,
                 "raw_0001_per_file_counts": aggregate.raw_0001_per_file_counts,
                 "reader_target_per_file_counts": aggregate.reader_target_per_file_counts,
+                "revision_counts": aggregate.revision_counts,
+                "raw_header_profile_counts": aggregate.raw_header_profile_counts,
+                "materialized_object_profile_counts": aggregate.materialized_object_profile_counts,
                 "example_source_sha256": aggregate.example_source_sha256,
             })
         })
