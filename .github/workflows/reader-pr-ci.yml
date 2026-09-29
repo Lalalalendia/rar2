@@ -131,8 +131,133 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: git fetch --no-tags origin "$HEAD_SHA"
 
-      - name: Test PR fanout classifier
+      - name: Test base-authority PR fanout classifier
         run: python tools/ci/test_reader_pr_fanout.py
+
+      - name: Test PR-head fanout classifier in isolation
+        if: ${{ github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          if ! grep -Eq '^(tools/ci/reader_pr_fanout.py|tools/ci/test_reader_pr_fanout.py)        name: Classify changed paths once
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BASE_SHA"
+          if [[ -z "$base" ]]; then
+            base="$(git rev-parse "$HEAD_SHA^")"
+          fi
+          python tools/ci/reader_pr_fanout.py \
+            --base "$base" \
+            --head "$HEAD_SHA" \
+            --receipt target/reader-pr-ci/fanout.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reader-pr-fanout-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/reader-pr-ci/fanout.json
+          if-no-files-found: error
+
+  tier-a:
+    name: Reader consumer Tier A
+    needs: classify
+    if: needs.classify.outputs.tier_a == 'true'
+    uses: ./.github/workflows/reader-consumer-preflight.yml
+
+  reader-windows-smoke:
+    name: Reader Windows shared-core smoke
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.reader_windows_smoke == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-windows-smoke.yml
+
+  reader-windows:
+    name: Reader Windows product
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-windows.yml
+
+  editor-windows:
+    name: Editor Windows product
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.editor_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-desktop-windows.yml
+
+  visual-oracle:
+    name: Reader visual oracle
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/carlton-reader-visual-oracle.yml
+
+  typography-golden:
+    name: Reader typography golden
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.typography_golden == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/reader-typography-golden.yml
+
+  android-core:
+    name: Android core portability
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.android_core == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/mobile-reader-android-core-portability.yml
+
+  android-local-open:
+    name: Android local open
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/mobile-reader-android-local-open.yml
+
+  android-render:
+    name: Android render
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.android == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/mobile-reader-android-render.yml
+
+  web:
+    name: Web real Chromium
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.web == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/web-acceptance-real-chromium.yml
+
+  local-portable:
+    name: Local portable Windows
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.local_portable == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-local-portable-windows.yml
+
+  installer:
+    name: Reader installer
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.installer == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-reader-installer.yml
+
+  path-identity:
+    name: Windows path identity
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.path_identity == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-win-path-identity.yml
+
+  update-accept:
+    name: Windows update acceptance
+    needs: [classify, tier-a]
+    if: ${{ always() && needs.classify.outputs.update_accept == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/chaptera-win-update-accept.yml
+ <<<"$changed"; then
+            echo "::notice::PR does not change the fanout classifier; base-authority tests are sufficient."
+            exit 0
+          fi
+
+          tmp="$(mktemp -d)"
+          git show "$HEAD_SHA:tools/ci/reader_pr_fanout.py" > "$tmp/reader_pr_fanout.py"
+          git show "$HEAD_SHA:tools/ci/test_reader_pr_fanout.py" > "$tmp/test_reader_pr_fanout.py"
+          python "$tmp/test_reader_pr_fanout.py"
 
       - id: scope
         name: Classify changed paths once
