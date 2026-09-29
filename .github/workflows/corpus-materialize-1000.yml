@@ -11,7 +11,7 @@ on:
       - 'tools/corpus/test_materialize_corpus_1000.py'
       - 'tools/corpus/materialization_container_first_wave.csv'
       - 'tools/corpus/receipts/container-first-wave-425-2026-09-29.json'
-      - 'tools/corpus/receipts/current-rar-1521.sha256.txt'
+      - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
       - '.github/workflows/corpus-materialize-1000.yml'
 
 permissions:
@@ -82,7 +82,7 @@ jobs:
       - name: Build strict 1000+ corpus
         run: |
           set -euo pipefail
-          python tools/corpus/materialize_corpus_1000.py             --input lalamu_625=_donor/lalamu/pub-corpus/corpus             --input historical_container_first_wave=out/container/pub             --authority tools/corpus/receipts/current-rar-1521.sha256.txt             --out out/materialized             --min-count 1000
+          python tools/corpus/materialize_corpus_1000.py             --input lalamu_625=_donor/lalamu/pub-corpus/corpus             --input historical_container_first_wave=out/container/pub             --authority tools/corpus/receipts/current-rar-1556.sha256.txt             --out out/materialized             --min-count 1000
           cat out/materialized/summary.json
 
       - name: Upload materialized corpus and receipts
