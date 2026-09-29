@@ -451,7 +451,7 @@ fn materialize_legacy_noquill_child(
     };
     let (table_story, table_source) = if let Some(table) = resolved_table {
         let Some((story, source)) =
-            build_legacy_table_projection(graph, source_hash, table, diagnostics)?
+            build_legacy_table_projection(graph, source_hash, table, bounds, diagnostics)?
         else {
             return Ok(());
         };
@@ -572,6 +572,7 @@ fn build_legacy_table_projection(
     graph: &mut PubSourceGraph,
     source_hash: &Sha256Digest,
     table: &Legacy0x22ResolvedTable,
+    table_bounds: RectEmu,
     diagnostics: &mut Vec<PubBridgeDiagnostic>,
 ) -> Result<Option<(PubTableStoryOwnershipSource, PubTableSource)>> {
     let rows = u32::from(table.object.row_count);
@@ -624,6 +625,46 @@ fn build_legacy_table_projection(
             column: index_u32 % columns,
         };
         let id = derive_legacy_table_cell_id(source_hash, chunk_id, cell.cell_index)?;
+        let column_index =
+            usize::try_from(address.column).context("legacy table column index overflow")?;
+        let row_index =
+            usize::try_from(address.row).context("legacy table row index overflow")?;
+        let column = table
+            .object
+            .columns
+            .get(column_index)
+            .context("legacy table column extent missing")?;
+        let row = table
+            .object
+            .rows
+            .get(row_index)
+            .context("legacy table row extent missing")?;
+        let column_start_emu = if column_index == 0 {
+            0
+        } else {
+            table.object.columns[column_index - 1].cumulative_emu
+        };
+        let row_start_emu = if row_index == 0 {
+            0
+        } else {
+            table.object.rows[row_index - 1].cumulative_emu
+        };
+        let cell_x = table_bounds
+            .x
+            .get()
+            .checked_add(i64::from(column_start_emu))
+            .context("legacy table cell x overflow")?;
+        let cell_y = table_bounds
+            .y
+            .get()
+            .checked_add(i64::from(row_start_emu))
+            .context("legacy table cell y overflow")?;
+        let cell_bounds = RectEmu::new(
+            LengthEmu::new(cell_x),
+            LengthEmu::new(cell_y),
+            LengthEmu::new(i64::from(column.extent_emu)),
+            LengthEmu::new(i64::from(row.extent_emu)),
+        );
         let key = format!("contents/0x22/table/{chunk_id}/cell/{}", cell.cell_index);
         cells.push(PubTableCellSource {
             id,
@@ -636,6 +677,7 @@ fn build_legacy_table_projection(
             }),
             utf16_start,
             utf16_end,
+            bounds: Some(cell_bounds),
             source_refs: vec![
                 source_ref(
                     &graph.source,
@@ -649,9 +691,27 @@ fn build_legacy_table_projection(
                 source_ref(
                     &graph.source,
                     &cell.separator_source,
-                    Some(key),
+                    Some(key.clone()),
                     Some("legacy_table_cell_boundary".into()),
                     SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &column.record_source,
+                    Some(key.clone()),
+                    Some("legacy_table_column_extent".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &row.record_source,
+                    Some(key),
+                    Some("legacy_table_row_extent".into()),
+                    SourceRole::Projection,
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
                 ),
