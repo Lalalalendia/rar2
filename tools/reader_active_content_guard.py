@@ -22,6 +22,7 @@ RUNTIME_SOURCE_ROOTS = (
     Path("vendor/producer-a/crates/pub-viewer/src"),
     Path("vendor/producer-a/crates/pub-editor/src"),
     Path("crates/chaptera-viewer-render-plan/src"),
+    Path("crates/chaptera-process-launch/src"),
 )
 
 RUNTIME_MANIFESTS = (
@@ -29,6 +30,7 @@ RUNTIME_MANIFESTS = (
     Path("vendor/producer-a/crates/pub-viewer/Cargo.toml"),
     Path("vendor/producer-a/crates/pub-editor/Cargo.toml"),
     Path("crates/chaptera-viewer-render-plan/Cargo.toml"),
+    Path("crates/chaptera-process-launch/Cargo.toml"),
 )
 
 FORBIDDEN_RUNTIME_TOKENS = (
@@ -63,6 +65,12 @@ PROCESS_LAUNCH_TOKENS = ("Command::new(", "std::process::Command::new(")
 ALLOWED_DESKTOP_PROCESS_CONTEXT = (
     '--product-smoke-v1',
     'activated Reader health smoke',
+)
+PROCESS_AUTHORITY_PATH = Path("crates/chaptera-process-launch/src/lib.rs")
+PROCESS_AUTHORITY_CONTEXT = (
+    "self.revalidate()?",
+    "Command::new(&self.executable)",
+    ".current_dir(&self.working_directory).env_clear()",
 )
 
 
@@ -133,43 +141,62 @@ def scan_network_dependencies(repo_root: Path) -> list[str]:
 
 
 def scan_desktop_process_launch(repo_root: Path) -> list[str]:
-    desktop_root = repo_root / "apps/chaptera-desktop/src"
+    roots = (
+        repo_root / "apps/chaptera-desktop/src",
+        repo_root / "crates/chaptera-process-launch/src",
+    )
     occurrences: list[tuple[Path, int, str]] = []
-    for path in sorted(desktop_root.rglob("*.rs")):
-        text = path.read_text(encoding="utf-8")
-        for token in PROCESS_LAUNCH_TOKENS:
-            start = 0
-            while True:
-                index = text.find(token, start)
-                if index < 0:
-                    break
-                occurrences.append((path, index, token))
-                start = index + len(token)
+    for root in roots:
+        for path in sorted(root.rglob("*.rs")):
+            text = path.read_text(encoding="utf-8")
+            for token in PROCESS_LAUNCH_TOKENS:
+                start = 0
+                while True:
+                    index = text.find(token, start)
+                    if index < 0:
+                        break
+                    occurrences.append((path, index, token))
+                    start = index + len(token)
 
-    if len(occurrences) != 1:
+    if len(occurrences) != 2:
         rendered = ", ".join(
             f"{path.relative_to(repo_root)}:{token}" for path, _, token in occurrences
         ) or "none"
         return [
-            "desktop production process-launch surface changed: expected exactly one "
-            f"reviewed updater health-smoke launch, found {len(occurrences)} ({rendered})"
+            "reviewed process-launch surface changed: expected updater health-smoke "
+            f"plus shared launch authority, found {len(occurrences)} ({rendered})"
         ]
 
-    path, index, token = occurrences[0]
-    relative = path.relative_to(repo_root)
-    if relative != Path("apps/chaptera-desktop/src/main.rs"):
+    by_relative = {
+        path.relative_to(repo_root): (path, index, token)
+        for path, index, token in occurrences
+    }
+    desktop_path = Path("apps/chaptera-desktop/src/main.rs")
+    if set(by_relative) != {desktop_path, PROCESS_AUTHORITY_PATH}:
+        rendered = ", ".join(str(path) for path in sorted(by_relative))
         return [
-            f"{relative}: reviewed process launch moved outside the admitted updater "
-            "health-smoke location"
+            "reviewed process launches moved outside admitted locations: "
+            f"{rendered}"
         ]
 
+    path, index, token = by_relative[desktop_path]
     text = path.read_text(encoding="utf-8")
     window = text[max(0, index - 2500) : index + 3500]
     missing = [marker for marker in ALLOWED_DESKTOP_PROCESS_CONTEXT if marker not in window]
     if missing:
         return [
-            f"{relative}: the sole {token} no longer proves the fixed Chaptera "
+            f"{desktop_path}: the sole {token} no longer proves the fixed Chaptera "
             f"product-smoke context; missing markers: {missing}"
+        ]
+
+    path, index, token = by_relative[PROCESS_AUTHORITY_PATH]
+    text = path.read_text(encoding="utf-8")
+    window = text[max(0, index - 1800) : index + 2600]
+    missing = [marker for marker in PROCESS_AUTHORITY_CONTEXT if marker not in window]
+    if missing:
+        return [
+            f"{PROCESS_AUTHORITY_PATH}: the sole {token} no longer proves canonical/hash "
+            f"revalidation plus explicit CWD/env-clear authority; missing markers: {missing}"
         ]
     return []
 
@@ -235,7 +262,7 @@ def main() -> int:
 
     print(
         "Reader active-content inertness guard: no COM/OLE/shell/network activation "
-        "surface found; one fixed Chaptera updater health-smoke process launch admitted."
+        "surface found; updater health-smoke and one shared bound launch authority admitted."
     )
     return 0
 
