@@ -69,8 +69,7 @@ pub fn validate_wmf_metafile(bytes: &[u8]) -> Result<WmfMetafileInfo> {
         bail!("unsupported WMF metafile type {metafile_type}");
     }
 
-    let header_words =
-        read_u16(bytes, header_offset + 2).context("missing WMF HeaderSize")?;
+    let header_words = read_u16(bytes, header_offset + 2).context("missing WMF HeaderSize")?;
     if header_words != META_HEADER_WORDS {
         bail!("invalid WMF HeaderSize {header_words}");
     }
@@ -80,8 +79,7 @@ pub fn validate_wmf_metafile(bytes: &[u8]) -> Result<WmfMetafileInfo> {
         bail!("unsupported WMF version {version:#06x}");
     }
 
-    let declared_words =
-        read_u32(bytes, header_offset + 6).context("missing WMF declared size")?;
+    let declared_words = read_u32(bytes, header_offset + 6).context("missing WMF declared size")?;
     let declared_bytes = usize::try_from(declared_words)
         .context("WMF declared word count overflow")?
         .checked_mul(2)
@@ -103,8 +101,7 @@ pub fn validate_wmf_metafile(bytes: &[u8]) -> Result<WmfMetafileInfo> {
 
     let object_count =
         read_u16(bytes, header_offset + 10).context("missing WMF NumberOfObjects")?;
-    let max_record_words =
-        read_u32(bytes, header_offset + 12).context("missing WMF MaxRecord")?;
+    let max_record_words = read_u32(bytes, header_offset + 12).context("missing WMF MaxRecord")?;
     if max_record_words < MIN_RECORD_WORDS {
         bail!("WMF MaxRecord is smaller than a record header");
     }
@@ -135,8 +132,7 @@ pub fn validate_wmf_metafile(bytes: &[u8]) -> Result<WmfMetafileInfo> {
             bail!("WMF record exceeds declared metafile size");
         }
 
-        let function =
-            read_u16(bytes, offset + 4).context("truncated WMF RecordFunction")?;
+        let function = read_u16(bytes, offset + 4).context("truncated WMF RecordFunction")?;
         record_count += 1;
         offset = record_end;
 
