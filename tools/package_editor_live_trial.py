@@ -106,7 +106,7 @@ def package_editor(
     agent_catalog_entry: str = "agent-control-v1.catalog.json",
     third_party_notices: pathlib.Path = DEFAULT_THIRD_PARTY_NOTICES,
     third_party_notices_entry: str = "THIRD-PARTY-NOTICES.txt",
-) -> dict[str, str | int]:
+) -> dict[str, object]:
     if not editor_exe.is_file():
         raise RuntimeError(f"Editor executable does not exist: {editor_exe}")
     if editor_exe.suffix.lower() != ".exe":
