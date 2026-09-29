@@ -86,7 +86,10 @@ READER_DESKTOP = (
     "apps/chaptera-desktop/src/render_backend.rs",
 )
 
-READER_WINDOWS = READER_DESKTOP + (
+READER_WINDOWS = READER_SHARED + READER_DESKTOP + (
+    "crates/chaptera-update-engine/**",
+    "crates/chaptera-update-orchestrator/**",
+    "crates/chaptera-update-handoff/**",
     "packages/product/reader-portable/**",
     "packages/product/desktop-suite/**",
     "tools/package_reader_portable.py",
