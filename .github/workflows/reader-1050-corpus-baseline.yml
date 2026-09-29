@@ -406,6 +406,14 @@ jobs:
           unavailable_file_count = 0
           raster_rejection_class_counts = {}
           raster_rejection_detail_counts = {}
+          pattern_selected_count = 0
+          region_selected_count = 0
+          region_selectclip_same_slot_count = 0
+          region_deleted_after_select_count = 0
+          pattern_profiles = {}
+          pattern_fill_record_counts = {}
+          region_profiles = {}
+          region_next_record_counts = {}
 
           for row in rows:
               funnel = row.get("legacy_ole_preview_funnel")
@@ -447,6 +455,32 @@ jobs:
                   raster_rejection_detail_counts[name] = (
                       raster_rejection_detail_counts.get(name, 0) + value
                   )
+
+              semantic_profiles = funnel.get("object_semantic_profiles") or []
+              assert isinstance(semantic_profiles, list), funnel
+              for profile in semantic_profiles:
+                  if not isinstance(profile, dict) or profile.get("available") is not True:
+                      continue
+                  pattern_selected_count += int(profile.get("pattern_selected_count") or 0)
+                  region_selected_count += int(profile.get("region_selected_count") or 0)
+                  region_selectclip_same_slot_count += int(
+                      profile.get("region_selectclip_same_slot_count") or 0
+                  )
+                  region_deleted_after_select_count += int(
+                      profile.get("region_deleted_after_select_count") or 0
+                  )
+                  for source_name, target in [
+                      ("pattern_profiles", pattern_profiles),
+                      ("pattern_fill_record_counts", pattern_fill_record_counts),
+                      ("region_profiles", region_profiles),
+                      ("region_next_record_counts", region_next_record_counts),
+                  ]:
+                      values = profile.get(source_name) or {}
+                      assert isinstance(values, dict), profile
+                      for name, value in values.items():
+                          value = int(value)
+                          assert value >= 0, (source_name, name, value)
+                          target[name] = target.get(name, 0) + value
 
               admitted = int(funnel.get("admitted_node_count") or 0)
               scan_success = int(funnel.get("scan_success_node_count") or 0)
@@ -490,6 +524,20 @@ jobs:
               "raster_rejection_detail_counts": dict(
                   sorted(raster_rejection_detail_counts.items())
               ),
+              "wmf_object_semantic_profile": {
+                  "pattern_selected_count": pattern_selected_count,
+                  "pattern_profiles": dict(sorted(pattern_profiles.items())),
+                  "pattern_fill_record_counts": dict(
+                      sorted(pattern_fill_record_counts.items())
+                  ),
+                  "region_selected_count": region_selected_count,
+                  "region_profiles": dict(sorted(region_profiles.items())),
+                  "region_next_record_counts": dict(
+                      sorted(region_next_record_counts.items())
+                  ),
+                  "region_selectclip_same_slot_count": region_selectclip_same_slot_count,
+                  "region_deleted_after_select_count": region_deleted_after_select_count,
+              },
               "evidence_boundary": (
                   "source-free aggregate product-funnel receipt from the existing exact-1050 "
                   "Reader pass; no source paths, Object storage numbers, OlePres ordinals, "
