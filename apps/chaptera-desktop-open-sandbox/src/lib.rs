@@ -43,16 +43,6 @@ pub fn launch_contained(
     platform::launch_contained(executable, request, timeout)
 }
 
-/// Diagnostic control only: launch a trusted no-I/O probe with the exact
-/// Microsoft-documented minimal AppContainer shape (SECURITY_CAPABILITIES only).
-/// This must never carry untrusted PUB bytes or become a production fallback.
-pub fn launch_minimal_appcontainer_probe_for_diagnostic(
-    executable: &Path,
-    timeout: Duration,
-) -> Result<u32> {
-    platform::launch_minimal_appcontainer_probe_for_diagnostic(executable, timeout)
-}
-
 #[cfg(not(windows))]
 mod platform {
     use super::*;
@@ -65,12 +55,6 @@ mod platform {
         bail!("Windows containment launcher is unavailable on this platform")
     }
 
-    pub fn launch_minimal_appcontainer_probe_for_diagnostic(
-        _executable: &Path,
-        _timeout: Duration,
-    ) -> Result<u32> {
-        bail!("Windows AppContainer diagnostic is unavailable on this platform")
-    }
 }
 
 #[cfg(windows)]
@@ -413,10 +397,6 @@ mod platform {
         encode_environment(entries)
     }
 
-    fn full_parent_environment_for_diagnostic() -> Vec<u16> {
-        encode_environment(std::env::vars_os().collect())
-    }
-
     fn derive_sid(profile_name: &str) -> Result<Sid> {
         let name = wide_str(profile_name);
         let mut sid = null_mut();
@@ -425,104 +405,6 @@ mod platform {
             bail!("DeriveAppContainerSidFromAppContainerName failed: HRESULT 0x{hr:08X}");
         }
         Ok(Sid(sid))
-    }
-
-    pub fn launch_minimal_appcontainer_probe_for_diagnostic(
-        executable: &Path,
-        timeout: Duration,
-    ) -> Result<u32> {
-        let executable = executable
-            .canonicalize()
-            .with_context(|| format!("canonicalize {}", executable.display()))?;
-        if !executable.is_absolute() || !executable.is_file() {
-            bail!("diagnostic executable must be an existing absolute file");
-        }
-        let cwd = executable
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("diagnostic executable has no parent"))?
-            .to_path_buf();
-
-        let profile = AppContainerProfile::ensure(
-            PROFILE_NAME,
-            PROFILE_DISPLAY,
-            Some("Chaptera source-path-free desktop PUB parser"),
-        )
-        .context("ensure AppContainer profile")?;
-
-        let access = AccessMask(FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
-        grant_to_package(ResourcePath::Directory(cwd), &profile.sid, access)
-            .context("grant package read/execute to diagnostic directory")?;
-        grant_to_package(ResourcePath::File(executable.clone()), &profile.sid, access)
-            .context("grant package read/execute to diagnostic executable")?;
-
-        let sid = derive_sid(&profile.name)?;
-        let security_capabilities = SECURITY_CAPABILITIES {
-            AppContainerSid: sid.0,
-            Capabilities: null_mut(),
-            CapabilityCount: 0,
-            Reserved: 0,
-        };
-
-        let mut attributes = AttributeList::new(1)?;
-        attributes.set(
-            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-            &security_capabilities,
-        )?;
-
-        let executable_w = wide(executable.as_os_str());
-        let mut command_line = wide(OsStr::new(&format!("\"{}\"", executable.display())));
-        let mut startup = STARTUPINFOEXW::default();
-        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-        startup.lpAttributeList = attributes.raw();
-
-        let mut process_info: PROCESS_INFORMATION = unsafe { zeroed() };
-        let ok = unsafe {
-            CreateProcessW(
-                executable_w.as_ptr(),
-                command_line.as_mut_ptr(),
-                null(),
-                null(),
-                0,
-                EXTENDED_STARTUPINFO_PRESENT,
-                null(),
-                null(),
-                &startup.StartupInfo,
-                &mut process_info,
-            )
-        };
-        if ok == 0 {
-            bail!(
-                "Microsoft-minimal AppContainer CreateProcessW failed: Win32 error {}",
-                unsafe { GetLastError() }
-            );
-        }
-
-        let process = Handle::new(process_info.hProcess, "diagnostic process handle")?;
-        let thread_handle = Handle::new(process_info.hThread, "diagnostic thread handle")?;
-        drop(thread_handle);
-
-        let timeout_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX - 1);
-        let wait = unsafe { WaitForSingleObject(process.raw(), timeout_ms) };
-        if wait == WAIT_TIMEOUT_VALUE {
-            unsafe {
-                TerminateProcess(process.raw(), 124);
-                WaitForSingleObject(process.raw(), 5_000);
-            }
-            bail!("Microsoft-minimal AppContainer bootstrap timed out");
-        }
-        if wait != WAIT_OBJECT_0_VALUE {
-            bail!("Microsoft-minimal AppContainer wait failed: {wait}");
-        }
-
-        let mut exit_code = u32::MAX;
-        let ok = unsafe { GetExitCodeProcess(process.raw(), &mut exit_code) };
-        if ok == 0 {
-            bail!(
-                "GetExitCodeProcess(minimal AppContainer) failed: Win32 error {}",
-                unsafe { GetLastError() }
-            );
-        }
-        Ok(exit_code)
     }
 
     fn get_token_u32(token: HANDLE, class: i32) -> Result<u32> {
@@ -711,37 +593,11 @@ mod platform {
         let job = configure_job()?;
         let pipes = make_pipe_set()?;
 
-        let diagnostic_policy = std::env::var("CHAPTERA_SANDBOX_DIAG_POLICY").ok();
-        let strict_mitigation_policy = MITIGATION_STRICT_HANDLE_ALWAYS_ON
+        let lpac_policy = PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
+        let mitigation_policy = MITIGATION_STRICT_HANDLE_ALWAYS_ON
             | MITIGATION_WIN32K_DISABLE_ALWAYS_ON
             | MITIGATION_EXTENSION_POINT_DISABLE_ALWAYS_ON;
-        let (lpac_policy, mitigation_policy, require_strict_mitigations) =
-            match diagnostic_policy.as_deref() {
-                Some("lpac-base") => (PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT, 0, false),
-                Some("appcontainer-strict") => (0, strict_mitigation_policy, true),
-                Some("appcontainer-base") => (0, 0, false),
-                Some("lpac-no-win32k") => (
-                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
-                    strict_mitigation_policy & !MITIGATION_WIN32K_DISABLE_ALWAYS_ON,
-                    false,
-                ),
-                Some("lpac-no-extension") => (
-                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
-                    strict_mitigation_policy & !MITIGATION_EXTENSION_POINT_DISABLE_ALWAYS_ON,
-                    false,
-                ),
-                Some("lpac-no-strict-handle") => (
-                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
-                    strict_mitigation_policy & !MITIGATION_STRICT_HANDLE_ALWAYS_ON,
-                    false,
-                ),
-                Some(other) => bail!("unknown sandbox diagnostic policy: {other}"),
-                None => (
-                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
-                    strict_mitigation_policy,
-                    true,
-                ),
-            };
+        let require_strict_mitigations = true;
         let child_policy = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
         let handle_list = [
             pipes.child_stdin.raw(),
@@ -767,16 +623,8 @@ mod platform {
         let executable_w = wide(executable.as_os_str());
         let cwd_w = wide(cwd.as_os_str());
         let mut command_line = wide(OsStr::new(&format!("\"{}\"", executable.display())));
-        let environment = if std::env::var_os("CHAPTERA_SANDBOX_DIAG_FULL_ENV").is_some() {
-            full_parent_environment_for_diagnostic()
-        } else {
-            minimal_environment(&cwd)
-        };
-        let cwd_ptr = if std::env::var_os("CHAPTERA_SANDBOX_DIAG_NO_CWD").is_some() {
-            null()
-        } else {
-            cwd_w.as_ptr()
-        };
+        let environment = minimal_environment(&cwd);
+        let cwd_ptr = cwd_w.as_ptr();
 
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
@@ -804,52 +652,9 @@ mod platform {
             )
         };
         if ok == 0 {
-            let first_error = unsafe { GetLastError() };
-            if first_error == 203 && std::env::var_os("CHAPTERA_SANDBOX_DIAG_203").is_some() {
-                // Diagnostic only: the probe executable is Chaptera-owned and no
-                // untrusted PUB bytes have been written yet. Retry once with the
-                // full parent environment to distinguish a remaining bounded-env
-                // dependency from deeper AppContainer/runner/attribute failure.
-                // Even if this retry launches, kill the Job immediately and fail
-                // the product launch; this can never become a production fallback.
-                let diagnostic_environment = full_parent_environment_for_diagnostic();
-                let mut diagnostic_command_line =
-                    wide(OsStr::new(&format!("\"{}\"", executable.display())));
-                let mut diagnostic_info: PROCESS_INFORMATION = unsafe { zeroed() };
-                let diagnostic_ok = unsafe {
-                    CreateProcessW(
-                        executable_w.as_ptr(),
-                        diagnostic_command_line.as_mut_ptr(),
-                        null(),
-                        null(),
-                        1,
-                        creation_flags,
-                        diagnostic_environment.as_ptr().cast(),
-                        cwd_ptr,
-                        &startup.StartupInfo,
-                        &mut diagnostic_info,
-                    )
-                };
-                if diagnostic_ok != 0 {
-                    let diagnostic_process =
-                        Handle::new(diagnostic_info.hProcess, "diagnostic process handle")?;
-                    let diagnostic_thread =
-                        Handle::new(diagnostic_info.hThread, "diagnostic thread handle")?;
-                    drop(diagnostic_thread);
-                    unsafe {
-                        TerminateJobObject(job.raw(), 203);
-                        WaitForSingleObject(diagnostic_process.raw(), 5_000);
-                    }
-                    bail!(
-                        "CreateProcessW failed closed: Win32 error 203; diagnostic full-parent environment launched successfully"
-                    );
-                }
-                let diagnostic_error = unsafe { GetLastError() };
-                bail!(
-                    "CreateProcessW failed closed: Win32 error 203; diagnostic full-parent environment also failed: Win32 error {diagnostic_error}"
-                );
-            }
-            bail!("CreateProcessW failed closed: Win32 error {first_error}");
+            bail!("CreateProcessW failed closed: Win32 error {}", unsafe {
+                GetLastError()
+            });
         }
 
         let process = Handle::new(process_info.hProcess, "process handle")?;
