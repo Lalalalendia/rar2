@@ -8,6 +8,10 @@ on:
       - "tools/windows/pub-runtime/**"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -17,32 +21,38 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - name: Validate SYNTH blank reduction R1 packet
+      - name: Validate every committed experiment packet
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python tools/research-runner/validate_packet.py `
-            --packet tools/research-runner/experiments/synth-blank-reduce-r1.packet.json `
-            --expected-environment publisher-2019
+          $packets = @(Get-ChildItem tools/research-runner/experiments -Filter "*.packet.json" -File | Sort-Object Name)
+          if ($packets.Count -eq 0) { throw "No experiment packets found." }
+          foreach ($packet in $packets) {
+            $doc = Get-Content -LiteralPath $packet.FullName -Raw | ConvertFrom-Json
+            python tools/research-runner/validate_packet.py `
+              --packet $packet.FullName `
+              --expected-environment ([string]$doc.publisher_environment)
+            if ($LASTEXITCODE -ne 0) { throw "Packet validation failed: $($packet.Name)" }
+          }
 
-      - name: Parse research PowerShell
+      - name: Parse all research PowerShell
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $files = @(
-            "tools/research-runner/prepare_native_run.ps1",
-            "tools/research-runner/finalize_native_run.ps1",
-            "tools/research-runner/operations/CfbStructuredStorage.psm1",
-            "tools/research-runner/operations/synth_blank_reduce_r1.ps1",
-            "tools/research-runner/tests/test_cfb_structured_storage.ps1",
-            "tools/windows/pub-runtime/PubRuntime.psm1"
+            Get-ChildItem tools/research-runner -Recurse -File |
+              Where-Object { $_.Extension -in @(".ps1", ".psm1") } |
+              Select-Object -ExpandProperty FullName
           )
+          $files += (Resolve-Path "tools/windows/pub-runtime/PubRuntime.psm1").Path
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
-              (Resolve-Path $file).Path,
+              $file,
               [ref]$tokens,
               [ref]$errors
             )

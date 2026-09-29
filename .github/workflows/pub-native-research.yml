@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pub-native-research-${{ inputs.publisher_environment }}-${{ inputs.packet }}
+  group: pub-native-research-${{ inputs.publisher_environment }}
   cancel-in-progress: false
 
 jobs:
@@ -36,8 +36,22 @@ jobs:
       experiment_id: ${{ steps.packet.outputs.experiment_id }}
       requires_publisher: ${{ steps.packet.outputs.requires_publisher }}
       operation_script: ${{ steps.packet.outputs.operation_script }}
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
     steps:
+      - name: Reject non-main native dispatch refs
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.ref }}" -ne "refs/heads/main") {
+            throw "Native research may only be dispatched from refs/heads/main."
+          }
+          "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Validate packet
         id: packet
@@ -63,6 +77,8 @@ jobs:
 
   native-experiment:
     needs: validate-packet
+    if: github.ref == 'refs/heads/main'
+    environment: pub-native-lab
     runs-on:
       - self-hosted
       - Windows
@@ -74,10 +90,23 @@ jobs:
       PUB_RESEARCH_ENVIRONMENT: ${{ inputs.publisher_environment }}
       PUB_RESEARCH_PACKET_SHA256: ${{ needs.validate-packet.outputs.packet_sha256 }}
       PUB_RESEARCH_OUTPUT: ${{ github.workspace }}\out\pub-research\${{ github.run_id }}
+      PUB_RESEARCH_PROFILE_ID: ${{ inputs.publisher_environment }}
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ needs.validate-packet.outputs.trusted_sha }}
           clean: true
+          persist-credentials: false
+
+      - name: Verify exact trusted checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actual = (git rev-parse HEAD).Trim()
+          $expected = "${{ needs.validate-packet.outputs.trusted_sha }}"
+          if ($actual -ne $expected) {
+            throw "Trusted checkout mismatch: expected $expected got $actual"
+          }
 
       - name: Validate packet again on native runner
         shell: pwsh
@@ -133,6 +162,7 @@ jobs:
           "- Environment: $env:PUB_RESEARCH_ENVIRONMENT" >> $env:GITHUB_STEP_SUMMARY
           "- Packet: $env:PUB_RESEARCH_PACKET" >> $env:GITHUB_STEP_SUMMARY
           "- Packet SHA-256: $env:PUB_RESEARCH_PACKET_SHA256" >> $env:GITHUB_STEP_SUMMARY
+          "- Trusted source SHA: ${{ needs.validate-packet.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
           if (Test-Path "$env:PUB_RESEARCH_OUTPUT\evidence-manifest.json") {
             "" >> $env:GITHUB_STEP_SUMMARY
             "Evidence manifest generated successfully." >> $env:GITHUB_STEP_SUMMARY

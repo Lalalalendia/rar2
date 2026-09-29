@@ -48,6 +48,38 @@ foreach ($publicDirName in @("logs", "analysis")) {
     }
 }
 
+$uploadSafeFiles = @()
+foreach ($publicDirName in @("logs", "analysis")) {
+    $publicDir = Join-Path $root $publicDirName
+    if (Test-Path -LiteralPath $publicDir) {
+        $uploadSafeFiles += @(Get-ChildItem -LiteralPath $publicDir -File -Recurse)
+    }
+}
+$environmentPath = Join-Path $root "environment.json"
+if (Test-Path -LiteralPath $environmentPath -PathType Leaf) {
+    $uploadSafeFiles += @(Get-Item -LiteralPath $environmentPath)
+}
+
+$sensitiveValues = @(
+    $env:RUNNER_NAME,
+    $env:GITHUB_WORKSPACE,
+    $env:RUNNER_TEMP,
+    $env:USERPROFILE,
+    $env:HOME
+) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique
+
+foreach ($file in $uploadSafeFiles) {
+    if ($file.Length -gt 8MB) {
+        throw "Upload-safe text evidence is unexpectedly large: $($file.FullName)"
+    }
+    $text = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop
+    foreach ($value in $sensitiveValues) {
+        if ($text.Contains([string]$value, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Upload-safe evidence contains a local runner/workspace identifier: $($file.Name)"
+        }
+    }
+}
+
 $records = @()
 foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse | Sort-Object FullName) {
     $relative = [IO.Path]::GetRelativePath($root, $file.FullName).Replace("\", "/")

@@ -14,6 +14,8 @@ from pathlib import Path
 SCHEMA = "pub-research-experiment.v1"
 ENV_RE = re.compile(r"^publisher-[0-9]{4}$")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{1,127}$")
+PACKET_ROOT = Path("tools/research-runner/experiments")
+OPERATION_ROOT = Path("tools/research-runner/operations")
 
 
 def fail(message: str) -> "NoReturn":
@@ -27,6 +29,13 @@ def resolve_inside(root: Path, value: str, field: str) -> Path:
     except ValueError:
         fail(f"{field} escapes repository root: {value}")
     return candidate
+
+
+def require_under(candidate: Path, allowed_root: Path, field: str) -> None:
+    try:
+        candidate.relative_to(allowed_root)
+    except ValueError:
+        fail(f"{field} must stay below {allowed_root}: {candidate}")
 
 
 def require_string_list(value: object, field: str) -> list[str]:
@@ -48,7 +57,13 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path.cwd().resolve()
+    packet_root = (root / PACKET_ROOT).resolve()
+    operation_root = (root / OPERATION_ROOT).resolve()
+
     packet_path = resolve_inside(root, args.packet, "packet path")
+    require_under(packet_path, packet_root, "packet path")
+    if packet_path.suffix != ".json":
+        fail("packet path must end in .json")
     if not packet_path.is_file():
         fail(f"packet does not exist: {args.packet}")
 
@@ -88,6 +103,7 @@ def main() -> int:
     if not isinstance(script, str) or not script.endswith(".ps1"):
         fail("operation.script must be a repository-relative .ps1 path")
     script_path = resolve_inside(root, script, "operation.script")
+    require_under(script_path, operation_root, "operation.script")
     if not script_path.is_file():
         fail(f"operation script does not exist: {script}")
     require_string_list(operation.get("args", []), "operation.args")
@@ -99,8 +115,15 @@ def main() -> int:
     if not required:
         fail("evidence.required must contain at least one path")
     for item in required:
-        if Path(item).is_absolute() or ".." in Path(item).parts:
+        p = Path(item)
+        if p.is_absolute() or ".." in p.parts:
             fail(f"evidence.required entry is not a safe relative path: {item}")
+        if not (
+            item == "environment.json"
+            or item.startswith("analysis/")
+            or item.startswith("logs/")
+        ):
+            fail(f"required public evidence must be environment.json, analysis/** or logs/**: {item}")
 
     fixture = packet.get("fixture")
     if fixture is not None:
