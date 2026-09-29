@@ -27,8 +27,11 @@ use pub_model::{
 #[cfg(feature = "cmo-slot-compose")]
 use pub_model::{CanonicalId, RectEmu};
 use pub_paint_bridge::{
+    PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
+    PubEffectivePaintSourceSpanV1, PubEffectivePaintValueV1, PubEffectiveShapePaintSourceV1,
     PubExplicitFillSourceV1, PubExplicitLineSourceV1, PubExplicitShapePaintSourceV1,
-    PubPaintSourceProvenanceV1, PubPaintSourceRoleV1, project_explicit_source_paint_to_viewer_v1,
+    PubPaintSourceProvenanceV1, PubPaintSourceRoleV1, project_effective_source_paint_to_viewer_v1,
+    project_explicit_source_paint_to_viewer_v1,
 };
 use pub_presentation_profile::{
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
@@ -45,9 +48,10 @@ pub use pub_reader::{
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
-    FailureTelemetryChoice, PubAssetExportDiagnostic, PubBridgeDiagnostic, PubResolveDiagnostic,
-    PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload, PubSourceGraphBuild,
-    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    FailureTelemetryChoice, PubAssetExportDiagnostic, PubBridgeDiagnostic,
+    PubEffectivePaintAuthority, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
+    PubResolvedNodePayload, PubSourceGraphBuild, analyze_mature_0x2c_page_roles,
+    build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, derive_pub_page_id, resolve_pub_source_graph,
 };
@@ -420,9 +424,77 @@ pub struct ViewerSolidLine {
     pub width_emu: i64,
 }
 
+fn bridge_effective_authority(
+    authority: PubEffectivePaintAuthority,
+) -> PubEffectivePaintAuthorityV1 {
+    match authority {
+        PubEffectivePaintAuthority::ShapeLocal => PubEffectivePaintAuthorityV1::ShapeLocal,
+        PubEffectivePaintAuthority::DrawingGroupPrimary => {
+            PubEffectivePaintAuthorityV1::DrawingGroupPrimary
+        }
+        PubEffectivePaintAuthority::DrawingGroupTertiary => {
+            PubEffectivePaintAuthorityV1::DrawingGroupTertiary
+        }
+        PubEffectivePaintAuthority::NormativeDefault => {
+            PubEffectivePaintAuthorityV1::NormativeDefault
+        }
+    }
+}
+
+fn bridge_effective_value<T: Clone>(
+    value: &pub_reader::PubEffectivePaintValue<T>,
+) -> PubEffectivePaintValueV1<T> {
+    PubEffectivePaintValueV1 {
+        value: value.value.clone(),
+        authority: bridge_effective_authority(value.authority),
+        source: value.source.as_ref().map(|source| PubEffectivePaintSourceSpanV1 {
+            stream: source.stream.0.clone(),
+            offset: source.offset,
+            len: source.len,
+        }),
+    }
+}
+
 fn viewer_node_paint_from_canonical_bridge(
     node: &Node<PubResolvedNodePayload>,
 ) -> Result<Option<ViewerNodePaint>> {
+    if let Some(effective) = node.payload.effective_paint.as_ref() {
+        let source = PubEffectiveShapePaintSourceV1 {
+            fill: PubEffectiveFillSourceV1 {
+                solid: effective.fill.solid.as_ref().map(bridge_effective_value),
+                color_rgb: effective
+                    .fill
+                    .color_rgb
+                    .as_ref()
+                    .map(bridge_effective_value),
+                visible: effective.fill.visible.as_ref().map(bridge_effective_value),
+            },
+            line: PubEffectiveLineSourceV1 {
+                color_rgb: effective
+                    .line
+                    .color_rgb
+                    .as_ref()
+                    .map(bridge_effective_value),
+                width_emu: effective
+                    .line
+                    .width_emu
+                    .as_ref()
+                    .map(bridge_effective_value),
+                visible: effective.line.visible.as_ref().map(bridge_effective_value),
+            },
+        };
+        return Ok(
+            project_effective_source_paint_to_viewer_v1(&source).map(|paint| ViewerNodePaint {
+                node_id: node.header.id,
+                solid_fill_rgb: paint.solid_fill_rgb,
+                solid_line: paint.solid_line.map(|line| ViewerSolidLine {
+                    rgb: line.rgb,
+                    width_emu: line.width_emu,
+                }),
+            }),
+        );
+    }
+
     let source_ref = node.header.source_refs.iter().find(|source_ref| {
         source_ref.path.as_deref() == Some("SpContainer/FOPT")
             && source_ref.authority == AuthorityClass::Authoritative
@@ -2370,6 +2442,47 @@ mod tests {
             .expect("fixture story")
             .text = text.to_owned();
         graph
+    }
+
+    #[test]
+    fn effective_paint_bridge_precedes_explicit_fopt_projection() {
+        let mut graph = resolved_graph_fixture();
+        let node_id = *graph.nodes.keys().next().expect("fixture node");
+        let node = graph.nodes.get_mut(&node_id).expect("fixture node");
+        node.payload.explicit_paint = pub_reader::PubExplicitShapePaintSource {
+            fill: pub_reader::PubExplicitFillSource {
+                solid: true,
+                color_rgb: Some([1, 2, 3]),
+                visible: Some(true),
+            },
+            line: pub_reader::PubExplicitLineSource::default(),
+        };
+        node.payload.effective_paint = Some(pub_reader::PubEffectiveShapePaintSource {
+            fill: pub_reader::PubEffectiveFillSource {
+                solid: Some(pub_reader::PubEffectivePaintValue {
+                    value: true,
+                    authority: PubEffectivePaintAuthority::NormativeDefault,
+                    source: None,
+                }),
+                color_rgb: Some(pub_reader::PubEffectivePaintValue {
+                    value: [0x11, 0x22, 0x33],
+                    authority: PubEffectivePaintAuthority::NormativeDefault,
+                    source: None,
+                }),
+                visible: Some(pub_reader::PubEffectivePaintValue {
+                    value: true,
+                    authority: PubEffectivePaintAuthority::NormativeDefault,
+                    source: None,
+                }),
+            },
+            line: pub_reader::PubEffectiveLineSource::default(),
+        });
+
+        let paint = viewer_node_paint_from_canonical_bridge(node)
+            .expect("bridge projection")
+            .expect("effective fill");
+        assert_eq!(paint.solid_fill_rgb, Some([0x11, 0x22, 0x33]));
+        assert!(paint.solid_line.is_none());
     }
 
     #[test]
