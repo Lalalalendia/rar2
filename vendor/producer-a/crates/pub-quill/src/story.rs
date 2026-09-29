@@ -251,7 +251,9 @@ pub enum QuillStoryFailureEvidence {
         next_boundary_is_descriptor: bool,
         required_fits_before_next_boundary: bool,
         strs_declared_count: Option<u32>,
+        strs_service_span: Option<u32>,
         strs_count_matches: Option<bool>,
+        text_descriptor_length: u32,
     },
     StrsServiceSpanOutOfBounds {
         declared_count: u32,
@@ -333,6 +335,7 @@ fn probe_syid_id_array_evidence(
     descriptors: &[&QuillChunkDescriptor],
     syid_descriptor: &QuillChunkDescriptor,
     strs_descriptor: &QuillChunkDescriptor,
+    text_descriptor: &QuillChunkDescriptor,
 ) -> Option<QuillStoryFailureEvidence> {
     let (start, len) = chunk_range(bytes, syid_descriptor).ok()?;
     if len < 8 {
@@ -349,6 +352,7 @@ fn probe_syid_id_array_evidence(
     let (available_to_next_boundary, next_boundary_is_descriptor) =
         next_descriptor_boundary(bytes, descriptors, syid_descriptor.data_offset.value);
     let strs_declared_count = descriptor_u32_at(bytes, strs_descriptor, 0);
+    let strs_service_span = descriptor_u32_at(bytes, strs_descriptor, 4);
 
     Some(QuillStoryFailureEvidence::SyidIdArray {
         declared_count: count,
@@ -359,7 +363,9 @@ fn probe_syid_id_array_evidence(
         next_boundary_is_descriptor,
         required_fits_before_next_boundary: required_chunk_length <= available_to_next_boundary,
         strs_declared_count,
+        strs_service_span,
         strs_count_matches: strs_declared_count.map(|value| value == count),
+        text_descriptor_length: text_descriptor.data_length.value,
     })
 }
 
@@ -413,6 +419,7 @@ pub fn probe_confirmed_story_catalog_failure_evidence(
         .collect::<Vec<_>>();
     let syid_descriptor = required_descriptor(&descriptors, SYID).ok()?;
     let strs_descriptor = required_descriptor(&descriptors, STRS).ok()?;
+    let text_descriptor = required_descriptor(&descriptors, TEXT).ok()?;
 
     let syid = match parse_syid(stream.clone(), bytes, syid_descriptor) {
         Ok(value) => value,
@@ -425,6 +432,7 @@ pub fn probe_confirmed_story_catalog_failure_evidence(
                 &descriptors,
                 syid_descriptor,
                 strs_descriptor,
+                text_descriptor,
             );
         }
         Err(_) => return None,
