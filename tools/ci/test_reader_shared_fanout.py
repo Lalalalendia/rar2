@@ -8,7 +8,7 @@ def expect(paths, **wanted):
 
 expect(
     ["vendor/producer-a/crates/pub-contents/src/lib.rs"],
-    reader_windows=True,
+    reader_windows=False,
     editor_windows=False,
     visual_oracle=False,
     typography=False,
@@ -18,7 +18,7 @@ expect(
 )
 expect(
     ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
-    reader_windows=True,
+    reader_windows=False,
     editor_windows=False,
     visual_oracle=True,
     typography=True,
