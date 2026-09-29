@@ -140,6 +140,17 @@ fn child_0022_profile(
         return None;
     }
     let chunk = chunk_bytes(contents, child)?;
+    let u16_le_words = (0..chunk.len() / 2)
+        .filter_map(|index| read_u16(chunk, index * 2))
+        .collect::<Vec<_>>();
+    let u32_le_dwords = (0..=chunk.len().saturating_sub(4) / 4)
+        .filter_map(|index| {
+            let offset = index * 4;
+            let raw = chunk.get(offset..offset + 4)?;
+            Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+        })
+        .collect::<Vec<_>>();
+
     Some(json!({
         "object_id": child.object_id,
         "service_word": child.service_word,
@@ -147,6 +158,8 @@ fn child_0022_profile(
         "chunk_sha256": sha256_hex(chunk),
         "prefix32_sha256": edge_fingerprint(chunk, true),
         "suffix32_sha256": edge_fingerprint(chunk, false),
+        "u16_le_words": u16_le_words,
+        "u32_le_dwords": u32_le_dwords,
     }))
 }
 
