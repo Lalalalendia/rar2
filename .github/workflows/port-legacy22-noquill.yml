@@ -1,0 +1,75 @@
+name: Port legacy22 no-Quill Reader train
+
+on:
+  push:
+    branches:
+      - work/legacy22-noquill-port-20260929
+    paths:
+      - ".github/workflows/port-legacy22-noquill.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: port-legacy22-noquill-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  port:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply bounded legacy train from historical Rar PRs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "chaptera-port-bot"
+          git config user.email "chaptera-port-bot@users.noreply.github.com"
+
+          curl -L --fail --retry 3 https://github.com/HeisLuka/rar/pull/1307.diff -o /tmp/1307.diff
+          git apply --3way /tmp/1307.diff
+
+          curl -L --fail --retry 3 https://github.com/HeisLuka/rar/pull/1311.diff -o /tmp/1311.diff
+          git apply --3way /tmp/1311.diff
+
+          python - <<'PY'
+          from pathlib import Path
+          p=Path("vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs")
+          s=p.read_text()
+          old="const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0008;"
+          new="const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0000;"
+          if old not in s:
+              raise SystemExit("expected legacy text marker not found")
+          p.write_text(s.replace(old,new),encoding="utf-8")
+          PY
+
+          rustfmt --edition 2024 vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs
+
+      - name: Run bounded legacy units
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-contents legacy22_directory
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader family_classifier
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader legacy22_noquill_graph
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer
+          cargo check -p chaptera-desktop --features reader-only
+
+      - name: Commit port
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git commit -m "reader: port bounded legacy22 source-graph train"
+          git push origin HEAD:${GITHUB_REF_NAME}
