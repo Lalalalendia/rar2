@@ -42,9 +42,10 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
         bail!("unsupported OLE presentation clipboard format {clipboard_format}");
     }
 
-    let target_device_size =
-        usize::try_from(read_u32(bytes, 8).ok_or_else(|| anyhow::anyhow!("missing target device size"))?)
-            .map_err(|_| anyhow::anyhow!("target device size overflow"))?;
+    let target_device_size = usize::try_from(
+        read_u32(bytes, 8).ok_or_else(|| anyhow::anyhow!("missing target device size"))?,
+    )
+    .map_err(|_| anyhow::anyhow!("target device size overflow"))?;
     if target_device_size < 4 {
         bail!("invalid OLE target device size {target_device_size}");
     }
