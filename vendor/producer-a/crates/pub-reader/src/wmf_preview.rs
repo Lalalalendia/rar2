@@ -119,7 +119,6 @@ enum GdiObject {
     Pen(Pen),
     Brush(Brush),
     RegionCompatibility,
-    Unsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1161,9 +1160,6 @@ pub fn rasterize_wmf_preview(
                     GdiObject::Brush(brush) => state.brush = brush,
                     GdiObject::RegionCompatibility => {
                         pending_region_compat_cliprect = true;
-                    }
-                    GdiObject::Unsupported => {
-                        bail!("WMF selects an unsupported graphics object");
                     }
                 }
             }
