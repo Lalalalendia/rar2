@@ -21,6 +21,7 @@ on:
       - "crates/chaptera-update-trust/**"
       - "crates/chaptera-viewer-render-plan/**"
       - "crates/pub-presentation-profile/**"
+      - "crates/pub-model/**"
       - "vendor/producer-a/Cargo.toml"
       - "vendor/producer-a/Cargo.lock"
       - "vendor/producer-a/crates/pub-core/**"
