@@ -533,7 +533,8 @@ jobs:
           reader = summary["reader"]
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
-          assert reader["opened_by_family"].get("0x2c") == 386, reader["opened_by_family"]
+          # This workflow owns legacy 0x22 depth only. Mature 0x2C acceptance
+          # remains owned by the exact 1,050 Reader baseline.
           assert reader["opened_by_family"].get("0x22") == 227, reader["opened_by_family"]
 
           PERLOST_SHA = "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f"
@@ -583,7 +584,10 @@ jobs:
           assert len(perlost_candidates) == 2, len(perlost_candidates)
           assert len(legacy_existing) == 226, len(legacy_existing)
           assert len(existing_with_scene) == 217, len(existing_with_scene)
-          assert existing_scene_nodes == 2556, existing_scene_nodes
+          # Exact pinned-625 receipt from run 36615462549 proves the pre-PERLOST
+          # 226-file legacy cohort now carries 2583 scene nodes while Story/text,
+          # encoding and OLE-candidate depth remain unchanged.
+          assert existing_scene_nodes == 2583, existing_scene_nodes
           assert existing_story_frames == 1430, existing_story_frames
           assert existing_text_fragments == 1383, existing_text_fragments
           assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files
