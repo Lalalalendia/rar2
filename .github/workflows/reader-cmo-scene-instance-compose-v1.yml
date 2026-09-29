@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - 'vendor/producer-a/crates/pub-viewer/**'
+      - '!vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs'
       - 'crates/chaptera-viewer-render-plan/**'
       - 'crates/chaptera-scene-instance/**'
       - 'crates/chaptera-layout-projection/**'
