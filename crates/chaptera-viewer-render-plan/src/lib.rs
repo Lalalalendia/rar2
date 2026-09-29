@@ -652,32 +652,32 @@ fn fallback_layout(reason: RenderTextLayoutFallbackReasonV1) -> RenderTextLayout
     }
 }
 
-fn admitted_single_story_frame(
+fn admitted_layout_frame_ordinal(
     visual: &ViewerGeometryDocument,
     story_id: StoryId,
     node_id: NodeId,
     projected_target_frame_node_id: Option<NodeId>,
-) -> Result<&pub_viewer::ViewerStoryFrame, RenderTextLayoutFallbackReasonV1> {
-    let mut frames = visual
-        .story_frames
-        .iter()
-        .filter(|frame| frame.story_id == story_id);
-    let Some(frame) = frames.next() else {
-        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
-    };
-    if frames.next().is_some() {
-        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
-    }
-
+) -> Result<u32, RenderTextLayoutFallbackReasonV1> {
     let Some(target_frame_node_id) = projected_target_frame_node_id else {
-        return (frame.frame_id == node_id)
-            .then_some(frame)
-            .ok_or(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+        let mut frames = visual
+            .story_frames
+            .iter()
+            .filter(|frame| frame.story_id == story_id);
+        let Some(frame) = frames.next() else {
+            return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+        };
+        if frames.next().is_some() || frame.frame_id != node_id {
+            return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+        }
+        return Ok(frame.ordinal);
     };
 
-    // Projected Cmo keeps the carrier Story/Frame identity canonical. The
-    // target frame is placement context owned by the host Story, not a frame
-    // to which the carrier Story may be rebound.
+    // Projected Cmo carrier Stories can originate on pages excluded by the
+    // customer-page presentation profile, so their source StoryFrame is not
+    // present in Viewer story_frames. Canonical carrier identity instead comes
+    // from SceneInstanceV1 + story_authority_id. Admission here validates only
+    // the separate host target-frame topology; the layout frame itself keeps
+    // the carrier node/story identity and uses projected slot bounds.
     let mut target_frame_matches = visual
         .story_frames
         .iter()
@@ -701,7 +701,7 @@ fn admitted_single_story_frame(
         return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
     }
 
-    Ok(frame)
+    Ok(0)
 }
 
 fn resolve_text_layout_v1(
@@ -737,13 +737,13 @@ fn resolve_text_layout_v1(
         return fallback_layout(RenderTextLayoutFallbackReasonV1::StoryExtentMismatch);
     }
 
-    let frame = match admitted_single_story_frame(
+    let frame_ordinal = match admitted_layout_frame_ordinal(
         visual,
         fragment.story_id,
         node_id,
         projected_target_frame_node_id,
     ) {
-        Ok(frame) => frame,
+        Ok(ordinal) => ordinal,
         Err(reason) => return fallback_layout(reason),
     };
 
@@ -797,7 +797,7 @@ fn resolve_text_layout_v1(
         story_frames: vec![ProjectedStoryFrame {
             story_origin: story.id,
             frame_origin: node_id,
-            ordinal: frame.ordinal,
+            ordinal: frame_ordinal,
             previous_frame_origin: None,
             next_frame_origin: None,
         }],
@@ -1127,39 +1127,33 @@ mod tests {
 
     #[cfg(feature = "projected-scene-instances")]
     #[test]
-    fn projected_cmo_layout_admits_separate_carrier_and_target_frame_context() {
+    fn projected_cmo_layout_admits_hidden_carrier_with_single_target_frame() {
         let mut visual = fixture();
         let carrier_node_id = visual.scene.nodes[0].origin;
         let carrier_story_id = visual.document.stories[0].id;
         let target_story_id = StoryId::from_canonical(canonical(8));
         let target_frame_node_id = NodeId::from_canonical(canonical(9));
-        visual.story_frames.extend([
-            pub_viewer::ViewerStoryFrame {
-                story_id: carrier_story_id,
-                frame_id: carrier_node_id,
-                ordinal: 0,
-            },
-            pub_viewer::ViewerStoryFrame {
-                story_id: target_story_id,
-                frame_id: target_frame_node_id,
-                ordinal: 0,
-            },
-        ]);
-
-        let admitted = admitted_single_story_frame(
-            &visual,
-            carrier_story_id,
-            carrier_node_id,
-            Some(target_frame_node_id),
-        )
-        .expect("projected Cmo should preserve carrier frame identity with a separate host target");
-        assert_eq!(admitted.frame_id, carrier_node_id);
-        assert_ne!(admitted.frame_id, target_frame_node_id);
+        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
+            story_id: target_story_id,
+            frame_id: target_frame_node_id,
+            ordinal: 0,
+        });
 
         assert_eq!(
-            admitted_single_story_frame(&visual, carrier_story_id, target_frame_node_id, None,),
+            admitted_layout_frame_ordinal(
+                &visual,
+                carrier_story_id,
+                carrier_node_id,
+                Some(target_frame_node_id),
+            ),
+            Ok(0),
+            "projected Cmo must not require a hidden carrier-page StoryFrame"
+        );
+
+        assert_eq!(
+            admitted_layout_frame_ordinal(&visual, carrier_story_id, carrier_node_id, None),
             Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired),
-            "ordinary node identity must still match its own StoryFrame"
+            "ordinary nodes still require their own canonical StoryFrame"
         );
     }
 
@@ -1173,11 +1167,6 @@ mod tests {
         let target_frame_node_id = NodeId::from_canonical(canonical(9));
         visual.story_frames.extend([
             pub_viewer::ViewerStoryFrame {
-                story_id: carrier_story_id,
-                frame_id: carrier_node_id,
-                ordinal: 0,
-            },
-            pub_viewer::ViewerStoryFrame {
                 story_id: target_story_id,
                 frame_id: target_frame_node_id,
                 ordinal: 0,
@@ -1190,7 +1179,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            admitted_single_story_frame(
+            admitted_layout_frame_ordinal(
                 &visual,
                 carrier_story_id,
                 carrier_node_id,
