@@ -131,10 +131,10 @@ fn scalar_u32_profile(chunk: &[u8]) -> BTreeMap<String, u32> {
     values
 }
 
-fn single_child_0022<'a>(
-    directory: &'a Legacy0x22Directory,
+fn single_child_0022(
+    directory: &Legacy0x22Directory,
     parent_object_id: u16,
-) -> Option<&'a Legacy0x22DirectoryEntry> {
+) -> Option<&Legacy0x22DirectoryEntry> {
     let mut children = directory
         .entries_by_parent_id(parent_object_id)
         .filter(|entry| entry.chunk_type == RAW_TYPE_0022);
