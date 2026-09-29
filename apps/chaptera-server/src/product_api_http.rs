@@ -1160,8 +1160,15 @@ mod tests {
         assert_eq!(reader_scene["source_hash"], source_sha256);
         assert_eq!(reader_scene["revision_id"], baseline.service_revision_id);
         assert_eq!(reader_scene["scene_authority"], "server_viewer_projection");
-        assert!(reader_scene["pages"].as_array().is_some_and(|pages| !pages.is_empty()));
-        assert!(reader_scene["nodes"].as_array().is_some());
+        let reader_pages = reader_scene["pages"].as_array().expect("Reader pages array");
+        let reader_nodes = reader_scene["nodes"].as_array().expect("Reader nodes array");
+        assert!(!reader_pages.is_empty());
+        assert!(!reader_nodes.is_empty());
+        assert!(reader_nodes.iter().all(|node| {
+            reader_pages
+                .iter()
+                .any(|page| page["page_id"] == node["page_id"])
+        }));
         assert!(reader_scene.get("geometry").is_none());
         assert!(reader_scene.get("project").is_none());
         assert!(reader_scene.get("authoring_graph").is_none());
