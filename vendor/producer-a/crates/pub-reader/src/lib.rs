@@ -3050,9 +3050,7 @@ pub fn resolve_bounded_effective_officeart_paint(
         OFFICE_ART_LINE_WIDTH,
         NORMATIVE_LINE_WIDTH_EMU,
     )
-    .and_then(|value| {
-        (value.value <= 0x0132_F540).then(|| value.map(i64::from))
-    });
+    .and_then(|value| (value.value <= 0x0132_F540).then(|| value.map(i64::from)));
 
     let line_visible = resolve_effective_officeart_boolean(
         shape,
@@ -3338,21 +3336,6 @@ fn bounded_officeart_rgb(value: u32, color_scheme: Option<&MatureColorScheme>) -
         }
         _ => None,
     }
-}
-
-fn shape_uses_officeart_scheme_color(shape: &pub_escher::SpContainerObservation) -> bool {
-    shape
-        .fopts
-        .iter()
-        .flat_map(|record| record.properties.iter())
-        .filter(|property| {
-            matches!(
-                property.property_id(),
-                OFFICE_ART_FILL_COLOR | OFFICE_ART_LINE_COLOR
-            ) && !property.f_bid()
-                && !property.f_complex()
-        })
-        .any(|property| (property.op >> 24) as u8 == 0x08)
 }
 
 fn exact_image_slot(
@@ -4094,10 +4077,7 @@ mod tests {
             paint.line.color_rgb.as_ref().map(|v| v.value),
             Some([0, 0, 0])
         );
-        assert_eq!(
-            paint.line.width_emu.as_ref().map(|v| v.value),
-            Some(0x2535)
-        );
+        assert_eq!(paint.line.width_emu.as_ref().map(|v| v.value), Some(0x2535));
         assert_eq!(paint.line.visible.as_ref().map(|v| v.value), Some(true));
         assert_eq!(
             paint.fill.color_rgb.as_ref().map(|v| v.authority),
@@ -4119,10 +4099,7 @@ mod tests {
                 crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF),
                 crop_test_property(OFFICE_ART_FILL_BOOLEANS, FILL_USE_FILLED_BIT),
                 crop_test_property(OFFICE_ART_LINE_WIDTH, 20_000),
-                crop_test_property(
-                    OFFICE_ART_LINE_BOOLEANS,
-                    LINE_USE_LINE_BIT | LINE_LINE_BIT,
-                ),
+                crop_test_property(OFFICE_ART_LINE_BOOLEANS, LINE_USE_LINE_BIT | LINE_LINE_BIT),
             ],
             vec![crop_test_property(OFFICE_ART_LINE_COLOR, 0x00FF_0000)],
         );
@@ -4164,10 +4141,8 @@ mod tests {
             .expect("other normative fields remain available");
         assert_eq!(paint.fill.color_rgb, None);
 
-        let unsupported = crop_test_shape(vec![crop_test_property(
-            OFFICE_ART_FILL_COLOR,
-            0x1000_0000,
-        )]);
+        let unsupported =
+            crop_test_shape(vec![crop_test_property(OFFICE_ART_FILL_COLOR, 0x1000_0000)]);
         let paint = resolve_bounded_effective_officeart_paint(&unsupported, None, None, true)
             .expect("unsupported color stays partial");
         assert_eq!(paint.fill.color_rgb, None);
