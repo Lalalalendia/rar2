@@ -65,9 +65,23 @@ jobs:
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $subject -CertStoreLocation "Cert:\CurrentUser\My" -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 -NotAfter (Get-Date).AddDays(1)
           $cer = Join-Path $env:RUNNER_TEMP "chaptera-test-signing.cer"
           Export-Certificate -Cert $cert -FilePath $cer | Out-Null
-          Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
-          Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\CurrentUser\TrustedPublisher" | Out-Null
+          "CHAPTERA_TEST_SIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_TEST_CERT_SUBJECT=$subject" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_TEST_CERT_FILE=$cer" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Trust ephemeral TEST-ONLY certificate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & certutil.exe -user -f -addstore Root $env:CHAPTERA_TEST_CERT_FILE
+          if ($LASTEXITCODE -ne 0) { throw "certutil Root import failed with code $LASTEXITCODE" }
+          & certutil.exe -user -f -addstore TrustedPublisher $env:CHAPTERA_TEST_CERT_FILE
+          if ($LASTEXITCODE -ne 0) { throw "certutil TrustedPublisher import failed with code $LASTEXITCODE" }
+
+      - name: Locate Windows SDK SignTool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
           $sdkBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
           $signtoolPath = Get-ChildItem -LiteralPath $sdkBin -Directory -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending |
@@ -79,10 +93,7 @@ jobs:
             if (-not $cmd) { throw "signtool.exe not found on runner" }
             $signtoolPath = $cmd.Source
           }
-
-          "CHAPTERA_TEST_SIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHAPTERA_SIGNTOOL_PATH=$signtoolPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CHAPTERA_TEST_CERT_SUBJECT=$subject" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Compile canonical Inno installer through one SignTool contract
         shell: pwsh
