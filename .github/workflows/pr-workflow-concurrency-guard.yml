@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Enforce latest-head cancellation on changed PR workflows
+      - name: Enforce PR workflow safety contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -45,6 +45,12 @@ jobs:
               continue
             fi
 
+            if grep -Eq '^[[:space:]]*contents:[[:space:]]*write[[:space:]]*$' "$path" \
+              && grep -Eq '(^|[[:space:]])git[[:space:]]+push([[:space:]]|$)' "$path"; then
+              echo "::error file=$path::PR validation must not combine contents:write with git push; emit an artifact or require an explicit reviewed update instead."
+              failed=1
+            fi
+
             if ! grep -Eq '^concurrency:' "$path"; then
               echo "::error file=$path::PR workflow must define top-level concurrency."
               failed=1
@@ -62,4 +68,4 @@ jobs:
             exit 1
           fi
 
-          echo "Changed PR workflows satisfy the latest-head concurrency contract."
+          echo "Changed PR workflows satisfy latest-head concurrency and no-self-mutation contracts."
