@@ -100,15 +100,25 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $name" }
           }
 
-      - name: Classify Microsoft-minimal AppContainer bootstrap
+      - name: Cross-classify minimal and strict bootstrap
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
           $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
-          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-init-probe.exe"
-          & $hostExe --microsoft-minimal $probe
+          $initProbe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-init-probe.exe"
+          $bootstrapProbe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
+
+          & $hostExe --microsoft-minimal $initProbe
           $code = $LASTEXITCODE
-          Write-Host "CHAPTERA_SANDBOX_MINIMAL_RESULT exit=$code"
+          Write-Host "CHAPTERA_SANDBOX_CROSS_RESULT shape=minimal probe=init exit=$code"
+
+          & $hostExe --microsoft-minimal $bootstrapProbe
+          $code = $LASTEXITCODE
+          Write-Host "CHAPTERA_SANDBOX_CROSS_RESULT shape=minimal probe=bootstrap exit=$code"
+
+          & $hostExe --strict-init $initProbe
+          $code = $LASTEXITCODE
+          Write-Host "CHAPTERA_SANDBOX_CROSS_RESULT shape=strict probe=init exit=$code"
           exit 0
 
       - name: Classify bootstrap startup policy
