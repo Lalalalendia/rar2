@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 
-const STANDARD_CLIPBOARD_MARKER: u32 = 0xffff_ffff;
+const STANDARD_CLIPBOARD_MARKER_ANSI: u32 = 0xffff_ffff;
+const STANDARD_CLIPBOARD_MARKER_UNICODE: u32 = 0xffff_fffe;
 const CF_METAFILEPICT: u32 = 3;
 const METAFILE_RESERVED2_LEN: usize = 18;
 const MAX_PRESENTATION_BYTES: usize = 64 * 1024 * 1024;
@@ -28,7 +29,10 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
     }
 
     let marker = read_u32(bytes, 0).ok_or_else(|| anyhow::anyhow!("missing clipboard marker"))?;
-    if marker != STANDARD_CLIPBOARD_MARKER {
+    if !matches!(
+        marker,
+        STANDARD_CLIPBOARD_MARKER_ANSI | STANDARD_CLIPBOARD_MARKER_UNICODE
+    ) {
         bail!("unsupported OLE presentation clipboard-format encoding");
     }
 
@@ -100,7 +104,7 @@ mod tests {
 
     fn fixture(format: u32, target_device_size: u32, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&STANDARD_CLIPBOARD_MARKER.to_le_bytes());
+        bytes.extend_from_slice(&STANDARD_CLIPBOARD_MARKER_ANSI.to_le_bytes());
         bytes.extend_from_slice(&format.to_le_bytes());
         bytes.extend_from_slice(&target_device_size.to_le_bytes());
         if target_device_size > 4 {
@@ -148,5 +152,14 @@ mod tests {
         let bytes = fixture(CF_METAFILEPICT, 12, &payload);
         let parsed = parse_cf_metafilepict_ole_presentation(&bytes).expect("presentation");
         assert_eq!(parsed.data, payload);
+    }
+
+    #[test]
+    fn accepts_both_standard_clipboard_markers() {
+        let payload = [0x03u8; 18];
+        let mut bytes = fixture(CF_METAFILEPICT, 4, &payload);
+        bytes[0..4].copy_from_slice(&STANDARD_CLIPBOARD_MARKER_UNICODE.to_le_bytes());
+        let parsed = parse_cf_metafilepict_ole_presentation(&bytes).expect("presentation");
+        assert_eq!(parsed.clipboard_format, CF_METAFILEPICT);
     }
 }
