@@ -76,9 +76,18 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             match build_legacy_0x22_quill_source_graph(Cursor::new(bytes), source_hash(bytes)) {
                 Ok(source) => {
                     stage = "legacy22_quill.resolve_graph".to_owned();
-                    resolve_pub_source_graph(&source.graph).is_ok()
+                    match resolve_pub_source_graph(&source.graph) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            stage_error_signature_sha256 = Some(sha256_hex(format!("{error:#}").as_bytes()));
+                            false
+                        }
+                    }
                 }
-                Err(_) => false,
+                Err(error) => {
+                    stage_error_signature_sha256 = Some(sha256_hex(format!("{error:#}").as_bytes()));
+                    false
+                }
             }
         }
         PubReaderRoute::Legacy22LowText => {
@@ -86,9 +95,18 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             match build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash(bytes)) {
                 Ok(source) => {
                     stage = "legacy22_noquill.resolve_graph".to_owned();
-                    resolve_pub_source_graph(&source.graph).is_ok()
+                    match resolve_pub_source_graph(&source.graph) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            stage_error_signature_sha256 = Some(sha256_hex(format!("{error:#}").as_bytes()));
+                            false
+                        }
+                    }
                 }
-                Err(_) => false,
+                Err(error) => {
+                    stage_error_signature_sha256 = Some(sha256_hex(format!("{error:#}").as_bytes()));
+                    false
+                }
             }
         }
         PubReaderRoute::Unsupported => false,
@@ -116,7 +134,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             route: classification.route.as_str().to_owned(),
             stage,
             opened: false,
-            open_error_signature_sha256: None,
+            open_error_signature_sha256: stage_error_signature_sha256,
         };
     }
 
