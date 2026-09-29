@@ -318,6 +318,75 @@ jobs:
           }, indent=2, sort_keys=True))
           PY
 
+      - name: Summarize source-free legacy OLE Viewer outcomes
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+
+          rows = json.loads(Path("out/reader1050/reader-records.json").read_text())
+          opened = [row for row in rows if row.get("opened") is True]
+
+          node_count = sum(int(row.get("legacy_ole_node_count") or 0) for row in opened)
+          renderable_count = sum(
+              int(row.get("legacy_ole_renderable_node_count") or 0) for row in opened
+          )
+          preview_node_count = sum(
+              int(row.get("legacy_ole_preview_node_count") or 0) for row in opened
+          )
+          preview_resource_count = sum(
+              int(row.get("legacy_ole_preview_resource_count") or 0) for row in opened
+          )
+          diagnostic_counts = Counter()
+          for row in opened:
+              diagnostic_counts.update(row.get("legacy_ole_preview_diagnostic_counts") or {})
+
+          assert preview_node_count <= renderable_count <= node_count, {
+              "legacy_ole_node_count": node_count,
+              "legacy_ole_renderable_node_count": renderable_count,
+              "legacy_ole_preview_node_count": preview_node_count,
+          }
+          assert preview_resource_count <= preview_node_count, {
+              "legacy_ole_preview_resource_count": preview_resource_count,
+              "legacy_ole_preview_node_count": preview_node_count,
+          }
+
+          payload = {
+              "schema": "chaptera.legacy-ole-viewer-outcome-census.v1",
+              "corpus_file_count": len(rows),
+              "opened_file_count": len(opened),
+              "files_with_legacy_ole_nodes": sum(
+                  1 for row in opened if int(row.get("legacy_ole_node_count") or 0) > 0
+              ),
+              "files_with_renderable_legacy_ole_nodes": sum(
+                  1
+                  for row in opened
+                  if int(row.get("legacy_ole_renderable_node_count") or 0) > 0
+              ),
+              "files_with_legacy_ole_preview": sum(
+                  1
+                  for row in opened
+                  if int(row.get("legacy_ole_preview_node_count") or 0) > 0
+              ),
+              "legacy_ole_node_count": node_count,
+              "legacy_ole_renderable_node_count": renderable_count,
+              "legacy_ole_preview_node_count": preview_node_count,
+              "legacy_ole_preview_resource_count": preview_resource_count,
+              "legacy_ole_geometry_only_node_count": renderable_count - preview_node_count,
+              "legacy_ole_preview_diagnostic_counts": dict(sorted(diagnostic_counts.items())),
+              "evidence_boundary": (
+                  "source-free aggregate Viewer outcome census; no PUB paths, OlePres names, "
+                  "payload bytes, or parser-private error text are retained"
+              ),
+          }
+          Path("out/reader1050/legacy-ole-viewer-outcome-census.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
       - name: Summarize source-free legacy residuals
         run: |
           set -euo pipefail
