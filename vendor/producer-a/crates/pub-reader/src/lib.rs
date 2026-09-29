@@ -239,12 +239,23 @@ pub struct PubTypographyRun {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubLegacyOleSource {
+    /// Exact persisted CFB storage number joined to `/Objects/Object N`.
+    pub storage_number: u16,
+    /// Persisted legacy Publisher-side flag. Its semantics remain intentionally opaque.
+    pub raw_flag: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubNodePayload {
     pub contents_seq_num: u32,
     pub officeart_shape_type: Option<u16>,
     pub officeart_spid: Option<u32>,
     /// Exact one-based OfficeArt BStore identity from non-complex fBid pib.
     pub image_slot: Option<u32>,
+    /// Bounded legacy OLE identity. Presence never authorizes OLE/COM activation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_ole: Option<PubLegacyOleSource>,
     /// Bounded observation of explicit OfficeArt picture-crop properties on
     /// this image-bound shape. Raw scalar values are intentionally not
     /// reinterpreted as Publisher points or normalized crop geometry here.
@@ -2429,6 +2440,7 @@ pub fn build_mature_0x2c_from_streams(
                     officeart_shape_type: shape.fsp.as_ref().map(|fsp| fsp.shape_type),
                     officeart_spid: shape.fsp.as_ref().map(|fsp| fsp.spid),
                     image_slot,
+                    legacy_ole: None,
                     explicit_image_crop,
                     explicit_paint,
                     effective_paint,
