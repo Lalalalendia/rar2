@@ -9,6 +9,7 @@ const METAFILE_RESERVED2_LEN: usize = 18;
 const MAX_PRESENTATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TARGET_DEVICE_BYTES: usize = 1024 * 1024;
 const MAX_OLE_PRESENTATION_COUNT: usize = 999;
+const MAX_OLE_PRESENTATION_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 const OLE_PRES_STREAM_PREFIX: &str = "\u{2}OlePres";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +165,7 @@ pub fn read_legacy_ole_cached_presentations<R: Read + Seek>(
         OLE_PRES_STREAM_PREFIX,
         MAX_OLE_PRESENTATION_COUNT,
         MAX_PRESENTATION_BYTES,
+        MAX_OLE_PRESENTATION_TOTAL_BYTES,
     )
     .with_context(|| format!("read bounded cached presentations under {storage_path}"))?;
 
