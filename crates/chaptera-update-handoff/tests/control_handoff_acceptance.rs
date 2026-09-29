@@ -100,6 +100,83 @@ fn copied_u1_process_cannot_take_over_until_parent_releases_install_lock() {
 }
 
 #[test]
+fn copied_control_identity_is_revalidated_immediately_before_spawn() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("install");
+    let candidate = temp.path().join("candidate");
+    let updater_rel = Path::new("chaptera-updater.exe");
+
+    copy_probe(&root.join("current").join(updater_rel));
+    seed_candidate(&candidate, b"U2");
+
+    let engine = UpdateEngine::new(&root);
+    engine
+        .begin_verified_candidate("tx-identity", "2.0.0", &candidate, updater_rel)
+        .unwrap();
+    let handoff = prepare_control_handoff(&engine).unwrap();
+
+    fs::write(&handoff.control_updater, b"replaced-after-admission").unwrap();
+
+    let error = match handoff.spawn() {
+        Ok(mut child) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("replaced control executable must not launch");
+        }
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        HandoffError::ControlUpdaterIdentityChanged(_)
+    ));
+    assert_eq!(
+        engine.recover().unwrap(),
+        RecoveryOutcome::PreparedTransactionAborted
+    );
+}
+
+#[test]
+fn updater_launch_handles_spaces_and_metacharacters_without_shell_or_ambient_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("install root & app");
+    let candidate = temp.path().join("candidate payload & v2");
+    let updater_rel = Path::new("chaptera-updater.exe");
+
+    copy_probe(&root.join("current").join(updater_rel));
+    fs::write(root.join("current/reader.bin"), b"reader-v1").unwrap();
+    seed_candidate(&candidate, b"U2-not-yet-usable");
+
+    let orchestrator = chaptera_update_orchestrator::UpdateOrchestrator::new(&root);
+    let (handoff, mut child) = spawn_preverified_candidate_handoff(
+        &orchestrator,
+        "tx-path-spaces",
+        "2.0.0",
+        &candidate,
+        updater_rel,
+    )
+    .unwrap();
+
+    assert!(handoff.control_updater.is_absolute());
+    assert!(handoff.request_path.is_absolute());
+    assert_eq!(
+        handoff.working_directory,
+        handoff.request_path.parent().unwrap()
+    );
+
+    let status = child.wait().unwrap();
+    assert!(
+        status.success(),
+        "probe rejects inherited PATH/tooling env or wrong CWD; status={status}"
+    );
+    wait_for_file(&receipt_path(&handoff.request_path));
+
+    assert_eq!(
+        orchestrator.engine().recover().unwrap(),
+        RecoveryOutcome::PreparedTransactionAborted
+    );
+}
+
+#[test]
 fn request_mismatch_is_rejected_before_control_can_continue_transaction() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("install");
