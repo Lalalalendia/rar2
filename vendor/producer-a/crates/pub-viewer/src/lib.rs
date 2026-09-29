@@ -50,9 +50,9 @@ pub use pub_reader::{
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, PubAssetExportDiagnostic, PubBridgeDiagnostic,
-    PubEffectivePaintAuthority, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
-    PubResolvedNodePayload, PubSourceGraphBuild, analyze_mature_0x2c_page_roles,
-    build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
+    PubResolvedGraphBuild, PubResolvedNodePayload, PubSourceGraphBuild,
+    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
     resolve_pub_source_graph,
@@ -623,11 +623,35 @@ pub fn viewer_story_text_sha256(text: &str) -> Sha256Digest {
     Sha256Digest::from_bytes(bytes)
 }
 
+pub const VIEWER_IMAGE_SOURCE_Q16_ONE: i64 = 1 << 16;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerImageSourceWindowV1 {
+    /// Normalized source-image viewport edges in signed Q16 units.
+    ///
+    /// Values may extend outside 0..1 for Publisher Fit/pan states. The
+    /// backend clips the persisted source window against the real image
+    /// domain instead of clamping the crop itself.
+    pub left_q16: i64,
+    pub top_q16: i64,
+    pub right_q16: i64,
+    pub bottom_q16: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerImagePlacementV1 {
+    pub node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_window: Option<ViewerImageSourceWindowV1>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerEmbeddedImage {
     pub resource_id: ResourceId,
     pub mime: String,
     pub node_ids: Vec<NodeId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<ViewerImagePlacementV1>,
     #[serde(skip)]
     pub bytes: Vec<u8>,
 }
@@ -720,6 +744,48 @@ enum ViewerPageSelectionDisposition {
 /// writer/mutation plan. Unsupported or ambiguous source observations that do
 /// not make the bounded adapter fail are translated to stable Viewer
 /// diagnostics instead of being silently discarded.
+fn viewer_image_source_window_v1(
+    crop: Option<&PubExplicitImageCropSource>,
+) -> Result<Option<ViewerImageSourceWindowV1>, &'static str> {
+    let Some(crop) = crop else {
+        return Ok(None);
+    };
+    if crop.ambiguous {
+        return Err("ambiguous_crop_properties");
+    }
+    if crop.top_raw.is_none()
+        && crop.bottom_raw.is_none()
+        && crop.left_raw.is_none()
+        && crop.right_raw.is_none()
+    {
+        return Ok(None);
+    }
+
+    let signed_q16 = |raw: Option<u32>| -> i64 { raw.map_or(0, |value| i64::from(value as i32)) };
+    let left_q16 = signed_q16(crop.left_raw);
+    let top_q16 = signed_q16(crop.top_raw);
+    let right_q16 = VIEWER_IMAGE_SOURCE_Q16_ONE - signed_q16(crop.right_raw);
+    let bottom_q16 = VIEWER_IMAGE_SOURCE_Q16_ONE - signed_q16(crop.bottom_raw);
+
+    if right_q16 <= left_q16 || bottom_q16 <= top_q16 {
+        return Err("non_positive_source_window");
+    }
+    if right_q16 <= 0
+        || bottom_q16 <= 0
+        || left_q16 >= VIEWER_IMAGE_SOURCE_Q16_ONE
+        || top_q16 >= VIEWER_IMAGE_SOURCE_Q16_ONE
+    {
+        return Err("source_window_outside_image");
+    }
+
+    Ok(Some(ViewerImageSourceWindowV1 {
+        left_q16,
+        top_q16,
+        right_q16,
+        bottom_q16,
+    }))
+}
+
 pub fn open_mature_0x2c(bytes: &[u8]) -> Result<ViewerDocument> {
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
     viewer_document_from_pipeline(bytes.len(), &pipeline)
@@ -1117,23 +1183,55 @@ fn open_mature_0x2c_bundle(
                 }
             }
 
-            bundle
-                .files
-                .into_iter()
-                .filter_map(|file| {
-                    let entry = bundle
-                        .manifest
-                        .assets
-                        .iter()
-                        .find(|entry| entry.resource_id == file.resource_id)?;
-                    Some(ViewerEmbeddedImage {
-                        resource_id: file.resource_id,
-                        mime: entry.mime.clone(),
-                        node_ids: entry.uses.iter().map(|usage| usage.node_id).collect(),
-                        bytes: file.bytes,
-                    })
-                })
-                .collect::<Vec<_>>()
+            let mut images = Vec::new();
+            for file in bundle.files {
+                let Some(entry) = bundle
+                    .manifest
+                    .assets
+                    .iter()
+                    .find(|entry| entry.resource_id == file.resource_id)
+                else {
+                    continue;
+                };
+
+                let mut placements = Vec::with_capacity(entry.uses.len());
+                for usage in &entry.uses {
+                    let source_window = match pipeline.resolved.graph.nodes.get(&usage.node_id).map(
+                        |node| {
+                            viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
+                        },
+                    ) {
+                        Some(Ok(source_window)) => source_window,
+                        Some(Err(reason)) => {
+                            document.diagnostics.push(ViewerDiagnostic {
+                                code: "viewer.image.crop_partial".to_owned(),
+                                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                                message: format!(
+                                    "Image crop for node {} is present but cannot be projected exactly ({reason}); exact image bytes are preserved and the full image remains the fallback.",
+                                    usage.node_id.as_canonical()
+                                ),
+                            });
+                            None
+                        }
+                        None => None,
+                    };
+                    if let Some(source_window) = source_window {
+                        placements.push(ViewerImagePlacementV1 {
+                            node_id: usage.node_id,
+                            source_window: Some(source_window),
+                        });
+                    }
+                }
+
+                images.push(ViewerEmbeddedImage {
+                    resource_id: file.resource_id,
+                    mime: entry.mime.clone(),
+                    node_ids: entry.uses.iter().map(|usage| usage.node_id).collect(),
+                    placements,
+                    bytes: file.bytes,
+                });
+            }
+            images
         }
         Err(_) => {
             document.diagnostics.push(ViewerDiagnostic {
@@ -1194,7 +1292,7 @@ fn open_mature_0x2c_bundle(
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, including explicit linked-frame chains and admitted source font sizes (including bounded inheritance) through Viewer fallback font metrics, plus exact embedded PNG/JPEG bytes and complete explicit shape-local solid fill/line state when available. Other inherited/default styling beyond admitted font/size, Publisher-exact typography/reflow, image crop/fit, gradients/patterns, effects, and transforms are not faithfully painted yet."
+            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, admitted source typography sizing, exact embedded PNG/JPEG bytes, persisted bounded image source-window crop, and admitted solid fill/line state. Publisher-exact typography/reflow, unsupported or ambiguous image crop, gradients/patterns, effects, and broader transforms are not faithfully painted yet."
                 .to_owned(),
         });
     }
@@ -2667,6 +2765,64 @@ mod tests {
     }
 
     #[test]
+    fn image_source_window_projects_signed_q16_crop_without_intrinsic_size_guessing() {
+        let fill = PubExplicitImageCropSource {
+            top_raw: Some(0x0000_5988),
+            bottom_raw: Some(0x0000_5988),
+            left_raw: Some(0),
+            right_raw: Some(0),
+            ambiguous: false,
+        };
+        assert_eq!(
+            viewer_image_source_window_v1(Some(&fill)).expect("fill crop"),
+            Some(ViewerImageSourceWindowV1 {
+                left_q16: 0,
+                top_q16: 0x5988,
+                right_q16: VIEWER_IMAGE_SOURCE_Q16_ONE,
+                bottom_q16: VIEWER_IMAGE_SOURCE_Q16_ONE - 0x5988,
+            })
+        );
+
+        let fit = PubExplicitImageCropSource {
+            top_raw: Some(0),
+            bottom_raw: Some(0),
+            left_raw: Some(0xFFFE_D618),
+            right_raw: Some(0xFFFE_D618),
+            ambiguous: false,
+        };
+        let fit_window = viewer_image_source_window_v1(Some(&fit))
+            .expect("fit crop")
+            .expect("fit source window");
+        assert!(fit_window.left_q16 < 0);
+        assert!(fit_window.right_q16 > VIEWER_IMAGE_SOURCE_Q16_ONE);
+        assert_eq!(
+            fit_window.right_q16 - VIEWER_IMAGE_SOURCE_Q16_ONE,
+            -fit_window.left_q16
+        );
+    }
+
+    #[test]
+    fn image_source_window_fails_closed_on_ambiguous_or_empty_windows() {
+        let ambiguous = PubExplicitImageCropSource {
+            top_raw: Some(0),
+            bottom_raw: None,
+            left_raw: None,
+            right_raw: None,
+            ambiguous: true,
+        };
+        assert!(viewer_image_source_window_v1(Some(&ambiguous)).is_err());
+
+        let collapsed = PubExplicitImageCropSource {
+            top_raw: None,
+            bottom_raw: None,
+            left_raw: Some(40_000),
+            right_raw: Some(40_000),
+            ambiguous: false,
+        };
+        assert!(viewer_image_source_window_v1(Some(&collapsed)).is_err());
+    }
+
+    #[test]
     fn normative_effective_paint_bridge_precedes_explicit_fopt_projection() {
         let mut graph = resolved_graph_fixture();
         let node_id = *graph.nodes.keys().next().expect("fixture node");
@@ -2797,6 +2953,7 @@ mod tests {
                 officeart_shape_type: None,
                 officeart_spid: None,
                 image_slot: None,
+                legacy_ole: None,
                 explicit_image_crop: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                 effective_paint: None,
