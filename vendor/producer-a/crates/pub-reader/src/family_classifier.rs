@@ -552,7 +552,8 @@ mod tests {
 
         let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
         let sector_len = 1usize << sector_shift;
-        let minifat_sector = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
+        let minifat_sector =
+            u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
         let offset = (minifat_sector as usize + 1) * sector_len;
         bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
         bytes
@@ -566,7 +567,11 @@ mod tests {
         assert_eq!(classified.route, PubReaderRoute::Legacy22LowText);
         assert_eq!(classified.confidence, PubFamilyConfidence::Medium);
         assert_eq!(classified.legacy_content_version, Some(136));
-        assert!(classified.reasons.contains(&PubFamilyReason::CfbParseFailed));
+        assert!(
+            classified
+                .reasons
+                .contains(&PubFamilyReason::CfbParseFailed)
+        );
     }
 
     #[test]
@@ -574,7 +579,11 @@ mod tests {
         let classified = classify_pub_family(&malformed_minifat_legacy_fixture(true));
         assert_eq!(classified.profile, PubFamilyProfile::NotStructuredPublisher);
         assert_eq!(classified.route, PubReaderRoute::Unsupported);
-        assert!(classified.reasons.contains(&PubFamilyReason::CfbParseFailed));
+        assert!(
+            classified
+                .reasons
+                .contains(&PubFamilyReason::CfbParseFailed)
+        );
     }
 
     #[test]
