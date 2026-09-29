@@ -33,6 +33,26 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    if first == "--strict-init" {
+        let probe = PathBuf::from(args.next().ok_or_else(|| anyhow!("missing probe path"))?);
+        if args.next().is_some() {
+            bail!("unexpected arguments");
+        }
+        let output =
+            launch_contained(&probe, b"", DEFAULT_WALL_TIMEOUT).context("launch strict init probe")?;
+        if output.receipt.exit_code != 0 {
+            bail!(
+                "strict init probe exited with {}: {}",
+                output.receipt.exit_code,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        if !output.stdout.is_empty() || !output.stderr.is_empty() {
+            bail!("strict init probe produced unexpected output");
+        }
+        return Ok(());
+    }
+
     let probe = PathBuf::from(first);
     if args.next().is_some() {
         bail!("unexpected arguments");
