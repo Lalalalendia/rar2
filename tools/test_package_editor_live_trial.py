@@ -1,3 +1,4 @@
+import hashlib
 import json
 import pathlib
 import tempfile
@@ -20,6 +21,30 @@ class EditorLiveTrialPackagerTests(unittest.TestCase):
         )
         self.catalog = self.root / "agent-control-v1.catalog.json"
         self.write_catalog()
+        self.runtime = self.root / "runtime"
+        self.runtime.mkdir()
+        worker = b"MZ" + b"worker" * 32
+        host = b"MZ" + b"host" * 32
+        (self.runtime / "chaptera-desktop-open-worker.exe").write_bytes(worker)
+        (self.runtime / "chaptera-desktop-open-sandbox-host.exe").write_bytes(host)
+        (self.runtime / "chaptera-desktop-open-runtime.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "chaptera.desktop-open-runtime-stage.v1",
+                    "worker": {
+                        "file_name": "chaptera-desktop-open-worker.exe",
+                        "sha256": hashlib.sha256(worker).hexdigest(),
+                        "byte_len": len(worker),
+                    },
+                    "sandbox_host": {
+                        "file_name": "chaptera-desktop-open-sandbox-host.exe",
+                        "sha256": hashlib.sha256(host).hexdigest(),
+                        "byte_len": len(host),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def write_catalog(
         self,
@@ -55,6 +80,7 @@ class EditorLiveTrialPackagerTests(unittest.TestCase):
         return package_editor(
             self.exe,
             output,
+            runtime_dir=self.runtime,
             readme=self.readme,
             agent_catalog=self.catalog,
             **kwargs,
@@ -80,6 +106,9 @@ class EditorLiveTrialPackagerTests(unittest.TestCase):
                     "THIRD-PARTY-NOTICES.txt",
                     "TRIAL-README.md",
                     "agent-control-v1.catalog.json",
+                    "chaptera-desktop-open-runtime.json",
+                    "chaptera-desktop-open-sandbox-host.exe",
+                    "chaptera-desktop-open-worker.exe",
                 ],
             )
             self.assertEqual(archive.read("Chaptera-Editor.exe"), self.exe.read_bytes())
@@ -111,6 +140,7 @@ class EditorLiveTrialPackagerTests(unittest.TestCase):
             package_editor(
                 bad,
                 self.root / "bad.zip",
+                runtime_dir=self.runtime,
                 readme=self.readme,
                 agent_catalog=self.catalog,
             )
@@ -148,6 +178,14 @@ class EditorLiveTrialPackagerTests(unittest.TestCase):
                 self.root / "bad.zip",
                 agent_catalog_entry="TRIAL-README.md",
             )
+
+    def test_rejects_runtime_receipt_hash_mismatch(self):
+        receipt_path = self.runtime / "chaptera-desktop-open-runtime.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["sandbox_host"]["sha256"] = "0" * 64
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "hash mismatch"):
+            self.package(self.root / "bad.zip")
 
 
 if __name__ == "__main__":
