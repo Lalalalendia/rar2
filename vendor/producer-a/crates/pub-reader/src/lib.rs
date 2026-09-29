@@ -91,8 +91,8 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillStoryReadError, QuillTypographyValueSource, parse_bounded_mcld,
-    parse_bounded_typography, parse_confirmed_story_catalog,
+    QuillMcldReadError, QuillStoryFailureEvidence, QuillStoryReadError, QuillTypographyValueSource,
+    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -939,6 +939,21 @@ pub fn probe_mature_0x2c_quill_story_error_kind(bytes: &[u8]) -> Option<&'static
         }
         QuillStoryReadError::ToknTargetSectionOverflow => "tokn_target_section_overflow",
     })
+}
+
+/// Returns a source-safe structural receipt for the first supported mature Quill story failure.
+///
+/// The receipt contains only counts, lengths and relative boundary distances.
+/// It does not retain document text, story IDs, raw bytes, filenames, source paths,
+/// absolute stream offsets or raw parser error text.
+pub fn probe_mature_0x2c_quill_story_failure_evidence(
+    bytes: &[u8],
+) -> Option<QuillStoryFailureEvidence> {
+    let quill = pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM_PATH).ok()?;
+    pub_quill::probe_confirmed_story_catalog_failure_evidence(
+        StreamPath(QUILL_STREAM_PATH.into()),
+        &quill,
+    )
 }
 
 /// Returns only the stable internal Quill story-catalog stage that fails.
