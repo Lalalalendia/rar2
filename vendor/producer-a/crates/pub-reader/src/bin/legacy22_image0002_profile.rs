@@ -543,7 +543,7 @@ fn wmf_raster_profile(chunk: &[u8]) -> Value {
                 "raster_error_class": wmf_raster_error_class(&message),
                 "raster_error_detail": wmf_raster_error_detail(&message),
             })
-        },
+        }
     }
 }
 
