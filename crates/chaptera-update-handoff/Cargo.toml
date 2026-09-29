@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+chaptera-process-launch = { path = "../chaptera-process-launch" }
 chaptera-update-engine = { path = "../chaptera-update-engine" }
 chaptera-update-orchestrator = { path = "../chaptera-update-orchestrator" }
 serde = { workspace = true }
