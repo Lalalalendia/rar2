@@ -48,6 +48,7 @@ on:
       - "tools/ci/reader_pr_fanout.py"
       - "tools/ci/test_reader_pr_fanout.py"
       - "tools/reader_active_content_guard.py"
+      - "tools/reader_page_role_observation.py"
       - "tools/package_reader_portable.py"
       - "tools/test_package_reader_portable.py"
       - "tools/package_editor_live_trial.py"
