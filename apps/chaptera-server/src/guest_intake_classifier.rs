@@ -215,10 +215,9 @@ fn obvious_non_pub(bytes: &[u8]) -> bool {
 }
 
 fn is_zip(bytes: &[u8]) -> bool {
-    matches!(
-        bytes.get(..4),
-        Some(b"PK\x03\x04") | Some(b"PK\x05\x06") | Some(b"PK\x07\x08")
-    )
+    bytes.starts_with(b"PK\x03\x04")
+        || bytes.starts_with(b"PK\x05\x06")
+        || bytes.starts_with(b"PK\x07\x08")
 }
 
 fn classification(
@@ -275,12 +274,9 @@ mod tests {
     #[test]
     fn publisher_cfb_with_reader_failure_is_high_value_and_authorizable() {
         let bytes = publisher_cfb(CONTENTS_0X2C_MAGIC);
-        let evidence = guest_failure_intake_evidence(
-            &bytes,
-            "unsupported",
-            Some("reader_scene_open_failed"),
-        )
-        .expect("server evidence");
+        let evidence =
+            guest_failure_intake_evidence(&bytes, "unsupported", Some("reader_scene_open_failed"))
+                .expect("server evidence");
         assert_eq!(evidence.classification.class, FailureClassV1::PubHighValue);
         evidence
             .validate_and_authorize(&consent())
