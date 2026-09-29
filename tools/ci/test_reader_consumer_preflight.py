@@ -57,6 +57,26 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertTrue(plan["desktop_reader_integration"])
         self.assertFalse(plan["desktop_reader_clippy"])
         self.assertTrue(plan["mobile_reader_integration"])
+        self.assertNotIn("vendor-check", ids)
+        self.assertIn("vendor-clippy", ids)
+        vendor_clippy = next(command for command in plan["commands"] if command["id"] == "vendor-clippy")
+        self.assertIn("--all-targets", vendor_clippy["argv"])
+        self.assertEqual(vendor_clippy["argv"][-2:], ["-D", "warnings"])
+
+    def test_render_plan_uses_clippy_as_compile_gate(self) -> None:
+        plan = MODULE.build_plan(
+            ["crates/chaptera-viewer-render-plan/src/lib.rs"],
+            "BASE",
+            "HEAD",
+        )
+        ids = {command["id"] for command in plan["commands"]}
+        self.assertNotIn("render-plan-check", ids)
+        self.assertIn("render-plan-clippy", ids)
+        self.assertIn("render-plan-tests", ids)
+        render_clippy = next(command for command in plan["commands"] if command["id"] == "render-plan-clippy")
+        self.assertIn("--all-targets", render_clippy["argv"])
+        self.assertIn("projected-scene-instances", render_clippy["argv"])
+        self.assertEqual(render_clippy["argv"][-2:], ["-D", "warnings"])
 
     def test_direct_desktop_change_keeps_desktop_clippy(self) -> None:
         plan = MODULE.build_plan(
