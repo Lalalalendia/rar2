@@ -413,6 +413,7 @@ fn materialize_legacy_noquill_child(
                 officeart_shape_type: None,
                 officeart_spid: None,
                 image_slot: None,
+                legacy_ole: None,
                 explicit_image_crop: None,
                 explicit_paint: PubExplicitShapePaintSource::default(),
                 effective_paint: None,
