@@ -201,7 +201,10 @@ pub fn classify_pub_family(bytes: &[u8]) -> PubFamilyClassification {
             let legacy_content_version = read_u16_le_at(&contents, 0x04);
             let legacy_secondary_fingerprint = read_u16_le_at(&contents, 0x0c);
             let (profile, route) = if has_quill {
-                (PubFamilyProfile::Legacy22Quill, PubReaderRoute::Legacy22Quill)
+                (
+                    PubFamilyProfile::Legacy22Quill,
+                    PubReaderRoute::Legacy22Quill,
+                )
             } else {
                 (
                     PubFamilyProfile::Legacy22LowText,
@@ -344,11 +347,7 @@ mod tests {
     #[test]
     fn classifies_publisher97_style_no_quill_as_legacy_low_text() {
         let bytes = synthetic_cfb(
-            Some(&contents(
-                pub_contents::CONTENTS_0X22_MAGIC,
-                300,
-                0x0088,
-            )),
+            Some(&contents(pub_contents::CONTENTS_0X22_MAGIC, 300, 0x0088)),
             false,
             false,
         );
@@ -367,11 +366,7 @@ mod tests {
     #[test]
     fn classifies_old_0x22_with_quill_separately() {
         let bytes = synthetic_cfb(
-            Some(&contents(
-                pub_contents::CONTENTS_0X22_MAGIC,
-                300,
-                0x0268,
-            )),
+            Some(&contents(pub_contents::CONTENTS_0X22_MAGIC, 300, 0x0268)),
             true,
             false,
         );
@@ -387,29 +382,17 @@ mod tests {
     #[test]
     fn mature_0x2c_requires_both_quill_and_escher() {
         let complete = synthetic_cfb(
-            Some(&contents(
-                pub_contents::CONTENTS_0X2C_MAGIC,
-                0,
-                21,
-            )),
+            Some(&contents(pub_contents::CONTENTS_0X2C_MAGIC, 0, 21)),
             true,
             true,
         );
         let missing_quill = synthetic_cfb(
-            Some(&contents(
-                pub_contents::CONTENTS_0X2C_MAGIC,
-                0,
-                21,
-            )),
+            Some(&contents(pub_contents::CONTENTS_0X2C_MAGIC, 0, 21)),
             false,
             true,
         );
         let missing_escher = synthetic_cfb(
-            Some(&contents(
-                pub_contents::CONTENTS_0X2C_MAGIC,
-                0,
-                21,
-            )),
+            Some(&contents(pub_contents::CONTENTS_0X2C_MAGIC, 0, 21)),
             true,
             false,
         );
@@ -431,19 +414,12 @@ mod tests {
 
     #[test]
     fn unknown_contents_magic_does_not_guess_a_parser() {
-        let bytes = synthetic_cfb(
-            Some(&contents([0xE8, 0xAC, 0x23, 0x00], 0, 0)),
-            true,
-            true,
-        );
+        let bytes = synthetic_cfb(Some(&contents([0xE8, 0xAC, 0x23, 0x00], 0, 0)), true, true);
 
         let classified = classify_pub_family(&bytes);
 
         assert_eq!(classified.family, None);
-        assert_eq!(
-            classified.profile,
-            PubFamilyProfile::PublisherUnknownFamily
-        );
+        assert_eq!(classified.profile, PubFamilyProfile::PublisherUnknownFamily);
         assert_eq!(classified.route, PubReaderRoute::Unsupported);
         assert!(
             classified
@@ -487,10 +463,7 @@ mod tests {
     fn missing_contents_and_non_cfb_fail_closed() {
         let missing_contents = synthetic_cfb(None, true, false);
         let classified = classify_pub_family(&missing_contents);
-        assert_eq!(
-            classified.profile,
-            PubFamilyProfile::PublisherUnknownFamily
-        );
+        assert_eq!(classified.profile, PubFamilyProfile::PublisherUnknownFamily);
         assert_eq!(classified.route, PubReaderRoute::Unsupported);
         assert!(
             classified
@@ -499,10 +472,7 @@ mod tests {
         );
 
         let not_cfb = classify_pub_family(b"not a compound file");
-        assert_eq!(
-            not_cfb.profile,
-            PubFamilyProfile::NotStructuredPublisher
-        );
+        assert_eq!(not_cfb.profile, PubFamilyProfile::NotStructuredPublisher);
         assert_eq!(not_cfb.route, PubReaderRoute::Unsupported);
     }
 }
