@@ -1191,6 +1191,51 @@ mod tests {
         }
     }
 
+    fn insert_record_before_function(bytes: &mut Vec<u8>, target: u16, extra: Vec<u8>) {
+        let mut offset = 18usize;
+        let mut insert_at = None;
+        while offset + 6 <= bytes.len() {
+            let words = read_u32(bytes, offset).expect("record size");
+            let function = read_u16(bytes, offset + 4).expect("record function");
+            if function == target {
+                insert_at = Some(offset);
+                break;
+            }
+            offset += usize::try_from(words * 2).expect("record bytes");
+        }
+        let insert_at = insert_at.expect("target record");
+        let extra_words = u32::try_from(extra.len() / 2).expect("record words");
+        bytes.splice(insert_at..insert_at, extra);
+        let words = u32::try_from(bytes.len() / 2).expect("WMF words");
+        bytes[6..10].copy_from_slice(&words.to_le_bytes());
+        let max_record_words = read_u32(bytes, 12).expect("MaxRecord");
+        if extra_words > max_record_words {
+            bytes[12..16].copy_from_slice(&extra_words.to_le_bytes());
+        }
+    }
+
+    fn region_compatibility_params() -> Vec<u8> {
+        let mut params = Vec::new();
+        params.extend_from_slice(&0_i16.to_le_bytes()); // nextInChain: ignored
+        params.extend_from_slice(&6_i16.to_le_bytes()); // ObjectType
+        params.extend_from_slice(&0x02f6_u32.to_le_bytes()); // ObjectCount: ignored
+        params.extend_from_slice(&42_i16.to_le_bytes()); // RegionSize
+        params.extend_from_slice(&1_i16.to_le_bytes()); // ScanCount
+        params.extend_from_slice(&2_i16.to_le_bytes()); // maxScan
+        for value in [25_i16, 25, 75, 75] {
+            params.extend_from_slice(&value.to_le_bytes());
+        }
+        params.extend_from_slice(&2_u16.to_le_bytes()); // Count
+        params.extend_from_slice(&25_u16.to_le_bytes()); // Top
+        params.extend_from_slice(&75_u16.to_le_bytes()); // Bottom
+        params.extend_from_slice(&25_u16.to_le_bytes()); // Left
+        params.extend_from_slice(&75_u16.to_le_bytes()); // Right
+        params.extend_from_slice(&2_u16.to_le_bytes()); // Count2
+        params.extend_from_slice(&[0_u8; 8]); // corpus-proven bounded compatibility tail
+        assert_eq!(params.len(), 42);
+        params
+    }
+
     fn synthetic_polygon() -> Vec<u8> {
         let mut records = Vec::<u8>::new();
         let mut window = Vec::new();
@@ -1244,6 +1289,88 @@ mod tests {
         assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
         let corner = ((5 * 100 + 5) * 4) as usize;
         assert_eq!(&image.rgba[corner..corner + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn accepts_bounded_region_select_only_before_explicit_clip_rect() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_CREATEREGION, &region_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+
+        let mut clip = Vec::new();
+        for value in [60_i16, 60, 40, 40] {
+            clip.extend_from_slice(&value.to_le_bytes());
+        }
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_INTERSECTCLIPRECT, &clip),
+        );
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("region compatibility");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+        let clipped = ((30 * 100 + 30) * 4) as usize;
+        assert_eq!(
+            &image.rgba[clipped..clipped + 4],
+            &[0, 0, 0, 0],
+            "explicit INTERSECTCLIPRECT, not Region SELECTOBJECT, supplies clipping"
+        );
+    }
+
+    #[test]
+    fn rejects_region_select_without_immediate_explicit_clip_rect() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_CREATEREGION, &region_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn rejects_region_outside_exact_bounded_compatibility_profile() {
+        let mut params = region_compatibility_params();
+        params[2..4].copy_from_slice(&5_i16.to_le_bytes());
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_CREATEREGION, &params));
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn keeps_selectclipregion_fail_closed() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_CREATEREGION, &region_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTCLIPREGION, &2_u16.to_le_bytes()),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
