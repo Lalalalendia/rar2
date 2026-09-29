@@ -29,22 +29,12 @@ def classify(paths: list[str]) -> dict[str, bool]:
         "Cargo.toml", "Cargo.lock",
         "apps/chaptera-desktop/src/render_backend.rs",
         "apps/chaptera-desktop/src/main.rs",
-        "vendor/producer-a/Cargo.toml",
-        "vendor/producer-a/Cargo.lock",
     }
-    reader_prefixes = (
-        "crates/chaptera-viewer-render-plan/",
-        "vendor/producer-a/crates/pub-core/",
-        "vendor/producer-a/crates/pub-cfb/",
-        "vendor/producer-a/crates/pub-contents/",
-        "vendor/producer-a/crates/pub-escher/",
-        "vendor/producer-a/crates/pub-model/",
-        "vendor/producer-a/crates/pub-quill/",
-        "vendor/producer-a/crates/pub-reader/",
-        "vendor/producer-a/crates/pub-layout/",
-        "vendor/producer-a/crates/pub-viewer/",
+    out["reader_windows"] = any(
+        _matches(x, reader_exact, ("crates/chaptera-viewer-render-plan/",))
+        for x in p
     )
-    out["reader_windows"] = any(_matches(x, reader_exact, reader_prefixes) for x in p)
+
 
     desktop_exact = {
         "apps/chaptera-desktop/src/render_backend.rs",
