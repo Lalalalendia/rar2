@@ -28,6 +28,7 @@ use crate::{
     authz_runtime::{
         AuthzError, CAP_VIEW, SqliteAuthorizedRevisionCommitter, SqliteAuthzAuthority,
     },
+    reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
     revision_materializer::{
         BlobStoreExactSourceLoader, EDITOR_REVISION_EVENT_SCHEMA_V1,
         EDITOR_REVISION_EVENT_SEMANTIC_SCHEMA_VERSION, EditorRevisionEventV1,
@@ -43,7 +44,6 @@ use crate::{
 pub const COMMIT_REQUEST_V1: &str = "chaptera.commit-request.v1";
 pub const COMMIT_ACCEPTED_V1: &str = "chaptera.commit-accepted.v1";
 pub const CURRENT_DOCUMENT_V1: &str = "chaptera.current-document.v1";
-pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
 #[derive(Clone)]
 pub struct ProductApiHttpState {
@@ -113,16 +113,6 @@ struct CurrentDocumentResponse {
     canonical_authoring_revision_id: String,
     project: pub_editor::EditorProject,
     authoring_graph: PubResolvedGraph,
-}
-
-#[derive(Debug, Serialize)]
-struct ReaderSceneResponse {
-    protocol_version: &'static str,
-    document_id: String,
-    source_hash: String,
-    revision_id: String,
-    scene_authority: &'static str,
-    geometry: pub_viewer::ViewerGeometryDocument,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,7 +238,7 @@ async fn reader_scene(
     Path(document_id): Path<String>,
     headers: HeaderMap,
     jar: CookieJar,
-) -> Result<Json<ReaderSceneResponse>, ProductApiError> {
+) -> Result<Json<ReaderSceneV1>, ProductApiError> {
     let principal = state
         .auth
         .authenticate_read_request(&headers, &jar)
@@ -299,14 +289,20 @@ async fn reader_scene(
         )
     })?;
 
-    Ok(Json(ReaderSceneResponse {
-        protocol_version: READER_SCENE_V1,
+    let scene = from_viewer_geometry(
         document_id,
-        source_hash: source.source_sha256,
-        revision_id: head.revision_id,
-        scene_authority: "immutable_source",
-        geometry,
-    }))
+        source.source_sha256,
+        head.revision_id,
+        &geometry,
+    )
+    .map_err(|error| {
+        ProductApiError::internal(
+            "reader_scene_projection_failed",
+            format!("source-neutral Reader scene projection failed: {error}"),
+        )
+    })?;
+
+    Ok(Json(scene))
 }
 
 async fn commit_move_node(
@@ -1160,11 +1156,13 @@ mod tests {
             .unwrap();
         assert_eq!(reader_scene.status(), StatusCode::OK);
         let reader_scene = json_body(reader_scene).await;
-        assert_eq!(reader_scene["protocol_version"], READER_SCENE_V1);
+        assert_eq!(reader_scene["protocol_version"], crate::reader_scene_v1::READER_SCENE_V1);
         assert_eq!(reader_scene["source_hash"], source_sha256);
         assert_eq!(reader_scene["revision_id"], baseline.service_revision_id);
-        assert_eq!(reader_scene["scene_authority"], "immutable_source");
-        assert_eq!(reader_scene["geometry"]["schema_version"], "0.1");
+        assert_eq!(reader_scene["scene_authority"], "server_viewer_projection");
+        assert!(reader_scene["pages"].as_array().is_some_and(|pages| !pages.is_empty()));
+        assert!(reader_scene["nodes"].as_array().is_some());
+        assert!(reader_scene.get("geometry").is_none());
         assert!(reader_scene.get("project").is_none());
         assert!(reader_scene.get("authoring_graph").is_none());
 
