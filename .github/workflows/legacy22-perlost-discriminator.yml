@@ -161,7 +161,9 @@ jobs:
           p=Path("corpus-src/pub-corpus/corpus/native/unclassified/d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f.pub")
           with olefile.OleFileIO(str(p)) as ole:
               ole.loadminifat()
-              ole.loaddirectory()
+              # OleFileIO has already loaded the directory during open; olefile 0.47
+              # requires an explicit sector argument for loaddirectory(), so do not
+              # invoke that internal loader a second time here.
               mf=list(ole.minifat)
               max_regular=0xFFFFFFFA
               terminal={0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFD,0xFFFFFFFC}
