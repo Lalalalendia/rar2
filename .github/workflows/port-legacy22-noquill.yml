@@ -74,7 +74,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git add -A
+          git add -- \
+            apps/chaptera-desktop/src \
+            vendor/producer-a/crates \
+            vendor/producer-a/Cargo.lock
           if git diff --cached --quiet; then
             echo "No changes."
             exit 0
