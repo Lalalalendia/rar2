@@ -80,4 +80,6 @@ jobs:
             exit 0
           fi
           git commit -m "reader: port bounded legacy22 source-graph train"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase "origin/${GITHUB_REF_NAME}"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
