@@ -5,9 +5,9 @@ from collections import Counter
 from pathlib import Path
 
 try:
- from .cfb_physical import CFB, END, FAT, FREE, NO, h
+ from .cfb_physical import CFB, END, FAT, FREE, NO, SIG, h
 except ImportError:
- from cfb_physical import CFB, END, FAT, FREE, NO, h
+ from cfb_physical import CFB, END, FAT, FREE, NO, SIG, h
 
 def logical(b):
  import olefile
