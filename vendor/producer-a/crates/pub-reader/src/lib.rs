@@ -2363,20 +2363,27 @@ pub fn build_mature_0x2c_from_streams(
             None
         };
         let (table_story, table) = if raw_type == Some(RAW_TYPE_TABLE) {
-            let context = table_bridge::TableBridgeContext {
-                source: &graph.source,
-                contents_stream: &contents_stream,
-                contents,
-                references: &references,
-                quill_catalog: &quill_catalog,
-                story_by_syid: &story_by_syid,
-                story_layout_keys: &story_layout_keys,
-                mcld: mcld.as_ref(),
-            };
-            (
-                table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
-                table_bridge::build_table_source(&context, seq_num, &chunk, &mut diagnostics)?,
-            )
+            if let Some(quill_catalog) = quill_catalog.as_ref() {
+                let context = table_bridge::TableBridgeContext {
+                    source: &graph.source,
+                    contents_stream: &contents_stream,
+                    contents,
+                    references: &references,
+                    quill_catalog,
+                    story_by_syid: &story_by_syid,
+                    story_layout_keys: &story_layout_keys,
+                    mcld: mcld.as_ref(),
+                };
+                (
+                    table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
+                    table_bridge::build_table_source(&context, seq_num, &chunk, &mut diagnostics)?,
+                )
+            } else {
+                // The only no-catalog admission is the already-fenced physical-empty
+                // Story65 variant with no live SHAPE/TABLE Story identity. Do not
+                // fabricate Quill/TCD-backed table semantics in that geometry-only path.
+                (None, None)
+            }
         } else {
             (None, None)
         };
