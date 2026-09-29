@@ -994,6 +994,54 @@ pub fn probe_mature_0x2c_contents_story_count(bytes: &[u8]) -> Option<u32> {
     Some(catalog.declared_count)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubContentsStoryDemandEvidence {
+    pub shape_table_chunk_count: usize,
+    pub chunks_with_story_id: usize,
+    pub distinct_story_id_count: usize,
+}
+
+/// Returns source-safe Story demand from confirmed SHAPE/TABLE field 0x27 scalars.
+///
+/// Only cardinalities are retained. Story identifiers themselves are never
+/// returned or serialized by this probe.
+pub fn probe_mature_0x2c_contents_story_demand(
+    bytes: &[u8],
+) -> Option<PubContentsStoryDemandEvidence> {
+    let contents = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH).ok()?;
+    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let header = parse_0x2c_header(contents_stream.clone(), &contents).ok()?;
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header).ok()?;
+    let references = build_reference_index(&contents, &trailer.directory).ok()?;
+
+    let mut shape_table_chunk_count = 0_usize;
+    let mut chunks_with_story_id = 0_usize;
+    let mut distinct_story_ids = BTreeSet::new();
+
+    for reference in references.values() {
+        if !matches!(
+            single_raw_type(reference),
+            Some(RAW_TYPE_SHAPE) | Some(RAW_TYPE_TABLE)
+        ) {
+            continue;
+        }
+        shape_table_chunk_count += 1;
+
+        let chunk = chunk_for_reference(contents_stream.clone(), &contents, reference).ok()?;
+        let story_id = unique_story_id_scalar(&chunk).ok()?;
+        if let Some(story_id) = story_id {
+            chunks_with_story_id += 1;
+            distinct_story_ids.insert(story_id);
+        }
+    }
+
+    Some(PubContentsStoryDemandEvidence {
+        shape_table_chunk_count,
+        chunks_with_story_id,
+        distinct_story_id_count: distinct_story_ids.len(),
+    })
+}
+
 /// Returns only the stable mature Contents Story-catalog error class.
 ///
 /// Dynamic payloads such as offsets, counts and identities are deliberately
