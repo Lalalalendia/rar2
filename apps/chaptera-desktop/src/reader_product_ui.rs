@@ -160,3 +160,4 @@ mod tests {
     }
 }
 // CI cancellation measurement head 1: start Reader Windows product.
+// CI cancellation measurement head 2: obsolete head should cancel promptly.
