@@ -35,7 +35,8 @@ const PROJECT_PERSISTENCE_SQL: &str = include_str!("../migrations/0013_project_p
 const WORKSPACE_CONTEXT_SQL: &str = include_str!("../migrations/0014_workspace_context.sql");
 const UPLOAD_ADMISSION_SQL: &str = include_str!("../migrations/0015_upload_admission.sql");
 const PUBLIC_RATE_LIMIT_SQL: &str = include_str!("../migrations/0016_public_rate_limit.sql");
-const READER_GUEST_SESSIONS_SQL: &str = include_str!("../migrations/0017_reader_guest_sessions.sql");
+const READER_GUEST_SESSIONS_SQL: &str =
+    include_str!("../migrations/0017_reader_guest_sessions.sql");
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
