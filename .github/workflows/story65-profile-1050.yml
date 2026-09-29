@@ -1,0 +1,196 @@
+name: STORY65 physical profile 1050
+
+on:
+  push:
+    branches:
+      - research/story65-profile-1050
+    paths:
+      - 'vendor/producer-a/crates/pub-reader/src/bin/story65_profile.rs'
+      - '.github/workflows/story65-profile-1050.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: story65-profile-1050-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt, clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate and build source-safe profiler
+        run: |
+          set -euo pipefail
+          rustfmt --check --edition 2024 vendor/producer-a/crates/pub-reader/src/bin/story65_profile.rs
+          cargo clippy \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin story65_profile \
+            -- \
+            -D warnings
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin story65_profile
+
+      - name: Profile all exact 1050 PUB
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from collections import Counter, defaultdict
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          corpus = Path("out/pinned1050/materialized/native")
+          paths = sorted(corpus.glob("*.pub"))
+          assert len(paths) == 1050, len(paths)
+
+          shared = {
+              "190e1c440eb4170758af00dac385af0f1c0c2d5ce198aacd2a7cd57474a57151",
+              "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
+              "636c94b0c9d6759fc71369cd292aeade61d55f23e8a0959b3982e03bbfc2142d",
+              "78ef44d22b5b1aa2cc031d03a039ab6ff7c472b8dad2869c32dd1aee7d7667bb",
+              "7a5393159155ad6b7e1e47fa2769e05ffdb7124298470bae15faa556b3c06cd6",
+              "8f514838dd553dc011942afbb385ce8f3e539795984a8fc97cfcb6a880023bc2",
+              "990cf478aed51a6e7fdd63556bf7402699d6a3eb1fdabaf8b18a621353878a46",
+              "be415f413886ede01e6018c8a89538deb88719418c535baf50dd041f15393698",
+          }
+
+          exe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "story65_profile"
+
+          def run(path, out_dir):
+              target = out_dir / f"{path.stem}.json"
+              cp = subprocess.run(
+                  [str(exe), str(path), str(target)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=30,
+                  check=False,
+              )
+              if cp.returncode != 0:
+                  raise RuntimeError(f"{path.stem}: rc={cp.returncode}: {cp.stderr[-1000:]}")
+              return json.loads(target.read_text())
+
+          rows = []
+          with tempfile.TemporaryDirectory(prefix="story65-profile-") as td:
+              out_dir = Path(td)
+              with ThreadPoolExecutor(max_workers=12) as pool:
+                  futures = {pool.submit(run, p, out_dir): p for p in paths}
+                  for future in as_completed(futures):
+                      rows.append(future.result())
+
+          rows.sort(key=lambda r: r["source_sha256"])
+          mature = [r for r in rows if r.get("contents_family") == "0x2c"]
+          with_catalog = [r for r in mature if int(r.get("story_catalog_count") or 0) > 0]
+
+          def one_catalog(row):
+              catalogs = row.get("story_catalogs") or []
+              return catalogs[0] if len(catalogs) == 1 else None
+
+          def physical_signature(catalog):
+              fields = catalog.get("top_level_fields") or []
+              return tuple(
+                  (int(f["id"]), int(f["block_type"]), str(f["body_kind"]))
+                  for f in fields
+              )
+
+          strict_errors = Counter()
+          signatures = Counter()
+          shared_rows = []
+          for row in with_catalog:
+              catalog = one_catalog(row)
+              if not catalog:
+                  continue
+              strict = catalog.get("strict_catalog") or {}
+              key = strict.get("error_kind") if strict.get("status") == "error" else "ok"
+              strict_errors[str(key)] += 1
+              signatures[str(physical_signature(catalog))] += 1
+              if row["source_sha256"] in shared:
+                  shared_rows.append({
+                      "source_sha256": row["source_sha256"],
+                      "serialization_revision": row.get("serialization_revision"),
+                      "strict_catalog": strict,
+                      "declared_length": catalog.get("declared_length"),
+                      "top_level_field_count": catalog.get("top_level_field_count"),
+                      "top_level_fields": catalog.get("top_level_fields"),
+                      "unsupported_tail": catalog.get("unsupported_tail"),
+                      "physical_signature": physical_signature(catalog),
+                  })
+
+          assert {r["source_sha256"] for r in shared_rows} == shared
+          assert all(
+              (r["strict_catalog"] or {}).get("error_kind") == "missing_declared_count"
+              for r in shared_rows
+          )
+
+          shared_signatures = Counter(str(tuple(r["physical_signature"])) for r in shared_rows)
+          summary = {
+              "schema": "chaptera.story65-physical-census.v1",
+              "corpus_file_count": len(rows),
+              "mature_file_count": len(mature),
+              "files_with_story_catalog": len(with_catalog),
+              "strict_result_counts": dict(strict_errors),
+              "physical_signature_count": len(signatures),
+              "shared_missing_count_file_count": len(shared_rows),
+              "shared_physical_signature_counts": dict(shared_signatures),
+              "shared_rows": shared_rows,
+              "top_physical_signatures": [
+                  {"signature": key, "count": count}
+                  for key, count in signatures.most_common(30)
+              ],
+              "evidence_boundary": (
+                  "source-safe structural inventory only: field ids, normalized wire classes, "
+                  "container lengths and raw spans; no scalar payload values or document text"
+              ),
+          }
+          Path("out/story65").mkdir(parents=True, exist_ok=True)
+          Path("out/story65/summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          Path("out/story65/profiles.json").write_text(
+              json.dumps(with_catalog, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: story65-profile-1050-${{ github.run_id }}
+          path: out/story65/**
+          if-no-files-found: error
+          retention-days: 90
