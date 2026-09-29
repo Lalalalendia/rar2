@@ -7,7 +7,6 @@ on:
     paths:
       - "tools/reader_corpus_manifest_v1.json"
       - "tools/run_reader_corpus_matrix_v1.py"
-      - ".github/workflows/reader-corpus-truth-v1.yml"
 
 permissions:
   contents: read
