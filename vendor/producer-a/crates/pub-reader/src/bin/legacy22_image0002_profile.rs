@@ -3,7 +3,8 @@ use pub_contents::{parse_legacy_0x22_directory, Legacy0x22Directory, Legacy0x22D
 use pub_core::StreamPath;
 use pub_model::Sha256Digest;
 use pub_reader::{
-    build_legacy_0x22_noquill_source_graph, validate_wmf_metafile, CONTENTS_STREAM_PATH,
+    build_legacy_0x22_noquill_source_graph, rasterize_wmf_preview, validate_wmf_metafile,
+    CONTENTS_STREAM_PATH,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -378,6 +379,151 @@ fn wmf_bounded_prefix_profile(payload: &[u8]) -> Value {
     })
 }
 
+fn first_eof_wmf_candidate(payload: &[u8]) -> Option<Vec<u8>> {
+    const META_HEADER_BYTES: usize = 18;
+    const MIN_RECORD_WORDS: u32 = 3;
+    const MAX_RECORDS: usize = 1_000_000;
+
+    let header_offset = wmf_header_offset(payload);
+    let mut offset = header_offset.checked_add(META_HEADER_BYTES)?;
+    if offset > payload.len() {
+        return None;
+    }
+
+    for _ in 0..MAX_RECORDS {
+        if offset >= payload.len() {
+            return None;
+        }
+        let record_words = usize::try_from(read_u32(payload, offset)?).ok()?;
+        if record_words < usize::try_from(MIN_RECORD_WORDS).ok()? {
+            return None;
+        }
+        let record_bytes = record_words.checked_mul(2)?;
+        let record_end = offset.checked_add(record_bytes)?;
+        if record_end > payload.len() {
+            return None;
+        }
+        let function = read_u16(payload, offset + 4)?;
+        offset = record_end;
+        if function == 0 {
+            let meta_len = offset.checked_sub(header_offset)?;
+            if meta_len % 2 != 0 {
+                return None;
+            }
+            let words = u32::try_from(meta_len / 2).ok()?;
+            let mut prefix = payload.get(..offset)?.to_vec();
+            if !write_u32(&mut prefix, header_offset + 6, words) {
+                return None;
+            }
+            return validate_wmf_metafile(&prefix).is_ok().then_some(prefix);
+        }
+    }
+    None
+}
+
+fn recovered_wmf_candidate(chunk: &[u8]) -> Option<(&'static str, Vec<u8>)> {
+    let declared_len = usize::try_from(read_u32(chunk, 0x04)?).ok()?;
+    let end = 0x08_usize.checked_add(declared_len)?;
+    let payload = chunk.get(0x08..end)?;
+
+    if validate_wmf_metafile(payload).is_ok() {
+        return Some(("strict", payload.to_vec()));
+    }
+
+    let header_offset = wmf_header_offset(payload);
+    if let Some(declared_words) = read_u32(payload, header_offset + 6) {
+        if let Ok(declared_words) = usize::try_from(declared_words) {
+            if let Some(meta_bytes) = declared_words.checked_mul(2) {
+                if let Some(prefix_end) = header_offset.checked_add(meta_bytes) {
+                    if let Some(prefix) = payload.get(..prefix_end) {
+                        if validate_wmf_metafile(prefix).is_ok() {
+                            return Some(("internal_declared_prefix", prefix.to_vec()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    first_eof_wmf_candidate(payload).map(|bytes| ("first_eof_prefix", bytes))
+}
+
+fn wmf_raster_error_class(message: &str) -> &'static str {
+    if message.starts_with("unsupported WMF record function") {
+        "unsupported_record_function"
+    } else if message.starts_with("unsupported WMF raster profile")
+        || message.starts_with("unsupported WMF header")
+    {
+        "unsupported_raster_profile"
+    } else if message.starts_with("unsupported WMF pen style") {
+        "unsupported_pen_style"
+    } else if message.starts_with("unsupported WMF brush style") {
+        "unsupported_brush_style"
+    } else if message.starts_with("unsupported WMF map mode") {
+        "unsupported_map_mode"
+    } else if message.starts_with("unsupported WMF ROP2 mode") {
+        "unsupported_rop2_mode"
+    } else if message.starts_with("unsupported WMF relative/absolute mode") {
+        "unsupported_relative_mode"
+    } else if message.starts_with("unsupported WMF polygon fill mode") {
+        "unsupported_polygon_fill_mode"
+    } else if message.starts_with("unsupported WMF stretch mode") {
+        "unsupported_stretch_mode"
+    } else if message.starts_with("unsupported WMF RESTOREDC value") {
+        "unsupported_restore_dc"
+    } else if message.starts_with("unsupported WMF escape") {
+        "unsupported_escape"
+    } else if message.contains("object table") || message.contains("graphics object") {
+        "object_table_or_object_kind"
+    } else if message.contains("raster work") {
+        "raster_work_limit"
+    } else if message.contains("output") || message.contains("zero output extent") {
+        "output_bound"
+    } else if message.contains("coordinate transform") || message.contains("window extent") {
+        "coordinate_or_window_transform"
+    } else if message.contains("point count") || message.contains("polygon count") {
+        "point_or_polygon_bound"
+    } else if message.contains("truncated")
+        || message.contains("overflow")
+        || message.contains("declared")
+        || message.contains("META_EOF")
+        || message.contains("record size")
+        || message.contains("missing WMF")
+    {
+        "malformed_or_structural"
+    } else {
+        "other_fail_closed"
+    }
+}
+
+fn wmf_raster_profile(chunk: &[u8]) -> Value {
+    let Some((recovery_class, wmf)) = recovered_wmf_candidate(chunk) else {
+        return json!({
+            "candidate": false,
+            "recovery_class": null,
+            "raster_success": false,
+            "raster_error_class": "no_bounded_wmf_candidate",
+        });
+    };
+
+    match rasterize_wmf_preview(&wmf, 512, 512) {
+        Ok(preview) => json!({
+            "candidate": true,
+            "recovery_class": recovery_class,
+            "raster_success": true,
+            "raster_error_class": null,
+            "raster_width": preview.width,
+            "raster_height": preview.height,
+        }),
+        Err(error) => json!({
+            "candidate": true,
+            "recovery_class": recovery_class,
+            "raster_success": false,
+            "raster_error_class": wmf_raster_error_class(&error.to_string()),
+        }),
+    }
+}
+
 fn wmf_declared_profile(chunk: &[u8]) -> Value {
     let Some(declared_u32) = read_u32(chunk, 0x04) else {
         return json!({
@@ -550,6 +696,7 @@ fn main() -> Result<()> {
             })
             .unwrap_or_default();
         let direct_native_declared_profile = direct_native_chunk.map(wmf_declared_profile);
+        let direct_native_raster_profile = direct_native_chunk.map(wmf_raster_profile);
 
         let previous_entry = image
             .object_id
@@ -597,6 +744,7 @@ fn main() -> Result<()> {
             "direct_native_wmf_valid_offsets": direct_native_wmf_offsets,
             "direct_native_wmf_payload_sha256": direct_native_payload_hashes,
             "direct_native_declared_profile": direct_native_declared_profile,
+            "direct_native_raster_profile": direct_native_raster_profile,
             "previous_object_raw_type": previous_entry
                 .map(|entry| format!("0x{:04x}", entry.chunk_type)),
             "previous_object_parent_matches_image": previous_entry
