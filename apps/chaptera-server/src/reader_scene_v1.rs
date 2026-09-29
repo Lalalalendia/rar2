@@ -6,6 +6,9 @@ use serde_json::Value;
 
 pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
+const MAX_INLINE_IMAGE_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Debug, Serialize)]
 pub struct ReaderSceneV1 {
     pub protocol_version: &'static str,
@@ -52,6 +55,8 @@ pub struct ReaderNodeV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_source_window: Option<ReaderImageSourceWindowV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 
@@ -95,10 +100,20 @@ pub struct ReaderStoryV1 {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ReaderImageSourceWindowV1 {
+    pub left_q16: i64,
+    pub top_q16: i64,
+    pub right_q16: i64,
+    pub bottom_q16: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ReaderImageResourceV1 {
     pub resource_id: String,
     pub mime: String,
     pub availability: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_data_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -194,18 +209,48 @@ pub fn from_viewer_geometry(
     }
 
     let mut resource_by_node = HashMap::new();
+    let mut source_window_by_node = HashMap::new();
     let mut resources = Vec::with_capacity(geometry.images.len());
     let mut resource_ids = HashSet::new();
+    let mut inline_image_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
         if !resource_ids.insert(resource_id.clone()) {
             return Err(format!("duplicate Viewer image resource {resource_id}"));
         }
+        let inline_data_url =
+            inline_image_data_url(&image.mime, &image.bytes, &mut inline_image_budget);
+        let availability = if inline_data_url.is_some() {
+            "inline_data_url"
+        } else {
+            "descriptor_only"
+        };
         resources.push(ReaderImageResourceV1 {
             resource_id: resource_id.clone(),
             mime: image.mime.clone(),
-            availability: "descriptor_only",
+            availability,
+            inline_data_url,
         });
+
+        for placement in &image.placements {
+            let node_id = serialized_string(&placement.node_id, "image placement node id")?;
+            if !node_ids.contains(&node_id) {
+                return Err(format!("image placement references unknown node {node_id}"));
+            }
+            let Some(window) = placement.source_window.as_ref() else {
+                continue;
+            };
+            let mapped = ReaderImageSourceWindowV1 {
+                left_q16: window.left_q16,
+                top_q16: window.top_q16,
+                right_q16: window.right_q16,
+                bottom_q16: window.bottom_q16,
+            };
+            if source_window_by_node.insert(node_id.clone(), mapped).is_some() {
+                return Err(format!("duplicate image placement for node {node_id}"));
+            }
+        }
+
         for node_id in &image.node_ids {
             let node_id = serialized_string(node_id, "image node id")?;
             if !node_ids.contains(&node_id) {
@@ -277,6 +322,7 @@ pub fn from_viewer_geometry(
                 .ok_or_else(|| format!("node kind missing for {node_id}"))?,
             paint: paint_by_node.remove(&node_id),
             resource_id: resource_by_node.remove(&node_id),
+            image_source_window: source_window_by_node.remove(&node_id),
             text: text_by_node.get(&node_id).cloned(),
             node_id,
             page_id,
@@ -323,6 +369,12 @@ pub fn from_viewer_geometry(
     }
     if kind_by_node.values().any(|kind| *kind == "unknown") {
         reasons.push("node_kind_partial");
+    }
+    if resources
+        .iter()
+        .any(|resource| resource.inline_data_url.is_none())
+    {
+        reasons.push("image_resource_not_inline");
     }
     if diagnostics
         .iter()
@@ -453,4 +505,76 @@ fn object_string(value: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| format!("{key} must be a string"))
+}
+
+
+fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
+    if !matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/jpg" | "image/gif"
+    ) || bytes.is_empty()
+        || bytes.len() > MAX_INLINE_IMAGE_RESOURCE_BYTES
+        || bytes.len() > *remaining_budget
+    {
+        return None;
+    }
+    *remaining_budget -= bytes.len();
+    Some(format!("data:{mime};base64,{}", base64_encode(bytes)))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+
+        encoded.push(char::from(TABLE[usize::from(b0 >> 2)]));
+        encoded.push(char::from(
+            TABLE[usize::from(((b0 & 0x03) << 4) | (b1 >> 4))],
+        ));
+        if chunk.len() > 1 {
+            encoded.push(char::from(
+                TABLE[usize::from(((b1 & 0x0f) << 2) | (b2 >> 6))],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if chunk.len() > 2 {
+            encoded.push(char::from(TABLE[usize::from(b2 & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_INLINE_IMAGE_TOTAL_BYTES, base64_encode, inline_image_data_url};
+
+    #[test]
+    fn base64_encoding_matches_rfc_4648_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+    }
+
+    #[test]
+    fn inline_image_resource_is_mime_allowlisted_and_budgeted() {
+        let mut budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+        let url = inline_image_data_url("image/png", b"png", &mut budget)
+            .expect("bounded PNG should inline");
+        assert_eq!(url, "data:image/png;base64,cG5n");
+        assert_eq!(budget, MAX_INLINE_IMAGE_TOTAL_BYTES - 3);
+
+        assert!(inline_image_data_url("image/svg+xml", b"<svg/>", &mut budget).is_none());
+
+        let mut exhausted = 2;
+        assert!(inline_image_data_url("image/png", b"png", &mut exhausted).is_none());
+        assert_eq!(exhausted, 2);
+    }
 }
