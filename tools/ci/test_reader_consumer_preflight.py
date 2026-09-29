@@ -78,7 +78,7 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("projected-scene-instances", render_clippy["argv"])
         self.assertEqual(render_clippy["argv"][-2:], ["-D", "warnings"])
 
-    def test_direct_desktop_change_keeps_desktop_clippy(self) -> None:
+    def test_direct_desktop_change_uses_compile_gates_without_whole_crate_clippy(self) -> None:
         plan = MODULE.build_plan(
             ["apps/chaptera-desktop/src/render_backend.rs"],
             "BASE",
@@ -87,9 +87,9 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         ids = {command["id"] for command in plan["commands"]}
         self.assertIn("desktop-reader-check", ids)
         self.assertIn("desktop-editor-check", ids)
-        self.assertIn("desktop-reader-clippy", ids)
+        self.assertNotIn("desktop-reader-clippy", ids)
         self.assertTrue(plan["desktop_reader_integration"])
-        self.assertTrue(plan["desktop_reader_clippy"])
+        self.assertFalse(plan["desktop_reader_clippy"])
 
     def test_rustfmt_delta_parses_added_and_deletion_only_hunks(self) -> None:
         diff = """@@ -10,2 +10,3 @@
