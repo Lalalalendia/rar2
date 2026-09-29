@@ -380,3 +380,5 @@ mod tests {
         ));
     }
 }
+
+// CI Reader PR DAG measurement probe; no runtime behavior change.
