@@ -1,3 +1,4 @@
+// Exact-seven #315 research probe; output is source-safe aggregate evidence only.
 use anyhow::{Context, Result};
 use pub_reader::{
     PubMatureContentsStoryDemand, QuillStoryFailureEvidence,
