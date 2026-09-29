@@ -61,9 +61,6 @@ const BS_DIBPATTERNPT: u16 = 5;
 const DIB_RGB_COLORS: u16 = 0;
 const BI_RGB: u32 = 0;
 const SRCCOPY: u32 = 0x00cc_0020;
-const BITMAPINFOHEADER_BYTES: usize = 40;
-const STRETCHDIB_FIXED_PARAM_BYTES: usize = 22;
-const STRETCHDIB_PALETTE_ENTRIES: usize = 256;
 const LEGACY_PATTERN_DIB_BYTES: usize = 96;
 const LEGACY_PATTERN_SIDE: usize = 8;
 const LEGACY_PATTERN_ROW_BYTES: usize = 4;
@@ -385,70 +382,56 @@ fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
     })
 }
 
-struct PackedStretchDib<'a> {
-    width: usize,
-    height: usize,
-    bit_count: u16,
-    row_stride: usize,
-    palette: Vec<Color>,
-    bits: &'a [u8],
+fn proven_stretchdib_profile(width: i32, height: i32, bit_count: u16) -> bool {
+    matches!(
+        (width, height, bit_count),
+        (96, 96, 8)
+            | (96, 96, 24)
+            | (100, 100, 24)
+            | (192, 192, 8)
+            | (192, 192, 24)
+            | (194, 189, 24)
+            | (200, 200, 8)
+            | (210, 210, 24)
+    )
 }
 
-impl PackedStretchDib<'_> {
-    fn color_at_bottom_origin(&self, x: usize, y: usize) -> Result<Color> {
-        if x >= self.width || y >= self.height {
-            bail!("WMF STRETCHDIB source coordinate is outside the DIB");
-        }
-        let row_offset = y
-            .checked_mul(self.row_stride)
-            .ok_or_else(|| anyhow!("WMF STRETCHDIB row offset overflow"))?;
-        match self.bit_count {
-            8 => {
-                let index = usize::from(
-                    *self
-                        .bits
-                        .get(row_offset + x)
-                        .ok_or_else(|| anyhow!("WMF STRETCHDIB indexed pixel is truncated"))?,
-                );
-                self.palette
-                    .get(index)
-                    .copied()
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))
-            }
-            24 => {
-                let pixel_offset = row_offset
-                    .checked_add(
-                        x.checked_mul(3)
-                            .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?,
-                    )
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?;
-                let raw = self
-                    .bits
-                    .get(pixel_offset..pixel_offset + 3)
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB BGR pixel is truncated"))?;
-                Ok(Color {
-                    r: raw[2],
-                    g: raw[1],
-                    b: raw[0],
-                })
-            }
-            other => bail!("unsupported WMF STRETCHDIB bit count {other}"),
-        }
-    }
-}
+fn rasterize_bounded_stretchdib(
+    params: &[u8],
+    state: &PlaybackState,
+    canvas: &mut Canvas,
+) -> Result<()> {
+    const FIXED_BYTES: usize = 22;
+    const BITMAPINFOHEADER_BYTES: usize = 40;
+    const RGBQUAD_BYTES: usize = 4;
 
-fn parse_stretch_dib(dib: &[u8], color_usage: u16) -> Result<PackedStretchDib<'_>> {
-    if color_usage != DIB_RGB_COLORS {
-        bail!("unsupported WMF STRETCHDIB color usage {color_usage}");
-    }
-    if dib.len() < BITMAPINFOHEADER_BYTES {
-        bail!("WMF STRETCHDIB BITMAPINFOHEADER is truncated");
+    if params.len() < FIXED_BYTES + BITMAPINFOHEADER_BYTES {
+        bail!("WMF STRETCHDIB is truncated");
     }
 
+    let raster_operation =
+        read_u32(params, 0).ok_or_else(|| anyhow!("WMF STRETCHDIB ROP is truncated"))?;
+    let color_usage =
+        read_u16(params, 4).ok_or_else(|| anyhow!("WMF STRETCHDIB ColorUsage is truncated"))?;
+    let src_height =
+        read_i16(params, 6).ok_or_else(|| anyhow!("WMF STRETCHDIB SrcHeight is truncated"))?;
+    let src_width =
+        read_i16(params, 8).ok_or_else(|| anyhow!("WMF STRETCHDIB SrcWidth is truncated"))?;
+    let src_y = read_i16(params, 10).ok_or_else(|| anyhow!("WMF STRETCHDIB YSrc is truncated"))?;
+    let src_x = read_i16(params, 12).ok_or_else(|| anyhow!("WMF STRETCHDIB XSrc is truncated"))?;
+    let dest_height =
+        read_i16(params, 14).ok_or_else(|| anyhow!("WMF STRETCHDIB DestHeight is truncated"))?;
+    let dest_width =
+        read_i16(params, 16).ok_or_else(|| anyhow!("WMF STRETCHDIB DestWidth is truncated"))?;
+    let dest_y = read_i16(params, 18).ok_or_else(|| anyhow!("WMF STRETCHDIB yDst is truncated"))?;
+    let dest_x = read_i16(params, 20).ok_or_else(|| anyhow!("WMF STRETCHDIB xDst is truncated"))?;
+
+    let dib = &params[FIXED_BYTES..];
     let header_size =
-        read_u32(dib, 0).ok_or_else(|| anyhow!("WMF STRETCHDIB header size is truncated"))?;
-    let width = read_i32(dib, 4).ok_or_else(|| anyhow!("WMF STRETCHDIB width is truncated"))?;
-    let height = read_i32(dib, 8).ok_or_else(|| anyhow!("WMF STRETCHDIB height is truncated"))?;
+        read_u32(dib, 0).ok_or_else(|| anyhow!("WMF STRETCHDIB DIB header is truncated"))?;
+    let width = read_i32(dib, 4).ok_or_else(|| anyhow!("WMF STRETCHDIB DIB width is truncated"))?;
+    let height =
+        read_i32(dib, 8).ok_or_else(|| anyhow!("WMF STRETCHDIB DIB height is truncated"))?;
     let planes = read_u16(dib, 12).ok_or_else(|| anyhow!("WMF STRETCHDIB planes are truncated"))?;
     let bit_count =
         read_u16(dib, 14).ok_or_else(|| anyhow!("WMF STRETCHDIB bit count is truncated"))?;
@@ -459,208 +442,155 @@ fn parse_stretch_dib(dib: &[u8], color_usage: u16) -> Result<PackedStretchDib<'_
     let colors_used =
         read_u32(dib, 32).ok_or_else(|| anyhow!("WMF STRETCHDIB color count is truncated"))?;
 
-    if header_size != BITMAPINFOHEADER_BYTES as u32
-        || width <= 0
-        || height <= 0
+    if raster_operation != SRCCOPY
+        || color_usage != DIB_RGB_COLORS
+        || src_x != 0
+        || src_y != 0
+        || dest_x != 0
+        || dest_y != 0
+        || src_width <= 0
+        || src_height <= 0
+        || dest_width != src_width
+        || dest_height != src_height
+        || header_size != BITMAPINFOHEADER_BYTES as u32
         || planes != 1
         || compression != BI_RGB
+        || width != i32::from(src_width)
+        || height != i32::from(src_height)
+        || !proven_stretchdib_profile(width, height, bit_count)
+        || !matches!((bit_count, colors_used), (8, 256) | (24, 0))
     {
-        bail!("unsupported WMF STRETCHDIB bitmap profile");
-    }
-    match bit_count {
-        8 if colors_used == STRETCHDIB_PALETTE_ENTRIES as u32 => {}
-        24 if colors_used == 0 => {}
-        _ => bail!("unsupported WMF STRETCHDIB bitmap profile"),
+        bail!("unsupported WMF STRETCHDIB profile");
     }
 
-    let width =
-        usize::try_from(width).map_err(|_| anyhow!("WMF STRETCHDIB width does not fit usize"))?;
-    let height =
-        usize::try_from(height).map_err(|_| anyhow!("WMF STRETCHDIB height does not fit usize"))?;
-    let row_bits = width
+    let width_usize =
+        usize::try_from(width).map_err(|_| anyhow!("WMF STRETCHDIB width is out of bounds"))?;
+    let height_usize =
+        usize::try_from(height).map_err(|_| anyhow!("WMF STRETCHDIB height is out of bounds"))?;
+    let bits_per_row = width_usize
         .checked_mul(usize::from(bit_count))
         .ok_or_else(|| anyhow!("WMF STRETCHDIB row bit count overflow"))?;
-    let row_stride = row_bits
+    let row_stride = bits_per_row
         .checked_add(31)
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB row alignment overflow"))?
-        / 32
-        * 4;
-    let bitmap_bytes = row_stride
-        .checked_mul(height)
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB bitmap size overflow"))?;
-    if usize::try_from(image_size).ok() != Some(bitmap_bytes) {
-        bail!("WMF STRETCHDIB image size does not match padded BI_RGB rows");
+        .and_then(|value| value.checked_div(32))
+        .and_then(|value| value.checked_mul(4))
+        .ok_or_else(|| anyhow!("WMF STRETCHDIB row stride overflow"))?;
+    let pixel_bytes = row_stride
+        .checked_mul(height_usize)
+        .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel byte count overflow"))?;
+    if usize::try_from(image_size).ok() != Some(pixel_bytes) {
+        bail!("unsupported WMF STRETCHDIB image size");
     }
 
-    let palette_entries = if bit_count == 8 {
-        STRETCHDIB_PALETTE_ENTRIES
-    } else {
-        0
-    };
+    let palette_entries = if bit_count == 8 { 256usize } else { 0usize };
     let palette_bytes = palette_entries
-        .checked_mul(4)
+        .checked_mul(RGBQUAD_BYTES)
         .ok_or_else(|| anyhow!("WMF STRETCHDIB palette size overflow"))?;
-    let bitmap_offset = BITMAPINFOHEADER_BYTES
+    let pixel_offset = BITMAPINFOHEADER_BYTES
         .checked_add(palette_bytes)
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB bitmap offset overflow"))?;
-    let expected_len = bitmap_offset
-        .checked_add(bitmap_bytes)
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB packed size overflow"))?;
-    if dib.len() != expected_len {
-        bail!("WMF STRETCHDIB packed DIB length mismatch");
+        .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?;
+    let expected_dib_len = pixel_offset
+        .checked_add(pixel_bytes)
+        .ok_or_else(|| anyhow!("WMF STRETCHDIB DIB length overflow"))?;
+    if dib.len() != expected_dib_len {
+        bail!("unsupported WMF STRETCHDIB DIB length");
     }
 
-    let mut palette = Vec::with_capacity(palette_entries);
-    for index in 0..palette_entries {
-        let offset = BITMAPINFOHEADER_BYTES + index * 4;
-        let raw = dib
-            .get(offset..offset + 4)
-            .ok_or_else(|| anyhow!("WMF STRETCHDIB RGBQUAD is truncated"))?;
-        if raw[3] != 0 {
-            bail!("WMF STRETCHDIB RGBQUAD reserved byte is nonzero");
+    let palette = if bit_count == 8 {
+        let mut colors = Vec::with_capacity(palette_entries);
+        for index in 0..palette_entries {
+            colors.push(rgb_quad(
+                dib,
+                BITMAPINFOHEADER_BYTES + index * RGBQUAD_BYTES,
+            )?);
         }
-        palette.push(Color {
-            r: raw[2],
-            g: raw[1],
-            b: raw[0],
-        });
+        Some(colors)
+    } else {
+        None
+    };
+
+    let (x0, y0) = map_point(state, canvas, dest_x, dest_y)?;
+    let (x1, y1) = map_point(state, canvas, dest_width, dest_height)?;
+    if x1 <= x0 || y1 <= y0 {
+        bail!("unsupported WMF STRETCHDIB mapped orientation");
     }
 
-    Ok(PackedStretchDib {
-        width,
-        height,
-        bit_count,
-        row_stride,
-        palette,
-        bits: &dib[bitmap_offset..],
-    })
-}
-
-fn map_logical_point(state: &PlaybackState, canvas: &Canvas, x: i32, y: i32) -> Result<(i32, i32)> {
-    if state.window_ext_x == 0 || state.window_ext_y == 0 {
-        bail!("WMF window extent is zero");
-    }
-    let px = (f64::from(x - state.window_org_x) * f64::from(canvas.width)
-        / f64::from(state.window_ext_x))
-    .round();
-    let py = (f64::from(y - state.window_org_y) * f64::from(canvas.height)
-        / f64::from(state.window_ext_y))
-    .round();
-    if !px.is_finite() || !py.is_finite() {
-        bail!("WMF coordinate transform produced a non-finite value");
-    }
-    if px < f64::from(i32::MIN)
-        || px > f64::from(i32::MAX)
-        || py < f64::from(i32::MIN)
-        || py > f64::from(i32::MAX)
-    {
-        bail!("WMF coordinate transform overflow");
-    }
-    Ok((px as i32, py as i32))
-}
-
-fn draw_stretch_dib(canvas: &mut Canvas, state: &PlaybackState, params: &[u8]) -> Result<()> {
-    if params.len() < STRETCHDIB_FIXED_PARAM_BYTES + BITMAPINFOHEADER_BYTES {
-        bail!("WMF STRETCHDIB record is truncated");
-    }
-    let raster_operation = read_u32(params, 0)
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB raster operation is truncated"))?;
-    let color_usage =
-        read_u16(params, 4).ok_or_else(|| anyhow!("WMF STRETCHDIB color usage is truncated"))?;
-    let src_height =
-        read_i16(params, 6).ok_or_else(|| anyhow!("WMF STRETCHDIB source height is truncated"))?;
-    let src_width =
-        read_i16(params, 8).ok_or_else(|| anyhow!("WMF STRETCHDIB source width is truncated"))?;
-    let src_y =
-        read_i16(params, 10).ok_or_else(|| anyhow!("WMF STRETCHDIB source y is truncated"))?;
-    let src_x =
-        read_i16(params, 12).ok_or_else(|| anyhow!("WMF STRETCHDIB source x is truncated"))?;
-    let dest_height = read_i16(params, 14)
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB destination height is truncated"))?;
-    let dest_width = read_i16(params, 16)
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB destination width is truncated"))?;
-    let dest_y =
-        read_i16(params, 18).ok_or_else(|| anyhow!("WMF STRETCHDIB destination y is truncated"))?;
-    let dest_x =
-        read_i16(params, 20).ok_or_else(|| anyhow!("WMF STRETCHDIB destination x is truncated"))?;
-
-    if raster_operation != SRCCOPY {
-        bail!("unsupported WMF STRETCHDIB raster operation 0x{raster_operation:08x}");
-    }
-    if src_width <= 0 || src_height <= 0 || dest_width <= 0 || dest_height <= 0 {
-        bail!("unsupported WMF STRETCHDIB non-positive extent");
-    }
-    if src_x < 0 || src_y < 0 {
-        bail!("unsupported WMF STRETCHDIB negative source origin");
-    }
-
-    let dib = parse_stretch_dib(&params[STRETCHDIB_FIXED_PARAM_BYTES..], color_usage)?;
-    let src_x = usize::try_from(src_x).map_err(|_| anyhow!("WMF STRETCHDIB source x overflow"))?;
-    let src_y = usize::try_from(src_y).map_err(|_| anyhow!("WMF STRETCHDIB source y overflow"))?;
-    let src_width =
-        usize::try_from(src_width).map_err(|_| anyhow!("WMF STRETCHDIB source width overflow"))?;
-    let src_height = usize::try_from(src_height)
-        .map_err(|_| anyhow!("WMF STRETCHDIB source height overflow"))?;
-    if src_x
-        .checked_add(src_width)
-        .is_none_or(|right| right > dib.width)
-        || src_y
-            .checked_add(src_height)
-            .is_none_or(|top| top > dib.height)
-    {
-        bail!("WMF STRETCHDIB source rectangle exceeds the DIB");
-    }
-
-    let dest_x_end = i32::from(dest_x)
-        .checked_add(i32::from(dest_width))
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB destination x overflow"))?;
-    let dest_y_end = i32::from(dest_y)
-        .checked_add(i32::from(dest_height))
-        .ok_or_else(|| anyhow!("WMF STRETCHDIB destination y overflow"))?;
-    let (x0, y0) = map_logical_point(state, canvas, i32::from(dest_x), i32::from(dest_y))?;
-    let (x1, y1) = map_logical_point(state, canvas, dest_x_end, dest_y_end)?;
-    if x0 == x1 || y0 == y1 {
+    let destination = RectPx {
+        left: x0,
+        top: y0,
+        right: x1,
+        bottom: y1,
+    };
+    let clipped = destination
+        .intersect(state.clip)
+        .intersect(RectPx::full(canvas.width, canvas.height));
+    if clipped.left >= clipped.right || clipped.top >= clipped.bottom {
         return Ok(());
     }
 
-    let draw_rect = RectPx {
-        left: x0.min(x1),
-        top: y0.min(y1),
-        right: x0.max(x1),
-        bottom: y0.max(y1),
-    }
-    .intersect(state.clip)
-    .intersect(RectPx::full(canvas.width, canvas.height));
-    if draw_rect.left >= draw_rect.right || draw_rect.top >= draw_rect.bottom {
-        return Ok(());
-    }
-
-    let work_width = u64::try_from(draw_rect.right - draw_rect.left)
-        .map_err(|_| anyhow!("WMF STRETCHDIB work width overflow"))?;
-    let work_height = u64::try_from(draw_rect.bottom - draw_rect.top)
-        .map_err(|_| anyhow!("WMF STRETCHDIB work height overflow"))?;
+    let draw_width = i64::from(destination.right - destination.left);
+    let draw_height = i64::from(destination.bottom - destination.top);
+    let work_width = u64::try_from(clipped.right - clipped.left)
+        .map_err(|_| anyhow!("WMF STRETCHDIB work width is out of bounds"))?;
+    let work_height = u64::try_from(clipped.bottom - clipped.top)
+        .map_err(|_| anyhow!("WMF STRETCHDIB work height is out of bounds"))?;
     canvas.charge_work(
         work_width
             .checked_mul(work_height)
-            .ok_or_else(|| anyhow!("WMF STRETCHDIB work size overflow"))?,
+            .ok_or_else(|| anyhow!("WMF STRETCHDIB work count overflow"))?,
     )?;
 
-    let mapped_width = f64::from(x1 - x0);
-    let mapped_height = f64::from(y1 - y0);
-    for y in draw_rect.top..draw_rect.bottom {
-        let ty =
-            ((f64::from(y) + 0.5 - f64::from(y0)) / mapped_height).clamp(0.0, 1.0 - f64::EPSILON);
-        let source_top_row = ((ty * src_height as f64).floor() as usize).min(src_height - 1);
-        let source_y = src_y + (src_height - 1 - source_top_row);
+    for y in clipped.top..clipped.bottom {
+        let source_y =
+            usize::try_from((i64::from(y - destination.top) * i64::from(height)) / draw_height)
+                .map_err(|_| anyhow!("WMF STRETCHDIB source y is out of bounds"))?
+                .min(height_usize - 1);
+        let stored_row = height_usize - 1 - source_y;
+        let row_offset = pixel_offset
+            .checked_add(
+                stored_row
+                    .checked_mul(row_stride)
+                    .ok_or_else(|| anyhow!("WMF STRETCHDIB row offset overflow"))?,
+            )
+            .ok_or_else(|| anyhow!("WMF STRETCHDIB row offset overflow"))?;
 
-        for x in draw_rect.left..draw_rect.right {
-            let tx = ((f64::from(x) + 0.5 - f64::from(x0)) / mapped_width)
-                .clamp(0.0, 1.0 - f64::EPSILON);
-            let source_column = ((tx * src_width as f64).floor() as usize).min(src_width - 1);
-            let color = dib.color_at_bottom_origin(src_x + source_column, source_y)?;
+        for x in clipped.left..clipped.right {
+            let source_x =
+                usize::try_from((i64::from(x - destination.left) * i64::from(width)) / draw_width)
+                    .map_err(|_| anyhow!("WMF STRETCHDIB source x is out of bounds"))?
+                    .min(width_usize - 1);
+
+            let color = if bit_count == 8 {
+                let index = usize::from(
+                    *dib.get(row_offset + source_x)
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB indexed pixel is truncated"))?,
+                );
+                palette
+                    .as_ref()
+                    .and_then(|colors| colors.get(index))
+                    .copied()
+                    .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))?
+            } else {
+                let pixel = row_offset
+                    .checked_add(
+                        source_x
+                            .checked_mul(3)
+                            .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?,
+                    )
+                    .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?;
+                let raw = dib
+                    .get(pixel..pixel + 3)
+                    .ok_or_else(|| anyhow!("WMF STRETCHDIB RGB pixel is truncated"))?;
+                Color {
+                    r: raw[2],
+                    g: raw[1],
+                    b: raw[0],
+                }
+            };
             canvas.set(state.clip, x, y, color);
         }
     }
+
     Ok(())
 }
 
@@ -687,7 +617,26 @@ fn bounded_output_size(width_hint: u32, height_hint: u32) -> Result<(u32, u32)> 
 }
 
 fn map_point(state: &PlaybackState, canvas: &Canvas, x: i16, y: i16) -> Result<(i32, i32)> {
-    map_logical_point(state, canvas, i32::from(x), i32::from(y))
+    if state.window_ext_x == 0 || state.window_ext_y == 0 {
+        bail!("WMF window extent is zero");
+    }
+    let px = (f64::from(i32::from(x) - state.window_org_x) * f64::from(canvas.width)
+        / f64::from(state.window_ext_x))
+    .round();
+    let py = (f64::from(i32::from(y) - state.window_org_y) * f64::from(canvas.height)
+        / f64::from(state.window_ext_y))
+    .round();
+    if !px.is_finite() || !py.is_finite() {
+        bail!("WMF coordinate transform produced a non-finite value");
+    }
+    if px < f64::from(i32::MIN)
+        || px > f64::from(i32::MAX)
+        || py < f64::from(i32::MIN)
+        || py > f64::from(i32::MAX)
+    {
+        bail!("WMF coordinate transform overflow");
+    }
+    Ok((px as i32, py as i32))
 }
 
 fn mapped_pen_width(state: &PlaybackState, canvas: &Canvas) -> u32 {
@@ -1514,7 +1463,7 @@ pub fn rasterize_wmf_preview(
                 }
                 draw_polyline(&mut canvas, &state, &points, true)?;
             }
-            META_STRETCHDIB => draw_stretch_dib(&mut canvas, &state, params)?,
+            META_STRETCHDIB => rasterize_bounded_stretchdib(params, &state, &mut canvas)?,
             META_ESCAPE => validate_enhanced_metafile_escape(params)?,
             other => bail!("unsupported WMF record function 0x{other:04x}"),
         }
@@ -1602,105 +1551,6 @@ mod tests {
         params.extend_from_slice(&[0_u8; 8]); // corpus-proven bounded compatibility tail
         assert_eq!(params.len(), 42);
         params
-    }
-
-    fn stretch_dib_params(
-        dib: Vec<u8>,
-        src_x: i16,
-        src_y: i16,
-        src_width: i16,
-        src_height: i16,
-    ) -> Vec<u8> {
-        let mut params = Vec::new();
-        params.extend_from_slice(&SRCCOPY.to_le_bytes());
-        params.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
-        params.extend_from_slice(&src_height.to_le_bytes());
-        params.extend_from_slice(&src_width.to_le_bytes());
-        params.extend_from_slice(&src_y.to_le_bytes());
-        params.extend_from_slice(&src_x.to_le_bytes());
-        params.extend_from_slice(&4_i16.to_le_bytes());
-        params.extend_from_slice(&4_i16.to_le_bytes());
-        params.extend_from_slice(&0_i16.to_le_bytes());
-        params.extend_from_slice(&0_i16.to_le_bytes());
-        params.extend_from_slice(&dib);
-        params
-    }
-
-    fn dib24_2x2() -> Vec<u8> {
-        let mut dib = Vec::new();
-        dib.extend_from_slice(&(BITMAPINFOHEADER_BYTES as u32).to_le_bytes());
-        dib.extend_from_slice(&2_i32.to_le_bytes());
-        dib.extend_from_slice(&2_i32.to_le_bytes());
-        dib.extend_from_slice(&1_u16.to_le_bytes());
-        dib.extend_from_slice(&24_u16.to_le_bytes());
-        dib.extend_from_slice(&BI_RGB.to_le_bytes());
-        dib.extend_from_slice(&16_u32.to_le_bytes());
-        dib.extend_from_slice(&0_i32.to_le_bytes());
-        dib.extend_from_slice(&0_i32.to_le_bytes());
-        dib.extend_from_slice(&0_u32.to_le_bytes());
-        dib.extend_from_slice(&0_u32.to_le_bytes());
-
-        // Bottom-up rows: bottom = blue, white; top = red, green.
-        dib.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
-        dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
-        dib
-    }
-
-    fn dib8_2x2() -> Vec<u8> {
-        let mut dib = Vec::new();
-        dib.extend_from_slice(&(BITMAPINFOHEADER_BYTES as u32).to_le_bytes());
-        dib.extend_from_slice(&2_i32.to_le_bytes());
-        dib.extend_from_slice(&2_i32.to_le_bytes());
-        dib.extend_from_slice(&1_u16.to_le_bytes());
-        dib.extend_from_slice(&8_u16.to_le_bytes());
-        dib.extend_from_slice(&BI_RGB.to_le_bytes());
-        dib.extend_from_slice(&8_u32.to_le_bytes());
-        dib.extend_from_slice(&0_i32.to_le_bytes());
-        dib.extend_from_slice(&0_i32.to_le_bytes());
-        dib.extend_from_slice(&(STRETCHDIB_PALETTE_ENTRIES as u32).to_le_bytes());
-        dib.extend_from_slice(&0_u32.to_le_bytes());
-
-        let palette = [
-            [0_u8, 0, 255, 0],
-            [0_u8, 255, 0, 0],
-            [255_u8, 0, 0, 0],
-            [255_u8, 255, 255, 0],
-        ];
-        for entry in palette {
-            dib.extend_from_slice(&entry);
-        }
-        for _ in palette.len()..STRETCHDIB_PALETTE_ENTRIES {
-            dib.extend_from_slice(&[0_u8; 4]);
-        }
-
-        // Bottom-up rows: bottom = blue, white; top = red, green.
-        dib.extend_from_slice(&[2_u8, 3, 0, 0]);
-        dib.extend_from_slice(&[0_u8, 1, 0, 0]);
-        dib
-    }
-
-    fn synthetic_stretch_dib(params: Vec<u8>) -> Vec<u8> {
-        let mut records = Vec::new();
-        let mut window = Vec::new();
-        window.extend_from_slice(&4_i16.to_le_bytes());
-        window.extend_from_slice(&4_i16.to_le_bytes());
-        records.extend(record(META_SETWINDOWEXT, &window));
-        let stretch = record(META_STRETCHDIB, &params);
-        let max_record_words = u32::try_from(stretch.len() / 2).expect("record words");
-        records.extend(stretch);
-        records.extend(record(META_EOF, &[]));
-
-        let total_len = 18 + records.len();
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&9_u16.to_le_bytes());
-        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
-        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend_from_slice(&max_record_words.to_le_bytes());
-        bytes.extend_from_slice(&0_u16.to_le_bytes());
-        bytes.extend(records);
-        bytes
     }
 
     fn synthetic_polygon() -> Vec<u8> {
@@ -1808,6 +1658,87 @@ mod tests {
         bytes.extend_from_slice(&0_u16.to_le_bytes());
         bytes.extend(records);
         bytes
+    }
+
+    fn synthetic_stretchdib(bit_count: u16) -> Vec<u8> {
+        const SIDE: usize = 96;
+        let mut records = Vec::<u8>::new();
+        let mut window = Vec::new();
+        window.extend_from_slice(&(SIDE as i16).to_le_bytes());
+        window.extend_from_slice(&(SIDE as i16).to_le_bytes());
+        records.extend(record(META_SETWINDOWEXT, &window));
+
+        let row_stride = (SIDE * usize::from(bit_count)).div_ceil(32) * 4;
+        let image_size = row_stride * SIDE;
+        let mut dib = Vec::new();
+        dib.extend_from_slice(&40_u32.to_le_bytes());
+        dib.extend_from_slice(&(SIDE as i32).to_le_bytes());
+        dib.extend_from_slice(&(SIDE as i32).to_le_bytes());
+        dib.extend_from_slice(&1_u16.to_le_bytes());
+        dib.extend_from_slice(&bit_count.to_le_bytes());
+        dib.extend_from_slice(&BI_RGB.to_le_bytes());
+        dib.extend_from_slice(&u32::try_from(image_size).unwrap().to_le_bytes());
+        dib.extend_from_slice(&0_i32.to_le_bytes());
+        dib.extend_from_slice(&0_i32.to_le_bytes());
+        dib.extend_from_slice(&(if bit_count == 8 { 256_u32 } else { 0 }).to_le_bytes());
+        dib.extend_from_slice(&0_u32.to_le_bytes());
+
+        if bit_count == 8 {
+            dib.extend_from_slice(&[0, 0, 0, 0]);
+            dib.extend_from_slice(&[0, 0, 255, 0]);
+            for _ in 2..256 {
+                dib.extend_from_slice(&[0, 0, 0, 0]);
+            }
+            dib.extend(std::iter::repeat_n(1_u8, image_size));
+        } else {
+            for _ in 0..(SIDE * SIDE) {
+                dib.extend_from_slice(&[0, 0, 255]);
+            }
+        }
+
+        let mut stretch = Vec::new();
+        stretch.extend_from_slice(&SRCCOPY.to_le_bytes());
+        stretch.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        stretch.extend_from_slice(&(SIDE as i16).to_le_bytes());
+        stretch.extend_from_slice(&(SIDE as i16).to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&(SIDE as i16).to_le_bytes());
+        stretch.extend_from_slice(&(SIDE as i16).to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&dib);
+        records.extend(record(META_STRETCHDIB, &stretch));
+        records.extend(record(META_EOF, &[]));
+
+        let total_len = 18 + records.len();
+        let max_record_words = u32::try_from((6 + stretch.len()) / 2).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&max_record_words.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
+    #[test]
+    fn rasterizes_corpus_proven_8bpp_stretchdib() {
+        let image =
+            rasterize_wmf_preview(&synthetic_stretchdib(8), 96, 96).expect("bounded 8bpp DIB");
+        let center = ((48 * 96 + 48) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn rasterizes_corpus_proven_24bpp_stretchdib() {
+        let image =
+            rasterize_wmf_preview(&synthetic_stretchdib(24), 96, 96).expect("bounded 24bpp DIB");
+        let center = ((48 * 96 + 48) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
     }
 
     #[test]
@@ -2045,77 +1976,6 @@ mod tests {
             record(META_SETTEXTCOLOR, &[0, 0, 0, 0, 0, 0]),
         );
         assert!(rasterize_wmf_preview(&oversized, 100, 100).is_err());
-    }
-
-    #[test]
-    fn rasterizes_bounded_stretchdib_24bpp_bottom_up() {
-        let bytes = synthetic_stretch_dib(stretch_dib_params(dib24_2x2(), 0, 0, 2, 2));
-        let image = rasterize_wmf_preview(&bytes, 4, 4).expect("24bpp STRETCHDIB");
-        let pixel = |x: usize, y: usize| {
-            let offset = (y * 4 + x) * 4;
-            &image.rgba[offset..offset + 4]
-        };
-        assert_eq!(pixel(0, 0), &[255, 0, 0, 255]);
-        assert_eq!(pixel(3, 0), &[0, 255, 0, 255]);
-        assert_eq!(pixel(0, 3), &[0, 0, 255, 255]);
-        assert_eq!(pixel(3, 3), &[255, 255, 255, 255]);
-    }
-
-    #[test]
-    fn rasterizes_bounded_stretchdib_8bpp_palette() {
-        let bytes = synthetic_stretch_dib(stretch_dib_params(dib8_2x2(), 0, 0, 2, 2));
-        let image = rasterize_wmf_preview(&bytes, 4, 4).expect("8bpp STRETCHDIB");
-        let top_left = 0;
-        let bottom_right = ((3 * 4 + 3) * 4) as usize;
-        assert_eq!(&image.rgba[top_left..top_left + 4], &[255, 0, 0, 255]);
-        assert_eq!(
-            &image.rgba[bottom_right..bottom_right + 4],
-            &[255, 255, 255, 255]
-        );
-    }
-
-    #[test]
-    fn stretchdib_honors_source_crop_and_clip() {
-        let mut bytes = synthetic_stretch_dib(stretch_dib_params(dib24_2x2(), 1, 0, 1, 2));
-        let mut clip = Vec::new();
-        for value in [4_i16, 4, 0, 2] {
-            clip.extend_from_slice(&value.to_le_bytes());
-        }
-        insert_record_before_function(
-            &mut bytes,
-            META_STRETCHDIB,
-            record(META_INTERSECTCLIPRECT, &clip),
-        );
-
-        let image = rasterize_wmf_preview(&bytes, 4, 4).expect("cropped STRETCHDIB");
-        let left = 16_usize;
-        let top_right = 12_usize;
-        let bottom_right = 60_usize;
-        assert_eq!(&image.rgba[left..left + 4], &[0, 0, 0, 0]);
-        assert_eq!(&image.rgba[top_right..top_right + 4], &[0, 255, 0, 255]);
-        assert_eq!(
-            &image.rgba[bottom_right..bottom_right + 4],
-            &[255, 255, 255, 255]
-        );
-    }
-
-    #[test]
-    fn stretchdib_rejects_profiles_outside_bounded_srccopy_bi_rgb_slice() {
-        let mut params = stretch_dib_params(dib24_2x2(), 0, 0, 2, 2);
-        params[0..4].copy_from_slice(&0_u32.to_le_bytes());
-        let mut canvas = Canvas::new(4, 4).expect("canvas");
-        let state = PlaybackState::new(4, 4);
-        assert!(draw_stretch_dib(&mut canvas, &state, &params).is_err());
-
-        let mut compressed = stretch_dib_params(dib24_2x2(), 0, 0, 2, 2);
-        let compression_offset = STRETCHDIB_FIXED_PARAM_BYTES + 16;
-        compressed[compression_offset..compression_offset + 4]
-            .copy_from_slice(&1_u32.to_le_bytes());
-        assert!(draw_stretch_dib(&mut canvas, &state, &compressed).is_err());
-
-        let mut truncated = stretch_dib_params(dib8_2x2(), 0, 0, 2, 2);
-        truncated.pop();
-        assert!(draw_stretch_dib(&mut canvas, &state, &truncated).is_err());
     }
 
     #[test]
