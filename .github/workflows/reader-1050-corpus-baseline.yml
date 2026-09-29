@@ -404,6 +404,7 @@ jobs:
           applicable_file_count = 0
           available_file_count = 0
           unavailable_file_count = 0
+          raster_rejection_class_counts = {}
 
           for row in rows:
               funnel = row.get("legacy_ole_preview_funnel")
@@ -421,6 +422,18 @@ jobs:
                   totals[name] += value
                   if value > 0:
                       files_with[name] += 1
+
+              file_rejection_classes = funnel.get("raster_rejection_class_counts") or {}
+              assert isinstance(file_rejection_classes, dict), funnel
+              assert sum(int(value) for value in file_rejection_classes.values()) == int(
+                  funnel.get("raster_rejected_node_count") or 0
+              ), funnel
+              for name, value in file_rejection_classes.items():
+                  value = int(value)
+                  assert value >= 0, (name, value)
+                  raster_rejection_class_counts[name] = (
+                      raster_rejection_class_counts.get(name, 0) + value
+                  )
 
               admitted = int(funnel.get("admitted_node_count") or 0)
               scan_success = int(funnel.get("scan_success_node_count") or 0)
@@ -458,6 +471,9 @@ jobs:
               "unavailable_file_count": unavailable_file_count,
               "totals": totals,
               "files_with": files_with,
+              "raster_rejection_class_counts": dict(
+                  sorted(raster_rejection_class_counts.items())
+              ),
               "evidence_boundary": (
                   "source-free aggregate product-funnel receipt from the existing exact-1050 "
                   "Reader pass; no source paths, Object storage numbers, OlePres ordinals, "
