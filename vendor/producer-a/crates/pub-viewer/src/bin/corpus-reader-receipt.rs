@@ -85,7 +85,7 @@ fn main() -> Result<()> {
                 .sum::<usize>();
             let legacy_object_residuals = legacy_object_residual_census(
                 &bytes,
-                visual.document.source.source_hash.clone(),
+                visual.document.source.source_hash,
                 visual.document.source.format_version.as_deref(),
             )?;
 
