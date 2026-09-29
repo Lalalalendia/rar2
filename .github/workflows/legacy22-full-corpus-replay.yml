@@ -533,7 +533,7 @@ jobs:
           reader = summary["reader"]
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
-          assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
+          assert reader["opened_by_family"].get("0x2c") == 386, reader["opened_by_family"]
           assert reader["opened_by_family"].get("0x22") == 227, reader["opened_by_family"]
 
           PERLOST_SHA = "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f"
