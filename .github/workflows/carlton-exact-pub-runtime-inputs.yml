@@ -8,6 +8,7 @@ on:
       - "crates/pub-presentation-profile/**"
       - "vendor/producer-a/crates/pub-reader/**"
       - "vendor/producer-a/crates/pub-viewer/**"
+      - "!vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"
       - ".github/workflows/carlton-exact-pub-runtime-inputs.yml"
   workflow_dispatch:
 
