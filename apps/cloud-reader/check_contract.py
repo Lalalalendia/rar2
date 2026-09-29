@@ -48,6 +48,8 @@ renderer_required = [
     "inline_data_url",
     "imagePaintGeometry",
     "tableCellPaintGeometry",
+    "resolvedTextLinePaintPlan",
+    "server-shared-resolved",
     "data-table-cell-id",
     "assertReaderSceneSourceNeutral",
     'data-renderer',
