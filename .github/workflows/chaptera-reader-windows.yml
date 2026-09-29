@@ -1,19 +1,7 @@
 name: Chaptera Reader Windows V0
 
 on:
-  pull_request:
-    paths:
-      - "apps/chaptera-desktop/**"
-      - "crates/chaptera-update-engine/**"
-      - "crates/chaptera-update-orchestrator/**"
-      - "crates/chaptera-update-handoff/**"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "vendor/producer-a/**"
-      - "packages/product/reader-portable/**"
-      - "packages/product/desktop-suite/**"
-      - "tools/package_reader_portable.py"
-      - "tools/test_package_reader_portable.py"
-      - ".github/workflows/chaptera-reader-windows.yml"
+  workflow_call:
   workflow_dispatch:
 
 concurrency:
@@ -24,20 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
 
   build-reader:
-    needs: reader-consumer-admission
-    if: needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
