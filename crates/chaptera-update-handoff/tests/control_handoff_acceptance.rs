@@ -22,6 +22,24 @@ fn seed_candidate(path: &Path, updater_bytes: &[u8]) {
     fs::write(path.join("reader.bin"), b"candidate-reader").unwrap();
 }
 
+
+fn same_file_identity(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        let left = fs::metadata(left).unwrap();
+        let right = fs::metadata(right).unwrap();
+        return left.volume_serial_number() == right.volume_serial_number()
+            && left.file_index() == right.file_index();
+    }
+
+    #[cfg(not(windows))]
+    {
+        fs::canonicalize(left).unwrap() == fs::canonicalize(right).unwrap()
+    }
+}
+
 fn wait_for_file(path: &Path) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !path.is_file() {
@@ -73,12 +91,11 @@ fn copied_u1_process_cannot_take_over_until_parent_releases_install_lock() {
         serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
     assert_eq!(receipt.transaction_id, "tx-handoff");
 
-    let actual_exe = fs::canonicalize(receipt.executable).unwrap();
-    let expected_control = fs::canonicalize(&control_updater).unwrap();
-    assert_eq!(
-        actual_exe, expected_control,
-        "child must execute from transaction-local copied U1 control path"
+    assert!(
+        same_file_identity(&receipt.executable, &control_updater),
+        "child must execute from transaction-local copied U1 control file even when Windows returns an extended/8.3 path alias"
     );
+    let actual_exe = fs::canonicalize(receipt.executable).unwrap();
     assert!(
         !actual_exe.starts_with(fs::canonicalize(root.join("current")).unwrap()),
         "control process must not be executing from current/"
@@ -247,9 +264,9 @@ fn front_door_spawns_copied_u1_before_releasing_install_ownership() {
     let receipt: ControlReceipt =
         serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
     assert_eq!(receipt.transaction_id, "tx-frontdoor-full");
-    assert_eq!(
-        fs::canonicalize(receipt.executable).unwrap(),
-        fs::canonicalize(&handoff.control_updater).unwrap()
+    assert!(
+        same_file_identity(&receipt.executable, &handoff.control_updater),
+        "front-door receipt must identify the exact copied U1 control file"
     );
 
     let request = read_control_request(&handoff.request_path).unwrap();
