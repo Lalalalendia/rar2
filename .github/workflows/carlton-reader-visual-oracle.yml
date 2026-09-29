@@ -257,6 +257,42 @@ jobs:
           if len(golden.get("projected_scene_instance_ids", [])) != 4:
               raise SystemExit("expected four canonical Cmo SceneInstance ids")
 
+          projected = [
+              instance
+              for page in golden["pages"]
+              for instance in page.get("projected_instances", [])
+          ]
+          if len(projected) != 4:
+              raise SystemExit(
+                  f"expected four projected Cmo carrier receipts, got {len(projected)}"
+              )
+          unresolved = [
+              {
+                  "instance_id": instance.get("instance_id"),
+                  "reason": instance.get("executed_text_metrics", {}).get(
+                      "backend_fallback_reason"
+                  ),
+              }
+              for instance in projected
+              if instance.get("executed_text_metrics", {}).get(
+                  "shared_resolved_layout"
+              ) is not True
+          ]
+          if unresolved:
+              raise SystemExit(
+                  "projected Cmo carriers did not reach SharedResolved: "
+                  + json.dumps(unresolved, sort_keys=True)
+              )
+          q49 = [
+              instance
+              for instance in projected
+              if instance.get("target_frame_paint_scalar_end") == 3
+          ]
+          if len(q49) != 1:
+              raise SystemExit(
+                  "q49 projected overset cutoff drift: expected exactly one scalar_end=3"
+              )
+
           pages = []
           for golden_page, diff_page in zip(golden["pages"], diff["pages"]):
               visual = diff_page["diff"]
