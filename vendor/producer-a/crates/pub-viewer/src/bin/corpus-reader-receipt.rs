@@ -57,6 +57,21 @@ fn legacy_object_residual_census(
 }
 
 
+fn raster_rejection_detail(error: &anyhow::Error) -> String {
+    let message = error.to_string();
+    if let Some(code) = message.strip_prefix("unsupported WMF record function ") {
+        return format!("record_function_{code}");
+    }
+    match message.as_str() {
+        "WMF object table is full" => "object_table_full".to_owned(),
+        "WMF object table exceeds bounded size or disagrees with validated header" => {
+            "object_table_bound_or_header".to_owned()
+        }
+        "WMF selects an unsupported graphics object" => "select_unsupported_object".to_owned(),
+        _ => raster_rejection_class(error).to_owned(),
+    }
+}
+
 fn raster_rejection_class(error: &anyhow::Error) -> &'static str {
     let message = error.to_string();
     if message.starts_with("unsupported WMF record function") {
@@ -187,6 +202,7 @@ fn legacy_ole_preview_funnel(
     let mut raster_success_node_count = 0usize;
     let mut raster_rejected_node_count = 0usize;
     let mut raster_rejection_class_counts = BTreeMap::<String, usize>::new();
+    let mut raster_rejection_detail_counts = BTreeMap::<String, usize>::new();
 
     for (storage_number, node_ids) in &uses_by_storage {
         let node_count = node_ids.len();
@@ -230,6 +246,8 @@ fn legacy_ole_preview_funnel(
                 raster_rejected_node_count += node_count;
                 let class = raster_rejection_class(&error).to_owned();
                 *raster_rejection_class_counts.entry(class).or_default() += node_count;
+                let detail = raster_rejection_detail(&error);
+                *raster_rejection_detail_counts.entry(detail).or_default() += node_count;
             }
         }
     }
@@ -270,6 +288,7 @@ fn legacy_ole_preview_funnel(
         "raster_success_node_count": raster_success_node_count,
         "raster_rejected_node_count": raster_rejected_node_count,
         "raster_rejection_class_counts": raster_rejection_class_counts,
+        "raster_rejection_detail_counts": raster_rejection_detail_counts,
         "viewer_preview_resource_count": viewer_preview_resource_count,
         "viewer_preview_node_count": viewer_preview_node_count,
         "viewer_preview_unavailable_node_count": admitted_node_count.saturating_sub(viewer_preview_node_count),
