@@ -578,6 +578,7 @@ struct RenderTextLayoutTargetV1 {
     page_id: PageId,
     page_size: Size2D,
     node_id: NodeId,
+    projected_target_frame_node_id: Option<NodeId>,
     bounds: RectEmu,
     transform: Affine2D,
 }
@@ -607,10 +608,29 @@ where
         let Some(fragment) = node.text.as_mut() else {
             continue;
         };
+        let projected_target_frame_node_id = {
+            #[cfg(feature = "projected-scene-instances")]
+            {
+                node.projected_scene_instance.as_ref().and_then(|instance| {
+                    visual
+                        .projected_instances
+                        .iter()
+                        .find(|projected| {
+                            projected.scene_instance.instance_id == instance.instance_id
+                        })
+                        .map(|projected| projected.target_frame_node_id)
+                })
+            }
+            #[cfg(not(feature = "projected-scene-instances"))]
+            {
+                None
+            }
+        };
         let target = RenderTextLayoutTargetV1 {
             page_id,
             page_size,
             node_id: node.node_id,
+            projected_target_frame_node_id,
             bounds: node.bounds,
             transform: node.transform.clone(),
         };
@@ -632,6 +652,26 @@ fn fallback_layout(reason: RenderTextLayoutFallbackReasonV1) -> RenderTextLayout
     }
 }
 
+fn admitted_single_story_frame(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    node_id: NodeId,
+    projected_target_frame_node_id: Option<NodeId>,
+) -> Result<&pub_viewer::ViewerStoryFrame, RenderTextLayoutFallbackReasonV1> {
+    let expected_frame_id = projected_target_frame_node_id.unwrap_or(node_id);
+    let mut frames = visual
+        .story_frames
+        .iter()
+        .filter(|frame| frame.story_id == story_id);
+    let Some(frame) = frames.next() else {
+        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    };
+    if frames.next().is_some() || frame.frame_id != expected_frame_id {
+        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    }
+    Ok(frame)
+}
+
 fn resolve_text_layout_v1(
     visual: &ViewerGeometryDocument,
     target: RenderTextLayoutTargetV1,
@@ -642,6 +682,7 @@ fn resolve_text_layout_v1(
         page_id,
         page_size,
         node_id,
+        projected_target_frame_node_id,
         bounds,
         transform,
     } = target;
@@ -664,16 +705,15 @@ fn resolve_text_layout_v1(
         return fallback_layout(RenderTextLayoutFallbackReasonV1::StoryExtentMismatch);
     }
 
-    let mut frames = visual
-        .story_frames
-        .iter()
-        .filter(|frame| frame.story_id == fragment.story_id);
-    let Some(frame) = frames.next() else {
-        return fallback_layout(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    let frame = match admitted_single_story_frame(
+        visual,
+        fragment.story_id,
+        node_id,
+        projected_target_frame_node_id,
+    ) {
+        Ok(frame) => frame,
+        Err(reason) => return fallback_layout(reason),
     };
-    if frames.next().is_some() || frame.frame_id != node_id {
-        return fallback_layout(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
-    }
 
     if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::FrameGeometryInvalid);
@@ -1051,6 +1091,66 @@ mod tests {
         assert_eq!(table.cells[0].column, 0);
         assert_eq!(table.cells[0].text, "cell");
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
+    fn projected_cmo_layout_admits_single_target_frame_context() {
+        let mut visual = fixture();
+        let carrier_node_id = visual.scene.nodes[0].origin;
+        let target_frame_node_id = NodeId::from_canonical(canonical(9));
+        let story_id = visual.document.stories[0].id;
+        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
+            story_id,
+            frame_id: target_frame_node_id,
+            ordinal: 0,
+        });
+
+        let admitted = admitted_single_story_frame(
+            &visual,
+            story_id,
+            carrier_node_id,
+            Some(target_frame_node_id),
+        )
+        .expect("projected Cmo target-frame context should admit one canonical StoryFrame");
+        assert_eq!(admitted.frame_id, target_frame_node_id);
+
+        assert_eq!(
+            admitted_single_story_frame(&visual, story_id, carrier_node_id, None),
+            Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired),
+            "ordinary node identity must not be relaxed"
+        );
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
+    fn projected_cmo_layout_keeps_multi_frame_topology_fail_closed() {
+        let mut visual = fixture();
+        let carrier_node_id = visual.scene.nodes[0].origin;
+        let target_frame_node_id = NodeId::from_canonical(canonical(9));
+        let story_id = visual.document.stories[0].id;
+        visual.story_frames.extend([
+            pub_viewer::ViewerStoryFrame {
+                story_id,
+                frame_id: target_frame_node_id,
+                ordinal: 0,
+            },
+            pub_viewer::ViewerStoryFrame {
+                story_id,
+                frame_id: NodeId::from_canonical(canonical(10)),
+                ordinal: 1,
+            },
+        ]);
+
+        assert_eq!(
+            admitted_single_story_frame(
+                &visual,
+                story_id,
+                carrier_node_id,
+                Some(target_frame_node_id),
+            ),
+            Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired)
+        );
     }
 
     #[cfg(feature = "projected-scene-instances")]
