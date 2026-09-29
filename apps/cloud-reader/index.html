@@ -97,8 +97,8 @@ import { renderReaderScene } from "./render-v1.mjs";
     summary.hidden = true;
   }
 
-  function render(payload) {
-    renderReaderScene(pagesHost, payload, {
+  async function render(payload) {
+    await renderReaderScene(pagesHost, payload, {
       emuPerCssPx: EMU_PER_CSS_PX,
       maxPageWidth: MAX_PAGE_WIDTH
     });
@@ -173,7 +173,7 @@ import { renderReaderScene } from "./render-v1.mjs";
       }));
 
       if (opened.scene?.protocol_version === "chaptera.reader-scene.v1") {
-        render(opened.scene);
+        await render(opened.scene);
       }
       status.className =
         opened.classification === "supported" || opened.classification === "partial"
@@ -212,7 +212,7 @@ import { renderReaderScene } from "./render-v1.mjs";
       if (payload.protocol_version !== "chaptera.reader-scene.v1") {
         throw new Error("Unsupported Reader scene protocol");
       }
-      render(payload);
+      await render(payload);
       documentStatus.className = "ok";
       documentStatus.textContent = "Opened saved document read-only.";
       const url = new URL(location.href);
