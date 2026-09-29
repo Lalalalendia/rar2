@@ -37,6 +37,7 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
+fontdb = "=0.24.0"
 rfd = { version = "=0.17.2", default-features = false }
 
 [dev-dependencies]
