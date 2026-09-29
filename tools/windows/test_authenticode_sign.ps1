@@ -18,5 +18,5 @@ if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE f
 $signature = Get-AuthenticodeSignature -LiteralPath $File
 if (-not $signature.SignerCertificate) { throw "no signer certificate after signing: $File" }
 if ($signature.SignerCertificate.Thumbprint -ne $thumbprint) {
-  throw "unexpected signer thumbprint for $File: $($signature.SignerCertificate.Thumbprint)"
+  throw "unexpected signer thumbprint for ${File}: $($signature.SignerCertificate.Thumbprint)"
 }
