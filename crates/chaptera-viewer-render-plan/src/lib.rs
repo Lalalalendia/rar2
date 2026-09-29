@@ -78,9 +78,19 @@ pub struct RenderSolidLineV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderImageSourceWindowV1 {
+    pub left_q16: i64,
+    pub top_q16: i64,
+    pub right_q16: i64,
+    pub bottom_q16: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderImageRefV1 {
     pub resource_id: ResourceId,
     pub mime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_window: Option<RenderImageSourceWindowV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -429,9 +439,23 @@ pub fn build_page_render_plan_v1(
                 .images
                 .iter()
                 .find(|image| image.node_ids.contains(&node.origin))
-                .map(|image| RenderImageRefV1 {
-                    resource_id: image.resource_id,
-                    mime: image.mime.clone(),
+                .map(|image| {
+                    let source_window = image
+                        .placements
+                        .iter()
+                        .find(|placement| placement.node_id == node.origin)
+                        .and_then(|placement| placement.source_window.as_ref())
+                        .map(|window| RenderImageSourceWindowV1 {
+                            left_q16: window.left_q16,
+                            top_q16: window.top_q16,
+                            right_q16: window.right_q16,
+                            bottom_q16: window.bottom_q16,
+                        });
+                    RenderImageRefV1 {
+                        resource_id: image.resource_id,
+                        mime: image.mime.clone(),
+                        source_window,
+                    }
                 });
             let table = visual
                 .tables
@@ -492,9 +516,23 @@ pub fn build_page_render_plan_v1(
             .images
             .iter()
             .find(|image| image.node_ids.contains(&origin_node_id))
-            .map(|image| RenderImageRefV1 {
-                resource_id: image.resource_id,
-                mime: image.mime.clone(),
+            .map(|image| {
+                let source_window = image
+                    .placements
+                    .iter()
+                    .find(|placement| placement.node_id == origin_node_id)
+                    .and_then(|placement| placement.source_window.as_ref())
+                    .map(|window| RenderImageSourceWindowV1 {
+                        left_q16: window.left_q16,
+                        top_q16: window.top_q16,
+                        right_q16: window.right_q16,
+                        bottom_q16: window.bottom_q16,
+                    });
+                RenderImageRefV1 {
+                    resource_id: image.resource_id,
+                    mime: image.mime.clone(),
+                    source_window,
+                }
             });
         let node = NodeRenderPlanV1 {
             node_id: origin_node_id,
@@ -794,8 +832,9 @@ mod tests {
         TableCellId,
     };
     use pub_viewer::{
-        ViewerDocument, ViewerEmbeddedImage, ViewerNodePaint, ViewerPage, ViewerSolidLine,
-        ViewerSource, ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
+        ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1,
+        ViewerImageSourceWindowV1, ViewerNodePaint, ViewerPage, ViewerSolidLine, ViewerSource,
+        ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
         viewer_story_text_sha256,
     };
 
@@ -892,6 +931,15 @@ mod tests {
                 resource_id,
                 mime: "image/png".into(),
                 node_ids: vec![node_id],
+                placements: vec![ViewerImagePlacementV1 {
+                    node_id,
+                    source_window: Some(ViewerImageSourceWindowV1 {
+                        left_q16: 8_192,
+                        top_q16: 16_384,
+                        right_q16: 57_344,
+                        bottom_q16: 49_152,
+                    }),
+                }],
                 bytes: vec![0x89, b'P', b'N', b'G'],
             }],
         }
@@ -913,6 +961,18 @@ mod tests {
         assert_eq!(
             node.image.as_ref().map(|image| image.mime.as_str()),
             Some("image/png")
+        );
+        assert_eq!(
+            node.image
+                .as_ref()
+                .and_then(|image| image.source_window.as_ref())
+                .map(|window| (
+                    window.left_q16,
+                    window.top_q16,
+                    window.right_q16,
+                    window.bottom_q16,
+                )),
+            Some((8_192, 16_384, 57_344, 49_152))
         );
         assert_eq!(
             node.text.as_ref().map(|text| text.text.as_str()),
