@@ -279,6 +279,11 @@ fn read_i16(bytes: &[u8], offset: usize) -> Option<i16> {
     read_u16(bytes, offset).map(|value| i16::from_le_bytes(value.to_le_bytes()))
 }
 
+fn read_i32(bytes: &[u8], offset: usize) -> Option<i32> {
+    let raw = bytes.get(offset..offset.checked_add(4)?)?;
+    Some(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
