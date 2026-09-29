@@ -3058,7 +3058,6 @@ mod tests {
                 }),
                 table_story: None,
                 table: None,
-                legacy_ole: None,
             },
         };
 
