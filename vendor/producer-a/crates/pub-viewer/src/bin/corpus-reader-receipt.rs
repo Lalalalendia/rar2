@@ -57,6 +57,57 @@ fn legacy_object_residual_census(
 }
 
 
+fn raster_rejection_class(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.starts_with("unsupported WMF record function") {
+        "unsupported_record_function"
+    } else if message.starts_with("unsupported WMF pen style") {
+        "unsupported_pen_style"
+    } else if message.starts_with("unsupported WMF brush style") {
+        "unsupported_brush_style"
+    } else if message.starts_with("unsupported WMF map mode") {
+        "unsupported_map_mode"
+    } else if message.starts_with("unsupported WMF ROP2 mode") {
+        "unsupported_rop2_mode"
+    } else if message.starts_with("unsupported WMF relative/absolute mode") {
+        "unsupported_relative_mode"
+    } else if message.starts_with("unsupported WMF polygon fill mode") {
+        "unsupported_polygon_fill_mode"
+    } else if message.starts_with("unsupported WMF stretch mode") {
+        "unsupported_stretch_mode"
+    } else if message.starts_with("unsupported WMF RESTOREDC value") {
+        "unsupported_restore_dc"
+    } else if message.starts_with("unsupported WMF escape function") {
+        "unsupported_escape_function"
+    } else if message.starts_with("unsupported WMF escape comment payload") {
+        "unsupported_escape_comment"
+    } else if message.starts_with("unsupported WMF raster profile")
+        || message.starts_with("unsupported WMF header")
+    {
+        "unsupported_raster_profile"
+    } else if message.contains("object table") || message.contains("graphics object") {
+        "object_table_or_object_kind"
+    } else if message.contains("raster work") {
+        "raster_work_limit"
+    } else if message.contains("output") || message.contains("zero output extent") {
+        "output_bound"
+    } else if message.contains("coordinate transform") || message.contains("window extent") {
+        "coordinate_or_window_transform"
+    } else if message.contains("point count") || message.contains("polygon count") {
+        "point_or_polygon_bound"
+    } else if message.contains("truncated")
+        || message.contains("overflow")
+        || message.contains("declared")
+        || message.contains("META_EOF")
+        || message.contains("record size")
+        || message.contains("missing WMF")
+    {
+        "malformed_or_structural"
+    } else {
+        "other_fail_closed"
+    }
+}
+
 fn legacy_ole_preview_funnel(
     bytes: &[u8],
     source_hash: pub_model::Sha256Digest,
@@ -135,6 +186,7 @@ fn legacy_ole_preview_funnel(
     let mut selection_ambiguous_node_count = 0usize;
     let mut raster_success_node_count = 0usize;
     let mut raster_rejected_node_count = 0usize;
+    let mut raster_rejection_class_counts = BTreeMap::<String, usize>::new();
 
     for (storage_number, node_ids) in &uses_by_storage {
         let node_count = node_ids.len();
@@ -174,7 +226,11 @@ fn legacy_ole_preview_funnel(
 
         match rasterize_wmf_preview(&selected.data, selected.width, selected.height) {
             Ok(_) => raster_success_node_count += node_count,
-            Err(_) => raster_rejected_node_count += node_count,
+            Err(error) => {
+                raster_rejected_node_count += node_count;
+                let class = raster_rejection_class(&error).to_owned();
+                *raster_rejection_class_counts.entry(class).or_default() += node_count;
+            }
         }
     }
 
@@ -213,6 +269,7 @@ fn legacy_ole_preview_funnel(
         "selection_ambiguous_node_count": selection_ambiguous_node_count,
         "raster_success_node_count": raster_success_node_count,
         "raster_rejected_node_count": raster_rejected_node_count,
+        "raster_rejection_class_counts": raster_rejection_class_counts,
         "viewer_preview_resource_count": viewer_preview_resource_count,
         "viewer_preview_node_count": viewer_preview_node_count,
         "viewer_preview_unavailable_node_count": admitted_node_count.saturating_sub(viewer_preview_node_count),
