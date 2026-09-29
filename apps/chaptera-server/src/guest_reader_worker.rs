@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
 use rand::{RngCore, rngs::OsRng};
@@ -20,8 +21,8 @@ use tokio::{
 };
 
 use crate::{
-    blob_store::BlobStoreService, reader_scene_v1::from_viewer_geometry,
-    source_ingress_security::SourceSecurityScannerConfig,
+    blob_store::BlobStoreService, guest_intake_classifier::guest_failure_intake_evidence,
+    reader_scene_v1::from_viewer_geometry, source_ingress_security::SourceSecurityScannerConfig,
 };
 
 pub const GUEST_SCENE_WORKER_V1: &str = "chaptera.reader-guest-scene-worker.v1";
@@ -61,6 +62,7 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub classification: String,
     pub terminal_code: Option<String>,
     pub scene: Option<Value>,
+    pub failure_classification: Option<FailureClassificationV1>,
     pub filesystem_confinement: bool,
 }
 
@@ -380,6 +382,10 @@ pub fn run_guest_scene_worker(
             ),
         };
 
+    let failure_classification =
+        guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
+            .map(|evidence| evidence.classification);
+
     let receipt = GuestSceneWorkerReceiptV1 {
         protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
         session_id: session_id.to_owned(),
@@ -388,6 +394,7 @@ pub fn run_guest_scene_worker(
         classification,
         terminal_code,
         scene,
+        failure_classification,
         filesystem_confinement: true,
     };
     write_receipt(output, &receipt)
@@ -426,10 +433,10 @@ fn validate_receipt(
                     "worker scene uses an unsupported Reader scene protocol",
                 ));
             }
-            if receipt.terminal_code.is_some() {
+            if receipt.terminal_code.is_some() || receipt.failure_classification.is_some() {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
-                    "supported/partial receipt cannot carry terminal code",
+                    "supported/partial receipt cannot carry terminal failure evidence",
                 ));
             }
         }
@@ -445,6 +452,19 @@ fn validate_receipt(
                     "unsupported receipt shape is invalid",
                 ));
             }
+            let failure_classification =
+                receipt.failure_classification.as_ref().ok_or_else(|| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_receipt_invalid",
+                        "unsupported receipt is missing server failure classification",
+                    )
+                })?;
+            failure_classification.validate().map_err(|_| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "unsupported receipt carries invalid failure classification",
+                )
+            })?;
         }
         _ => {
             return Err(GuestSceneWorkerError::new(
@@ -598,6 +618,7 @@ mod tests {
             classification: "unsupported".to_owned(),
             terminal_code: Some("reader_scene_open_failed".to_owned()),
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
+            failure_classification: None,
             filesystem_confinement: true,
         };
         assert!(validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1,).is_err());
