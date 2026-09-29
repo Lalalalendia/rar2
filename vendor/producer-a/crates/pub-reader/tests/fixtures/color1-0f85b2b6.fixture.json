@@ -11,18 +11,63 @@
   "expected_scheme": {
     "name": "Office",
     "declared_count": 8,
-    "ordinals": [0, 1, 2, 3, 4, 5, 6, 7],
-    "raw_slot_rgb": [
-      [0, 0, 0],
-      [91, 155, 213],
-      [237, 125, 49],
-      [158, 158, 158],
-      [255, 192, 0],
-      [8, 82, 150],
-      [153, 51, 102],
-      [255, 255, 255]
+    "ordinals": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
     ],
-    "effective_slot_0_rgb": [0, 0, 0]
+    "raw_slot_rgb": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        91,
+        155,
+        213
+      ],
+      [
+        237,
+        125,
+        49
+      ],
+      [
+        158,
+        158,
+        158
+      ],
+      [
+        255,
+        192,
+        0
+      ],
+      [
+        8,
+        82,
+        150
+      ],
+      [
+        153,
+        51,
+        102
+      ],
+      [
+        255,
+        255,
+        255
+      ]
+    ],
+    "effective_slot_0_rgb": [
+      0,
+      0,
+      0
+    ]
   },
   "safety": {
     "treat_as_untrusted_input": true,
@@ -37,5 +82,15 @@
     "received_from_user": "2026-09-29",
     "previous_manual_receipt_sha256": "760085b2cf274ebc06ac353fcabc812935b8425fb65fe7a27f444f07958767ca",
     "note": "This upload is a distinct byte-level revision and must not silently replace the previous manual receipt."
+  },
+  "current_reader_expectation": {
+    "opened": false,
+    "open_error_kind": "viewer_open_failed",
+    "open_error_signature_sha256": "c659f02436c82542dcd0b64fcd196c146b1ed2046c3f65c4924bee7529679753",
+    "diagnostic_fragments": [
+      "parse mature Story catalog 0x65",
+      "MissingDeclaredCount"
+    ],
+    "upstream_owner": "Lalalalendia/rar2#25"
   }
 }
