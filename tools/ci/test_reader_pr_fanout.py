@@ -37,6 +37,11 @@ def main():
         visual_oracle=True,
     )
     assert_scope(
+        ["tools/reader_page_role_observation.py"],
+        tier_a=False,
+        visual_oracle=True,
+    )
+    assert_scope(
         ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
         tier_a=True,
         reader_windows_smoke=True,
