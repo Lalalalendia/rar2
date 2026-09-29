@@ -87,12 +87,17 @@ jobs:
           report = json.loads(Path("out/quill-story-early-text-boundary.json").read_text())
           assert report["witness_count"] == 7, report["witness_count"]
           rows = report["rows"]
-          assert all(row["contents_syid_order_matches"] for row in rows), rows
+
+          # Facts already proved by #315; the early SYID/STRS payloads are filler,
+          # not Story identity/length carriers.
           assert all(row["syid_length_matches_grounded_count"] for row in rows), rows
           assert all(row["strs_length_matches_observed_22_plus_8n"] for row in rows), rows
+          assert all(row["syid_chunk_all_ff"] for row in rows), rows
+          assert all(row["strs_chunk_all_ff"] for row in rows), rows
+          assert all(row["strs_direct_generic_plc_candidate_count"] == 0 for row in rows), rows
 
           summary = {
-              "schema": "chaptera.quill-story-early-text-boundary.summary.v1",
+              "schema": "chaptera.quill-story-early-text-boundary.summary.v2",
               "witness_count": 7,
               "rows": [
                   {
@@ -100,26 +105,14 @@ jobs:
                       "revision": row["contents_serialization_revision"],
                       "story_count": row["grounded_story_count"],
                       "text_utf16_units": row["text_utf16_units"],
-                      "btep_plc_valid": row["btep_plc_valid"],
-                      "btec_plc_valid": row["btec_plc_valid"],
-                      "candidate_count": row["candidate_count"],
-                      "accepted_candidate_count": row["accepted_candidate_count"],
-                      "candidates": [
-                          {
-                              "prefix_offset": candidate["prefix_offset"],
-                              "data_size": candidate["data_size"],
-                              "nonzero_flag_count": candidate["nonzero_flag_count"],
-                              "first_n_sum_matches_text": candidate["first_n_sum_matches_text"],
-                              "all_sum_matches_text": candidate["all_sum_matches_text"],
-                              "trailing_increment_utf16": candidate["trailing_increment_utf16"],
-                              "zero_story_increment_count": candidate["zero_story_increment_count"],
-                              "structured_records_consume_tail_exactly": candidate["structured_records_consume_tail_exactly"],
-                              "story_ends_in_btep": candidate["story_ends_in_btep"],
-                              "story_ends_in_btec": candidate["story_ends_in_btec"],
-                              "story_ends_in_both": candidate["story_ends_in_both"],
-                          }
-                          for candidate in row["candidates"]
-                      ],
+                      "syid_all_ff": row["syid_chunk_all_ff"],
+                      "strs_all_ff": row["strs_chunk_all_ff"],
+                      "btep_descriptor_length": row["btep_descriptor_length"],
+                      "btec_descriptor_length": row["btec_descriptor_length"],
+                      "fdpp_descriptor_length": row["fdpp_descriptor_length"],
+                      "fdpc_descriptor_length": row["fdpc_descriptor_length"],
+                      "btep_candidates": row["btep_candidates"],
+                      "btec_candidates": row["btec_candidates"],
                   }
                   for row in rows
               ],
