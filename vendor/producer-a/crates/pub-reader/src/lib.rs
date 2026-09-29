@@ -76,11 +76,12 @@ use pub_contents::{
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
+    DggDefaultOptionsInventory, DggDefaultOptionsObservation, Fopte, FoptObservation,
     OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
     OFFICE_ART_PROPERTY_CROP_FROM_RIGHT, OFFICE_ART_PROPERTY_CROP_FROM_TOP,
     OFFICE_ART_PROPERTY_PIB, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
     PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField, PublisherFieldRecord,
-    SpContainerInventory, inspect_sp_containers,
+    SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
     Affine2D, AuthorityClass, ByteRange, CanonicalId, Document, DocumentId, LengthEmu, Node,
@@ -295,6 +296,39 @@ pub struct PubExplicitLineSource {
     pub width_emu: Option<i64>,
     /// Set only when fUsefLine is present in explicit 0x01FF.
     pub visible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubEffectivePaintAuthority {
+    ShapeLocal,
+    DggPrimary,
+    DggTertiary,
+    NormativeDefault,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubEffectivePaintValue<T> {
+    pub value: T,
+    pub authority: PubEffectivePaintAuthority,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<RawSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PubEffectiveShapePaintSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_solid: Option<PubEffectivePaintValue<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_color_rgb: Option<PubEffectivePaintValue<[u8; 3]>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_visible: Option<PubEffectivePaintValue<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_color_rgb: Option<PubEffectivePaintValue<[u8; 3]>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_width_emu: Option<PubEffectivePaintValue<i64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_visible: Option<PubEffectivePaintValue<bool>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2881,6 +2915,261 @@ fn explicit_officeart_paint(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EffectiveScalarLookup {
+    Missing,
+    Present { value: u32, source: RawSpan },
+    Blocked,
+}
+
+fn unique_effective_scalar_from_properties<'a>(
+    properties: impl Iterator<Item = &'a Fopte>,
+    property_id: u16,
+) -> EffectiveScalarLookup {
+    let matches = properties
+        .filter(|property| property.property_id() == property_id)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => EffectiveScalarLookup::Missing,
+        [property] if !property.f_bid() && !property.f_complex() => {
+            EffectiveScalarLookup::Present {
+                value: property.op,
+                source: property.source.clone(),
+            }
+        }
+        _ => EffectiveScalarLookup::Blocked,
+    }
+}
+
+fn unique_effective_scalar_from_records(
+    records: &[FoptObservation],
+    property_id: u16,
+) -> EffectiveScalarLookup {
+    unique_effective_scalar_from_properties(
+        records.iter().flat_map(|record| record.properties.iter()),
+        property_id,
+    )
+}
+
+fn shape_effective_scalar(
+    shape: &pub_escher::SpContainerObservation,
+    property_id: u16,
+) -> EffectiveScalarLookup {
+    unique_effective_scalar_from_records(&shape.fopts, property_id)
+}
+
+fn dgg_effective_scalar(
+    dgg: Option<&DggDefaultOptionsObservation>,
+    property_id: u16,
+    primary: bool,
+) -> EffectiveScalarLookup {
+    let Some(dgg) = dgg else {
+        return EffectiveScalarLookup::Missing;
+    };
+    let records = if primary {
+        &dgg.primary_options
+    } else {
+        &dgg.tertiary_options
+    };
+    unique_effective_scalar_from_records(records, property_id)
+}
+
+fn single_dgg_defaults(
+    inventory: &DggDefaultOptionsInventory,
+) -> Result<Option<&DggDefaultOptionsObservation>> {
+    match inventory.drawing_groups.as_slice() {
+        [] => Ok(None),
+        [dgg] => Ok(Some(dgg)),
+        many => bail!(
+            "expected at most one OfficeArtDggContainer for effective defaults, observed {}",
+            many.len()
+        ),
+    }
+}
+
+fn resolve_effective_scalar(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+    property_id: u16,
+    normative_default: Option<u32>,
+) -> Option<PubEffectivePaintValue<u32>> {
+    for (lookup, authority) in [
+        (
+            shape_effective_scalar(shape, property_id),
+            PubEffectivePaintAuthority::ShapeLocal,
+        ),
+        (
+            dgg_effective_scalar(dgg, property_id, true),
+            PubEffectivePaintAuthority::DggPrimary,
+        ),
+        (
+            dgg_effective_scalar(dgg, property_id, false),
+            PubEffectivePaintAuthority::DggTertiary,
+        ),
+    ] {
+        match lookup {
+            EffectiveScalarLookup::Missing => {}
+            EffectiveScalarLookup::Blocked => return None,
+            EffectiveScalarLookup::Present { value, source } => {
+                return Some(PubEffectivePaintValue {
+                    value,
+                    authority,
+                    source: Some(source),
+                });
+            }
+        }
+    }
+
+    normative_default.map(|value| PubEffectivePaintValue {
+        value,
+        authority: PubEffectivePaintAuthority::NormativeDefault,
+        source: None,
+    })
+}
+
+fn resolve_effective_boolean(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+    property_id: u16,
+    use_bit: u32,
+    value_bit: u32,
+    normative_default: Option<bool>,
+) -> Option<PubEffectivePaintValue<bool>> {
+    for (lookup, authority) in [
+        (
+            shape_effective_scalar(shape, property_id),
+            PubEffectivePaintAuthority::ShapeLocal,
+        ),
+        (
+            dgg_effective_scalar(dgg, property_id, true),
+            PubEffectivePaintAuthority::DggPrimary,
+        ),
+        (
+            dgg_effective_scalar(dgg, property_id, false),
+            PubEffectivePaintAuthority::DggTertiary,
+        ),
+    ] {
+        match lookup {
+            EffectiveScalarLookup::Missing => {}
+            EffectiveScalarLookup::Blocked => return None,
+            EffectiveScalarLookup::Present { value, source } => {
+                if value & use_bit == 0 {
+                    continue;
+                }
+                return Some(PubEffectivePaintValue {
+                    value: value & value_bit != 0,
+                    authority,
+                    source: Some(source),
+                });
+            }
+        }
+    }
+
+    normative_default.map(|value| PubEffectivePaintValue {
+        value,
+        authority: PubEffectivePaintAuthority::NormativeDefault,
+        source: None,
+    })
+}
+
+/// Resolves only the already-admitted solid 2-D OfficeArt paint surface.
+///
+/// admit_normative_2d_defaults must only be true for a caller that has
+/// independently admitted the shape as a bounded 2-D primitive. Unsupported or
+/// ambiguous higher-authority properties fail the affected field closed and do
+/// not fall through to a lower-authority/default value.
+pub fn resolve_effective_officeart_paint(
+    shape: &pub_escher::SpContainerObservation,
+    dgg_inventory: &DggDefaultOptionsInventory,
+    color_scheme: Option<&MatureColorScheme>,
+    admit_normative_2d_defaults: bool,
+) -> Result<PubEffectiveShapePaintSource> {
+    let dgg = single_dgg_defaults(dgg_inventory)?;
+    let normative = admit_normative_2d_defaults.then_some(());
+
+    let fill_type = resolve_effective_scalar(
+        shape,
+        dgg,
+        OFFICE_ART_FILL_TYPE,
+        normative.map(|_| 0),
+    );
+    let fill_solid = fill_type.as_ref().map(|resolved| PubEffectivePaintValue {
+        value: resolved.value == 0,
+        authority: resolved.authority,
+        source: resolved.source.clone(),
+    });
+    let fill_color_rgb = if fill_solid.as_ref().is_some_and(|value| value.value) {
+        resolve_effective_scalar(
+            shape,
+            dgg,
+            OFFICE_ART_FILL_COLOR,
+            normative.map(|_| 0x00FF_FFFF),
+        )
+        .and_then(|resolved| {
+            bounded_officeart_rgb(resolved.value, color_scheme).map(|value| {
+                PubEffectivePaintValue {
+                    value,
+                    authority: resolved.authority,
+                    source: resolved.source,
+                }
+            })
+        })
+    } else {
+        None
+    };
+    let fill_visible = resolve_effective_boolean(
+        shape,
+        dgg,
+        OFFICE_ART_FILL_BOOLEANS,
+        FILL_USE_FILLED_BIT,
+        FILL_FILLED_BIT,
+        normative.map(|_| true),
+    );
+
+    let line_color_rgb = resolve_effective_scalar(
+        shape,
+        dgg,
+        OFFICE_ART_LINE_COLOR,
+        normative.map(|_| 0x0000_0000),
+    )
+    .and_then(|resolved| {
+        bounded_officeart_rgb(resolved.value, color_scheme).map(|value| PubEffectivePaintValue {
+            value,
+            authority: resolved.authority,
+            source: resolved.source,
+        })
+    });
+    let line_width_emu = resolve_effective_scalar(
+        shape,
+        dgg,
+        OFFICE_ART_LINE_WIDTH,
+        normative.map(|_| 0x0000_2535),
+    )
+    .and_then(|resolved| {
+        (resolved.value <= 0x0132_F540).then_some(PubEffectivePaintValue {
+            value: i64::from(resolved.value),
+            authority: resolved.authority,
+            source: resolved.source,
+        })
+    });
+    let line_visible = resolve_effective_boolean(
+        shape,
+        dgg,
+        OFFICE_ART_LINE_BOOLEANS,
+        LINE_USE_LINE_BIT,
+        LINE_LINE_BIT,
+        normative.map(|_| true),
+    );
+
+    Ok(PubEffectiveShapePaintSource {
+        fill_solid,
+        fill_color_rgb,
+        fill_visible,
+        line_color_rgb,
+        line_width_emu,
+        line_visible,
+    })
+}
 fn unique_explicit_officeart_scalar(
     shape: &pub_escher::SpContainerObservation,
     property_id: u16,
@@ -3719,6 +4008,160 @@ mod tests {
         );
     }
 
+    fn effective_test_property(property_id: u16, op: u32, offset: u64) -> Fopte {
+        Fopte {
+            opid: property_id,
+            op,
+            source: crop_test_span(offset, 6),
+            complex_source: None,
+            complex_data: None,
+        }
+    }
+
+    fn effective_test_shape(properties: Vec<Fopte>) -> pub_escher::SpContainerObservation {
+        crop_test_shape(properties)
+    }
+
+    fn effective_test_dgg(
+        primary: Vec<Fopte>,
+        tertiary: Vec<Fopte>,
+    ) -> DggDefaultOptionsInventory {
+        DggDefaultOptionsInventory {
+            schema_version: 1,
+            stream: StreamPath(ESCHER_STREAM_PATH.to_owned()),
+            stream_len: 0,
+            drawing_groups: vec![DggDefaultOptionsObservation {
+                source: crop_test_span(1000, 0),
+                primary_options: (!primary.is_empty())
+                    .then(|| FoptObservation {
+                        rec_type: pub_escher::OFFICE_ART_FOPT,
+                        source: crop_test_span(1010, 0),
+                        properties: primary,
+                    })
+                    .into_iter()
+                    .collect(),
+                tertiary_options: (!tertiary.is_empty())
+                    .then(|| FoptObservation {
+                        rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+                        source: crop_test_span(1020, 0),
+                        properties: tertiary,
+                    })
+                    .into_iter()
+                    .collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn effective_paint_uses_normative_defaults_for_admitted_2d_shape() {
+        let shape = effective_test_shape(Vec::new());
+        let dgg = effective_test_dgg(Vec::new(), Vec::new());
+        let paint = resolve_effective_officeart_paint(&shape, &dgg, None, true)
+            .expect("normative effective paint");
+
+        assert_eq!(paint.fill_solid.as_ref().map(|value| value.value), Some(true));
+        assert_eq!(
+            paint.fill_color_rgb.as_ref().map(|value| value.value),
+            Some([0xFF, 0xFF, 0xFF])
+        );
+        assert_eq!(paint.fill_visible.as_ref().map(|value| value.value), Some(true));
+        assert_eq!(
+            paint.line_color_rgb.as_ref().map(|value| value.value),
+            Some([0, 0, 0])
+        );
+        assert_eq!(paint.line_width_emu.as_ref().map(|value| value.value), Some(0x2535));
+        assert_eq!(paint.line_visible.as_ref().map(|value| value.value), Some(true));
+        assert!(
+            [
+                paint.fill_solid.as_ref().map(|value| value.authority),
+                paint.fill_color_rgb.as_ref().map(|value| value.authority),
+                paint.fill_visible.as_ref().map(|value| value.authority),
+                paint.line_color_rgb.as_ref().map(|value| value.authority),
+                paint.line_width_emu.as_ref().map(|value| value.authority),
+                paint.line_visible.as_ref().map(|value| value.authority),
+            ]
+            .into_iter()
+            .flatten()
+            .all(|authority| authority == PubEffectivePaintAuthority::NormativeDefault)
+        );
+    }
+
+    #[test]
+    fn effective_paint_shape_local_scalar_overrides_dgg_default() {
+        let shape = effective_test_shape(vec![effective_test_property(
+            OFFICE_ART_FILL_COLOR,
+            0x0000_00FF,
+            10,
+        )]);
+        let dgg = effective_test_dgg(
+            vec![effective_test_property(OFFICE_ART_FILL_COLOR, 0x00FF_0000, 20)],
+            Vec::new(),
+        );
+        let paint = resolve_effective_officeart_paint(&shape, &dgg, None, true)
+            .expect("effective paint");
+
+        let fill = paint.fill_color_rgb.expect("effective fill color");
+        assert_eq!(fill.value, [0xFF, 0, 0]);
+        assert_eq!(fill.authority, PubEffectivePaintAuthority::ShapeLocal);
+        assert_eq!(fill.source.map(|source| source.offset), Some(10));
+    }
+
+    #[test]
+    fn effective_paint_boolean_without_use_bit_continues_to_dgg() {
+        let shape = effective_test_shape(vec![effective_test_property(
+            OFFICE_ART_FILL_BOOLEANS,
+            FILL_FILLED_BIT,
+            10,
+        )]);
+        let dgg = effective_test_dgg(
+            vec![effective_test_property(
+                OFFICE_ART_FILL_BOOLEANS,
+                FILL_USE_FILLED_BIT,
+                20,
+            )],
+            Vec::new(),
+        );
+        let paint = resolve_effective_officeart_paint(&shape, &dgg, None, true)
+            .expect("effective paint");
+
+        let visible = paint.fill_visible.expect("effective fill visibility");
+        assert!(!visible.value);
+        assert_eq!(visible.authority, PubEffectivePaintAuthority::DggPrimary);
+        assert_eq!(visible.source.map(|source| source.offset), Some(20));
+    }
+
+    #[test]
+    fn effective_paint_unsupported_higher_authority_color_fails_closed() {
+        let mut blocked = effective_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF, 10);
+        blocked.opid |= 0x4000;
+        let shape = effective_test_shape(vec![blocked]);
+        let dgg = effective_test_dgg(
+            vec![effective_test_property(OFFICE_ART_FILL_COLOR, 0x00FF_0000, 20)],
+            Vec::new(),
+        );
+        let paint = resolve_effective_officeart_paint(&shape, &dgg, None, true)
+            .expect("effective paint");
+
+        assert!(paint.fill_color_rgb.is_none());
+    }
+
+    #[test]
+    fn effective_paint_can_disable_normative_defaults_without_losing_dgg_values() {
+        let shape = effective_test_shape(Vec::new());
+        let dgg = effective_test_dgg(
+            vec![effective_test_property(OFFICE_ART_LINE_WIDTH, 12_345, 30)],
+            Vec::new(),
+        );
+        let paint = resolve_effective_officeart_paint(&shape, &dgg, None, false)
+            .expect("effective paint");
+
+        assert!(paint.fill_solid.is_none());
+        assert!(paint.fill_visible.is_none());
+        assert!(paint.line_visible.is_none());
+        let width = paint.line_width_emu.expect("DGG line width survives");
+        assert_eq!(width.value, 12_345);
+        assert_eq!(width.authority, PubEffectivePaintAuthority::DggPrimary);
+    }
     #[test]
     fn source_object_key_vocabularies_are_explicit_and_disjoint() {
         assert_eq!(contents_object_key(330), "contents/0x2c/seq/330");
