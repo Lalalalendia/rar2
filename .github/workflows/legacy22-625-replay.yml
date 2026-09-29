@@ -1,4 +1,5 @@
 name: Legacy22 625 corpus replay
+# Re-run after the bounded source train is physically present on the branch.
 
 on:
   push:
