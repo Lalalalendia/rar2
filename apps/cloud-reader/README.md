@@ -58,7 +58,9 @@ and 8 MiB in total. Display limitations remain visible alongside the document.
 Opening can be cancelled or replaced by dropping another file. A superseded
 network response or delayed font activation cannot publish an old document.
 Guest paths, session IDs and response protocol versions must agree before the
-client advances; capability tokens never go to another origin.
+client advances; capability tokens never go to another origin. Guest requests
+reject HTTP redirects so neither raw file bytes nor capability headers can be
+forwarded through an unexpected redirect.
 
 ## UI validation
 

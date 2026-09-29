@@ -217,7 +217,7 @@ async function openFile(file) {
   try {
     message("Creating private viewing session…");
     const issued = await jsonResponse(await fetch("/v1/reader/guest-sessions", {
-      method: "POST", credentials: "omit", cache: "no-store", signal,
+      method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
       headers: { "content-type": "application/json", "x-csrf-token": csrf },
       body: JSON.stringify({ expected_byte_len: file.size })
     }));
@@ -235,7 +235,7 @@ async function openFile(file) {
     const headers = { "x-csrf-token": csrf, "x-chaptera-reader-session": accessToken };
     message("Uploading for temporary private processing…");
     const uploaded = await jsonResponse(await fetch(uploadPath, {
-      method: "PUT", credentials: "omit", cache: "no-store", signal,
+      method: "PUT", credentials: "omit", cache: "no-store", redirect: "error", signal,
       headers: { ...headers, "content-type": "application/octet-stream" }, body: file
     }));
     if (!isCurrent(operation)) return;
@@ -244,7 +244,7 @@ async function openFile(file) {
     }
     message("Scanning and opening…");
     const opened = await jsonResponse(await fetch(openPath, {
-      method: "POST", credentials: "omit", cache: "no-store", signal,
+      method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
       headers: { ...headers, "content-type": "application/json" }, body: "{}"
     }));
     if (!isCurrent(operation)) return;
