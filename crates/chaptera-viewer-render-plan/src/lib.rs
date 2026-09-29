@@ -13,7 +13,9 @@ use pub_layout::{
 };
 #[cfg(feature = "projected-scene-instances")]
 use pub_model::CanonicalId;
-use pub_model::{Affine2D, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, StoryId};
+use pub_model::{
+    Affine2D, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, StoryId, TableCellId,
+};
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
@@ -47,6 +49,26 @@ pub struct NodeRenderPlanV1 {
     pub image: Option<RenderImageRefV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<RenderTextFragmentV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<RenderTableV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTableV1 {
+    pub story_id: StoryId,
+    pub rows: u32,
+    pub columns: u32,
+    pub cells: Vec<RenderTableCellV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTableCellV1 {
+    pub id: TableCellId,
+    pub row: u32,
+    pub column: u32,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<RectEmu>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -411,6 +433,26 @@ pub fn build_page_render_plan_v1(
                     resource_id: image.resource_id,
                     mime: image.mime.clone(),
                 });
+            let table = visual
+                .tables
+                .iter()
+                .find(|table| table.node_id == node.origin)
+                .map(|table| RenderTableV1 {
+                    story_id: table.story_id,
+                    rows: table.rows,
+                    columns: table.columns,
+                    cells: table
+                        .cells
+                        .iter()
+                        .map(|cell| RenderTableCellV1 {
+                            id: cell.id,
+                            row: cell.address.row,
+                            column: cell.address.column,
+                            text: cell.text.clone(),
+                            bounds: cell.bounds,
+                        })
+                        .collect(),
+                });
             NodeRenderPlanV1 {
                 node_id: node.origin,
                 #[cfg(feature = "projected-scene-instances")]
@@ -426,6 +468,7 @@ pub fn build_page_render_plan_v1(
                     }),
                 image,
                 text,
+                table,
             }
         })
         .collect::<Vec<_>>();
@@ -467,6 +510,7 @@ pub fn build_page_render_plan_v1(
                 }),
             image,
             text: projected_text(visual, projected)?,
+            table: None,
         };
 
         let insert_at = nodes
@@ -745,10 +789,14 @@ mod tests {
     use pub_layout::{
         BoundedLayoutEnvironment, BoundedResolvedScene, ResolvedPhysicalNode, ResolvedSurface,
     };
-    use pub_model::{Affine2D, CanonicalId, LengthEmu, RectEmu, Sha256Digest, Size2D};
+    use pub_model::{
+        Affine2D, CanonicalId, LengthEmu, RectEmu, Sha256Digest, Size2D, TableCellAddress,
+        TableCellId,
+    };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerNodePaint, ViewerPage, ViewerSolidLine,
-        ViewerSource, ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
+        ViewerSource, ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
+        viewer_story_text_sha256,
     };
 
     fn canonical(byte: u8) -> CanonicalId {
@@ -839,6 +887,7 @@ mod tests {
                 size_inherited: true,
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
+            tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
                 resource_id,
                 mime: "image/png".into(),
@@ -869,12 +918,58 @@ mod tests {
             node.text.as_ref().map(|text| text.text.as_str()),
             Some("hello")
         );
+        assert!(node.table.is_none());
         let typography = &node.text.as_ref().expect("text").typography;
         assert_eq!(typography.len(), 1);
         assert_eq!(typography[0].scalar_start, 0);
         assert_eq!(typography[0].scalar_end, 2);
         assert_eq!(typography[0].text_size_emu, 24 * 12_700);
         assert!(typography[0].size_inherited);
+    }
+
+    #[test]
+    fn table_payload_reaches_render_plan_with_cell_text_and_bounds() {
+        let mut visual = fixture();
+        let node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        let cell_id = TableCellId::from_canonical(canonical(5));
+        let cell_bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(150),
+            LengthEmu::new(200),
+        );
+
+        // Mature TABLE owns its text through the table payload, not a normal
+        // StoryFrame. Keep the fixture aligned with that product boundary.
+        visual.text_fragments.clear();
+        visual.typography_runs.clear();
+        visual.tables.push(ViewerTable {
+            node_id,
+            story_id,
+            rows: 1,
+            columns: 1,
+            cells: vec![ViewerTableCell {
+                id: cell_id,
+                address: TableCellAddress { row: 0, column: 0 },
+                text: "cell".into(),
+                bounds: Some(cell_bounds),
+            }],
+        });
+
+        let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
+        let node = &plan.nodes[0];
+        assert!(node.text.is_none());
+
+        let table = node.table.as_ref().expect("table payload");
+        assert_eq!(table.story_id, story_id);
+        assert_eq!((table.rows, table.columns), (1, 1));
+        assert_eq!(table.cells.len(), 1);
+        assert_eq!(table.cells[0].id, cell_id);
+        assert_eq!(table.cells[0].row, 0);
+        assert_eq!(table.cells[0].column, 0);
+        assert_eq!(table.cells[0].text, "cell");
+        assert_eq!(table.cells[0].bounds, Some(cell_bounds));
     }
 
     #[cfg(feature = "projected-scene-instances")]
