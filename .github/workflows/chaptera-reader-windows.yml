@@ -2,7 +2,19 @@ name: Chaptera Reader Windows V0
 
 on:
   workflow_call:
+    inputs:
+      full_product:
+        description: "Run full Reader product/package validation"
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
+    inputs:
+      full_product:
+        description: "Run full Reader product/package validation"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -19,25 +31,32 @@ jobs:
           components: rustfmt
 
       - uses: actions/setup-python@v5
+        if: ${{ inputs.full_product }}
         with:
           python-version: "3.12"
 
       - name: Test Reader portable packager
+        if: ${{ inputs.full_product }}
         run: python -m unittest tools/test_package_reader_portable.py -v
 
       - name: Test shared Viewer render-plan contract
+        if: ${{ inputs.full_product }}
         run: cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml
 
       - name: Check compile-time Reader surface
+        if: ${{ inputs.full_product }}
         run: cargo check -p chaptera-desktop --features reader-only --all-targets
 
       - name: Test bounded desktop image decode adapter
+        if: ${{ inputs.full_product }}
         run: cargo test -p chaptera-desktop --features reader-only image_decode_adapter::tests -- --nocapture
 
       - name: Test Reader first-run contract
+        if: ${{ inputs.full_product }}
         run: cargo test -p chaptera-desktop --features reader-only reader_first_run -- --nocapture
 
       - name: Test Reader atomic open-state and source freshness
+        if: ${{ inputs.full_product }}
         run: |
           cargo test -p chaptera-desktop --features reader-only open_generation -- --nocapture
           cargo test -p chaptera-desktop --features reader-only committed_source -- --nocapture
@@ -71,6 +90,7 @@ jobs:
           } | ConvertTo-Json | Set-Content -Encoding utf8 target/release/chaptera-reader.desktop-build.json
 
       - name: Exercise Reader copied-U1 control mode on Windows
+        if: ${{ inputs.full_product }}
         shell: pwsh
         run: |
           cargo test -p chaptera-update-handoff --test control_handoff_acceptance -- --nocapture
@@ -133,6 +153,7 @@ jobs:
           } | ConvertTo-Json | Set-Content -Encoding utf8 target/release/chaptera-reader.real-pub-smoke.json
 
       - name: Run product identity smoke
+        if: ${{ inputs.full_product }}
         shell: pwsh
         run: |
           $exe = "target/release/chaptera-reader.exe"
@@ -162,10 +183,24 @@ jobs:
           if ($smoke.locale.network_lookup_used -ne $false -or $smoke.locale.ip_geolocation_used -ne $false -or $smoke.locale.account_state_used -ne $false) { throw "Reader locale contract crossed the privacy boundary" }
 
       - name: Build portable Chaptera Reader ZIP
+        if: ${{ inputs.full_product }}
         run: |
           python tools/package_reader_portable.py --reader-exe target/release/chaptera-reader.exe --output-zip target/release/Chaptera-Reader-Windows-x86_64.zip --manifest target/release/Chaptera-Reader.package.json
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload shared-core Windows smoke evidence
+        if: ${{ !inputs.full_product }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-reader-windows-smoke-x86_64
+          path: |
+            target/release/chaptera-reader.exe
+            target/release/chaptera-reader.desktop-build.json
+            target/release/chaptera-reader.real-pub-smoke.json
+          if-no-files-found: error
+
+      - name: Upload full Reader Windows product evidence
+        if: ${{ inputs.full_product }}
+        uses: actions/upload-artifact@v4
         with:
           name: chaptera-reader-windows-x86_64
           path: |
@@ -179,6 +214,7 @@ jobs:
 
   validate-portable-reader:
     needs: build-reader
+    if: ${{ inputs.full_product }}
     runs-on: windows-latest
     steps:
       - uses: actions/download-artifact@v4
