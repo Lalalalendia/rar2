@@ -149,7 +149,7 @@ jobs:
               print(json.dumps(out,indent=2,sort_keys=True))
           PY
 
-      - name: Prove MiniFAT validity within declared stream lengths
+      - name: Separate live CFB namespace from orphan MiniFAT garbage
         shell: bash
         run: |
           set -euo pipefail
@@ -170,95 +170,15 @@ jobs:
                   if v not in terminal and (v > max_regular or v >= len(mf))
               }
 
-              required_sectors=set()
-              transition_errors=[]
-              tail_anomalies=[]
-              checked_small_streams=0
-
-              for idx,entry in enumerate(ole.direntries):
-                  if entry is None or entry.entry_type != olefile.STGTY_STREAM:
-                      continue
-                  size=int(entry.size)
-                  if size <= 0 or size >= ole.minisectorcutoff:
-                      continue
-                  checked_small_streams += 1
-                  needed=(size + mini_sector_size - 1)//mini_sector_size
-                  cur=int(entry.isectStart)
-                  seen=set()
-                  chain=[]
-                  for ordinal in range(needed):
-                      if cur in terminal:
-                          transition_errors.append({
-                              "direntry":idx,
-                              "reason":"premature_terminal",
-                              "ordinal":ordinal,
-                              "needed":needed,
-                              "size":size,
-                          })
-                          break
-                      if not (0 <= cur < len(mf)):
-                          transition_errors.append({
-                              "direntry":idx,
-                              "reason":"sector_out_of_range",
-                              "ordinal":ordinal,
-                              "at":cur,
-                              "needed":needed,
-                              "size":size,
-                          })
-                          break
-                      if cur in seen:
-                          transition_errors.append({
-                              "direntry":idx,
-                              "reason":"cycle_before_declared_len",
-                              "ordinal":ordinal,
-                              "at":cur,
-                              "needed":needed,
-                              "size":size,
-                          })
-                          break
-                      seen.add(cur)
-                      required_sectors.add(cur)
-                      chain.append(cur)
-                      nxt=int(mf[cur])
-                      if ordinal + 1 < needed:
-                          if nxt in terminal:
-                              transition_errors.append({
-                                  "direntry":idx,
-                                  "reason":"terminal_before_declared_len",
-                                  "ordinal":ordinal,
-                                  "at":cur,
-                                  "needed":needed,
-                                  "size":size,
-                              })
-                              break
-                          if nxt > max_regular or nxt >= len(mf):
-                              transition_errors.append({
-                                  "direntry":idx,
-                                  "reason":"invalid_next_before_declared_len",
-                                  "ordinal":ordinal,
-                                  "at":cur,
-                                  "next":nxt,
-                                  "needed":needed,
-                                  "size":size,
-                              })
-                              break
-                          cur=nxt
-                      elif nxt not in terminal:
-                          tail_anomalies.append({
-                              "direntry":idx,
-                              "size":size,
-                              "needed":needed,
-                              "last_required_sector":cur,
-                              "tail_next":nxt,
-                              "tail_next_in_range":0 <= nxt < len(mf),
-                          })
-
+              live_stream_sids=set()
               logical_stream_read_count=0
               logical_stream_read_failures=0
               logical_stream_length_mismatches=0
               for parts in ole.listdir(streams=True,storages=False):
                   logical_stream_read_count += 1
                   try:
+                      sid=int(ole._find(parts))
+                      live_stream_sids.add(sid)
                       expected=int(ole.get_size(parts))
                       actual=len(ole.openstream(parts).read())
                       if actual != expected:
@@ -266,20 +186,99 @@ jobs:
                   except Exception:
                       logical_stream_read_failures += 1
 
-              tail_by_sector={row["last_required_sector"]:row for row in tail_anomalies}
+              def analyze_stream_sids(selected_sids):
+                  required_sectors=set()
+                  transition_errors=[]
+                  tail_anomalies=[]
+                  checked=0
+                  for idx,entry in enumerate(ole.direntries):
+                      if idx not in selected_sids:
+                          continue
+                      if entry is None or entry.entry_type != olefile.STGTY_STREAM:
+                          continue
+                      size=int(entry.size)
+                      if size <= 0 or size >= ole.minisectorcutoff:
+                          continue
+                      checked += 1
+                      needed=(size + mini_sector_size - 1)//mini_sector_size
+                      cur=int(entry.isectStart)
+                      seen=set()
+                      for ordinal in range(needed):
+                          if cur in terminal:
+                              transition_errors.append({
+                                  "direntry":idx,"reason":"premature_terminal",
+                                  "ordinal":ordinal,"needed":needed,"size":size,
+                              })
+                              break
+                          if not (0 <= cur < len(mf)):
+                              transition_errors.append({
+                                  "direntry":idx,"reason":"sector_out_of_range",
+                                  "ordinal":ordinal,"at":cur,"needed":needed,"size":size,
+                              })
+                              break
+                          if cur in seen:
+                              transition_errors.append({
+                                  "direntry":idx,"reason":"cycle_before_declared_len",
+                                  "ordinal":ordinal,"at":cur,"needed":needed,"size":size,
+                              })
+                              break
+                          seen.add(cur)
+                          required_sectors.add(cur)
+                          nxt=int(mf[cur])
+                          if ordinal + 1 < needed:
+                              if nxt in terminal:
+                                  transition_errors.append({
+                                      "direntry":idx,"reason":"terminal_before_declared_len",
+                                      "ordinal":ordinal,"at":cur,"needed":needed,"size":size,
+                                  })
+                                  break
+                              if nxt > max_regular or nxt >= len(mf):
+                                  transition_errors.append({
+                                      "direntry":idx,"reason":"invalid_next_before_declared_len",
+                                      "ordinal":ordinal,"at":cur,"next":nxt,
+                                      "needed":needed,"size":size,
+                                  })
+                                  break
+                              cur=nxt
+                          elif nxt not in terminal:
+                              tail_anomalies.append({
+                                  "direntry":idx,"size":size,"needed":needed,
+                                  "last_required_sector":cur,"tail_next":nxt,
+                                  "tail_next_in_range":0 <= nxt < len(mf),
+                              })
+                  return {
+                      "checked_small_stream_count":checked,
+                      "required_sectors":required_sectors,
+                      "transition_errors":transition_errors,
+                      "tail_anomalies":tail_anomalies,
+                  }
+
+              all_stream_sids={
+                  idx for idx,entry in enumerate(ole.direntries)
+                  if entry is not None and entry.entry_type == olefile.STGTY_STREAM
+              }
+              orphan_stream_sids=all_stream_sids-live_stream_sids
+              live=analyze_stream_sids(live_stream_sids)
+              orphan=analyze_stream_sids(orphan_stream_sids)
+
               print(json.dumps({
                   "minifat_entry_count":len(mf),
                   "mini_sector_size":mini_sector_size,
                   "invalid_entry_count":len(invalid),
                   "invalid_entries":invalid,
-                  "checked_small_stream_count":checked_small_streams,
-                  "required_mini_sector_count":len(required_sectors),
-                  "required_transition_error_count":len(transition_errors),
-                  "required_transition_errors":transition_errors,
-                  "tail_anomaly_count":len(tail_anomalies),
-                  "tail_anomalies":tail_anomalies,
-                  "mini_sector_384_required":384 in required_sectors,
-                  "mini_sector_384_tail_anomaly":tail_by_sector.get(384),
+                  "live_stream_sid_count":len(live_stream_sids),
+                  "orphan_stream_sid_count":len(orphan_stream_sids),
+                  "live_checked_small_stream_count":live["checked_small_stream_count"],
+                  "live_required_mini_sector_count":len(live["required_sectors"]),
+                  "live_required_transition_error_count":len(live["transition_errors"]),
+                  "live_required_transition_errors":live["transition_errors"],
+                  "live_tail_anomaly_count":len(live["tail_anomalies"]),
+                  "live_tail_anomalies":live["tail_anomalies"],
+                  "orphan_required_transition_error_count":len(orphan["transition_errors"]),
+                  "orphan_required_transition_errors":orphan["transition_errors"],
+                  "orphan_tail_anomaly_count":len(orphan["tail_anomalies"]),
+                  "mini_sector_384_referenced_by_live_stream":384 in live["required_sectors"],
+                  "mini_sector_384_referenced_by_orphan_stream":384 in orphan["required_sectors"],
                   "logical_stream_read_count":logical_stream_read_count,
                   "logical_stream_read_failure_count":logical_stream_read_failures,
                   "logical_stream_length_mismatch_count":logical_stream_length_mismatches,
@@ -305,12 +304,13 @@ jobs:
           reach=json.loads(Path("/tmp/perlost-minifat-reachability.json").read_text())
           assert "/Contents" in ole["paths"], ole
           assert reach["invalid_entries"].get("384") == 1431327565, reach
-          assert reach["mini_sector_384_required"] is True, reach
-          assert reach["mini_sector_384_tail_anomaly"]["tail_next"] == 1431327565, reach
-          assert reach["required_transition_error_count"] == 0, reach
+          assert reach["logical_stream_read_count"] > 0, reach
           assert reach["logical_stream_read_failure_count"] == 0, reach
           assert reach["logical_stream_length_mismatch_count"] == 0, reach
-          assert reach["tail_anomaly_count"] >= 1, reach
+          assert reach["live_required_transition_error_count"] == 0, reach
+          assert reach["mini_sector_384_referenced_by_live_stream"] is False, reach
+          assert reach["mini_sector_384_referenced_by_orphan_stream"] is True, reach
+          assert reach["orphan_required_transition_error_count"] > 0, reach
           # Report may retain only structural metadata/error text, never source bytes or recovered story text.
           forbidden=["PERLOST.PUB", "PageWiz/", "recovered_text", "story_text"]
           raw=p.read_text()
