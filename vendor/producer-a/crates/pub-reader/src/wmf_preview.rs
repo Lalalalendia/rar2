@@ -87,7 +87,8 @@ struct Brush {
 enum GdiObject {
     Pen(Pen),
     Brush(Brush),
-    Unsupported,
+    UnsupportedPatternBrush,
+    Region,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -588,6 +589,83 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
     Ok(())
 }
 
+fn validate_region_object(params: &[u8]) -> Result<()> {
+    const REGION_HEADER_BYTES: usize = 22;
+    const REGION_OBJECT_TYPE: i16 = 0x0006;
+
+    if params.len() < REGION_HEADER_BYTES {
+        bail!("WMF region object is truncated");
+    }
+    let object_type =
+        read_i16(params, 2).ok_or_else(|| anyhow!("WMF region object type is truncated"))?;
+    if object_type != REGION_OBJECT_TYPE {
+        bail!("unsupported WMF region object type {object_type}");
+    }
+
+    let region_size_raw =
+        read_i16(params, 8).ok_or_else(|| anyhow!("WMF region size is truncated"))?;
+    let region_size = usize::try_from(i32::from(region_size_raw))
+        .map_err(|_| anyhow!("WMF region size is negative"))?;
+    if region_size != params.len() {
+        bail!("WMF region size disagrees with record payload");
+    }
+
+    let scan_count_raw =
+        read_i16(params, 10).ok_or_else(|| anyhow!("WMF region scan count is truncated"))?;
+    let scan_count = usize::try_from(i32::from(scan_count_raw))
+        .map_err(|_| anyhow!("WMF region scan count is negative"))?;
+    if scan_count > MAX_POINTS_PER_RECORD {
+        bail!("WMF region scan count exceeds bounded limit");
+    }
+
+    let max_scan_raw =
+        read_i16(params, 12).ok_or_else(|| anyhow!("WMF region maxScan is truncated"))?;
+    let max_scan = usize::try_from(i32::from(max_scan_raw))
+        .map_err(|_| anyhow!("WMF region maxScan is negative"))?;
+    if max_scan > MAX_POINTS_PER_RECORD {
+        bail!("WMF region maxScan exceeds bounded limit");
+    }
+
+    let mut offset = REGION_HEADER_BYTES;
+    for _ in 0..scan_count {
+        let count = usize::from(
+            read_u16(params, offset).ok_or_else(|| anyhow!("WMF region scan is truncated"))?,
+        );
+        if count % 2 != 0 {
+            bail!("WMF region scan coordinate count is odd");
+        }
+        if count > MAX_POINTS_PER_RECORD.saturating_mul(2) {
+            bail!("WMF region scan coordinate count exceeds bounded limit");
+        }
+        let scan_line_bytes = count
+            .checked_mul(2)
+            .ok_or_else(|| anyhow!("WMF region scan byte count overflow"))?;
+        let count2_offset = offset
+            .checked_add(6)
+            .and_then(|value| value.checked_add(scan_line_bytes))
+            .ok_or_else(|| anyhow!("WMF region scan range overflow"))?;
+        let scan_end = count2_offset
+            .checked_add(2)
+            .ok_or_else(|| anyhow!("WMF region scan range overflow"))?;
+        if scan_end > params.len() {
+            bail!("WMF region scan payload is truncated");
+        }
+        let count2 = usize::from(
+            read_u16(params, count2_offset)
+                .ok_or_else(|| anyhow!("WMF region scan Count2 is truncated"))?,
+        );
+        if count2 != count {
+            bail!("WMF region scan Count2 disagrees with Count");
+        }
+        offset = scan_end;
+    }
+
+    if offset != params.len() {
+        bail!("WMF region payload has trailing bytes");
+    }
+    Ok(())
+}
+
 fn parse_points(params: &[u8], count: usize, offset: usize) -> Result<Vec<(i16, i16)>> {
     if count > MAX_POINTS_PER_RECORD {
         bail!("WMF point count exceeds bounded limit");
@@ -944,8 +1022,12 @@ pub fn rasterize_wmf_preview(
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
             }
-            META_DIBCREATEPATTERNBRUSH | META_CREATEREGION => {
-                allocate_object(&mut objects, GdiObject::Unsupported)?;
+            META_DIBCREATEPATTERNBRUSH => {
+                allocate_object(&mut objects, GdiObject::UnsupportedPatternBrush)?;
+            }
+            META_CREATEREGION => {
+                validate_region_object(params)?;
+                allocate_object(&mut objects, GdiObject::Region)?;
             }
             META_DELETEOBJECT => {
                 let index = usize::from(
@@ -967,8 +1049,15 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
-                    GdiObject::Unsupported => {
-                        bail!("WMF selects an unsupported graphics object");
+                    GdiObject::UnsupportedPatternBrush => {
+                        bail!("WMF selects an unsupported pattern brush graphics object");
+                    }
+                    GdiObject::Region => {
+                        // MS-WMF does not use a Region Object for clipping until
+                        // META_SELECTCLIPREGION. The corpus-proven profile selects
+                        // the Region through META_SELECTOBJECT and then supplies an
+                        // explicit META_INTERSECTCLIPRECT, so this selection has no
+                        // playback-state effect in the bounded V1 raster subset.
                     }
                 }
             }
@@ -1154,6 +1243,28 @@ mod tests {
         bytes
     }
 
+    fn valid_region_object() -> Vec<u8> {
+        let mut region = Vec::new();
+        region.extend_from_slice(&0_i16.to_le_bytes());
+        region.extend_from_slice(&6_i16.to_le_bytes());
+        region.extend_from_slice(&0_u32.to_le_bytes());
+        region.extend_from_slice(&42_i16.to_le_bytes());
+        region.extend_from_slice(&1_i16.to_le_bytes());
+        region.extend_from_slice(&2_i16.to_le_bytes());
+        for value in [0_i16, 0, 100, 100] {
+            region.extend_from_slice(&value.to_le_bytes());
+        }
+        region.extend_from_slice(&6_u16.to_le_bytes());
+        region.extend_from_slice(&0_u16.to_le_bytes());
+        region.extend_from_slice(&100_u16.to_le_bytes());
+        for value in [0_u16, 100, 0, 100, 0, 100] {
+            region.extend_from_slice(&value.to_le_bytes());
+        }
+        region.extend_from_slice(&6_u16.to_le_bytes());
+        assert_eq!(region.len(), 42);
+        region
+    }
+
     #[test]
     fn rasterizes_bounded_polygon_without_platform_gdi() {
         let image = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("preview");
@@ -1169,6 +1280,46 @@ mod tests {
         let mut bytes = synthetic_polygon();
         bytes[10..12].copy_from_slice(&0_u16.to_le_bytes());
         assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn region_selectobject_is_inert_until_explicit_clip_record() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+
+        insert_record_before_eof(
+            &mut bytes,
+            record(META_CREATEREGION, &valid_region_object()),
+        );
+        insert_record_before_eof(&mut bytes, record(META_SELECTOBJECT, &2_u16.to_le_bytes()));
+
+        let mut clip = Vec::new();
+        for value in [100_i16, 100, 0, 0] {
+            clip.extend_from_slice(&value.to_le_bytes());
+        }
+        insert_record_before_eof(&mut bytes, record(META_INTERSECTCLIPRECT, &clip));
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("bounded region selection");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn malformed_region_objects_fail_closed() {
+        let valid = valid_region_object();
+        validate_region_object(&valid).expect("bounded region profile");
+
+        let mut wrong_type = valid.clone();
+        wrong_type[2..4].copy_from_slice(&5_i16.to_le_bytes());
+        assert!(validate_region_object(&wrong_type).is_err());
+
+        let mut wrong_size = valid.clone();
+        wrong_size[8..10].copy_from_slice(&40_i16.to_le_bytes());
+        assert!(validate_region_object(&wrong_size).is_err());
+
+        let mut odd_scan = valid;
+        odd_scan[22..24].copy_from_slice(&5_u16.to_le_bytes());
+        assert!(validate_region_object(&odd_scan).is_err());
     }
 
     #[test]
