@@ -556,8 +556,7 @@ mod tests {
         bytes.extend_from_slice(&array);
 
         let chunk = parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
-        let variant =
-            parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk).unwrap();
+        let variant = parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk).unwrap();
         assert_eq!(
             variant.cardinality_authority,
             StoryCatalogCardinalityAuthority::DerivedEmptyEntryArray
