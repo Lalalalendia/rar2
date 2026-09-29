@@ -618,6 +618,7 @@ mod tests {
             classification: "unsupported".to_owned(),
             terminal_code: Some("reader_scene_open_failed".to_owned()),
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
+            failure_classification: None,
             filesystem_confinement: true,
         };
         assert!(validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1,).is_err());
