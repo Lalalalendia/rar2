@@ -171,7 +171,7 @@ fn axis_order(axis: RulerGuideAxis) -> u8 {
 mod tests {
     use super::*;
     use pub_model::{
-        CanonicalId, DocumentId, EMU_PER_INCH, PageId, Sha256Digest, Size2D, SourceDescriptor,
+        CanonicalId, EMU_PER_INCH, PageId, Sha256Digest, Size2D, SourceDescriptor,
     };
 
     fn page_id() -> PageId {
