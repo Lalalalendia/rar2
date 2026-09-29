@@ -11,6 +11,9 @@ on:
       - "apps/chaptera-desktop/Cargo.toml"
       - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/fallback_font.rs"
+      - "apps/chaptera-desktop/src/source_font.rs"
+      - "apps/chaptera-desktop/src/render_backend.rs"
+      - "crates/chaptera-viewer-render-plan/**"
       - "packages/product/editor-live-trial/**"
       - "tools/package_editor_live_trial.py"
       - "tools/test_package_editor_live_trial.py"
@@ -47,3 +50,57 @@ jobs:
         run: cargo test --manifest-path apps/chaptera-desktop/Cargo.toml fallback_font::tests -- --nocapture
       - name: Portable package carries font licence notice
         run: python -m unittest tools.test_package_editor_live_trial -v
+
+  source-font-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Acquire pinned SampleNewsletter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove bounded Windows source-font binding
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $environmentReceipt = Join-Path $env:RUNNER_TEMP "desktop-source-font-environment.json"
+          $realPubReceipt = Join-Path $env:RUNNER_TEMP "desktop-source-font-real-pub.json"
+          $env:CHAPTERA_SOURCE_FONT_RECEIPT = $environmentReceipt
+          $env:CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT = $realPubReceipt
+
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml source_font::tests::windows_environment_font_binds_identical_layout_and_paint_bytes -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "source-font Windows environment proof failed" }
+
+          cargo test --manifest-path apps/chaptera-desktop/Cargo.toml --features embedded-fixture-tests windows_source_font_real_pub_receipt_compares_shared_layouts -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "source-font real-PUB layout proof failed" }
+
+          if (-not (Test-Path $environmentReceipt)) { throw "source-font environment receipt missing" }
+          if (-not (Test-Path $realPubReceipt)) { throw "source-font real-PUB receipt missing" }
+          "CHAPTERA_SOURCE_FONT_RECEIPT=$environmentReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT=$realPubReceipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload source-safe source-font receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-source-font-environment-v1
+          path: |
+            ${{ env.CHAPTERA_SOURCE_FONT_RECEIPT }}
+            ${{ env.CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT }}
+          if-no-files-found: error
+          retention-days: 30

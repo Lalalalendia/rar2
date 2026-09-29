@@ -199,32 +199,32 @@ pub fn paint_document_node_foreground(
     let text_clip_rect = node_rect.shrink(2.0);
     let text_painter = painter.with_clip_rect(text_clip_rect);
 
-    if let Some(layout) = fragment.layout.as_ref() {
-        if let RenderTextLayoutDispositionV1::SharedResolved {
+    if let Some(layout) = fragment.layout.as_ref()
+        && let RenderTextLayoutDispositionV1::SharedResolved {
+            font_resource_id,
             font_size_emu,
             line_height_emu,
             ..
         } = &layout.disposition
-        {
-            if let Some(metrics) = paint_shared_resolved_text(
-                &text_painter,
-                fragment,
-                layout.lines.as_slice(),
-                *font_size_emu,
-                *line_height_emu,
+        && let Some(metrics) = paint_shared_resolved_text(
+            &text_painter,
+            fragment,
+            layout.lines.as_slice(),
+            SharedResolvedPaintParams {
+                font_resource_id,
+                font_size_emu: *font_size_emu,
+                line_height_emu: *line_height_emu,
                 scene_scale,
-                text_clip_rect,
-            ) {
-                let text_clipped = preview_text_height_is_clipped(
-                    metrics.galley_height_px,
-                    text_clip_rect.height(),
-                );
-                return NodePaintOutcome {
-                    text_clipped,
-                    text_metrics: Some(metrics),
-                };
-            }
-        }
+                clip_rect: text_clip_rect,
+            },
+        )
+    {
+        let text_clipped =
+            preview_text_height_is_clipped(metrics.galley_height_px, text_clip_rect.height());
+        return NodePaintOutcome {
+            text_clipped,
+            text_metrics: Some(metrics),
+        };
     }
 
     let backend_fallback_reason = Some(match fragment.layout.as_ref() {
@@ -237,8 +237,12 @@ pub fn paint_document_node_foreground(
         None => "shared_layout_not_requested".to_owned(),
     });
 
-    let (layout_job, usage) =
-        layout_document_text(fragment, scene_scale, text_clip_rect.width().max(1.0_f32));
+    let (layout_job, usage) = layout_document_text(
+        fragment,
+        scene_scale,
+        text_clip_rect.width().max(1.0_f32),
+        fragment.backend_font_resource_id.as_deref(),
+    );
     let executed_font_sizes_px = layout_job
         .sections
         .iter()
@@ -332,15 +336,27 @@ fn shared_resolved_line_job(text: &str, font_id: egui::FontId) -> egui::text::La
     )
 }
 
-fn paint_shared_resolved_text(
-    painter: &egui::Painter,
-    fragment: &RenderTextFragmentV1,
-    lines: &[chaptera_viewer_render_plan::RenderResolvedTextLineV1],
+struct SharedResolvedPaintParams<'a> {
+    font_resource_id: &'a str,
     font_size_emu: i64,
     line_height_emu: i64,
     scene_scale: f32,
     clip_rect: egui::Rect,
+}
+
+fn paint_shared_resolved_text(
+    painter: &egui::Painter,
+    fragment: &RenderTextFragmentV1,
+    lines: &[chaptera_viewer_render_plan::RenderResolvedTextLineV1],
+    params: SharedResolvedPaintParams<'_>,
 ) -> Option<TextPaintMetrics> {
+    let SharedResolvedPaintParams {
+        font_resource_id,
+        font_size_emu,
+        line_height_emu,
+        scene_scale,
+        clip_rect,
+    } = params;
     if font_size_emu <= 0 || line_height_emu <= 0 || !scene_scale.is_finite() || scene_scale <= 0.0
     {
         return None;
@@ -352,7 +368,13 @@ fn paint_shared_resolved_text(
         return None;
     }
 
-    let font_id = egui::FontId::new(font_size_px, crate::fallback_font::family());
+    if font_resource_id.is_empty() {
+        return None;
+    }
+    let font_id = egui::FontId::new(
+        font_size_px,
+        egui::FontFamily::Name(font_resource_id.into()),
+    );
     let mut max_width_px = 0.0_f32;
 
     for (expected_index, line) in lines.iter().enumerate() {
@@ -411,8 +433,17 @@ fn layout_document_text(
     fragment: &RenderTextFragmentV1,
     scene_scale: f32,
     wrap_width_px: f32,
+    backend_font_resource_id: Option<&str>,
 ) -> (egui::text::LayoutJob, TextLayoutUsage) {
-    let fallback = crate::fallback_font::font_id_for_scene_scale(scene_scale);
+    let fallback = backend_font_resource_id
+        .filter(|resource_id| !resource_id.is_empty())
+        .map(|resource_id| {
+            egui::FontId::new(
+                crate::fallback_font::screen_font_size(scene_scale),
+                egui::FontFamily::Name(resource_id.into()),
+            )
+        })
+        .unwrap_or_else(|| crate::fallback_font::font_id_for_scene_scale(scene_scale));
     let fallback_job = || {
         (
             egui::text::LayoutJob::simple(
@@ -476,11 +507,11 @@ fn layout_document_text(
         let Some(text) = scalar_slice(&fragment.text, start, end) else {
             return fallback_job();
         };
-        append_text_section(
-            &mut job,
-            text,
-            egui::FontId::new(size, crate::fallback_font::family()),
-        );
+        let family = backend_font_resource_id
+            .filter(|resource_id| !resource_id.is_empty())
+            .map(|resource_id| egui::FontFamily::Name(resource_id.into()))
+            .unwrap_or_else(crate::fallback_font::family);
+        append_text_section(&mut job, text, egui::FontId::new(size, family));
         cursor = end;
     }
 
@@ -679,7 +710,7 @@ mod tests {
         .expect("render text fragment");
 
         let scene_scale = 1.0 / 12_700.0;
-        let (job, usage) = layout_document_text(&fragment, scene_scale, 400.0);
+        let (job, usage) = layout_document_text(&fragment, scene_scale, 400.0, None);
         assert_eq!(job.text, "ABCDEF");
         assert_eq!(job.sections.len(), 3);
         let sizes = job
@@ -705,6 +736,36 @@ mod tests {
     }
 
     #[test]
+    fn backend_fallback_uses_explicit_source_font_resource_when_available() {
+        let fragment: RenderTextFragmentV1 = serde_json::from_value(serde_json::json!({
+            "story_id": "00000000-0000-0000-0000-000000000001",
+            "scalar_start": 0,
+            "scalar_end": 4,
+            "text": "ABCD",
+            "line_count": 1,
+            "typography": [
+                {"scalar_start":0,"scalar_end":4,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
+            ],
+            "backend_font_resource_id": "chaptera.desktop.environment-font.test.face0"
+        }))
+        .expect("render text fragment");
+
+        let (job, usage) = layout_document_text(
+            &fragment,
+            1.0 / 12_700.0,
+            400.0,
+            fragment.backend_font_resource_id.as_deref(),
+        );
+        assert_eq!(usage.source_typography_sections, 1);
+        assert_eq!(usage.fallback_sections, 0);
+        assert_eq!(job.sections.len(), 1);
+        assert_eq!(
+            job.sections[0].format.font_id.family,
+            egui::FontFamily::Name("chaptera.desktop.environment-font.test.face0".into())
+        );
+    }
+
+    #[test]
     fn overlapping_typography_fails_closed_to_one_fallback_section() {
         let fragment: RenderTextFragmentV1 = serde_json::from_value(serde_json::json!({
             "story_id": "00000000-0000-0000-0000-000000000001",
@@ -718,7 +779,7 @@ mod tests {
             ]
         }))
         .expect("render text fragment");
-        let (job, usage) = layout_document_text(&fragment, 1.0 / 12_700.0, 400.0);
+        let (job, usage) = layout_document_text(&fragment, 1.0 / 12_700.0, 400.0, None);
         assert_eq!(job.sections.len(), 1);
         assert_eq!(usage.source_typography_sections, 0);
         assert_eq!(usage.fallback_sections, 1);

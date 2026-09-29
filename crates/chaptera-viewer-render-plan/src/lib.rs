@@ -103,6 +103,8 @@ pub struct RenderTextFragmentV1 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography: Vec<RenderTypographyRunV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_font_resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<RenderTextLayoutV1>,
 }
 
@@ -339,6 +341,7 @@ fn projected_text(
         text: story.text.clone(),
         line_count: 0,
         typography,
+        backend_font_resource_id: None,
         layout: None,
     }))
 }
@@ -404,6 +407,7 @@ pub fn build_page_render_plan_v1(
                             })
                         })
                         .collect(),
+                    backend_font_resource_id: None,
                     layout: None,
                 });
             #[cfg(feature = "projected-scene-instances")]
@@ -583,6 +587,18 @@ pub fn build_page_render_plan_with_text_layout_v1(
     page_index: usize,
     font: &ExplicitRenderTextFontResourceV1<'_>,
 ) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
+    build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, font, |_| None)
+}
+
+pub fn build_page_render_plan_with_text_layout_resolver_v1<'a, F>(
+    visual: &ViewerGeometryDocument,
+    page_index: usize,
+    fallback_font: &ExplicitRenderTextFontResourceV1<'a>,
+    mut resolve_font: F,
+) -> Result<PageRenderPlanV1, RenderPlanErrorV1>
+where
+    F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+{
     let mut plan = build_page_render_plan_v1(visual, page_index)?;
     let page_id = plan.page_id;
     let page_size = plan.page_size;
@@ -598,6 +614,11 @@ pub fn build_page_render_plan_with_text_layout_v1(
             bounds: node.bounds,
             transform: node.transform.clone(),
         };
+        let resolved_font = resolve_font(fragment);
+        fragment.backend_font_resource_id = resolved_font
+            .as_ref()
+            .map(|font| font.resource_id.to_owned());
+        let font = resolved_font.as_ref().unwrap_or(fallback_font);
         fragment.layout = Some(resolve_text_layout_v1(visual, target, fragment, font));
     }
 

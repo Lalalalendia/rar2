@@ -14,6 +14,7 @@ mod locale;
 mod product_smoke;
 mod reader_product_ui;
 mod render_backend;
+mod source_font;
 #[allow(dead_code)]
 mod supporter;
 #[allow(dead_code)]
@@ -28,6 +29,7 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderPlanErrorV1,
+    build_page_render_plan_with_text_layout_resolver_v1,
     build_page_render_plan_with_text_layout_v1,
 };
 use eframe::egui;
@@ -110,6 +112,17 @@ fn build_desktop_page_render_plan(
     build_page_render_plan_with_text_layout_v1(visual, page_index, &desktop_text_font_resource())
 }
 
+fn build_desktop_page_render_plan_with_source_fonts(
+    visual: &ViewerGeometryDocument,
+    page_index: usize,
+    source_fonts: &source_font::DesktopSourceFontRegistry,
+) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
+    let fallback = desktop_text_font_resource();
+    build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
+        source_fonts.resource_for_fragment(fragment)
+    })
+}
+
 fn text_layout_disposition_counts(plan: &PageRenderPlanV1) -> (usize, usize) {
     let mut shared = 0_usize;
     let mut fallback = 0_usize;
@@ -143,7 +156,7 @@ enum CanvasZoomMode {
     FitSelection,
 }
 
-const GEOMETRY_WARNING: &str = "Partial preview: bounded semantic text may be painted across proven explicit linked-frame chains. Proven source font sizes, including bounded FDPP→STSH1 inheritance where admitted, affect text sizing through the shared render plan; the current renderer still uses Chaptera's pinned fallback font face rather than claiming source-font availability. Exact embedded PNG/JPEG images and complete explicit shape-local solid fill/line state may also be painted. Other inherited/default styling beyond admitted font/size, Publisher-exact font metrics/reflow, image crop/fit, gradients/patterns, effects, and transforms are not faithfully painted yet.";
+const GEOMETRY_WARNING: &str = "Partial preview: bounded semantic text may be painted across proven explicit linked-frame chains. Proven source font sizes affect text sizing through the shared render plan. When one source family is authoritative for a complete fragment and an unambiguous same-family local Windows face exists, Chaptera may use that exact environment-resolved font file for shaping and paint; this is not a claim that the local file matches the original Publisher environment. Unresolved or ambiguous fonts stay on Chaptera's pinned fallback. Exact embedded PNG/JPEG images and persisted crop/Fit/Fill viewports may also be painted. Other unsupported styling, Publisher-exact substitution/reflow, gradients/patterns, effects, and transforms remain Partial.";
 const PREVIEW_TEXT_CLIP_WARNING: &str = "Text exceeds the height of at least one frame in the current desktop preview and is visibly clipped. Admitted single-frame homogeneous text uses shared resolved line breaks; other cases still use explicit backend fallback. This is preview-only evidence, not Publisher-native overset or exact reflow evidence.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -937,6 +950,9 @@ struct ViewerApp {
     source_revalidate_after: Option<Instant>,
     source_exact_revalidate_after: Option<Instant>,
     visual: Option<ViewerGeometryDocument>,
+    source_fonts: source_font::DesktopSourceFontRegistry,
+    source_fonts_install_attempted: bool,
+    source_fonts_active: bool,
     selected_page: usize,
     page_frame_cache: BTreeMap<usize, Rc<CachedPageFrameWork>>,
     page_frame_cache_builds: u64,
@@ -996,6 +1012,9 @@ impl ViewerApp {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            source_fonts: source_font::DesktopSourceFontRegistry::new(),
+            source_fonts_install_attempted: false,
+            source_fonts_active: false,
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
@@ -1379,6 +1398,9 @@ impl ViewerApp {
             .iter()
             .any(|story| !story.text.is_empty());
 
+        let mut source_fonts = source_font::DesktopSourceFontRegistry::new();
+        source_fonts.ensure_visual_fonts(&visual);
+
         self.source_path = Some(source_path);
         self.committed_source = Some(CommittedSourceState {
             generation,
@@ -1390,6 +1412,9 @@ impl ViewerApp {
         let now = Instant::now();
         self.source_revalidate_after = Some(now + SOURCE_REVALIDATE_INTERVAL);
         self.source_exact_revalidate_after = Some(now + SOURCE_EXACT_REVALIDATE_INTERVAL);
+        self.source_fonts = source_fonts;
+        self.source_fonts_install_attempted = false;
+        self.source_fonts_active = false;
         self.visual = Some(visual);
         self.selected_page = 0;
         self.page_frame_cache.clear();
@@ -3858,8 +3883,12 @@ impl ViewerApp {
             .pages
             .get(page_index)
             .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
-        let render_plan = build_desktop_page_render_plan(visual, page_index)
-            .map_err(|error| error.to_string())?;
+        let render_plan = if self.source_fonts_active {
+            build_desktop_page_render_plan_with_source_fonts(visual, page_index, &self.source_fonts)
+        } else {
+            build_desktop_page_render_plan(visual, page_index)
+        }
+        .map_err(|error| error.to_string())?;
         let page_id_text = page.id.as_canonical().to_string();
 
         let mut hit_entries = Vec::new();
@@ -3955,6 +3984,27 @@ impl ViewerApp {
     }
 
     fn show_canvas(&mut self, ui: &mut egui::Ui) {
+        if !self.source_fonts_install_attempted {
+            self.source_fonts_install_attempted = true;
+            let additional = self.source_fonts.egui_fonts();
+            match fallback_font::install_with_additional(ui.ctx(), &additional) {
+                Ok(()) => {
+                    self.source_fonts_active = true;
+                }
+                Err(_) => {
+                    self.source_fonts_active = false;
+                    let _ = fallback_font::install(ui.ctx());
+                }
+            }
+            self.page_frame_cache.clear();
+
+            // egui applies FontDefinitions at the next pass boundary. Do not
+            // build or paint a render plan that names a newly registered
+            // source-font family in the same pass that calls set_fonts.
+            ui.ctx().request_repaint();
+            return;
+        }
+
         self.ensure_image_textures(ui.ctx());
         self.preview_clipped_frames = 0;
         self.preview_clipped_story_keys.clear();
@@ -5772,6 +5822,9 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            source_fonts: source_font::DesktopSourceFontRegistry::new(),
+            source_fonts_install_attempted: false,
+            source_fonts_active: false,
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
@@ -5835,6 +5888,9 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            source_fonts: source_font::DesktopSourceFontRegistry::new(),
+            source_fonts_install_attempted: false,
+            source_fonts_active: false,
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
@@ -6113,6 +6169,9 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: Some(visual),
+            source_fonts: source_font::DesktopSourceFontRegistry::new(),
+            source_fonts_install_attempted: false,
+            source_fonts_active: false,
             selected_page: 0,
             page_frame_cache: BTreeMap::new(),
             page_frame_cache_builds: 0,
@@ -8720,6 +8779,195 @@ mod tests {
             serde_json::to_vec_pretty(&receipt).expect("serialize Carlton golden receipt"),
         )
         .expect("write Carlton golden receipt");
+    }
+
+    #[cfg(all(feature = "embedded-fixture-tests", target_os = "windows"))]
+    #[test]
+    fn windows_source_font_real_pub_receipt_compares_shared_layouts() {
+        use sha2::{Digest, Sha256};
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER");
+        let bytes = fs::read(&fixture).expect("read pinned SampleNewsletter");
+        let source_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(
+            source_sha256, "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            "SampleNewsletter identity drifted"
+        );
+
+        let visual = diagnostic_sweep::open_for_product(&bytes)
+            .expect("SampleNewsletter must open through product Reader path");
+        let mut registry = source_font::DesktopSourceFontRegistry::new();
+        registry.ensure_visual_fonts(&visual);
+        assert!(
+            registry.resolved_count() > 0,
+            "pinned real PUB must expose at least one uniquely resolvable local source family"
+        );
+
+        let paint_fonts = registry.egui_fonts();
+        let ctx = egui::Context::default();
+        fallback_font::install_with_additional(&ctx, &paint_fonts)
+            .expect("resolved source-font bytes must register in egui");
+
+        let mut selected = None;
+        let resolved_families = registry
+            .resolved_families()
+            .map(|(source, resolved, sha256)| {
+                serde_json::json!({
+                    "source_family": source,
+                    "resolved_family": resolved,
+                    "sha256": sha256,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut candidate_counts = serde_json::Map::new();
+        let mut source_resource_fallback_reasons = BTreeMap::<String, u64>::new();
+        candidate_counts.insert("text_fragments".to_owned(), 0_u64.into());
+        candidate_counts.insert("source_resource_fragments".to_owned(), 0_u64.into());
+        candidate_counts.insert("source_backend_font_hint".to_owned(), 0_u64.into());
+        candidate_counts.insert(
+            "fallback_without_source_hint_same_node".to_owned(),
+            0_u64.into(),
+        );
+
+        'pages: for page_index in 0..visual.document.pages.len() {
+            let source_plan =
+                build_desktop_page_render_plan_with_source_fonts(&visual, page_index, &registry)
+                    .expect("source-font render plan");
+            let fallback_plan =
+                build_desktop_page_render_plan(&visual, page_index).expect("fallback render plan");
+
+            for source_node in &source_plan.nodes {
+                let Some(source_text) = source_node.text.as_ref() else {
+                    continue;
+                };
+                if let Some(value) = candidate_counts.get_mut("text_fragments") {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
+
+                let Some(source_resource) = registry.resource_for_fragment(source_text) else {
+                    continue;
+                };
+                if let Some(value) = candidate_counts.get_mut("source_resource_fragments") {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
+                let Some(source_hint) = source_text.backend_font_resource_id.as_deref() else {
+                    continue;
+                };
+                assert_eq!(source_hint, source_resource.resource_id);
+                if let Some(value) = candidate_counts.get_mut("source_backend_font_hint") {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
+
+                if let Some(source_layout) = source_text.layout.as_ref()
+                    && let chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback { reason } =
+                        &source_layout.disposition
+                {
+                    *source_resource_fallback_reasons
+                        .entry(reason.code().to_owned())
+                        .or_insert(0) += 1;
+                }
+
+                let Some(fallback_node) = fallback_plan
+                    .nodes
+                    .iter()
+                    .find(|candidate| candidate.node_id == source_node.node_id)
+                else {
+                    continue;
+                };
+                let Some(fallback_text) = fallback_node.text.as_ref() else {
+                    continue;
+                };
+                if fallback_text.backend_font_resource_id.is_some() {
+                    continue;
+                }
+                if let Some(value) =
+                    candidate_counts.get_mut("fallback_without_source_hint_same_node")
+                {
+                    *value = (value.as_u64().unwrap_or(0) + 1).into();
+                }
+
+                let source_family = source_text
+                    .typography
+                    .first()
+                    .map(|run| run.source_font_name.as_str())
+                    .expect("admitted source-font fragment has typography");
+                let (_, resolved_family, resolved_sha256) = registry
+                    .resolved_families()
+                    .find(|(source, _, _)| source.trim().eq_ignore_ascii_case(source_family.trim()))
+                    .expect("resolved family metadata");
+
+                selected = Some(serde_json::json!({
+                    "schema": "chaptera.desktop-source-font-real-pub-receipt.v1",
+                    "source_pub_sha256": source_sha256,
+                    "source_unchanged": true,
+                    "page_index": page_index,
+                    "node_id": source_node.node_id,
+                    "source_family": source_family,
+                    "resolved_family": resolved_family,
+                    "font_resource_id": source_resource.resource_id,
+                    "font_sha256": resolved_sha256,
+                    "face_index": source_resource.face_index,
+                    "font_byte_len": source_resource.bytes.len(),
+                    "same_bytes_drive_layout_resource_and_egui_registration": paint_fonts.iter().any(|font| {
+                        font.resource_id == source_resource.resource_id
+                            && font.face_index == source_resource.face_index
+                            && font.bytes == source_resource.bytes
+                    }),
+                    "source_backend_font_hint": source_hint,
+                    "fallback_backend_font_hint": fallback_text.backend_font_resource_id,
+                    "source_layout_disposition": source_text.layout.as_ref().map(|layout| {
+                        match &layout.disposition {
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved { .. } => "shared_resolved",
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback { .. } => "backend_fallback",
+                        }
+                    }),
+                    "fallback_layout_disposition": fallback_text.layout.as_ref().map(|layout| {
+                        match &layout.disposition {
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved { .. } => "shared_resolved",
+                            chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback { .. } => "backend_fallback",
+                        }
+                    }),
+                    "shared_layout_gate_unchanged": true,
+                    "publisher_exact_font_claimed": false,
+                    "environment_exact_same_family_only": true
+                }));
+                break 'pages;
+            }
+        }
+
+        let receipt = selected.unwrap_or_else(|| {
+            panic!(
+                "SampleNewsletter has no source-font backend execution witness; resolved_families={} candidate_counts={} source_resource_fallback_reasons={}",
+                serde_json::to_string(&resolved_families).expect("serialize resolved families"),
+                serde_json::Value::Object(candidate_counts),
+                serde_json::to_string(&source_resource_fallback_reasons)
+                    .expect("serialize source-resource fallback reasons")
+            )
+        });
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(fs::read(&fixture).expect("re-read fixture"))
+            ),
+            source_sha256,
+            "source PUB must remain byte-identical"
+        );
+        assert_eq!(
+            receipt["same_bytes_drive_layout_resource_and_egui_registration"],
+            serde_json::Value::Bool(true)
+        );
+
+        if let Ok(path) = std::env::var("CHAPTERA_SOURCE_FONT_REAL_PUB_RECEIPT") {
+            fs::write(
+                path,
+                serde_json::to_vec_pretty(&receipt)
+                    .expect("serialize real-PUB source-font receipt"),
+            )
+            .expect("write real-PUB source-font receipt");
+        }
+        println!("{}", serde_json::to_string(&receipt).expect("receipt json"));
     }
 
     #[test]
