@@ -120,6 +120,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           function Assert-TestSignature([string]$Path) {
             $sig = Get-AuthenticodeSignature -LiteralPath $Path
+            Write-Host ("AUTHENTICODE path={0} status={1} signer={2} message={3}" -f $Path, [string]$sig.Status, $(if ($sig.SignerCertificate) { $sig.SignerCertificate.Thumbprint } else { "<none>" }), [string]$sig.StatusMessage)
             if (-not $sig.SignerCertificate) { throw "missing signer certificate for $Path" }
             if ($sig.SignerCertificate.Thumbprint -ne $env:CHAPTERA_TEST_SIGN_THUMBPRINT) { throw "unexpected signer for $Path" }
             $chainUntrusted = $sig.Status -in @("NotTrusted", "UnknownError") -and
@@ -147,6 +148,7 @@ jobs:
           $stream = [System.IO.File]::Open($tampered, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
           try { $stream.WriteByte(0) } finally { $stream.Dispose() }
           $tamperedSig = Get-AuthenticodeSignature -LiteralPath $tampered
+          Write-Host ("AUTHENTICODE_TAMPER status={0} signer={1} message={2}" -f [string]$tamperedSig.Status, $(if ($tamperedSig.SignerCertificate) { $tamperedSig.SignerCertificate.Thumbprint } else { "<none>" }), [string]$tamperedSig.StatusMessage)
           if ($tamperedSig.Status -ne "HashMismatch") {
             throw "post-sign mutation did not produce HashMismatch: $($tamperedSig.Status) $($tamperedSig.StatusMessage)"
           }
