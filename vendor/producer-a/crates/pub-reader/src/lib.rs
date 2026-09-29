@@ -22,8 +22,8 @@ mod ole_presentation;
 mod resolve;
 mod structural_base;
 mod table_bridge;
-mod wmf_preview;
 mod wmf;
+mod wmf_preview;
 
 pub use asset_export::{
     PUB_ASSET_EXPORT_SCHEMA_V0_1, PUB_ASSET_MANIFEST_FILENAME, PubAssetExportBundle,
@@ -73,7 +73,6 @@ pub use ole_presentation::{
     LegacyOleCachedPresentationScan, OlePresentation, parse_cf_metafilepict_ole_presentation,
     read_legacy_ole_cached_presentations, scan_legacy_ole_cached_presentations,
 };
-pub use wmf_preview::{WmfPreviewRgba, rasterize_wmf_preview};
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
     Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
@@ -119,6 +118,7 @@ pub use table_bridge::{
     RAW_TYPE_TABLE, materialize_bounded_simple_table_cells,
 };
 pub use wmf::{WmfMetafileInfo, validate_wmf_metafile};
+pub use wmf_preview::{WmfPreviewRgba, rasterize_wmf_preview};
 
 pub const PUB_ADAPTER_ID: &str = "pub-rs";
 pub const PUB_FORMAT_PROFILE_ID: &str = "pub-mature-0x2c-v0.1";
