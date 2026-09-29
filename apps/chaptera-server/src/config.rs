@@ -612,11 +612,7 @@ impl ChapteraConfig {
         }
 
         if let Some(guest) = &self.cloud_reader_guest {
-            validate_cloud_reader_guest(
-                guest,
-                &self.source_validation,
-                &self.edge,
-            )?;
+            validate_cloud_reader_guest(guest, &self.source_validation, &self.edge)?;
         }
 
         match (&self.auth, self.environment) {
@@ -699,8 +695,7 @@ fn validate_cloud_reader_guest(
             "guest max file bytes does not fit i64",
         )
     })?;
-    if guest.max_reserved_bytes < max_file_i64
-        || guest.max_reserved_bytes > 2 * 1024 * 1024 * 1024
+    if guest.max_reserved_bytes < max_file_i64 || guest.max_reserved_bytes > 2 * 1024 * 1024 * 1024
     {
         return Err(ConfigError::new(
             "cloud_reader_guest_reserved_bytes_invalid",
