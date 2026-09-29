@@ -159,3 +159,4 @@ mod tests {
         assert_eq!(status_color("unknown"), MUTED_TEXT);
     }
 }
+// CI cancellation measurement head 1: start Reader Windows product.
