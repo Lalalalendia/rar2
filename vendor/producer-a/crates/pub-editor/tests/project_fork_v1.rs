@@ -89,6 +89,7 @@ fn graph() -> PubResolvedGraph {
                     image_slot: None,
                     explicit_image_crop: None,
                     explicit_paint: PubExplicitShapePaintSource::default(),
+                    effective_paint: None,
                     story_frame: None,
                     table_story: None,
                     table: None,

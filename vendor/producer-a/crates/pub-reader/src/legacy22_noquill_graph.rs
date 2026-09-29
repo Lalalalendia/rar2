@@ -415,6 +415,7 @@ fn materialize_legacy_noquill_child(
                 image_slot: None,
                 explicit_image_crop: None,
                 explicit_paint: PubExplicitShapePaintSource::default(),
+                effective_paint: None,
                 story_frame: story_id.map(|story_id| PubStoryFrameSource {
                     text_id: u32::from(child_object_id),
                     story_id: Some(story_id),

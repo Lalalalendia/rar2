@@ -15,6 +15,7 @@ const WORKER_ID: &str = "chaptera-recovery-worker/v0";
 const FENCE_MODE_ENV: &str = "CHAPTERA_RECOVERY_FENCE_MODE";
 const WINDOWS_FENCE_MODE: &str = "windows_job_object_v1";
 const PRODUCER_RECEIPT_NAME: &str = "producer-receipt.json";
+const EXECUTOR_ENV_ALLOWLIST: &[&str] = &["SystemRoot", "WINDIR", "TEMP", "TMP"];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Job {
@@ -56,6 +57,7 @@ struct Policy {
 #[derive(Debug, Clone)]
 struct LaunchConfig {
     program: PathBuf,
+    program_sha256: String,
     args: Vec<String>,
 }
 
@@ -203,14 +205,21 @@ fn parse_launch_config(args: &[String]) -> Result<Option<LaunchConfig>, String> 
     let Some(program) = program else {
         return Err("--executor-arg requires --executor".to_owned());
     };
+    if !program.is_absolute() {
+        return Err("--executor must be an absolute executable path".to_owned());
+    }
+    let program = fs::canonicalize(&program)
+        .map_err(|error| format!("canonicalize executor {}: {error}", program.display()))?;
     let metadata = fs::metadata(&program)
         .map_err(|error| format!("stat executor {}: {error}", program.display()))?;
     if !metadata.is_file() {
         return Err("--executor must name an existing file".to_owned());
     }
+    let program_sha256 = sha256_file(&program)?;
 
     Ok(Some(LaunchConfig {
         program,
+        program_sha256,
         args: executor_args,
     }))
 }
@@ -234,7 +243,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 fn executor_identity(config: &LaunchConfig) -> Result<String, String> {
     let mut digest = Sha256::new();
     digest.update(b"chaptera.external-recovery-executor.v1\0");
-    digest.update(sha256_file(&config.program)?.as_bytes());
+    digest.update(config.program_sha256.as_bytes());
 
     for arg in &config.args {
         let path = Path::new(arg);
@@ -249,6 +258,32 @@ fn executor_identity(config: &LaunchConfig) -> Result<String, String> {
     }
 
     Ok(format!("external-sha256:{:x}", digest.finalize()))
+}
+
+fn revalidate_executor_identity(config: &LaunchConfig) -> Result<(), String> {
+    let canonical = fs::canonicalize(&config.program).map_err(|error| {
+        format!(
+            "canonicalize executor before launch {}: {error}",
+            config.program.display()
+        )
+    })?;
+    if canonical != config.program {
+        return Err("executor canonical identity changed before launch".to_owned());
+    }
+    let current_sha256 = sha256_file(&canonical)?;
+    if current_sha256 != config.program_sha256 {
+        return Err("executor bytes changed after admission".to_owned());
+    }
+    Ok(())
+}
+
+fn apply_executor_environment(command: &mut Command) {
+    command.env_clear();
+    for key in EXECUTOR_ENV_ALLOWLIST {
+        if let Some(value) = env::var_os(key) {
+            command.env(key, value);
+        }
+    }
 }
 
 fn emit<T: Serialize>(value: &T) -> Result<(), String> {
@@ -547,9 +582,12 @@ fn external_executor(job: &Job, source_sha: &str, config: &LaunchConfig) -> Resu
         ),
     )?;
 
-    let status = Command::new(&config.program)
-        .args(&config.args)
-        .current_dir(&job_directory)
+    revalidate_executor_identity(config)?;
+
+    let mut command = Command::new(&config.program);
+    command.args(&config.args).current_dir(&job_directory);
+    apply_executor_environment(&mut command);
+    let status = command
         .env("CHAPTERA_RECOVERY_JOB_ID", &job.job_id)
         .env("CHAPTERA_RECOVERY_SOURCE", &source)
         .env("CHAPTERA_RECOVERY_SOURCE_SHA256", source_sha)
@@ -901,6 +939,65 @@ mod tests {
     fn executor_args_without_executor_are_rejected() {
         let args = vec!["--executor-arg".to_owned(), "x".to_owned()];
         assert!(parse_launch_config(&args).is_err());
+    }
+
+    #[test]
+    fn relative_executor_path_is_rejected_before_launch() {
+        let path = PathBuf::from(format!(
+            "chaptera-relative-executor-{}-{}.bin",
+            std::process::id(),
+            env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "local".to_owned())
+        ));
+        fs::write(&path, b"relative executor").expect("write relative executor");
+        let args = vec!["--executor".to_owned(), path.to_string_lossy().into_owned()];
+        let error = parse_launch_config(&args).expect_err("relative executor must fail");
+        assert!(error.contains("absolute executable path"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn executor_is_canonicalized_and_bound_to_admission_hash() {
+        let path = temp_source("executor-identity");
+        let args = vec!["--executor".to_owned(), path.to_string_lossy().into_owned()];
+        let config = parse_launch_config(&args)
+            .expect("parse launch config")
+            .expect("configured executor");
+        assert!(config.program.is_absolute());
+        assert_eq!(
+            config.program,
+            fs::canonicalize(&path).expect("canonical executor")
+        );
+        assert_eq!(
+            config.program_sha256,
+            sha256_file(&config.program).expect("hash executor")
+        );
+        revalidate_executor_identity(&config).expect("stable executor identity");
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn executor_byte_replacement_is_rejected_before_spawn() {
+        let path = temp_source("executor-replacement");
+        let args = vec!["--executor".to_owned(), path.to_string_lossy().into_owned()];
+        let config = parse_launch_config(&args)
+            .expect("parse launch config")
+            .expect("configured executor");
+        fs::write(&config.program, b"replacement executor bytes").expect("replace executor");
+        let error =
+            revalidate_executor_identity(&config).expect_err("identity replacement must fail");
+        assert!(error.contains("executor bytes changed after admission"));
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn executor_environment_allowlist_excludes_path_and_user_profile() {
+        for forbidden in ["PATH", "PATHEXT", "HOME", "USERPROFILE"] {
+            assert!(
+                !EXECUTOR_ENV_ALLOWLIST
+                    .iter()
+                    .any(|key| key.eq_ignore_ascii_case(forbidden))
+            );
+        }
     }
 
     #[test]
