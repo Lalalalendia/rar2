@@ -1,0 +1,538 @@
+name: Legacy22 image STRETCHDIB 1050 validation
+
+on:
+  push:
+    branches:
+      - validation/legacy22-image-stretchdib-1050-01
+    paths:
+      - '.github/workflows/legacy22-image-1050.yml'
+      - 'vendor/producer-a/crates/pub-reader/src/bin/legacy22_image0002_profile.rs'
+      - 'vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs'
+      - 'vendor/producer-a/crates/pub-reader/src/wmf.rs'
+      - 'vendor/producer-a/crates/pub-reader/src/wmf_preview.rs'
+      - 'vendor/producer-a/crates/pub-contents/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: legacy22-image-stretchdib-1050-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          components: rustfmt
+
+      - name: Restore research Cargo target
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: legacy22-image-stretchdib-1050-${{ runner.os }}-${{ hashFiles('vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/pub-reader/src/**/*.rs', 'vendor/producer-a/crates/pub-contents/src/**/*.rs') }}
+          restore-keys: |
+            legacy22-image-current-1050-${{ runner.os }}-
+
+      - name: Build image profiler
+        run: |
+          set -euo pipefail
+          rustfmt --check --edition 2021 vendor/producer-a/crates/pub-reader/src/bin/legacy22_image0002_profile.rs
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin legacy22_image0002_profile
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --release --bin legacy22_image0002_profile
+
+      - name: Verify corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          assert len(paths) == 1050, len(paths)
+          digest = hashlib.sha256(
+              "".join(p.stem.casefold() + "\n" for p in paths).encode("ascii")
+          ).hexdigest()
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          PY
+
+      - name: Run raw0x0002 image census
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from collections import Counter
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          corpus = Path("out/pinned1050/materialized/native")
+          paths = sorted(corpus.glob("*.pub"))
+          exe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "legacy22_image0002_profile"
+
+          def profile(path, out_dir):
+              target = out_dir / f"{path.stem}.json"
+              cp = subprocess.run(
+                  [str(exe), str(path), str(target)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=45,
+                  check=False,
+              )
+              if cp.returncode != 0:
+                  raise RuntimeError(f"{path.name}: rc={cp.returncode}: {cp.stderr[-2000:]}")
+              return json.loads(target.read_text())
+
+          rows = []
+          with tempfile.TemporaryDirectory(prefix="legacy22-image-current-1050-") as td:
+              out_dir = Path(td)
+              with ThreadPoolExecutor(max_workers=16) as pool:
+                  futures = {pool.submit(profile, p, out_dir): p for p in paths}
+                  for future in as_completed(futures):
+                      rows.append(future.result())
+
+          eligible = [r for r in rows if r.get("eligible_reader_open") is True]
+          images = [
+              {"source_sha256": row["source_sha256"], **item}
+              for row in eligible
+              for item in (row.get("images") or [])
+          ]
+
+          def count_true(field):
+              return sum(item.get(field) is True for item in images)
+
+          parent_types = Counter(item.get("parent_raw_type") or "none" for item in images)
+          chunk_lengths = Counter(str(item.get("chunk_len")) for item in images)
+          child_profiles = Counter(
+              ",".join(sorted(item.get("child_raw_types") or [])) or "none"
+              for item in images
+          )
+          field_native_types = Counter(
+              item.get("field_native_target_raw_type") or "none" for item in images
+          )
+          direct_native_presence = Counter(
+              str(int(item.get("direct_image_data_child_count") or 0))
+              for item in images
+          )
+          direct_native_chunk_lengths = Counter(
+              str(item.get("direct_native_chunk_len"))
+              for item in images
+              if item.get("direct_native_chunk_len") is not None
+          )
+          direct_native_wmf_offsets = Counter(
+              ",".join(str(v) for v in item.get("direct_native_wmf_valid_offsets") or []) or "none"
+              for item in images
+          )
+          field_repl_types = Counter(
+              item.get("field_replacement_target_raw_type") or
+              ("zero_or_missing" if item.get("field_replacement_ref_at_0x8a") in (None, 0) else "missing_target")
+              for item in images
+          )
+          direct_native_payload_hashes = [
+              h
+              for item in images
+              for h in (item.get("direct_native_wmf_payload_sha256") or [])
+          ]
+          replacement_payload_hashes = [
+              repl.get("payload_sha256")
+              for item in images
+              if (repl := item.get("field_replacement")) and repl.get("payload_sha256")
+          ]
+
+          direct_native_len_match = sum(
+              item.get("direct_native_len_after_0x08") is not None
+              and item.get("direct_native_len_u32_at_0x04") == item.get("direct_native_len_after_0x08")
+              for item in images
+          )
+          direct_native_wmf_at_0x08 = sum(
+              8 in (item.get("direct_native_wmf_valid_offsets") or [])
+              for item in images
+          )
+          direct_native_wmf_other_only = sum(
+              bool(item.get("direct_native_wmf_valid_offsets"))
+              and 8 not in (item.get("direct_native_wmf_valid_offsets") or [])
+              for item in images
+          )
+          direct_native_wmf_none = sum(
+              not (item.get("direct_native_wmf_valid_offsets") or [])
+              for item in images
+              if int(item.get("direct_image_data_child_count") or 0) == 1
+          )
+
+          no_child = [
+              item for item in images
+              if int(item.get("direct_image_data_child_count") or 0) == 0
+          ]
+          direct_child = [
+              item for item in images
+              if int(item.get("direct_image_data_child_count") or 0) == 1
+          ]
+          no_child_parent_types = Counter(item.get("parent_raw_type") or "none" for item in no_child)
+          no_child_chunk_lengths = Counter(str(item.get("chunk_len")) for item in no_child)
+          no_child_service_words = Counter(str(item.get("service_word")) for item in no_child)
+          no_child_geometry_profiles = Counter(
+              f"{(item.get('geometry') or {}).get('delta_x_sign', 'missing')}/"
+              f"{(item.get('geometry') or {}).get('delta_y_sign', 'missing')}"
+              for item in no_child
+          )
+          no_child_files = {item["source_sha256"] for item in no_child}
+          direct_child_files = {item["source_sha256"] for item in direct_child}
+          declared_profiles = [
+              item.get("direct_native_declared_profile") or {}
+              for item in direct_child
+          ]
+          declared_profile_counts = Counter(
+              "fits={fits};exact={exact};wmf={wmf}".format(
+                  fits=profile.get("declared_fits_chunk") is True,
+                  exact=profile.get("exact_chunk_end") is True,
+                  wmf=profile.get("wmf_valid") is True,
+              )
+              for profile in declared_profiles
+          )
+          declared_trailing_lengths = Counter(
+              str(profile.get("trailing_len", "missing"))
+              for profile in declared_profiles
+          )
+          declared_validation_errors = Counter(
+              profile.get("validation_error_class")
+              or ("none" if profile.get("wmf_valid") is True else "unclassified")
+              for profile in declared_profiles
+          )
+          declared_payload_hashes = [
+              profile.get("payload_sha256")
+              for profile in declared_profiles
+              if profile.get("payload_sha256")
+          ]
+          prefix_profiles = [
+              profile.get("wmf_prefix") or {}
+              for profile in declared_profiles
+          ]
+          strict_invalid_prefix_valid = [
+              prefix
+              for profile, prefix in zip(declared_profiles, prefix_profiles)
+              if profile.get("wmf_valid") is not True and prefix.get("prefix_valid") is True
+          ]
+          prefix_suffix_lengths = Counter(
+              str(prefix.get("suffix_len", "missing"))
+              for prefix in strict_invalid_prefix_valid
+          )
+          prefix_payload_hashes = [
+              prefix.get("prefix_sha256")
+              for prefix in strict_invalid_prefix_valid
+              if prefix.get("prefix_sha256")
+          ]
+          prefix_validation_errors = Counter(
+              prefix.get("validation_error_class")
+              or ("none" if prefix.get("prefix_valid") is True else "unclassified")
+              for prefix in prefix_profiles
+          )
+          raster_profiles = [
+              item.get("direct_native_raster_profile") or {}
+              for item in direct_child
+          ]
+          raster_recovery_classes = Counter(
+              profile.get("recovery_class") or "none"
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+          )
+          raster_success_recovery_classes = Counter(
+              profile.get("recovery_class") or "none"
+              for profile in raster_profiles
+              if profile.get("raster_success") is True
+          )
+          raster_error_classes = Counter(
+              profile.get("raster_error_class") or "unclassified"
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+              and profile.get("raster_success") is not True
+          )
+          raster_error_details = Counter(
+              profile.get("raster_error_detail")
+              or profile.get("raster_error_class")
+              or "unclassified"
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+              and profile.get("raster_success") is not True
+          )
+          raster_blocker_profiles = Counter(
+              json.dumps(
+                  profile.get("raster_blocker_profile") or {"kind": "missing"},
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+              and profile.get("raster_success") is not True
+          )
+          raster_success_files = {
+              item["source_sha256"]
+              for item, profile in zip(direct_child, raster_profiles)
+              if profile.get("raster_success") is True
+          }
+          raster_positive_geometry_candidate_count = sum(
+              profile.get("candidate") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, profile in zip(direct_child, raster_profiles)
+          )
+          raster_positive_geometry_success_count = sum(
+              profile.get("raster_success") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, profile in zip(direct_child, raster_profiles)
+          )
+          raster_nonpositive_geometry_success_count = sum(
+              profile.get("raster_success") is True
+              and (item.get("geometry") or {}).get("positive_rect") is not True
+              for item, profile in zip(direct_child, raster_profiles)
+          )
+          strict_invalid_profiles = [
+              profile for profile in declared_profiles
+              if profile.get("wmf_valid") is not True
+          ]
+          strict_invalid_recovery_classes = Counter()
+          first_eof_suffix_lengths = Counter()
+          first_eof_payload_hashes = []
+          for profile in strict_invalid_profiles:
+              prefix = profile.get("wmf_prefix") or {}
+              first_eof = profile.get("first_eof") or {}
+              if prefix.get("prefix_valid") is True:
+                  recovery = "internal_declared_prefix_valid"
+              elif profile.get("outer_size_rewrite_valid") is True:
+                  recovery = "outer_size_rewrite_valid"
+              elif first_eof.get("prefix_valid") is True:
+                  recovery = "first_eof_prefix_valid"
+              else:
+                  recovery = "unresolved"
+              strict_invalid_recovery_classes[recovery] += 1
+              if first_eof.get("prefix_valid") is True:
+                  first_eof_suffix_lengths[str(first_eof.get("suffix_len", "missing"))] += 1
+                  if first_eof.get("prefix_sha256"):
+                      first_eof_payload_hashes.append(first_eof["prefix_sha256"])
+          strict_valid_positive_geometry = sum(
+              profile.get("wmf_valid") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, profile in zip(direct_child, declared_profiles)
+          )
+          prefix_valid_positive_geometry = sum(
+              prefix.get("prefix_valid") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, prefix in zip(direct_child, prefix_profiles)
+          )
+          prefix_valid_nonpositive_geometry = sum(
+              prefix.get("prefix_valid") is True
+              and (item.get("geometry") or {}).get("positive_rect") is not True
+              for item, prefix in zip(direct_child, prefix_profiles)
+          )
+          no_child_previous_types = Counter(
+              item.get("previous_object_raw_type") or "none" for item in no_child
+          )
+          no_child_next_types = Counter(
+              item.get("next_object_raw_type") or "none" for item in no_child
+          )
+
+          summary = {
+              "schema": "chaptera.legacy22-image0002-census.v1",
+              "corpus_file_count": len(paths),
+              "eligible_noquill_reader_file_count": len(eligible),
+              "physical_raw0002_count": sum(int(r.get("physical_image_count") or 0) for r in eligible),
+              "reachable_raw0002_count": len(images),
+              "reachable_raw0002_file_count": len({i["source_sha256"] for i in images}),
+              "geometry_carrier_present_count": sum(
+                  (i.get("geometry") or {}).get("carrier_present") is True for i in images
+              ),
+              "geometry_positive_rect_count": sum(
+                  (i.get("geometry") or {}).get("positive_rect") is True for i in images
+              ),
+              "geometry_nondegenerate_count": sum(
+                  (i.get("geometry") or {}).get("nondegenerate") is True for i in images
+              ),
+              "parent_raw_type_counts": dict(parent_types.most_common()),
+              "chunk_length_counts": dict(chunk_lengths.most_common()),
+              "child_raw_type_profile_counts": dict(child_profiles.most_common()),
+              "field_native_ref_nonzero_count": sum(
+                  i.get("field_native_ref_at_0x72") not in (None, 0) for i in images
+              ),
+              "field_native_target_raw_type_counts": dict(field_native_types.most_common()),
+              "direct_image_data_child_count_profile": dict(direct_native_presence.most_common()),
+              "direct_native_chunk_length_counts": dict(direct_native_chunk_lengths.most_common()),
+              "direct_native_wmf_valid_offset_profile_counts": dict(
+                  direct_native_wmf_offsets.most_common()
+              ),
+              "direct_native_len_at_0x04_matches_payload_after_0x08_count": direct_native_len_match,
+              "direct_native_wmf_at_0x08_count": direct_native_wmf_at_0x08,
+              "direct_native_wmf_other_offset_only_count": direct_native_wmf_other_only,
+              "direct_native_wmf_none_count": direct_native_wmf_none,
+              "direct_native_wmf_payload_reference_count": len(direct_native_payload_hashes),
+              "direct_native_wmf_unique_payload_sha256_count": len(set(direct_native_payload_hashes)),
+              "direct_declared_profile_counts": dict(declared_profile_counts.most_common()),
+              "direct_declared_length_fits_chunk_count": sum(
+                  profile.get("declared_fits_chunk") is True for profile in declared_profiles
+              ),
+              "direct_declared_exact_chunk_end_count": sum(
+                  profile.get("exact_chunk_end") is True for profile in declared_profiles
+              ),
+              "direct_declared_wmf_valid_count": sum(
+                  profile.get("wmf_valid") is True for profile in declared_profiles
+              ),
+              "direct_declared_trailing_length_counts": dict(
+                  declared_trailing_lengths.most_common()
+              ),
+              "direct_declared_validation_error_counts": dict(
+                  declared_validation_errors.most_common()
+              ),
+              "direct_declared_payload_reference_count": len(declared_payload_hashes),
+              "direct_declared_unique_payload_sha256_count": len(set(declared_payload_hashes)),
+              "direct_wmf_prefix_valid_count": sum(
+                  prefix.get("prefix_valid") is True for prefix in prefix_profiles
+              ),
+              "direct_strict_invalid_but_prefix_valid_count": len(strict_invalid_prefix_valid),
+              "direct_strict_invalid_prefix_suffix_length_counts": dict(
+                  prefix_suffix_lengths.most_common()
+              ),
+              "direct_strict_invalid_prefix_payload_reference_count": len(prefix_payload_hashes),
+              "direct_strict_invalid_prefix_unique_sha256_count": len(set(prefix_payload_hashes)),
+              "direct_wmf_prefix_validation_error_counts": dict(
+                  prefix_validation_errors.most_common()
+              ),
+              "direct_raster_candidate_count": sum(
+                  profile.get("candidate") is True for profile in raster_profiles
+              ),
+              "direct_raster_success_count": sum(
+                  profile.get("raster_success") is True for profile in raster_profiles
+              ),
+              "direct_raster_recovery_class_counts": dict(
+                  raster_recovery_classes.most_common()
+              ),
+              "direct_raster_success_recovery_class_counts": dict(
+                  raster_success_recovery_classes.most_common()
+              ),
+              "direct_raster_error_class_counts": dict(
+                  raster_error_classes.most_common()
+              ),
+              "direct_raster_error_detail_counts": dict(
+                  raster_error_details.most_common()
+              ),
+              "direct_raster_blocker_profile_counts": dict(
+                  raster_blocker_profiles.most_common()
+              ),
+              "direct_raster_success_file_count": len(raster_success_files),
+              "direct_raster_positive_geometry_candidate_count": raster_positive_geometry_candidate_count,
+              "direct_raster_positive_geometry_success_count": raster_positive_geometry_success_count,
+              "direct_raster_nonpositive_geometry_success_count": raster_nonpositive_geometry_success_count,
+              "direct_strict_invalid_outer_size_rewrite_valid_count": sum(
+                  profile.get("outer_size_rewrite_valid") is True
+                  for profile in strict_invalid_profiles
+              ),
+              "direct_strict_invalid_first_eof_prefix_valid_count": sum(
+                  (profile.get("first_eof") or {}).get("prefix_valid") is True
+                  for profile in strict_invalid_profiles
+              ),
+              "direct_strict_invalid_recovery_class_counts": dict(
+                  strict_invalid_recovery_classes.most_common()
+              ),
+              "direct_strict_invalid_first_eof_suffix_length_counts": dict(
+                  first_eof_suffix_lengths.most_common()
+              ),
+              "direct_strict_invalid_first_eof_payload_reference_count": len(
+                  first_eof_payload_hashes
+              ),
+              "direct_strict_invalid_first_eof_unique_sha256_count": len(
+                  set(first_eof_payload_hashes)
+              ),
+              "direct_strict_wmf_positive_geometry_count": strict_valid_positive_geometry,
+              "direct_wmf_prefix_positive_geometry_count": prefix_valid_positive_geometry,
+              "direct_wmf_prefix_nonpositive_geometry_count": prefix_valid_nonpositive_geometry,
+              "no_direct_image_data_owner_count": len(no_child),
+              "no_direct_image_data_file_count": len(no_child_files),
+              "no_direct_image_data_files_also_with_direct_image_data_count": len(
+                  no_child_files & direct_child_files
+              ),
+              "no_direct_image_data_parent_raw_type_counts": dict(no_child_parent_types.most_common()),
+              "no_direct_image_data_chunk_length_counts": dict(no_child_chunk_lengths.most_common()),
+              "no_direct_image_data_service_word_counts": dict(no_child_service_words.most_common()),
+              "no_direct_image_data_geometry_sign_counts": dict(no_child_geometry_profiles.most_common()),
+              "no_direct_image_data_field_native_ref_nonzero_count": sum(
+                  i.get("field_native_ref_at_0x72") not in (None, 0) for i in no_child
+              ),
+              "no_direct_image_data_field_replacement_ref_nonzero_count": sum(
+                  i.get("field_replacement_ref_at_0x8a") not in (None, 0) for i in no_child
+              ),
+              "no_direct_image_data_previous_raw_type_counts": dict(
+                  no_child_previous_types.most_common()
+              ),
+              "no_direct_image_data_previous_raw0021_count": sum(
+                  i.get("previous_object_raw_type") == "0x0021" for i in no_child
+              ),
+              "no_direct_image_data_previous_parent_matches_count": sum(
+                  i.get("previous_object_parent_matches_image") is True for i in no_child
+              ),
+              "no_direct_image_data_next_raw_type_counts": dict(
+                  no_child_next_types.most_common()
+              ),
+              "no_direct_image_data_next_raw0021_count": sum(
+                  i.get("next_object_raw_type") == "0x0021" for i in no_child
+              ),
+              "no_direct_image_data_next_parent_matches_count": sum(
+                  i.get("next_object_parent_matches_image") is True for i in no_child
+              ),
+              "field_replacement_ref_nonzero_count": sum(
+                  i.get("field_replacement_ref_at_0x8a") not in (None, 0) for i in images
+              ),
+              "field_replacement_target_raw_type_counts": dict(field_repl_types.most_common()),
+              "field_replacement_target_parent_match_count": count_true(
+                  "field_replacement_target_parent_matches"
+              ),
+              "field_replacement_gif89a_count": sum(
+                  (i.get("field_replacement") or {}).get("gif89a") is True for i in images
+              ),
+              "field_replacement_exact_length_count": sum(
+                  (i.get("field_replacement") or {}).get("lengths_equal_payload") is True for i in images
+              ),
+              "field_replacement_payload_reference_count": len(replacement_payload_hashes),
+              "field_replacement_unique_payload_sha256_count": len(set(replacement_payload_hashes)),
+              "filename_companion_owner_count": sum(
+                  int(i.get("filename_child_count") or 0) > 0 for i in images
+              ),
+              "filename_companion_record_count": sum(
+                  int(i.get("filename_child_count") or 0) for i in images
+              ),
+              "evidence_boundary": (
+                  "source-safe structural census only; no filename strings or image bytes retained; "
+                  "no Reader admission change"
+              ),
+          }
+
+          Path("out").mkdir(exist_ok=True)
+          Path("out/legacy22-image-1050.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy22-image-current-1050-${{ github.run_id }}
+          path: out/legacy22-image-1050.json
+          retention-days: 90
