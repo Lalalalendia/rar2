@@ -204,14 +204,23 @@ jobs:
           u32_summary = summarize(u32_values)
 
           # Hosted/offline causal join for LEGACY22-RAW0022-CAUSAL-01.
-          # Compare OleData.V (+0x0A) only against persisted CFB object-storage
-          # identities/topology; do not assign semantics from numeric shape.
+          # Reuse stream-path receipts already produced by deep_profile instead of
+          # reparsing the same CFB files. Compare OleData.V (+0x0A) against exact
+          # /Objects/Object N roots and correlate F (+0x0E) with matched-root topology.
           import re
-          import olefile
 
-          sha_to_path = {path.stem.lower(): path for path in paths}
+          fingerprints = json.loads(
+              Path("out/legacy625/fingerprints.json").read_text()
+          )
+          fingerprints_by_sha = {
+              str(row.get("sha256") or "").lower(): row
+              for row in fingerprints
+              if row.get("sha256")
+          }
+
           cfb_join = {
               "candidate_count": len(candidates),
+              "candidate_file_count": len(affected),
               "files_with_objects_storage": 0,
               "files_with_object_substorage": 0,
               "files_with_olepres": 0,
@@ -220,43 +229,103 @@ jobs:
               "v_minus_1_in_object_storage_number": 0,
               "v_in_olepres_suffix": 0,
               "v_in_any_numeric_cfb_component": 0,
+              "v_matched_root_has_olepres": 0,
+              "v_matched_root_has_ole10native": 0,
+              "v_matched_root_has_ole_stream": 0,
+              "v_matched_root_has_compobj": 0,
+              "v_matched_root_has_contents": 0,
+              "files_v_set_equals_object_root_set": 0,
+              "files_v_set_subset_object_root_set": 0,
+              "files_object_root_set_subset_v_set": 0,
+              "files_v_set_disjoint_object_root_set": 0,
           }
           object_storage_counts = Counter()
           olepres_counts = Counter()
           v_values = Counter()
-
+          matched_root_signatures = Counter()
+          matched_root_signature_by_f = Counter()
+          direct_match_by_f = Counter()
+          direct_match_by_revision = Counter()
+          f_by_revision = Counter()
+          candidate_file_revisions = Counter()
+          candidate_instance_revisions = Counter()
           topology_by_sha = {}
+          logical_groups = defaultdict(list)
+
+          candidate_by_sha = defaultdict(list)
+          for item in candidates:
+              candidate_by_sha[item["source_sha256"].lower()].append(item)
+
           for row in affected:
               source_sha = row["source_sha256"].lower()
-              path = sha_to_path.get(source_sha)
-              if path is None:
+              fingerprint = fingerprints_by_sha.get(source_sha)
+              if fingerprint is None:
                   raise RuntimeError(
-                      f"{source_sha}: candidate source is missing from pinned corpus paths"
+                      f"{source_sha}: candidate source missing from deep_profile fingerprints"
                   )
+
+              revision = str(fingerprint.get("contents_serialization_revision"))
+              candidate_file_revisions[revision] += 1
+              logical_identity = str(
+                  fingerprint.get("content_topology_fingerprint_sha256") or ""
+              )
+              if not logical_identity:
+                  raise RuntimeError(f"{source_sha}: missing logical stream-set identity")
+              logical_groups[logical_identity].append(source_sha)
+
+              object_features = defaultdict(set)
               object_numbers = set()
               olepres_numbers = set()
               any_numbers = set()
               has_objects = False
-              try:
-                  with olefile.OleFileIO(str(path)) as ole:
-                      entries = ole.listdir(streams=True, storages=True)
-              except Exception as exc:
-                  raise RuntimeError(
-                      f"{path.name}: CFB topology parse failed: {exc}"
-                  ) from exc
-              for entry in entries:
-                  for component in entry:
-                      if component.casefold() == "objects":
-                          has_objects = True
-                      m = re.fullmatch(r"Object\s*(\d+)", component, flags=re.IGNORECASE)
-                      if m:
-                          object_numbers.add(int(m.group(1)))
-                      m = re.fullmatch(r".*OlePres(\d+)", component, flags=re.IGNORECASE)
-                      if m:
-                          olepres_numbers.add(int(m.group(1)))
+              stream_paths = [
+                  str(stream.get("path") or "")
+                  for stream in (fingerprint.get("streams") or [])
+                  if isinstance(stream, dict)
+              ]
+
+              for stream_path in stream_paths:
+                  parts = [part for part in stream_path.strip("/").split("/") if part]
+                  if parts and parts[0].casefold() == "objects":
+                      has_objects = True
+                  if len(parts) >= 2 and parts[0].casefold() == "objects":
+                      object_match = re.fullmatch(
+                          r"Object\s*(\d+)", parts[1], flags=re.IGNORECASE
+                      )
+                      if object_match:
+                          object_number = int(object_match.group(1))
+                          object_numbers.add(object_number)
+                          for component in parts[2:]:
+                              folded = component.casefold()
+                              if "olepres" in folded:
+                                  object_features[object_number].add("olepres")
+                              if "ole10native" in folded:
+                                  object_features[object_number].add("ole10native")
+                              normalized = folded.lstrip("\x00\x01\x02")
+                              if normalized == "ole":
+                                  object_features[object_number].add("ole")
+                              if "compobj" in folded:
+                                  object_features[object_number].add("compobj")
+                              if normalized == "contents":
+                                  object_features[object_number].add("contents")
+
+                  for component in parts:
+                      olepres_match = re.search(
+                          r"OlePres(\d+)", component, flags=re.IGNORECASE
+                      )
+                      if olepres_match:
+                          olepres_numbers.add(int(olepres_match.group(1)))
                       for numeric in re.finditer(r"\d+", component):
                           any_numbers.add(int(numeric.group(0)))
-              topology_by_sha[source_sha] = (object_numbers, olepres_numbers, any_numbers)
+
+              topology_by_sha[source_sha] = {
+                  "object_numbers": object_numbers,
+                  "olepres_numbers": olepres_numbers,
+                  "any_numbers": any_numbers,
+                  "object_features": object_features,
+                  "revision": revision,
+              }
+
               if has_objects:
                   cfb_join["files_with_objects_storage"] += 1
               if object_numbers:
@@ -266,18 +335,62 @@ jobs:
               object_storage_counts[str(len(object_numbers))] += 1
               olepres_counts[str(len(olepres_numbers))] += 1
 
+              file_v_values = {
+                  int((item.get("child_u16_first64") or {})["0x0a"])
+                  for item in candidate_by_sha[source_sha]
+                  if "0x0a" in (item.get("child_u16_first64") or {})
+              }
+              if file_v_values == object_numbers:
+                  cfb_join["files_v_set_equals_object_root_set"] += 1
+              if file_v_values.issubset(object_numbers):
+                  cfb_join["files_v_set_subset_object_root_set"] += 1
+              if object_numbers.issubset(file_v_values):
+                  cfb_join["files_object_root_set_subset_v_set"] += 1
+              if file_v_values.isdisjoint(object_numbers):
+                  cfb_join["files_v_set_disjoint_object_root_set"] += 1
+
           for item in candidates:
               source_sha = item["source_sha256"].lower()
+              topology = topology_by_sha[source_sha]
               raw_v = (item.get("child_u16_first64") or {}).get("0x0a")
-              if raw_v is None:
-                  continue
+              raw_f = (item.get("child_u16_first64") or {}).get("0x0e")
+              if raw_v is None or raw_f is None:
+                  raise RuntimeError(
+                      f"{source_sha}: missing complete OleData V/F scalar profile"
+                  )
+
               v = int(raw_v)
+              f = int(raw_f)
+              revision = topology["revision"]
+              object_numbers = topology["object_numbers"]
+              olepres_numbers = topology["olepres_numbers"]
+              any_numbers = topology["any_numbers"]
+              object_features = topology["object_features"]
+
               v_values[str(v)] += 1
-              object_numbers, olepres_numbers, any_numbers = topology_by_sha.get(
-                  source_sha, (set(), set(), set())
-              )
-              if v in object_numbers:
+              candidate_instance_revisions[revision] += 1
+              f_by_revision[(revision, str(f))] += 1
+
+              direct = v in object_numbers
+              direct_match_by_f[(str(f), str(direct).lower())] += 1
+              direct_match_by_revision[(revision, str(direct).lower())] += 1
+              if direct:
                   cfb_join["v_in_object_storage_number"] += 1
+                  features = object_features.get(v, set())
+                  signature = "|".join(sorted(features)) or "none"
+                  matched_root_signatures[signature] += 1
+                  matched_root_signature_by_f[(str(f), signature)] += 1
+                  if "olepres" in features:
+                      cfb_join["v_matched_root_has_olepres"] += 1
+                  if "ole10native" in features:
+                      cfb_join["v_matched_root_has_ole10native"] += 1
+                  if "ole" in features:
+                      cfb_join["v_matched_root_has_ole_stream"] += 1
+                  if "compobj" in features:
+                      cfb_join["v_matched_root_has_compobj"] += 1
+                  if "contents" in features:
+                      cfb_join["v_matched_root_has_contents"] += 1
+
               if v + 1 in object_numbers:
                   cfb_join["v_plus_1_in_object_storage_number"] += 1
               if v > 0 and v - 1 in object_numbers:
@@ -298,6 +411,42 @@ jobs:
               {"value": value, "count": count}
               for value, count in v_values.most_common(20)
           ]
+          cfb_join["matched_object_root_signature_counts"] = dict(
+              matched_root_signatures.most_common()
+          )
+          cfb_join["matched_object_root_signature_by_f_counts"] = {
+              f"{f}:{signature}": count
+              for (f, signature), count in sorted(
+                  matched_root_signature_by_f.items()
+              )
+          }
+          cfb_join["direct_v_match_by_f_counts"] = {
+              f"{f}:{matched}": count
+              for (f, matched), count in sorted(direct_match_by_f.items())
+          }
+          cfb_join["candidate_file_contents_revision_counts"] = dict(
+              sorted(candidate_file_revisions.items())
+          )
+          cfb_join["candidate_instance_contents_revision_counts"] = dict(
+              sorted(candidate_instance_revisions.items())
+          )
+          cfb_join["direct_v_match_by_revision_counts"] = {
+              f"{revision}:{matched}": count
+              for (revision, matched), count
+              in sorted(direct_match_by_revision.items())
+          }
+          cfb_join["f_by_revision_counts"] = {
+              f"{revision}:{f}": count
+              for (revision, f), count in sorted(f_by_revision.items())
+          }
+          cfb_join["candidate_file_logical_identity_count"] = len(logical_groups)
+          cfb_join["candidate_file_duplicate_logical_group_count"] = sum(
+              len(group) > 1 for group in logical_groups.values()
+          )
+          cfb_join["candidate_file_largest_logical_duplicate_group_size"] = max(
+              (len(group) for group in logical_groups.values()),
+              default=0,
+          )
 
           summary = {
               "schema": "chaptera.legacy22-raw0022-companion-census.v1",
