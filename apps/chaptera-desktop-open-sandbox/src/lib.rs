@@ -478,7 +478,12 @@ mod platform {
         Ok(flags)
     }
 
-    fn inspect_process(process: HANDLE, job: HANDLE) -> Result<SandboxReceipt> {
+    fn inspect_process(
+        process: HANDLE,
+        job: HANDLE,
+        require_strict_mitigations: bool,
+        lpac_opt_out: bool,
+    ) -> Result<SandboxReceipt> {
         let mut token_raw = null_mut();
         let ok = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token_raw) };
         if ok == 0 {
@@ -506,10 +511,9 @@ mod platform {
         if !app_container
             || !zero_capabilities
             || in_job == 0
-            || win32k & 1 == 0
-            || extension & 1 == 0
-            || strict & 1 == 0
             || child & 1 == 0
+            || (require_strict_mitigations
+                && (win32k & 1 == 0 || extension & 1 == 0 || strict & 1 == 0))
         {
             bail!(
                 "containment receipt incomplete: app_container={app_container} zero_caps={zero_capabilities} in_job={in_job} win32k={win32k:#x} extension={extension:#x} strict={strict:#x} child={child:#x}"
@@ -520,7 +524,7 @@ mod platform {
             schema_version: "chaptera-desktop-pub-containment-receipt-v1",
             app_container,
             zero_capabilities,
-            lpac_all_application_packages_opt_out: true,
+            lpac_all_application_packages_opt_out: lpac_opt_out,
             exact_handle_allowlist_count: 3,
             child_process_restricted: true,
             job_member_at_creation: in_job != 0,
@@ -592,11 +596,42 @@ mod platform {
         let job = configure_job()?;
         let pipes = make_pipe_set()?;
 
-        let lpac_policy = PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
-        let child_policy = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
-        let mitigation_policy = MITIGATION_STRICT_HANDLE_ALWAYS_ON
+        let diagnostic_policy = std::env::var("CHAPTERA_SANDBOX_DIAG_POLICY").ok();
+        let strict_mitigation_policy = MITIGATION_STRICT_HANDLE_ALWAYS_ON
             | MITIGATION_WIN32K_DISABLE_ALWAYS_ON
             | MITIGATION_EXTENSION_POINT_DISABLE_ALWAYS_ON;
+        let (lpac_policy, mitigation_policy, require_strict_mitigations) =
+            match diagnostic_policy.as_deref() {
+                Some("lpac-base") => (
+                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
+                    0,
+                    false,
+                ),
+                Some("appcontainer-strict") => (0, strict_mitigation_policy, true),
+                Some("appcontainer-base") => (0, 0, false),
+                Some("lpac-no-win32k") => (
+                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
+                    strict_mitigation_policy & !MITIGATION_WIN32K_DISABLE_ALWAYS_ON,
+                    false,
+                ),
+                Some("lpac-no-extension") => (
+                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
+                    strict_mitigation_policy & !MITIGATION_EXTENSION_POINT_DISABLE_ALWAYS_ON,
+                    false,
+                ),
+                Some("lpac-no-strict-handle") => (
+                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
+                    strict_mitigation_policy & !MITIGATION_STRICT_HANDLE_ALWAYS_ON,
+                    false,
+                ),
+                Some(other) => bail!("unknown sandbox diagnostic policy: {other}"),
+                None => (
+                    PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
+                    strict_mitigation_policy,
+                    true,
+                ),
+            };
+        let child_policy = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
         let handle_list = [
             pipes.child_stdin.raw(),
             pipes.child_stdout.raw(),
@@ -705,7 +740,12 @@ mod platform {
         drop(pipes.child_stdout);
         drop(pipes.child_stderr);
 
-        let mut receipt = inspect_process(process.raw(), job.raw())?;
+        let mut receipt = inspect_process(
+            process.raw(),
+            job.raw(),
+            require_strict_mitigations,
+            lpac_policy == PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT,
+        )?;
 
         let mut stdin = unsafe { pipes.parent_stdin.into_file() };
         let stdout = unsafe { pipes.parent_stdout.into_file() };
