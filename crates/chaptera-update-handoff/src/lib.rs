@@ -1,15 +1,17 @@
 use chaptera_update_engine::{UpdateEngine, UpdateError, UpdatePhase};
 use chaptera_update_orchestrator::{OrchestrationError, UpdateOrchestrator};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 pub const CONTROL_REQUEST_SCHEMA_VERSION: &str = "chaptera.update-control-request.v1";
 pub const CONTROL_RECEIPT_SCHEMA_VERSION: &str = "chaptera.update-control-receipt.v1";
 pub const CONTROL_MODE_ARG: &str = "--chaptera-update-control";
+const CONTROL_ENV_ALLOWLIST: &[&str] = &["SystemRoot", "WINDIR", "TEMP", "TMP"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ControlHandoffRequest {
@@ -31,22 +33,53 @@ pub struct ControlReceipt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedControlHandoff {
     pub control_updater: PathBuf,
+    pub control_updater_sha256: String,
     pub request_path: PathBuf,
+    pub working_directory: PathBuf,
 }
 
 impl PreparedControlHandoff {
     pub fn spawn(&self) -> Result<Child> {
-        if !self.control_updater.is_file() {
-            return Err(HandoffError::ControlUpdaterMissing(
+        if !self.control_updater.is_absolute() {
+            return Err(HandoffError::ControlUpdaterIdentityChanged(
+                self.control_updater.clone(),
+            ));
+        }
+        let canonical_updater = fs::canonicalize(&self.control_updater)
+            .map_err(|_| HandoffError::ControlUpdaterMissing(self.control_updater.clone()))?;
+        if canonical_updater != self.control_updater || !canonical_updater.is_file() {
+            return Err(HandoffError::ControlUpdaterIdentityChanged(
+                self.control_updater.clone(),
+            ));
+        }
+        if sha256_file(&canonical_updater)? != self.control_updater_sha256 {
+            return Err(HandoffError::ControlUpdaterIdentityChanged(
                 self.control_updater.clone(),
             ));
         }
 
-        Command::new(&self.control_updater)
+        if !self.request_path.is_absolute() || !self.request_path.is_file() {
+            return Err(HandoffError::ControlRequestMissing(self.request_path.clone()));
+        }
+        let canonical_working_directory = fs::canonicalize(&self.working_directory)
+            .map_err(|_| HandoffError::ControlWorkingDirectoryMissing(
+                self.working_directory.clone(),
+            ))?;
+        if canonical_working_directory != self.working_directory
+            || !canonical_working_directory.is_dir()
+        {
+            return Err(HandoffError::ControlWorkingDirectoryMissing(
+                self.working_directory.clone(),
+            ));
+        }
+
+        let mut command = Command::new(&canonical_updater);
+        command
             .arg(CONTROL_MODE_ARG)
             .arg(&self.request_path)
-            .spawn()
-            .map_err(HandoffError::Io)
+            .current_dir(&canonical_working_directory);
+        apply_control_environment(&mut command);
+        command.spawn().map_err(HandoffError::Io)
     }
 }
 
@@ -61,6 +94,9 @@ pub enum HandoffError {
     Schema(String),
     Mismatch(String),
     ControlUpdaterMissing(PathBuf),
+    ControlUpdaterIdentityChanged(PathBuf),
+    ControlRequestMissing(PathBuf),
+    ControlWorkingDirectoryMissing(PathBuf),
     RequestAlreadyExists(PathBuf),
 }
 
@@ -79,6 +115,15 @@ impl fmt::Display for HandoffError {
             Self::Mismatch(message) => write!(f, "control request mismatch: {message}"),
             Self::ControlUpdaterMissing(path) => {
                 write!(f, "copied control updater is missing: {}", path.display())
+            }
+            Self::ControlUpdaterIdentityChanged(path) => {
+                write!(f, "copied control updater identity changed before launch: {}", path.display())
+            }
+            Self::ControlRequestMissing(path) => {
+                write!(f, "control request is missing or not absolute: {}", path.display())
+            }
+            Self::ControlWorkingDirectoryMissing(path) => {
+                write!(f, "control working directory is missing or changed: {}", path.display())
             }
             Self::RequestAlreadyExists(path) => {
                 write!(f, "control request already exists: {}", path.display())
@@ -181,10 +226,52 @@ pub fn prepare_control_handoff(engine: &UpdateEngine) -> Result<PreparedControlH
     };
     write_json_durable(&request_path, &request)?;
 
+    let control_updater = fs::canonicalize(&paths.control_updater)
+        .map_err(|_| HandoffError::ControlUpdaterMissing(paths.control_updater.clone()))?;
+    if !control_updater.is_absolute() || !control_updater.is_file() {
+        return Err(HandoffError::ControlUpdaterMissing(control_updater));
+    }
+    let control_updater_sha256 = sha256_file(&control_updater)?;
+
+    let request_path = fs::canonicalize(&request_path)
+        .map_err(|_| HandoffError::ControlRequestMissing(request_path.clone()))?;
+    let working_directory = request_path
+        .parent()
+        .ok_or_else(|| HandoffError::ControlWorkingDirectoryMissing(request_path.clone()))
+        .and_then(|parent| {
+            fs::canonicalize(parent)
+                .map_err(|_| HandoffError::ControlWorkingDirectoryMissing(parent.to_path_buf()))
+        })?;
+
     Ok(PreparedControlHandoff {
-        control_updater: paths.control_updater,
+        control_updater,
+        control_updater_sha256,
         request_path,
+        working_directory,
     })
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn apply_control_environment(command: &mut Command) {
+    command.env_clear();
+    for key in CONTROL_ENV_ALLOWLIST {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
 }
 
 pub fn read_control_request(path: &Path) -> Result<ControlHandoffRequest> {
