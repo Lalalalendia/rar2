@@ -87,16 +87,22 @@ def build_plan(paths: list[str]) -> dict:
         affected.add("pub-viewer")
 
     render_plan = any(p.startswith("crates/chaptera-viewer-render-plan/") for p in paths)
-    desktop = any(
+    desktop_source_changed = any(
         p in {
             "apps/chaptera-desktop/src/render_backend.rs",
             "apps/chaptera-desktop/src/main.rs",
         }
         for p in paths
     )
-    if any(p in {"Cargo.toml", "Cargo.lock"} for p in paths):
+    root_workspace_changed = any(p in {"Cargo.toml", "Cargo.lock"} for p in paths)
+    if root_workspace_changed:
         render_plan = True
-        desktop = True
+
+    # Any shared Reader dependency change must still prove it compiles through
+    # the actual reader-only desktop product seam. This is the cheap Linux
+    # integration proof that lets parser-only PRs avoid the full Windows
+    # build/package/smoke workflow.
+    desktop = bool(packages) or render_plan or desktop_source_changed or root_workspace_changed
 
     for path in paths:
         if path.startswith("crates/chaptera-viewer-render-plan/") and path.endswith(".rs"):
@@ -230,36 +236,41 @@ def build_plan(paths: list[str]) -> dict:
         )
 
     if desktop:
-        commands.extend(
-            [
-                {
-                    "id": "desktop-reader-check",
-                    "argv": [
-                        "cargo",
-                        "check",
-                        "-p",
-                        "chaptera-desktop",
-                        "--features",
-                        "reader-only",
-                        "--all-targets",
-                    ],
-                },
-                {
-                    "id": "desktop-reader-clippy",
-                    "argv": [
-                        "cargo",
-                        "clippy",
-                        "-p",
-                        "chaptera-desktop",
-                        "--features",
-                        "reader-only",
-                        "--all-targets",
-                        "--",
-                        "-D",
-                        "warnings",
-                    ],
-                },
-            ]
+        commands.append(
+            {
+                "id": "desktop-reader-check",
+                "argv": [
+                    "cargo",
+                    "check",
+                    "-p",
+                    "chaptera-desktop",
+                    "--features",
+                    "reader-only",
+                    "--all-targets",
+                ],
+            }
+        )
+
+    # Clippy the desktop shell only when the shell/root workspace itself
+    # changed. For an upstream parser-only change, the compile integration
+    # check above is sufficient and avoids a second whole product lint pass.
+    if desktop_source_changed or root_workspace_changed:
+        commands.append(
+            {
+                "id": "desktop-reader-clippy",
+                "argv": [
+                    "cargo",
+                    "clippy",
+                    "-p",
+                    "chaptera-desktop",
+                    "--features",
+                    "reader-only",
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+            }
         )
 
     return {
