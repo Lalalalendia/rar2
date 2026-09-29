@@ -18,6 +18,17 @@ PLACEABLE_HEADER_BYTES = 22
 META_HEADER_BYTES = 18
 META_HEADER_WORDS = 9
 META_EOF = 0x0000
+META_CREATEPALETTE = 0x00F7
+META_CREATEBRUSH = 0x00F8
+META_SELECTCLIPREGION = 0x012C
+META_SELECTOBJECT = 0x012D
+META_DIBCREATEPATTERNBRUSH = 0x0142
+META_DELETEOBJECT = 0x01F0
+META_CREATEPATTERNBRUSH = 0x01F9
+META_CREATEPENINDIRECT = 0x02FA
+META_CREATEFONTINDIRECT = 0x02FB
+META_CREATEBRUSHINDIRECT = 0x02FC
+META_CREATEREGION = 0x06FF
 MAX_RECORDS = 1_000_000
 
 
@@ -178,6 +189,100 @@ def parse_wmf(raw: bytes) -> dict:
     }
 
 
+
+def audit_wmf_object_lifecycle(raw: bytes) -> dict:
+    """Audit object-table allocation/reuse and region selection without retaining source identity."""
+
+    parsed = parse_wmf(raw)
+    header_offset = PLACEABLE_HEADER_BYTES if parsed["placeable"] else 0
+    metafile_end = header_offset + parsed["declared_bytes"]
+    object_count = parsed["object_count"]
+
+    slots: list[dict | None] = [None] * object_count
+    ever_used = [False] * object_count
+
+    counts = Counter()
+    region_selectobject_reused = 0
+    region_selectobject_fresh = 0
+    selectclipregion_region = 0
+    selectclipregion_nonregion = 0
+
+    def allocate(kind: str) -> None:
+        for index, slot in enumerate(slots):
+            if slot is None:
+                reused = ever_used[index]
+                slots[index] = {"kind": kind, "reused": reused}
+                ever_used[index] = True
+                counts[f"create_{kind}"] += 1
+                return
+        raise ParseError("object_table_full")
+
+    offset = header_offset + META_HEADER_BYTES
+    while offset < metafile_end:
+        record_words = u32(raw, offset)
+        record_end = offset + record_words * 2
+        function = u16(raw, offset + 4)
+        params = raw[offset + 6 : record_end]
+
+        if function in (META_CREATEPALETTE, META_CREATEBRUSH, META_CREATEPATTERNBRUSH,
+                        META_CREATEFONTINDIRECT):
+            allocate("other")
+        elif function == META_CREATEPENINDIRECT:
+            allocate("pen")
+        elif function == META_CREATEBRUSHINDIRECT:
+            allocate("brush")
+        elif function == META_DIBCREATEPATTERNBRUSH:
+            allocate("pattern_brush")
+        elif function == META_CREATEREGION:
+            allocate("region")
+        elif function == META_DELETEOBJECT:
+            index = u16(params, 0)
+            if index >= len(slots):
+                raise ParseError("delete_object_oob")
+            if slots[index] is None:
+                raise ParseError("delete_object_empty")
+            counts[f"delete_{slots[index]['kind']}"] += 1
+            slots[index] = None
+        elif function == META_SELECTOBJECT:
+            index = u16(params, 0)
+            if index >= len(slots):
+                raise ParseError("select_object_oob")
+            slot = slots[index]
+            if slot is None:
+                raise ParseError("select_object_empty")
+            kind = slot["kind"]
+            counts[f"selectobject_{kind}"] += 1
+            if kind == "region":
+                if slot["reused"]:
+                    region_selectobject_reused += 1
+                else:
+                    region_selectobject_fresh += 1
+        elif function == META_SELECTCLIPREGION:
+            index = u16(params, 0)
+            if index >= len(slots):
+                raise ParseError("select_clip_region_oob")
+            slot = slots[index]
+            if slot is None:
+                raise ParseError("select_clip_region_empty")
+            counts["selectclipregion_total"] += 1
+            if slot["kind"] == "region":
+                selectclipregion_region += 1
+            else:
+                selectclipregion_nonregion += 1
+
+        offset = record_end
+        if function == META_EOF:
+            break
+
+    return {
+        "counts": dict(counts),
+        "region_selectobject_fresh_slot_count": region_selectobject_fresh,
+        "region_selectobject_reused_slot_count": region_selectobject_reused,
+        "selectclipregion_region_count": selectclipregion_region,
+        "selectclipregion_nonregion_count": selectclipregion_nonregion,
+    }
+
+
 def error_code(exc: Exception) -> str:
     text = str(exc)
     return text.split(":", 1)[0] if text else exc.__class__.__name__
@@ -217,6 +322,11 @@ def profile_corpus(corpus_dir: Path) -> dict:
     record_counts: list[int] = []
     declared_sizes: list[int] = []
     valid_wmf_count = 0
+    object_lifecycle_counts = Counter()
+    region_selectobject_fresh_slot_count = 0
+    region_selectobject_reused_slot_count = 0
+    selectclipregion_region_count = 0
+    selectclipregion_nonregion_count = 0
 
     for path in paths:
         file_has_olepres = False
@@ -261,6 +371,12 @@ def profile_corpus(corpus_dir: Path) -> dict:
                         continue
 
                     valid_wmf_count += 1
+                    lifecycle = audit_wmf_object_lifecycle(pres["data"])
+                    object_lifecycle_counts.update(lifecycle["counts"])
+                    region_selectobject_fresh_slot_count += lifecycle["region_selectobject_fresh_slot_count"]
+                    region_selectobject_reused_slot_count += lifecycle["region_selectobject_reused_slot_count"]
+                    selectclipregion_region_count += lifecycle["selectclipregion_region_count"]
+                    selectclipregion_nonregion_count += lifecycle["selectclipregion_nonregion_count"]
                     wmf_placeable_counts[str(wmf["placeable"]).lower()] += 1
                     wmf_type_counts[str(wmf["metafile_type"])] += 1
                     wmf_version_counts[f"0x{wmf['version']:04x}"] += 1
@@ -319,6 +435,16 @@ def profile_corpus(corpus_dir: Path) -> dict:
         },
         "record_function_counts": dict(function_counts.most_common()),
         "record_function_file_counts": dict(function_file_counts.most_common()),
+        "object_lifecycle_counts": dict(object_lifecycle_counts.most_common()),
+        "region_selection_audit": {
+            "selectobject_region_total": (
+                region_selectobject_fresh_slot_count + region_selectobject_reused_slot_count
+            ),
+            "selectobject_region_fresh_slot": region_selectobject_fresh_slot_count,
+            "selectobject_region_reused_slot": region_selectobject_reused_slot_count,
+            "selectclipregion_region": selectclipregion_region_count,
+            "selectclipregion_nonregion": selectclipregion_nonregion_count,
+        },
         "function_set_profile_count": len(function_set_profiles),
         "top_function_set_profiles": [
             {"functions": profile.split(",") if profile else [], "count": count}
