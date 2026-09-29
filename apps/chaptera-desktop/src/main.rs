@@ -9055,6 +9055,11 @@ mod tests {
                 app.selected_page = page_offset;
                 app
             });
+        // The first ViewerApp canvas pass installs any admitted environment-resolved
+        // source fonts and deliberately returns before building a render plan that names
+        // them. Advance one additional pass so the receipt observes the same post-font
+        // product execution that the user sees.
+        harness.step();
         harness.step();
 
         let image = harness
@@ -9062,6 +9067,20 @@ mod tests {
             .expect("headless Reader render must succeed");
         let png_path = output_dir.join("samplenewsletter-reference-customer-page-001-reader.png");
         image.save(&png_path).expect("write Reader golden PNG");
+
+        let executed = harness.state();
+        assert!(
+            executed.source_fonts_install_attempted,
+            "golden ViewerApp must cross the source-font activation boundary"
+        );
+        assert!(
+            executed.source_fonts.resolved_count() > 0,
+            "Windows golden fixture must expose at least one bounded environment-resolved source font"
+        );
+        assert!(
+            executed.source_fonts_active,
+            "bounded environment-resolved source fonts must be active for the post-font census"
+        );
 
         let receipt = serde_json::json!({
             "schema": "chaptera.reader-golden-samplenewsletter.v3",
@@ -9075,6 +9094,11 @@ mod tests {
             "render_plan_typography_sections": typography_sections,
             "shared_resolved_layout_frames": shared_resolved_layout_frames,
             "backend_fallback_frames": backend_fallback_frames,
+            "environment_resolved_source_font_count": executed.source_fonts.resolved_count(),
+            "environment_resolved_source_fonts_active": executed.source_fonts_active,
+            "post_source_font_preview_clipped_frames": executed.preview_clipped_frames,
+            "post_source_font_preview_clipped_story_count": executed.preview_clipped_story_keys.len(),
+            "post_source_font_preview_text_diagnostics": executed.preview_text_diagnostics,
             "source_font_face_claimed": false,
             "publisher_exact_reflow_claimed": false,
             "text_layout_authority": "shared_resolved_when_admitted_else_backend_fallback",
