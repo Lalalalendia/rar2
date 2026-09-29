@@ -1,7 +1,8 @@
 use super::{
     CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
-    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubNodePayload,
-    PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource, ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE,
+    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyOleSource,
+    PubNodePayload, PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource, ROLE_DOCUMENT,
+    ROLE_NODE, ROLE_PAGE,
     ROLE_STORY, derive_pub_id, source_ref,
 };
 use anyhow::{Context, Result, bail};
@@ -21,6 +22,9 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
 const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0000;
+const LEGACY_OLE_TYPE: u16 = 0x0003;
+const LEGACY_OLE_DATA_TYPE: u16 = 0x0022;
+const LEGACY_OLE_DATA_LEN: usize = 18;
 const LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES: [u16; 4] = [0x0004, 0x0005, 0x0006, 0x0007];
 const LEGACY_GROUP_TYPE: u16 = 0x000f;
 const LEGACY_GROUP_MAX_DEPTH: usize = 100;
@@ -329,7 +333,24 @@ fn materialize_legacy_noquill_child(
 
     let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
     let is_group = child_entry.chunk_type == LEGACY_GROUP_TYPE;
-    if !is_text_shape && !is_group && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type)
+    let is_legacy_ole = child_entry.chunk_type == LEGACY_OLE_TYPE;
+    let (legacy_ole, legacy_ole_source) = if is_legacy_ole {
+        let Some(profile) = legacy_ole_profile(contents, directory, child_object_id) else {
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(child_object_id),
+                raw_type: Some(child_entry.chunk_type),
+                reason: "legacy_ole_profile_not_admitted_v1".into(),
+            });
+            return Ok(());
+        };
+        (Some(profile.0), Some(profile.1))
+    } else {
+        (None, None)
+    };
+    if !is_text_shape
+        && !is_group
+        && !is_legacy_ole
+        && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type)
     {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
             object_id: u32::from(child_object_id),
@@ -367,7 +388,7 @@ fn materialize_legacy_noquill_child(
     } else {
         None
     };
-    let source_refs = vec![
+    let mut source_refs = vec![
         source_ref(
             &graph.source,
             &child_entry.entry_source,
@@ -391,12 +412,25 @@ fn materialize_legacy_noquill_child(
             ReadConfidence::Exact,
         ),
     ];
+    if let Some(source) = legacy_ole_source {
+        source_refs.push(source_ref(
+            &graph.source,
+            &source,
+            Some(format!("contents/0x22/object/{child_object_id}")),
+            Some("legacy_ole_data".into()),
+            SourceRole::Semantic,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ));
+    }
 
     graph.nodes.insert(
         node_id,
         Node {
             kind: if is_group {
                 NodeKind::Group
+            } else if is_legacy_ole {
+                NodeKind::Unsupported
             } else {
                 NodeKind::Shape
             },
@@ -413,6 +447,7 @@ fn materialize_legacy_noquill_child(
                 officeart_shape_type: None,
                 officeart_spid: None,
                 image_slot: None,
+                legacy_ole,
                 explicit_image_crop: None,
                 explicit_paint: PubExplicitShapePaintSource::default(),
                 effective_paint: None,
@@ -686,6 +721,41 @@ fn legacy_shape_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
     ))
 }
 
+fn parse_legacy_ole_data_chunk(chunk: &[u8]) -> Option<PubLegacyOleSource> {
+    if chunk.len() != LEGACY_OLE_DATA_LEN
+        || read_u16(chunk, 0x00)? != LEGACY_OLE_DATA_TYPE
+        || read_u16(chunk, 0x02)? != 0x0800
+        || read_u32(chunk, 0x04)? != 10
+        || read_u16(chunk, 0x08)? != 0x4f4d
+        || read_u16(chunk, 0x0c)? != 0
+        || read_u16(chunk, 0x10)? != 0
+    {
+        return None;
+    }
+
+    Some(PubLegacyOleSource {
+        storage_number: read_u16(chunk, 0x0a)?,
+        raw_flag: read_u16(chunk, 0x0e)?,
+    })
+}
+
+fn legacy_ole_profile(
+    contents: &[u8],
+    directory: &Legacy0x22Directory,
+    parent_object_id: u16,
+) -> Option<(PubLegacyOleSource, RawSpan)> {
+    let children = directory
+        .entries_by_parent_id(parent_object_id)
+        .collect::<Vec<_>>();
+    if children.len() != 1 || children[0].chunk_type != LEGACY_OLE_DATA_TYPE {
+        return None;
+    }
+    let child = children[0];
+    let chunk = chunk_bytes(contents, child).ok()?;
+    let profile = parse_legacy_ole_data_chunk(chunk)?;
+    Some((profile, child.chunk_source.clone()))
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     let raw = bytes.get(offset..offset.checked_add(2)?)?;
     Some(u16::from_le_bytes([raw[0], raw[1]]))
@@ -771,6 +841,31 @@ mod tests {
         ));
     }
 
+
+    #[test]
+    fn legacy_ole_data_profile_is_exact_and_preserves_opaque_flag() {
+        let mut chunk = vec![0_u8; LEGACY_OLE_DATA_LEN];
+        chunk[0x00..0x02].copy_from_slice(&LEGACY_OLE_DATA_TYPE.to_le_bytes());
+        chunk[0x02..0x04].copy_from_slice(&0x0800_u16.to_le_bytes());
+        chunk[0x04..0x08].copy_from_slice(&10_u32.to_le_bytes());
+        chunk[0x08..0x0a].copy_from_slice(&0x4f4d_u16.to_le_bytes());
+        chunk[0x0a..0x0c].copy_from_slice(&73_u16.to_le_bytes());
+        chunk[0x0c..0x0e].copy_from_slice(&0_u16.to_le_bytes());
+        chunk[0x0e..0x10].copy_from_slice(&0x8000_u16.to_le_bytes());
+        chunk[0x10..0x12].copy_from_slice(&0_u16.to_le_bytes());
+
+        assert_eq!(
+            parse_legacy_ole_data_chunk(&chunk),
+            Some(PubLegacyOleSource {
+                storage_number: 73,
+                raw_flag: 0x8000,
+            })
+        );
+
+        chunk[0x08] ^= 0x01;
+        assert!(parse_legacy_ole_data_chunk(&chunk).is_none());
+    }
+
     #[test]
     fn simple_geometry_shape_admission_is_bounded() {
         for chunk_type in LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES {
@@ -779,6 +874,7 @@ mod tests {
 
         for chunk_type in [
             LEGACY_TEXT_SHAPE_TYPE,
+            LEGACY_OLE_TYPE,   // OLE is admitted only through its bounded OleData profile
             0x0002,            // image
             0x0008,            // Quill-era text shape
             0x000a,            // table
