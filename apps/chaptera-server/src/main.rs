@@ -8,7 +8,9 @@ use chaptera_server::{
     config::{ChapteraConfig, EnvironmentMode, SecretResolver},
     doctor,
     edge::EdgePolicy,
-    guest_reader_http::{self, GuestReaderHttpConfig, GuestReaderHttpState, SqliteGuestReaderSessionStore},
+    guest_reader_http::{
+        self, GuestReaderHttpConfig, GuestReaderHttpState, SqliteGuestReaderSessionStore,
+    },
     guest_reader_worker::{self, IsolatedGuestSceneProducer},
     job_queue::SqliteJobQueue,
     jobs::UnconfiguredWorkerRuntime,
@@ -262,9 +264,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             guest_scanner,
                             guest_scene_worker,
                             GuestReaderHttpConfig {
-                                session_ttl: Duration::from_secs(
-                                    guest_config.session_ttl_seconds,
-                                ),
+                                session_ttl: Duration::from_secs(guest_config.session_ttl_seconds),
                                 max_file_bytes: guest_config.max_file_bytes,
                             },
                         )?;
