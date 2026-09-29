@@ -57,6 +57,8 @@ pub struct ReaderNodeV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_source_window: Option<ReaderImageSourceWindowV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<ReaderTableV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 
@@ -90,6 +92,24 @@ pub struct ReaderPaintV1 {
 pub struct ReaderLineV1 {
     pub rgb: [u8; 3],
     pub width_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTableV1 {
+    pub story_id: String,
+    pub rows: u32,
+    pub columns: u32,
+    pub cells: Vec<ReaderTableCellV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTableCellV1 {
+    pub cell_id: String,
+    pub row: u32,
+    pub column: u32,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<ReaderRectV1>,
 }
 
 #[derive(Debug, Serialize)]
@@ -269,6 +289,45 @@ pub fn from_viewer_geometry(
         }
     }
 
+    let mut table_by_node = HashMap::new();
+    for table in &geometry.tables {
+        let node_id = serialized_string(&table.node_id, "table node id")?;
+        if !node_ids.contains(&node_id) {
+            return Err(format!("table references unknown node {node_id}"));
+        }
+        bind_kind(&mut kind_by_node, &node_id, "table")?;
+
+        let mut cells = Vec::with_capacity(table.cells.len());
+        for cell in &table.cells {
+            let bounds = cell.bounds.as_ref().map(rect_from_serialized).transpose()?;
+            if bounds
+                .as_ref()
+                .is_some_and(|bounds| bounds.width <= 0 || bounds.height <= 0)
+            {
+                return Err(format!(
+                    "table {node_id} cell has non-positive resolved bounds"
+                ));
+            }
+            cells.push(ReaderTableCellV1 {
+                cell_id: serialized_string(&cell.id, "table cell id")?,
+                row: cell.address.row,
+                column: cell.address.column,
+                text: cell.text.clone(),
+                bounds,
+            });
+        }
+
+        let mapped = ReaderTableV1 {
+            story_id: serialized_string(&table.story_id, "table story id")?,
+            rows: table.rows,
+            columns: table.columns,
+            cells,
+        };
+        if table_by_node.insert(node_id.clone(), mapped).is_some() {
+            return Err(format!("duplicate table binding for node {node_id}"));
+        }
+    }
+
     let mut paint_by_node = HashMap::new();
     for paint in &geometry.paints {
         let node_id = serialized_string(&paint.node_id, "paint node id")?;
@@ -326,6 +385,7 @@ pub fn from_viewer_geometry(
             paint: paint_by_node.remove(&node_id),
             resource_id: resource_by_node.remove(&node_id),
             image_source_window: source_window_by_node.remove(&node_id),
+            table: table_by_node.remove(&node_id),
             text: text_by_node.get(&node_id).cloned(),
             node_id,
             page_id,

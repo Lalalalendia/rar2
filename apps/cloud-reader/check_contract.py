@@ -47,6 +47,8 @@ renderer_required = [
     "chaptera.reader-scene.v1",
     "inline_data_url",
     "imagePaintGeometry",
+    "tableCellPaintGeometry",
+    "data-table-cell-id",
     "assertReaderSceneSourceNeutral",
     'data-renderer',
 ]
