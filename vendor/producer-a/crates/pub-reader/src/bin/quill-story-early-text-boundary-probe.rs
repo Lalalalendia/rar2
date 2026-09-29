@@ -33,6 +33,18 @@ struct Descriptor {
 }
 
 #[derive(Debug, Serialize)]
+struct DescriptorPayloadProfile {
+    name: String,
+    data_length: u32,
+    opt_a: u16,
+    payload_all_ff: bool,
+    payload_all_zero: bool,
+    non_ff_byte_count: usize,
+    non_zero_byte_count: usize,
+    first_u32_is_ff: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct DescriptorMetadataProfile {
     opt_a_is_zero: bool,
     opt_a_equals_grounded_story_count: bool,
@@ -165,6 +177,7 @@ struct WitnessRow {
     descriptor_opt_b_one_count: usize,
     descriptor_opt_c_zero_count: usize,
     descriptor_opt_b_c_ordinary_count: usize,
+    descriptor_payload_profiles: Vec<DescriptorPayloadProfile>,
     syid_descriptor_metadata: DescriptorMetadataProfile,
     strs_descriptor_metadata: DescriptorMetadataProfile,
     text_descriptor_metadata: DescriptorMetadataProfile,
@@ -214,6 +227,39 @@ fn u16_at(bytes: &[u8], offset: usize) -> Option<u16> {
 fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn descriptor_name(name: &[u8; 4]) -> String {
+    name.iter()
+        .map(|byte| {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                char::from(*byte)
+            } else {
+                '.'
+            }
+        })
+        .collect()
+}
+
+fn descriptor_payload_profiles(
+    quill: &[u8],
+    descriptors: &[Descriptor],
+) -> Result<Vec<DescriptorPayloadProfile>> {
+    let mut out = Vec::with_capacity(descriptors.len());
+    for descriptor in descriptors {
+        let payload = descriptor_range(quill, descriptor)?;
+        out.push(DescriptorPayloadProfile {
+            name: descriptor_name(&descriptor.name),
+            data_length: descriptor.data_length,
+            opt_a: descriptor.opt_a,
+            payload_all_ff: payload.iter().all(|byte| *byte == 0xff),
+            payload_all_zero: payload.iter().all(|byte| *byte == 0),
+            non_ff_byte_count: payload.iter().filter(|byte| **byte != 0xff).count(),
+            non_zero_byte_count: payload.iter().filter(|byte| **byte != 0).count(),
+            first_u32_is_ff: u32_at(payload, 0) == Some(u32::MAX),
+        });
+    }
+    Ok(out)
 }
 
 fn descriptor_metadata_profile(
@@ -1187,6 +1233,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let syid_payload = descriptor_range(&quill, syid)?;
     let strs_payload = descriptor_range(&quill, strs)?;
     descriptor_range(&quill, text)?;
+    let descriptor_payload_profiles = descriptor_payload_profiles(&quill, &descriptors)?;
     let syid_descriptor_metadata = descriptor_metadata_profile(syid, grounded_story_count);
     let strs_descriptor_metadata = descriptor_metadata_profile(strs, grounded_story_count);
     let text_descriptor_metadata = descriptor_metadata_profile(text, grounded_story_count);
@@ -1237,6 +1284,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         descriptor_opt_b_one_count,
         descriptor_opt_c_zero_count,
         descriptor_opt_b_c_ordinary_count,
+        descriptor_payload_profiles,
         syid_descriptor_metadata,
         strs_descriptor_metadata,
         text_descriptor_metadata,
@@ -1316,7 +1364,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v7",
+        "schema": "chaptera.quill-story-early-text-boundary.v8",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
