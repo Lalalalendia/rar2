@@ -596,13 +596,15 @@ fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
     // The one scan is structurally valid (Count=Count2=2) and the corpus profile
     // carries an additional bounded eight-byte tail that is playback-inert here.
     if params.len() != 42 {
-        bail!("unsupported WMF Region compatibility payload length {}", params.len());
+        bail!(
+            "unsupported WMF Region compatibility payload length {}",
+            params.len()
+        );
     }
 
     let object_type =
         read_i16(params, 2).ok_or_else(|| anyhow!("WMF Region ObjectType is truncated"))?;
-    let region_size =
-        read_i16(params, 8).ok_or_else(|| anyhow!("WMF RegionSize is truncated"))?;
+    let region_size = read_i16(params, 8).ok_or_else(|| anyhow!("WMF RegionSize is truncated"))?;
     let scan_count =
         read_i16(params, 10).ok_or_else(|| anyhow!("WMF Region ScanCount is truncated"))?;
     let max_scan =
@@ -629,8 +631,7 @@ fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
     if count != 2 {
         bail!("unsupported WMF Region scan coordinate count {count}");
     }
-    let _left =
-        read_u16(params, 28).ok_or_else(|| anyhow!("WMF Region Scan left is truncated"))?;
+    let _left = read_u16(params, 28).ok_or_else(|| anyhow!("WMF Region Scan left is truncated"))?;
     let _right =
         read_u16(params, 30).ok_or_else(|| anyhow!("WMF Region Scan right is truncated"))?;
     let count2 =
