@@ -72,6 +72,50 @@ pub struct PubExplicitLineSourceV1 {
     pub visible: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubEffectivePaintAuthorityV1 {
+    ShapeLocal,
+    DrawingGroupPrimary,
+    DrawingGroupTertiary,
+    NormativeDefault,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubEffectivePaintSourceSpanV1 {
+    pub stream: String,
+    pub offset: u64,
+    pub len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubEffectivePaintValueV1<T> {
+    pub value: T,
+    pub authority: PubEffectivePaintAuthorityV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PubEffectivePaintSourceSpanV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PubEffectiveShapePaintSourceV1 {
+    pub fill: PubEffectiveFillSourceV1,
+    pub line: PubEffectiveLineSourceV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PubEffectiveFillSourceV1 {
+    pub solid: Option<PubEffectivePaintValueV1<bool>>,
+    pub color_rgb: Option<PubEffectivePaintValueV1<[u8; 3]>>,
+    pub visible: Option<PubEffectivePaintValueV1<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PubEffectiveLineSourceV1 {
+    pub color_rgb: Option<PubEffectivePaintValueV1<[u8; 3]>>,
+    pub width_emu: Option<PubEffectivePaintValueV1<i64>>,
+    pub visible: Option<PubEffectivePaintValueV1<bool>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerNodePaintV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,6 +201,72 @@ pub fn project_explicit_source_paint_to_viewer_v1(
         return Ok(None);
     };
     Ok(project_viewer_node_paint_v1(&paint))
+}
+
+/// Projects Reader-resolved effective paint without pretending a mixed
+/// authority result is backed by one canonical SourceRef.
+///
+/// The Reader remains the authority for the effective-property cascade.
+/// This bridge only admits complete bounded fill/stroke components and keeps
+/// the Viewer from duplicating OfficeArt inheritance/default semantics.
+pub fn project_effective_source_paint_to_viewer_v1(
+    source: &PubEffectiveShapePaintSourceV1,
+) -> Option<ViewerNodePaintV1> {
+    fn evidence_is_consistent<T>(value: &PubEffectivePaintValueV1<T>) -> bool {
+        match value.authority {
+            PubEffectivePaintAuthorityV1::NormativeDefault => value.source.is_none(),
+            PubEffectivePaintAuthorityV1::ShapeLocal
+            | PubEffectivePaintAuthorityV1::DrawingGroupPrimary
+            | PubEffectivePaintAuthorityV1::DrawingGroupTertiary => value.source.is_some(),
+        }
+    }
+
+    let solid_fill_rgb = match (
+        source.fill.solid.as_ref(),
+        source.fill.color_rgb.as_ref(),
+        source.fill.visible.as_ref(),
+    ) {
+        (Some(solid), Some(color), Some(visible))
+            if evidence_is_consistent(solid)
+                && evidence_is_consistent(color)
+                && evidence_is_consistent(visible)
+                && solid.value
+                && visible.value =>
+        {
+            Some(color.value)
+        }
+        _ => None,
+    };
+
+    let solid_line = match (
+        source.line.color_rgb.as_ref(),
+        source.line.width_emu.as_ref(),
+        source.line.visible.as_ref(),
+    ) {
+        (Some(color), Some(width), Some(visible))
+            if evidence_is_consistent(color)
+                && evidence_is_consistent(width)
+                && evidence_is_consistent(visible)
+                && visible.value
+                && width.value > 0
+                && width.value <= MAX_BOUNDED_SOURCE_LINE_WIDTH_EMU_V1 =>
+        {
+            Some(ViewerSolidLineV1 {
+                rgb: color.value,
+                width_emu: width.value,
+            })
+        }
+        _ => None,
+    };
+
+    if solid_fill_rgb.is_none() && solid_line.is_none() {
+        None
+    } else {
+        Some(ViewerNodePaintV1 {
+            solid_fill_rgb,
+            solid_line,
+        })
+    }
 }
 
 pub fn project_viewer_node_paint_v1(paint: &ShapePaintV1) -> Option<ViewerNodePaintV1> {
@@ -248,6 +358,167 @@ mod tests {
                 solid_line,
             })
         }
+    }
+
+    fn effective_value<T>(
+        value: T,
+        authority: PubEffectivePaintAuthorityV1,
+    ) -> PubEffectivePaintValueV1<T> {
+        let source = (authority != PubEffectivePaintAuthorityV1::NormativeDefault).then(|| {
+            PubEffectivePaintSourceSpanV1 {
+                stream: "/Escher/EscherStm".to_owned(),
+                offset: 100,
+                len: 6,
+            }
+        });
+        PubEffectivePaintValueV1 {
+            value,
+            authority,
+            source,
+        }
+    }
+
+    #[test]
+    fn mixed_authority_effective_paint_projects_without_single_source_ref() {
+        let source = PubEffectiveShapePaintSourceV1 {
+            fill: PubEffectiveFillSourceV1 {
+                solid: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+                color_rgb: Some(effective_value(
+                    [0x11, 0x22, 0x33],
+                    PubEffectivePaintAuthorityV1::ShapeLocal,
+                )),
+                visible: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::DrawingGroupPrimary,
+                )),
+            },
+            line: PubEffectiveLineSourceV1 {
+                color_rgb: Some(effective_value(
+                    [0x44, 0x55, 0x66],
+                    PubEffectivePaintAuthorityV1::DrawingGroupTertiary,
+                )),
+                width_emu: Some(effective_value(
+                    9_525,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+                visible: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::ShapeLocal,
+                )),
+            },
+        };
+
+        assert_eq!(
+            project_effective_source_paint_to_viewer_v1(&source),
+            Some(ViewerNodePaintV1 {
+                solid_fill_rgb: Some([0x11, 0x22, 0x33]),
+                solid_line: Some(ViewerSolidLineV1 {
+                    rgb: [0x44, 0x55, 0x66],
+                    width_emu: 9_525,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn partial_or_hidden_effective_paint_does_not_invent_viewer_paint() {
+        let partial = PubEffectiveShapePaintSourceV1 {
+            fill: PubEffectiveFillSourceV1 {
+                solid: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+                color_rgb: Some(effective_value(
+                    [1, 2, 3],
+                    PubEffectivePaintAuthorityV1::ShapeLocal,
+                )),
+                visible: None,
+            },
+            line: PubEffectiveLineSourceV1::default(),
+        };
+        assert_eq!(project_effective_source_paint_to_viewer_v1(&partial), None);
+
+        let hidden = PubEffectiveShapePaintSourceV1 {
+            fill: PubEffectiveFillSourceV1 {
+                solid: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+                color_rgb: Some(effective_value(
+                    [1, 2, 3],
+                    PubEffectivePaintAuthorityV1::ShapeLocal,
+                )),
+                visible: Some(effective_value(
+                    false,
+                    PubEffectivePaintAuthorityV1::DrawingGroupPrimary,
+                )),
+            },
+            line: PubEffectiveLineSourceV1 {
+                color_rgb: Some(effective_value(
+                    [4, 5, 6],
+                    PubEffectivePaintAuthorityV1::ShapeLocal,
+                )),
+                width_emu: Some(effective_value(
+                    9_525,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+                visible: Some(effective_value(
+                    false,
+                    PubEffectivePaintAuthorityV1::DrawingGroupTertiary,
+                )),
+            },
+        };
+        assert_eq!(project_effective_source_paint_to_viewer_v1(&hidden), None);
+    }
+
+    #[test]
+    fn inconsistent_effective_evidence_fails_closed() {
+        let source = PubEffectiveShapePaintSourceV1 {
+            fill: PubEffectiveFillSourceV1 {
+                solid: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+                color_rgb: Some(PubEffectivePaintValueV1 {
+                    value: [1, 2, 3],
+                    authority: PubEffectivePaintAuthorityV1::ShapeLocal,
+                    source: None,
+                }),
+                visible: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+            },
+            line: PubEffectiveLineSourceV1::default(),
+        };
+        assert_eq!(project_effective_source_paint_to_viewer_v1(&source), None);
+
+        let source = PubEffectiveShapePaintSourceV1 {
+            fill: PubEffectiveFillSourceV1 {
+                solid: Some(PubEffectivePaintValueV1 {
+                    value: true,
+                    authority: PubEffectivePaintAuthorityV1::NormativeDefault,
+                    source: Some(PubEffectivePaintSourceSpanV1 {
+                        stream: "/Escher/EscherStm".to_owned(),
+                        offset: 100,
+                        len: 6,
+                    }),
+                }),
+                color_rgb: Some(effective_value(
+                    [1, 2, 3],
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+                visible: Some(effective_value(
+                    true,
+                    PubEffectivePaintAuthorityV1::NormativeDefault,
+                )),
+            },
+            line: PubEffectiveLineSourceV1::default(),
+        };
+        assert_eq!(project_effective_source_paint_to_viewer_v1(&source), None);
     }
 
     #[test]
