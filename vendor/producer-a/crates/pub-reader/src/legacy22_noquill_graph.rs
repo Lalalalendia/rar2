@@ -144,6 +144,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
         .get(text_start..text_end)
         .context("legacy no-Quill text range exceeds Contents")?;
     let mut story_by_owner = BTreeMap::<u16, StoryId>::new();
+    let mut diagnostics = Vec::new();
 
     let text_info = parse_legacy_0x22_text_info_map(contents_stream.clone(), contents)
         .context("parse legacy no-Quill text owner map")?;
@@ -165,46 +166,58 @@ pub fn build_legacy_0x22_noquill_from_contents(
             if end == previous_end {
                 continue;
             }
-            let story_id = derive_legacy_story_id(&source_hash, owner.owner_id)?;
-            let text = decode_bounded_legacy_ascii(&text_bytes[previous_end..end])
-                .with_context(|| format!("decode no-Quill owner {} text", owner.owner_id))?;
             let absolute_start = text_start + previous_end;
-            graph.stories.insert(
-                story_id,
-                Story {
-                    id: story_id,
-                    text,
-                    paragraphs: Vec::new(),
-                    runs: Vec::new(),
-                    fields: Vec::new(),
-                    hyperlinks: Vec::new(),
-                    source_refs: vec![
-                        source_ref(
-                            &graph.source,
-                            &RawSpan {
-                                stream: contents_stream.clone(),
-                                offset: absolute_start as u64,
-                                len: (end - previous_end) as u64,
-                            },
-                            Some(format!("contents/0x22/noquill-owner/{}", owner.owner_id)),
-                            Some("legacy_text".into()),
-                            SourceRole::Semantic,
-                            AuthorityClass::Authoritative,
-                            ReadConfidence::Exact,
-                        ),
-                        source_ref(
-                            &graph.source,
-                            &owner.owner_id_source,
-                            Some(format!("contents/0x22/noquill-owner/{}", owner.owner_id)),
-                            Some("owner_id".into()),
-                            SourceRole::Relation,
-                            AuthorityClass::Authoritative,
-                            ReadConfidence::Exact,
-                        ),
-                    ],
-                },
-            );
-            story_by_owner.insert(owner.owner_id, story_id);
+            let owner_bytes = &text_bytes[previous_end..end];
+            match decode_bounded_legacy_ascii(owner_bytes) {
+                Ok(text) => {
+                    let story_id = derive_legacy_story_id(&source_hash, owner.owner_id)?;
+                    graph.stories.insert(
+                        story_id,
+                        Story {
+                            id: story_id,
+                            text,
+                            paragraphs: Vec::new(),
+                            runs: Vec::new(),
+                            fields: Vec::new(),
+                            hyperlinks: Vec::new(),
+                            source_refs: vec![
+                                source_ref(
+                                    &graph.source,
+                                    &RawSpan {
+                                        stream: contents_stream.clone(),
+                                        offset: absolute_start as u64,
+                                        len: (end - previous_end) as u64,
+                                    },
+                                    Some(format!("contents/0x22/noquill-owner/{}", owner.owner_id)),
+                                    Some("legacy_text".into()),
+                                    SourceRole::Semantic,
+                                    AuthorityClass::Authoritative,
+                                    ReadConfidence::Exact,
+                                ),
+                                source_ref(
+                                    &graph.source,
+                                    &owner.owner_id_source,
+                                    Some(format!("contents/0x22/noquill-owner/{}", owner.owner_id)),
+                                    Some("owner_id".into()),
+                                    SourceRole::Relation,
+                                    AuthorityClass::Authoritative,
+                                    ReadConfidence::Exact,
+                                ),
+                            ],
+                        },
+                    );
+                    story_by_owner.insert(owner.owner_id, story_id);
+                }
+                Err(_) => diagnostics.push(PubBridgeDiagnostic::LegacyTextEncodingUnresolved {
+                    owner_id: Some(u32::from(owner.owner_id)),
+                    source: RawSpan {
+                        stream: contents_stream.clone(),
+                        offset: absolute_start as u64,
+                        len: owner_bytes.len() as u64,
+                    },
+                    high_byte_count: owner_bytes.iter().filter(|byte| **byte >= 0x80).count(),
+                }),
+            }
             previous_end = end;
         }
 
@@ -216,6 +229,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
                 text_bytes,
                 text_start,
                 previous_end,
+                &mut diagnostics,
             )?;
         }
     } else if !text_bytes.is_empty() {
@@ -226,10 +240,10 @@ pub fn build_legacy_0x22_noquill_from_contents(
             text_bytes,
             text_start,
             0,
+            &mut diagnostics,
         )?;
     }
 
-    let mut diagnostics = Vec::new();
     for (page_object_id, page_id) in &page_object_to_id {
         let page_entry = directory
             .entry_by_object_id(*page_object_id)
@@ -367,17 +381,26 @@ fn materialize_unowned_text_story(
     text_bytes: &[u8],
     absolute_text_start: usize,
     relative_start: usize,
+    diagnostics: &mut Vec<PubBridgeDiagnostic>,
 ) -> Result<()> {
     let remaining = &text_bytes[relative_start..];
     if remaining.is_empty() {
         return Ok(());
     }
-    let story_id = derive_unowned_text_story_id(
-        source_hash,
-        absolute_text_start + relative_start,
-        remaining.len(),
-    )?;
-    let text = decode_bounded_legacy_ascii(remaining)?;
+    let absolute_start = absolute_text_start + relative_start;
+    let Ok(text) = decode_bounded_legacy_ascii(remaining) else {
+        diagnostics.push(PubBridgeDiagnostic::LegacyTextEncodingUnresolved {
+            owner_id: None,
+            source: RawSpan {
+                stream: stream.clone(),
+                offset: absolute_start as u64,
+                len: remaining.len() as u64,
+            },
+            high_byte_count: remaining.iter().filter(|byte| **byte >= 0x80).count(),
+        });
+        return Ok(());
+    };
+    let story_id = derive_unowned_text_story_id(source_hash, absolute_start, remaining.len())?;
     graph.stories.insert(
         story_id,
         Story {
@@ -391,12 +414,12 @@ fn materialize_unowned_text_story(
                 &graph.source,
                 &RawSpan {
                     stream: stream.clone(),
-                    offset: (absolute_text_start + relative_start) as u64,
+                    offset: absolute_start as u64,
                     len: remaining.len() as u64,
                 },
                 Some(format!(
                     "contents/0x22/noquill-text-range/{:#x}+{}",
-                    absolute_text_start + relative_start,
+                    absolute_start,
                     remaining.len()
                 )),
                 Some("legacy_text".into()),
@@ -604,6 +627,63 @@ mod tests {
             "OPEN HOUSE"
         );
         assert!(decode_bounded_legacy_ascii(&[0x80]).is_err());
+    }
+
+    #[test]
+    fn unresolved_non_ascii_text_can_be_recorded_without_guessing_unicode() {
+        let mut graph = PubSourceGraph::empty(
+            SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x22-noquill".into()),
+                adapter_version: "test".into(),
+                source_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .parse()
+                    .unwrap(),
+            },
+            Document {
+                id: DocumentId::from_canonical(
+                    derive_pub_id(
+                        &"0000000000000000000000000000000000000000000000000000000000000000"
+                            .parse()
+                            .unwrap(),
+                        "test/document",
+                        ROLE_DOCUMENT,
+                    )
+                    .unwrap(),
+                ),
+                format_origin: "pub".into(),
+                source_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .parse()
+                    .unwrap(),
+                pages: Vec::new(),
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+        );
+        let mut diagnostics = Vec::new();
+        materialize_unowned_text_story(
+            &mut graph,
+            &"0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap(),
+            &StreamPath(CONTENTS_STREAM_PATH.into()),
+            b"A\x92B",
+            0x120,
+            0,
+            &mut diagnostics,
+        )
+        .unwrap();
+
+        assert!(graph.stories.is_empty());
+        assert_eq!(diagnostics.len(), 1);
+        assert!(matches!(
+            &diagnostics[0],
+            PubBridgeDiagnostic::LegacyTextEncodingUnresolved {
+                owner_id: None,
+                source,
+                high_byte_count: 1,
+            } if source.offset == 0x120 && source.len == 3
+        ));
     }
 
     #[test]
