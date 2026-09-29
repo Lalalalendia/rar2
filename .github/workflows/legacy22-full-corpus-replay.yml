@@ -60,6 +60,14 @@ jobs:
             --release \
             --bin corpus-reader-receipt
 
+      - name: Validate legacy22 geometry profiler
+        run: |
+          set -euo pipefail
+          rustfmt             --check             --edition 2021             vendor/producer-a/crates/pub-reader/src/bin/legacy22_geometry_profile.rs
+          cargo test             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin legacy22_geometry_profile
+          cargo clippy             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin legacy22_geometry_profile             --             -D warnings
+          cargo build             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --release             --bin legacy22_geometry_profile
+
       - name: Replay full pinned corpus
         run: |
           set -euo pipefail
@@ -71,6 +79,120 @@ jobs:
             --rar-ref "rar2:${GITHUB_SHA}" \
             --out out/legacy625 \
             --workers 4
+
+      - name: Classify raw 0x0004 geometry residuals
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from collections import Counter
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
+          paths = sorted(corpus.glob("*.pub"))
+          assert len(paths) == 625, len(paths)
+          exe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "legacy22_geometry_profile"
+
+          def run(path, out_dir):
+              target = out_dir / f"{path.stem}.json"
+              cp = subprocess.run(
+                  [str(exe), str(path), str(target)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=45,
+                  check=False,
+              )
+              if cp.returncode != 0:
+                  raise RuntimeError(
+                      f"{path.name}: profiler rc={cp.returncode}: {cp.stderr[-2000:]}"
+                  )
+              return json.loads(target.read_text())
+
+          rows = []
+          with tempfile.TemporaryDirectory(prefix="legacy22-geometry-") as td:
+              out_dir = Path(td)
+              with ThreadPoolExecutor(max_workers=8) as pool:
+                  futures = {pool.submit(run, path, out_dir): path for path in paths}
+                  for future in as_completed(futures):
+                      rows.append(future.result())
+
+          rows.sort(key=lambda row: row["source_sha256"])
+          eligible = [row for row in rows if row.get("eligible_reader_open") is True]
+          instances = [
+              {"source_sha256": row["source_sha256"], **item}
+              for row in eligible
+              for item in (row.get("instances") or [])
+          ]
+
+          active = [
+              item for item in instances
+              if item.get("matching_parent_page_membership") is True
+          ]
+          nonactive = [
+              item for item in instances
+              if item.get("matching_parent_page_membership") is not True
+          ]
+          invalid_current = [
+              item for item in instances
+              if (item.get("geometry_current") or {}).get("positive_rect") is not True
+          ]
+          invalid_active = [
+              item for item in active
+              if (item.get("geometry_current") or {}).get("positive_rect") is not True
+          ]
+
+          def positive_at(items, field):
+              return sum(
+                  (item.get(field) or {}).get("positive_rect") is True
+                  for item in items
+              )
+
+          summary = {
+              "schema": "chaptera.legacy22-geometry-census.v1",
+              "corpus_file_count": len(paths),
+              "eligible_noquill_reader_file_count": len(eligible),
+              "raw0004_instance_count": len(instances),
+              "matching_parent_active_page_count": len(active),
+              "non_matching_or_nonactive_count": len(nonactive),
+              "current_invalid_geometry_count": len(invalid_current),
+              "active_current_invalid_geometry_count": len(invalid_active),
+              "active_invalid_positive_at_0x04": positive_at(
+                  invalid_active, "geometry_start_0x04"
+              ),
+              "active_invalid_positive_at_0x08": positive_at(
+                  invalid_active, "geometry_start_0x08"
+              ),
+              "invalid_chunk_length_counts": dict(
+                  Counter(str(item["chunk_len"]) for item in invalid_current).most_common()
+              ),
+              "invalid_parent_raw_type_counts": dict(
+                  Counter(
+                      str(item.get("parent_raw_type") or "none")
+                      for item in invalid_current
+                  ).most_common()
+              ),
+              "invalid_normalized_geometry_cluster_count": len({
+                  item.get("normalized_geometry_sha256")
+                  for item in invalid_current
+                  if item.get("normalized_geometry_sha256")
+              }),
+              "evidence_boundary": (
+                  "research-only partition of raw 0x0004 LINE records; +0x04/+0x08 "
+                  "are observational alternate carrier probes only and do not change "
+                  "Reader decoding without repeated active-page evidence"
+              ),
+          }
+
+          Path("out/legacy625/raw0004-geometry-census.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
 
       - name: Guard legacy22 product depth
         run: |
