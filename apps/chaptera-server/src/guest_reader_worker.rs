@@ -20,8 +20,7 @@ use tokio::{
 };
 
 use crate::{
-    blob_store::BlobStoreService,
-    reader_scene_v1::from_viewer_geometry,
+    blob_store::BlobStoreService, reader_scene_v1::from_viewer_geometry,
     source_ingress_security::SourceSecurityScannerConfig,
 };
 
@@ -274,12 +273,7 @@ impl IsolatedGuestSceneProducer {
                 "isolated guest scene receipt is malformed",
             )
         })?;
-        validate_receipt(
-            &receipt,
-            session_id,
-            &expected_sha256,
-            expected_byte_len,
-        )?;
+        validate_receipt(&receipt, session_id, &expected_sha256, expected_byte_len)?;
         Ok(receipt)
     }
 }
@@ -606,12 +600,6 @@ mod tests {
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
             filesystem_confinement: true,
         };
-        assert!(validate_receipt(
-            &receipt,
-            "guest:0123456789abcdef",
-            &"a".repeat(64),
-            1,
-        )
-        .is_err());
+        assert!(validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1,).is_err());
     }
 }
