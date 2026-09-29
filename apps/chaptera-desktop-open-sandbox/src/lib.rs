@@ -357,7 +357,7 @@ mod platform {
         Ok(job)
     }
 
-    fn minimal_environment(cwd: &Path) -> Vec<u16> {
+    fn minimal_environment(_cwd: &Path) -> Vec<u16> {
         let mut entries = ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "TEMP", "TMP"]
             .into_iter()
             .filter_map(|key| std::env::var_os(key).map(|value| (key.to_owned(), value)))
