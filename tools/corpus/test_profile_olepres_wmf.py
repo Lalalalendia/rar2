@@ -87,6 +87,17 @@ def region_params() -> bytes:
     return bytes(raw)
 
 
+def region_params_with_zero_scan_tail() -> bytes:
+    raw = bytearray(region_params())
+    raw[8:10] = (42).to_bytes(2, "little", signed=True)
+    raw += (0).to_bytes(2, "little")  # Count
+    raw += (7).to_bytes(2, "little")  # Top
+    raw += (7).to_bytes(2, "little")  # Bottom
+    raw += (0).to_bytes(2, "little")  # Count2
+    assert len(raw) == 42
+    return bytes(raw)
+
+
 def presentation(payload: bytes, trailer_len: int = 18) -> bytes:
     raw = bytearray()
     raw += (0xFFFFFFFF).to_bytes(4, "little")
@@ -173,6 +184,25 @@ def main() -> int:
     assert region_selection["creation_profile"]["scan_structure"] == "valid_exact"
     assert region_selection["creation_profile"]["total_scan_coordinates"] == 2
     assert region_selection["supported_draw_counts"] == {"0x041b": 1}
+
+    region_tail = wmf_with_records(
+        [
+            record(META_CREATEREGION, region_params_with_zero_scan_tail()),
+            record(META_SELECTOBJECT, (0).to_bytes(2, "little")),
+            record(META_RECTANGLE),
+        ]
+    )
+    region_tail_selection = classify_special_object_selections(region_tail)[0]
+    tail_profile = region_tail_selection["creation_profile"]
+    assert tail_profile["payload_bytes"] == 42
+    assert tail_profile["scan_structure"] == "valid_with_tail"
+    assert tail_profile["tail_bytes"] == 8
+    assert tail_profile["tail_scan_candidate"] == {
+        "count": 0,
+        "count2_matches": True,
+        "zero_count": True,
+        "vertical_relation": "equal",
+    }
 
     clip_region = wmf_with_records(
         [
