@@ -101,6 +101,23 @@ jobs:
             throw "containment receipt is incomplete"
           }
 
+      - name: Dump recent Windows loader diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          $since = (Get-Date).AddMinutes(-10)
+          Write-Host "Recent Application/WER events for containment startup failure:"
+          Get-WinEvent -FilterHashtable @{ LogName = "Application"; StartTime = $since } -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Message -match "chaptera-desktop-sandbox-negative-probe" -or
+              $_.Message -match "0xc0000142" -or
+              $_.Message -match "C0000142"
+            } |
+            Select-Object TimeCreated, Id, ProviderName, LevelDisplayName, Message |
+            Format-List |
+            Out-String -Width 4096 |
+            Write-Host
+
       - name: Acquire exact Apache POI SampleNewsletter
         shell: pwsh
         run: |
