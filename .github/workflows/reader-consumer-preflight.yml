@@ -33,11 +33,14 @@ jobs:
           toolchain: "1.94.1"
           components: rustfmt, clippy
 
-      - name: Format shared Reader seam
-        run: |
-          cargo fmt -p chaptera-desktop -- --check
-          cargo fmt --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml -- --check
-          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer -- --check
+      - name: Format desktop root seam
+        run: cargo fmt -p chaptera-desktop -- --check
+
+      - name: Format render-plan seam
+        run: cargo fmt --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml -- --check
+
+      - name: Format vendor Reader seam
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer -- --check
 
       - name: Check shared Reader seam
         run: |
