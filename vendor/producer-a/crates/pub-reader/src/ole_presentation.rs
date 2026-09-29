@@ -365,9 +365,7 @@ mod tests {
         assert!(parse_cf_metafilepict_ole_presentation(&bytes).is_err());
 
         let mut truncated_data = fixture(CF_METAFILEPICT, 4, &payload);
-        truncated_data.truncate(
-            truncated_data.len() - METAFILE_RESERVED2_LEN - 1,
-        );
+        truncated_data.truncate(truncated_data.len() - METAFILE_RESERVED2_LEN - 1);
         assert!(parse_cf_metafilepict_ole_presentation(&truncated_data).is_err());
 
         let mut no_trailer = fixture(CF_METAFILEPICT, 4, &payload);
