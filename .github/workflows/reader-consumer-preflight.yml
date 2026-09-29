@@ -27,6 +27,22 @@ jobs:
           toolchain: "1.94.1"
           components: rustfmt, clippy
 
+      - name: Restore Reader Tier A Cargo cache
+        id: tier-a-cargo-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/reader-tier-a
+          key: ${{ runner.os }}-rust-1.94.1-reader-tier-a-${{ hashFiles('Cargo.lock', 'vendor/producer-a/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-1.94.1-reader-tier-a-
+
+      - name: Report Reader Tier A Cargo cache
+        run: echo "cache-hit=${{ steps.tier-a-cargo-cache.outputs.cache-hit }}"
+
       - name: Test Reader preflight planner
         run: python tools/ci/test_reader_consumer_preflight.py
 
