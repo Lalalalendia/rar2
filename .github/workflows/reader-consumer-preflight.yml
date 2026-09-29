@@ -12,6 +12,10 @@ jobs:
     name: Reader consumer Tier A
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Share Cargo artifacts across the donor workspace and root product checks.
+      # This keeps equivalent package compilations in one job-local cache.
+      CARGO_TARGET_DIR: target/reader-tier-a
     steps:
       - uses: actions/checkout@v4
         with:
