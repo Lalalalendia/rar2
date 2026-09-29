@@ -1075,6 +1075,8 @@ fn legacy_shape_bounds(page: &Page, chunk: &[u8], chunk_type: u16) -> Option<Rec
             delta_x.checked_abs()?,
             delta_y.checked_abs()?,
         )
+    } else if chunk_type == LEGACY_GROUP_TYPE {
+        (xs, ys, delta_x, delta_y)
     } else {
         if delta_x <= 0 || delta_y <= 0 {
             return None;
@@ -1293,6 +1295,52 @@ mod tests {
         chunk[LEGACY_SHAPE_XE_OFFSET..LEGACY_SHAPE_XE_OFFSET + 4]
             .copy_from_slice(&(1_500_i32).to_le_bytes());
         assert!(legacy_shape_bounds(&page, &chunk, 0x0005).is_none());
+    }
+
+    #[test]
+    fn legacy_group_bounds_preserve_point_and_signed_extents() {
+        let page_id = PageId::from_canonical(pub_model::CanonicalId::from_bytes([9; 16]));
+        let page = Page {
+            id: page_id,
+            size: Size2D::new(LengthEmu::new(10_000), LengthEmu::new(8_000)),
+            bleed: None,
+            margins: None,
+            children: Vec::new(),
+            extensions: Vec::new(),
+        };
+
+        let mut point = vec![0_u8; 0x20];
+        for offset in [
+            LEGACY_SHAPE_XS_OFFSET,
+            LEGACY_SHAPE_YS_OFFSET,
+            LEGACY_SHAPE_XE_OFFSET,
+            LEGACY_SHAPE_YE_OFFSET,
+        ] {
+            point[offset..offset + 4].copy_from_slice(&(500_i32).to_le_bytes());
+        }
+        let bounds =
+            legacy_shape_bounds(&page, &point, LEGACY_GROUP_TYPE).expect("point group bounds");
+        assert_eq!(bounds.x.get(), 5_500);
+        assert_eq!(bounds.y.get(), 4_500);
+        assert_eq!(bounds.width.get(), 0);
+        assert_eq!(bounds.height.get(), 0);
+
+        let mut reversed = point;
+        reversed[LEGACY_SHAPE_XS_OFFSET..LEGACY_SHAPE_XS_OFFSET + 4]
+            .copy_from_slice(&(2_000_i32).to_le_bytes());
+        reversed[LEGACY_SHAPE_YS_OFFSET..LEGACY_SHAPE_YS_OFFSET + 4]
+            .copy_from_slice(&(1_500_i32).to_le_bytes());
+        reversed[LEGACY_SHAPE_XE_OFFSET..LEGACY_SHAPE_XE_OFFSET + 4]
+            .copy_from_slice(&(-1_000_i32).to_le_bytes());
+        reversed[LEGACY_SHAPE_YE_OFFSET..LEGACY_SHAPE_YE_OFFSET + 4]
+            .copy_from_slice(&(500_i32).to_le_bytes());
+
+        let bounds =
+            legacy_shape_bounds(&page, &reversed, LEGACY_GROUP_TYPE).expect("signed group bounds");
+        assert_eq!(bounds.x.get(), 7_000);
+        assert_eq!(bounds.y.get(), 5_500);
+        assert_eq!(bounds.width.get(), -3_000);
+        assert_eq!(bounds.height.get(), -1_000);
     }
 
     #[test]
