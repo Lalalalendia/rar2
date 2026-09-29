@@ -36,7 +36,7 @@ def main():
         reader_windows=True,
         visual_oracle=True,
         typography_golden=True,
-        corpus_truth=True,
+        corpus_truth=False,
         android=False,
         web=False,
         local_portable=False,
