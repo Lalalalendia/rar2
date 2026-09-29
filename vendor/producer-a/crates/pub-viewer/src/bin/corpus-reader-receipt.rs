@@ -1,12 +1,49 @@
 use anyhow::{Context, Result};
+use pub_reader::{build_legacy_0x22_noquill_source_graph, PubBridgeDiagnostic};
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{env, fs, path::PathBuf};
+use std::{collections::BTreeMap, env, fs, io::Cursor, path::PathBuf};
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+
+fn legacy_object_residual_census(
+    bytes: &[u8],
+    source_hash: pub_model::Sha256Digest,
+    format_version: Option<&str>,
+) -> Result<Vec<Value>> {
+    if format_version != Some("0x22-noquill") {
+        return Ok(Vec::new());
+    }
+
+    let source = build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash)
+        .context("rebuild legacy no-Quill source graph for source-free residual census")?;
+    let mut counts = BTreeMap::<(Option<u16>, String), usize>::new();
+
+    for diagnostic in source.diagnostics {
+        if let PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+            raw_type, reason, ..
+        } = diagnostic
+        {
+            *counts.entry((raw_type, reason)).or_default() += 1;
+        }
+    }
+
+    Ok(counts
+        .into_iter()
+        .map(|((raw_type, reason), count)| {
+            json!({
+                "raw_type": raw_type,
+                "raw_type_hex": raw_type.map(|value| format!("0x{value:04x}")),
+                "reason": reason,
+                "count": count,
+            })
+        })
+        .collect())
 }
 
 fn main() -> Result<()> {
@@ -47,6 +84,11 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|image| image.node_ids.len())
                 .sum::<usize>();
+            let legacy_object_residuals = legacy_object_residual_census(
+                &bytes,
+                visual.document.source.source_hash,
+                visual.document.source.format_version.as_deref(),
+            )?;
 
             json!({
                 "schema": "chaptera.reader-corpus-structural-receipt.v1",
@@ -70,6 +112,7 @@ fn main() -> Result<()> {
                 "solid_fill_count": visual.paints.iter().filter(|paint| paint.solid_fill_rgb.is_some()).count(),
                 "solid_line_count": visual.paints.iter().filter(|paint| paint.solid_line.is_some()).count(),
                 "diagnostic_codes": diagnostic_codes,
+                "legacy_object_residuals": legacy_object_residuals,
                 "visual_fidelity_proven": false,
             })
         }
