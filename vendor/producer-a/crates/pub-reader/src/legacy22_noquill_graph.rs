@@ -24,7 +24,8 @@ const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0000;
 const LEGACY_OLE_TYPE: u16 = 0x0003;
 const LEGACY_OLE_DATA_TYPE: u16 = 0x0022;
 const LEGACY_OLE_DATA_LEN: usize = 18;
-const LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES: [u16; 4] = [0x0004, 0x0005, 0x0006, 0x0007];
+const LEGACY_LINE_TYPE: u16 = 0x0004;
+const LEGACY_SIMPLE_GEOMETRY_SHAPE_TYPES: [u16; 4] = [LEGACY_LINE_TYPE, 0x0005, 0x0006, 0x0007];
 const LEGACY_GROUP_TYPE: u16 = 0x000f;
 const LEGACY_GROUP_MAX_DEPTH: usize = 100;
 const LEGACY_LIST_HEADER_SIZE: usize = 10;
@@ -369,7 +370,12 @@ fn materialize_legacy_noquill_child(
     }
 
     let chunk = chunk_bytes(contents, child_entry)?;
-    let Some(bounds) = legacy_shape_bounds(page, chunk) else {
+    let bounds = if child_entry.chunk_type == LEGACY_LINE_TYPE {
+        legacy_line_bounds(page, chunk)
+    } else {
+        legacy_shape_bounds(page, chunk)
+    };
+    let Some(bounds) = bounds else {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
             object_id: u32::from(child_object_id),
             raw_type: Some(child_entry.chunk_type),
@@ -712,6 +718,31 @@ fn legacy_shape_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
     }
     let x = page.size.width.get().checked_div(2)?.checked_add(xs)?;
     let y = page.size.height.get().checked_div(2)?.checked_add(ys)?;
+    Some(RectEmu::new(
+        LengthEmu::new(x),
+        LengthEmu::new(y),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
+fn legacy_line_bounds(page: &Page, chunk: &[u8]) -> Option<RectEmu> {
+    let xs = i64::from(read_i32(chunk, LEGACY_SHAPE_XS_OFFSET)?);
+    let ys = i64::from(read_i32(chunk, LEGACY_SHAPE_YS_OFFSET)?);
+    let xe = i64::from(read_i32(chunk, LEGACY_SHAPE_XE_OFFSET)?);
+    let ye = i64::from(read_i32(chunk, LEGACY_SHAPE_YE_OFFSET)?);
+    if xs == xe && ys == ye {
+        return None;
+    }
+
+    let left = xs.min(xe);
+    let top = ys.min(ye);
+    let right = xs.max(xe);
+    let bottom = ys.max(ye);
+    let width = right.checked_sub(left)?;
+    let height = bottom.checked_sub(top)?;
+    let x = page.size.width.get().checked_div(2)?.checked_add(left)?;
+    let y = page.size.height.get().checked_div(2)?.checked_add(top)?;
     Some(RectEmu::new(
         LengthEmu::new(x),
         LengthEmu::new(y),
