@@ -22,7 +22,7 @@ def minimal_wmf() -> bytes:
     return bytes(raw)
 
 
-def presentation(payload: bytes) -> bytes:
+def presentation(payload: bytes, trailer_len: int = 18) -> bytes:
     raw = bytearray()
     raw += (0xFFFFFFFF).to_bytes(4, "little")
     raw += CF_METAFILEPICT.to_bytes(4, "little")
@@ -35,7 +35,7 @@ def presentation(payload: bytes) -> bytes:
     raw += (480).to_bytes(4, "little")
     raw += len(payload).to_bytes(4, "little")
     raw += payload
-    raw += bytes(18)
+    raw += bytes(trailer_len)
     return bytes(raw)
 
 
@@ -49,7 +49,20 @@ def main() -> int:
     assert parsed_pres["clipboard"] == "standard:3"
     assert parsed_pres["aspect"] == 1
     assert parsed_pres["has_reserved2_18"] is True
+    assert parsed_pres["trailing_len"] == 18
     assert parse_wmf(parsed_pres["data"])["version"] == 0x0300
+
+    eof_variant = parse_ole_presentation(presentation(wmf, trailer_len=0))
+    assert eof_variant["trailing_len"] == 0
+    assert eof_variant["has_reserved2_18"] is False
+    assert parse_wmf(eof_variant["data"])["version"] == 0x0300
+
+    try:
+        parse_ole_presentation(presentation(wmf, trailer_len=17))
+    except ParseError as exc:
+        assert str(exc) == "presentation_trailer_truncated"
+    else:
+        raise AssertionError("non-empty short trailer must fail closed")
 
     bad = bytearray(wmf)
     bad[6:10] = (11).to_bytes(4, "little")
