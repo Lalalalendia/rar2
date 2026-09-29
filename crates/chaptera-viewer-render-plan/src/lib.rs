@@ -658,7 +658,6 @@ fn admitted_single_story_frame(
     node_id: NodeId,
     projected_target_frame_node_id: Option<NodeId>,
 ) -> Result<&pub_viewer::ViewerStoryFrame, RenderTextLayoutFallbackReasonV1> {
-    let expected_frame_id = projected_target_frame_node_id.unwrap_or(node_id);
     let mut frames = visual
         .story_frames
         .iter()
@@ -666,9 +665,42 @@ fn admitted_single_story_frame(
     let Some(frame) = frames.next() else {
         return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
     };
-    if frames.next().is_some() || frame.frame_id != expected_frame_id {
+    if frames.next().is_some() {
         return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
     }
+
+    let Some(target_frame_node_id) = projected_target_frame_node_id else {
+        return (frame.frame_id == node_id)
+            .then_some(frame)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    };
+
+    // Projected Cmo keeps the carrier Story/Frame identity canonical. The
+    // target frame is placement context owned by the host Story, not a frame
+    // to which the carrier Story may be rebound.
+    let mut target_frame_matches = visual
+        .story_frames
+        .iter()
+        .filter(|candidate| candidate.frame_id == target_frame_node_id);
+    let Some(target_frame) = target_frame_matches.next() else {
+        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    };
+    if target_frame_matches.next().is_some() {
+        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    }
+
+    let mut target_story_frames = visual
+        .story_frames
+        .iter()
+        .filter(|candidate| candidate.story_id == target_frame.story_id);
+    let Some(single_target_frame) = target_story_frames.next() else {
+        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    };
+    if target_story_frames.next().is_some() || single_target_frame.frame_id != target_frame_node_id
+    {
+        return Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired);
+    }
+
     Ok(frame)
 }
 
@@ -1095,48 +1127,63 @@ mod tests {
 
     #[cfg(feature = "projected-scene-instances")]
     #[test]
-    fn projected_cmo_layout_admits_single_target_frame_context() {
+    fn projected_cmo_layout_admits_separate_carrier_and_target_frame_context() {
         let mut visual = fixture();
         let carrier_node_id = visual.scene.nodes[0].origin;
+        let carrier_story_id = visual.document.stories[0].id;
+        let target_story_id = StoryId::from_canonical(canonical(8));
         let target_frame_node_id = NodeId::from_canonical(canonical(9));
-        let story_id = visual.document.stories[0].id;
-        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
-            story_id,
-            frame_id: target_frame_node_id,
-            ordinal: 0,
-        });
+        visual.story_frames.extend([
+            pub_viewer::ViewerStoryFrame {
+                story_id: carrier_story_id,
+                frame_id: carrier_node_id,
+                ordinal: 0,
+            },
+            pub_viewer::ViewerStoryFrame {
+                story_id: target_story_id,
+                frame_id: target_frame_node_id,
+                ordinal: 0,
+            },
+        ]);
 
         let admitted = admitted_single_story_frame(
             &visual,
-            story_id,
+            carrier_story_id,
             carrier_node_id,
             Some(target_frame_node_id),
         )
-        .expect("projected Cmo target-frame context should admit one canonical StoryFrame");
-        assert_eq!(admitted.frame_id, target_frame_node_id);
+        .expect("projected Cmo should preserve carrier frame identity with a separate host target");
+        assert_eq!(admitted.frame_id, carrier_node_id);
+        assert_ne!(admitted.frame_id, target_frame_node_id);
 
         assert_eq!(
-            admitted_single_story_frame(&visual, story_id, carrier_node_id, None),
+            admitted_single_story_frame(&visual, carrier_story_id, target_frame_node_id, None,),
             Err(RenderTextLayoutFallbackReasonV1::SingleFrameRequired),
-            "ordinary node identity must not be relaxed"
+            "ordinary node identity must still match its own StoryFrame"
         );
     }
 
     #[cfg(feature = "projected-scene-instances")]
     #[test]
-    fn projected_cmo_layout_keeps_multi_frame_topology_fail_closed() {
+    fn projected_cmo_layout_keeps_multi_frame_target_topology_fail_closed() {
         let mut visual = fixture();
         let carrier_node_id = visual.scene.nodes[0].origin;
+        let carrier_story_id = visual.document.stories[0].id;
+        let target_story_id = StoryId::from_canonical(canonical(8));
         let target_frame_node_id = NodeId::from_canonical(canonical(9));
-        let story_id = visual.document.stories[0].id;
         visual.story_frames.extend([
             pub_viewer::ViewerStoryFrame {
-                story_id,
+                story_id: carrier_story_id,
+                frame_id: carrier_node_id,
+                ordinal: 0,
+            },
+            pub_viewer::ViewerStoryFrame {
+                story_id: target_story_id,
                 frame_id: target_frame_node_id,
                 ordinal: 0,
             },
             pub_viewer::ViewerStoryFrame {
-                story_id,
+                story_id: target_story_id,
                 frame_id: NodeId::from_canonical(canonical(10)),
                 ordinal: 1,
             },
@@ -1145,7 +1192,7 @@ mod tests {
         assert_eq!(
             admitted_single_story_frame(
                 &visual,
-                story_id,
+                carrier_story_id,
                 carrier_node_id,
                 Some(target_frame_node_id),
             ),
