@@ -16,6 +16,7 @@ EVIDENCE_ONLY_PATHS = {
 
 SCOPES = (
     "tier_a",
+    "reader_windows_smoke",
     "reader_windows",
     "editor_windows",
     "visual_oracle",
@@ -90,7 +91,11 @@ READER_DESKTOP = (
     "apps/chaptera-desktop/src/render_backend.rs",
 )
 
-READER_WINDOWS = READER_SHARED + READER_DESKTOP + (
+READER_WINDOWS_SMOKE = READER_SHARED + (
+    ".github/workflows/chaptera-reader-windows-smoke.yml",
+)
+
+READER_WINDOWS = READER_DESKTOP + (
     "crates/chaptera-update-engine/**",
     "crates/chaptera-update-orchestrator/**",
     "crates/chaptera-update-handoff/**",
@@ -229,6 +234,7 @@ def classify(paths: list[str]) -> dict[str, bool]:
     semantic_paths = [path for path in paths if path not in EVIDENCE_ONLY_PATHS]
     mapping = {
         "tier_a": TIER_A,
+        "reader_windows_smoke": READER_WINDOWS_SMOKE,
         "reader_windows": READER_WINDOWS,
         "editor_windows": EDITOR_WINDOWS,
         "visual_oracle": VISUAL_ORACLE,
@@ -245,6 +251,11 @@ def classify(paths: list[str]) -> dict[str, bool]:
         scope: any(matches(path, patterns) for path in semantic_paths)
         for scope, patterns in mapping.items()
     }
+    # Full Reader Windows product/package acceptance supersedes the bounded
+    # shared-core smoke when both surfaces are touched.
+    if result["reader_windows"]:
+        result["reader_windows_smoke"] = False
+
     # Full Editor Windows acceptance is product-surface validation, not a tax on
     # shared Reader/render plumbing. Shared desktop seams stay covered by Tier A.
     if any(
