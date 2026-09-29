@@ -140,6 +140,12 @@ fn child_0022_profile(
         return None;
     }
     let chunk = chunk_bytes(contents, child)?;
+    let u16_le_by_offset = (0..chunk.len().saturating_sub(1))
+        .step_by(2)
+        .filter_map(|offset| {
+            read_u16(chunk, offset).map(|value| (format!("0x{offset:02x}"), value))
+        })
+        .collect::<BTreeMap<_, _>>();
     Some(json!({
         "object_id": child.object_id,
         "service_word": child.service_word,
@@ -147,6 +153,7 @@ fn child_0022_profile(
         "chunk_sha256": sha256_hex(chunk),
         "prefix32_sha256": edge_fingerprint(chunk, true),
         "suffix32_sha256": edge_fingerprint(chunk, false),
+        "u16_le_by_offset": u16_le_by_offset,
     }))
 }
 
