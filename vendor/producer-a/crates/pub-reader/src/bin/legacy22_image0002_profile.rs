@@ -216,6 +216,111 @@ fn wmf_validation_error_class(message: &str) -> &'static str {
     }
 }
 
+fn write_u32(bytes: &mut [u8], offset: usize, value: u32) -> bool {
+    let Some(dst) = bytes.get_mut(offset..offset.saturating_add(4)) else {
+        return false;
+    };
+    dst.copy_from_slice(&value.to_le_bytes());
+    true
+}
+
+fn wmf_header_offset(payload: &[u8]) -> usize {
+    if read_u32(payload, 0) == Some(WMF_PLACEABLE_KEY) {
+        WMF_PLACEABLE_HEADER_BYTES
+    } else {
+        0
+    }
+}
+
+fn wmf_outer_size_rewrite_valid(payload: &[u8]) -> bool {
+    let header_offset = wmf_header_offset(payload);
+    let Some(meta_len) = payload.len().checked_sub(header_offset) else {
+        return false;
+    };
+    if meta_len < 18 || meta_len % 2 != 0 {
+        return false;
+    }
+    let Ok(words) = u32::try_from(meta_len / 2) else {
+        return false;
+    };
+    let mut patched = payload.to_vec();
+    if !write_u32(&mut patched, header_offset + 6, words) {
+        return false;
+    }
+    validate_wmf_metafile(&patched).is_ok()
+}
+
+fn wmf_first_eof_profile(payload: &[u8]) -> Value {
+    const META_HEADER_BYTES: usize = 18;
+    const MIN_RECORD_WORDS: u32 = 3;
+    const MAX_RECORDS: usize = 1_000_000;
+
+    let header_offset = wmf_header_offset(payload);
+    let Some(mut offset) = header_offset.checked_add(META_HEADER_BYTES) else {
+        return json!({"found": false, "prefix_valid": false, "failure": "header_overflow"});
+    };
+    if offset > payload.len() {
+        return json!({"found": false, "prefix_valid": false, "failure": "truncated_header"});
+    }
+
+    for _ in 0..MAX_RECORDS {
+        if offset == payload.len() {
+            return json!({"found": false, "prefix_valid": false, "failure": "no_eof"});
+        }
+        let Some(record_words) = read_u32(payload, offset) else {
+            return json!({"found": false, "prefix_valid": false, "failure": "truncated_record_size"});
+        };
+        if record_words < MIN_RECORD_WORDS {
+            return json!({"found": false, "prefix_valid": false, "failure": "invalid_record_size"});
+        }
+        let Ok(record_words) = usize::try_from(record_words) else {
+            return json!({"found": false, "prefix_valid": false, "failure": "record_size_overflow"});
+        };
+        let Some(record_bytes) = record_words.checked_mul(2) else {
+            return json!({"found": false, "prefix_valid": false, "failure": "record_size_overflow"});
+        };
+        let Some(record_end) = offset.checked_add(record_bytes) else {
+            return json!({"found": false, "prefix_valid": false, "failure": "record_range_overflow"});
+        };
+        if record_end > payload.len() {
+            return json!({"found": false, "prefix_valid": false, "failure": "record_out_of_bounds"});
+        }
+        let Some(function) = read_u16(payload, offset + 4) else {
+            return json!({"found": false, "prefix_valid": false, "failure": "truncated_function"});
+        };
+        offset = record_end;
+        if function == 0 {
+            let Some(meta_len) = offset.checked_sub(header_offset) else {
+                return json!({"found": true, "prefix_valid": false, "failure": "meta_range_underflow"});
+            };
+            if meta_len % 2 != 0 {
+                return json!({"found": true, "prefix_valid": false, "failure": "odd_meta_length"});
+            }
+            let Ok(words) = u32::try_from(meta_len / 2) else {
+                return json!({"found": true, "prefix_valid": false, "failure": "meta_size_overflow"});
+            };
+            let mut prefix = payload[..offset].to_vec();
+            if !write_u32(&mut prefix, header_offset + 6, words) {
+                return json!({"found": true, "prefix_valid": false, "failure": "patch_out_of_bounds"});
+            }
+            let validation = validate_wmf_metafile(&prefix);
+            let prefix_valid = validation.is_ok();
+            return json!({
+                "found": true,
+                "prefix_valid": prefix_valid,
+                "suffix_len": payload.len() - offset,
+                "validation_error_class": validation
+                    .as_ref()
+                    .err()
+                    .map(|error| wmf_validation_error_class(&error.to_string())),
+                "prefix_sha256": prefix_valid.then(|| sha256_hex(&prefix)),
+            });
+        }
+    }
+
+    json!({"found": false, "prefix_valid": false, "failure": "record_limit"})
+}
+
 fn wmf_bounded_prefix_profile(payload: &[u8]) -> Value {
     let placeable = read_u32(payload, 0) == Some(WMF_PLACEABLE_KEY);
     let header_offset = if placeable {
@@ -314,6 +419,8 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
         Err(error) => (false, Some(wmf_validation_error_class(&error.to_string()))),
     };
     let wmf_prefix = wmf_bounded_prefix_profile(payload);
+    let outer_size_rewrite_valid = wmf_outer_size_rewrite_valid(payload);
+    let first_eof = wmf_first_eof_profile(payload);
     json!({
         "length_present": true,
         "declared_len": declared_len,
@@ -324,6 +431,8 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
         "validation_error_class": validation_error_class,
         "payload_sha256": wmf_valid.then(|| sha256_hex(payload)),
         "wmf_prefix": wmf_prefix,
+        "outer_size_rewrite_valid": outer_size_rewrite_valid,
+        "first_eof": first_eof,
     })
 }
 
