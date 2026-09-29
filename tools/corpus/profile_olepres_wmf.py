@@ -73,6 +73,9 @@ def parse_ole_presentation(raw: bytes) -> dict:
     data_end = data_offset + data_size
     if data_end > len(raw):
         raise ParseError("presentation_data_truncated")
+    trailing_len = len(raw) - data_end
+    if trailing_len != 0 and trailing_len < 18:
+        raise ParseError("presentation_trailer_truncated")
 
     return {
         "clipboard": clipboard,
@@ -84,7 +87,8 @@ def parse_ole_presentation(raw: bytes) -> dict:
         "height": height,
         "data": raw[data_offset:data_end],
         "data_size": data_size,
-        "has_reserved2_18": data_end + 18 <= len(raw),
+        "trailing_len": trailing_len,
+        "has_reserved2_18": trailing_len >= 18,
     }
 
 
@@ -202,6 +206,7 @@ def profile_corpus(corpus_dir: Path) -> dict:
     aspect_counts = Counter()
     advf_counts = Counter()
     reserved1_counts = Counter()
+    presentation_trailer_len_counts = Counter()
     wmf_errors = Counter()
     wmf_placeable_counts = Counter()
     wmf_type_counts = Counter()
@@ -244,11 +249,9 @@ def profile_corpus(corpus_dir: Path) -> dict:
                     aspect_counts[str(pres["aspect"])] += 1
                     advf_counts[str(pres["advf"])] += 1
                     reserved1_counts[str(pres["reserved1"])] += 1
+                    presentation_trailer_len_counts[str(pres["trailing_len"])] += 1
 
                     if pres["clipboard"] != f"standard:{CF_METAFILEPICT}":
-                        continue
-                    if not pres["has_reserved2_18"]:
-                        envelope_errors["missing_reserved2_18"] += 1
                         continue
 
                     try:
@@ -292,6 +295,9 @@ def profile_corpus(corpus_dir: Path) -> dict:
         "aspect_counts": dict(aspect_counts.most_common()),
         "advf_counts": dict(advf_counts.most_common()),
         "reserved1_counts": dict(reserved1_counts.most_common()),
+        "presentation_trailer_len_counts": dict(
+            sorted(presentation_trailer_len_counts.items(), key=lambda item: int(item[0]))
+        ),
         "valid_wmf_count": valid_wmf_count,
         "wmf_error_counts": dict(wmf_errors.most_common()),
         "wmf_placeable_counts": dict(wmf_placeable_counts.most_common()),
