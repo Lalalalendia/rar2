@@ -87,13 +87,14 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         affected.add("pub-viewer")
 
     render_plan = any(p.startswith("crates/chaptera-viewer-render-plan/") for p in paths)
-    desktop = any(
+    desktop_source_changed = any(
         p in {
             "apps/chaptera-desktop/src/render_backend.rs",
             "apps/chaptera-desktop/src/main.rs",
         }
         for p in paths
     )
+    desktop = desktop_source_changed
     if any(p in {"Cargo.toml", "Cargo.lock"} for p in paths):
         render_plan = True
         desktop = True
@@ -256,6 +257,20 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                     ],
                 },
                 {
+                    "id": "desktop-editor-check",
+                    "argv": [
+                        "cargo",
+                        "check",
+                        "-p",
+                        "chaptera-desktop",
+                        "--all-targets",
+                    ],
+                },
+            ]
+        )
+        if desktop_source_changed:
+            commands.append(
+                {
                     "id": "desktop-reader-clippy",
                     "argv": [
                         "cargo",
@@ -269,19 +284,8 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "-D",
                         "warnings",
                     ],
-                },
-                {
-                    "id": "desktop-editor-check",
-                    "argv": [
-                        "cargo",
-                        "check",
-                        "-p",
-                        "chaptera-desktop",
-                        "--all-targets",
-                    ],
-                },
-            ]
-        )
+                }
+            )
 
     if mobile_reader:
         commands.append(
@@ -301,6 +305,7 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         "affected_vendor_packages": packages,
         "render_plan": render_plan,
         "desktop_reader_integration": desktop,
+        "desktop_reader_clippy": desktop_source_changed,
         "mobile_reader_integration": mobile_reader,
         "commands": commands,
     }
