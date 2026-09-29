@@ -24,8 +24,23 @@ const DESCRIPTOR_PRESENT: u16 = 0x0018;
 #[derive(Debug, Clone)]
 struct Descriptor {
     name: [u8; 4],
+    opt_a: u16,
+    opt_b: u16,
+    opt_c: u16,
+    bit_type: [u8; 4],
     data_offset: u32,
     data_length: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct DescriptorMetadataProfile {
+    opt_a_is_zero: bool,
+    opt_a_equals_grounded_story_count: bool,
+    opt_b_is_one: bool,
+    opt_c_is_zero: bool,
+    bit_type_all_zero: bool,
+    bit_type_all_ff: bool,
+    bit_type_sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +128,15 @@ struct WitnessRow {
     byte_len: usize,
     contents_serialization_revision: u16,
     grounded_story_count: u32,
+    descriptor_count: usize,
+    descriptor_opt_b_one_count: usize,
+    descriptor_opt_c_zero_count: usize,
+    descriptor_opt_b_c_ordinary_count: usize,
+    syid_descriptor_metadata: DescriptorMetadataProfile,
+    strs_descriptor_metadata: DescriptorMetadataProfile,
+    text_descriptor_metadata: DescriptorMetadataProfile,
+    syid_strs_text_opt_a_all_equal: bool,
+    syid_strs_text_bit_type_all_equal: bool,
     story_catalog_entries_with_unsupported_tail: usize,
     story_catalog_scalar_profiles: Vec<StoryCatalogScalarFieldProfile>,
     story_catalog_scalar_pair_profiles: Vec<StoryCatalogScalarPairProfile>,
@@ -156,6 +180,22 @@ fn u16_at(bytes: &[u8], offset: usize) -> Option<u16> {
 fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn descriptor_metadata_profile(
+    descriptor: &Descriptor,
+    grounded_story_count: u32,
+) -> DescriptorMetadataProfile {
+    DescriptorMetadataProfile {
+        opt_a_is_zero: descriptor.opt_a == 0,
+        opt_a_equals_grounded_story_count:
+            u32::from(descriptor.opt_a) == grounded_story_count,
+        opt_b_is_one: descriptor.opt_b == 1,
+        opt_c_is_zero: descriptor.opt_c == 0,
+        bit_type_all_zero: descriptor.bit_type.iter().all(|byte| *byte == 0),
+        bit_type_all_ff: descriptor.bit_type.iter().all(|byte| *byte == 0xff),
+        bit_type_sha256: sha256_hex(&descriptor.bit_type),
+    }
 }
 
 fn descriptor_range<'a>(bytes: &'a [u8], descriptor: &Descriptor) -> Result<&'a [u8]> {
@@ -202,12 +242,28 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
                 .get(offset + 2..offset + 6)
                 .context("descriptor name is truncated")?;
             let name = [name_raw[0], name_raw[1], name_raw[2], name_raw[3]];
+            let opt_a = u16_at(bytes, offset + 6).context("descriptor optA is truncated")?;
+            let opt_b = u16_at(bytes, offset + 8).context("descriptor optB is truncated")?;
+            let opt_c = u16_at(bytes, offset + 10).context("descriptor optC is truncated")?;
+            let bit_type_raw = bytes
+                .get(offset + 12..offset + 16)
+                .context("descriptor bitType is truncated")?;
+            let bit_type = [
+                bit_type_raw[0],
+                bit_type_raw[1],
+                bit_type_raw[2],
+                bit_type_raw[3],
+            ];
             let data_offset =
                 u32_at(bytes, offset + 16).context("descriptor data offset is truncated")?;
             let data_length =
                 u32_at(bytes, offset + 20).context("descriptor data length is truncated")?;
             out.push(Descriptor {
                 name,
+                opt_a,
+                opt_b,
+                opt_c,
+                bit_type,
                 data_offset,
                 data_length,
             });
@@ -839,6 +895,21 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let syid_payload = descriptor_range(&quill, syid)?;
     let strs_payload = descriptor_range(&quill, strs)?;
     descriptor_range(&quill, text)?;
+    let syid_descriptor_metadata = descriptor_metadata_profile(syid, grounded_story_count);
+    let strs_descriptor_metadata = descriptor_metadata_profile(strs, grounded_story_count);
+    let text_descriptor_metadata = descriptor_metadata_profile(text, grounded_story_count);
+    let descriptor_opt_b_one_count = descriptors
+        .iter()
+        .filter(|descriptor| descriptor.opt_b == 1)
+        .count();
+    let descriptor_opt_c_zero_count = descriptors
+        .iter()
+        .filter(|descriptor| descriptor.opt_c == 0)
+        .count();
+    let descriptor_opt_b_c_ordinary_count = descriptors
+        .iter()
+        .filter(|descriptor| descriptor.opt_b == 1 && descriptor.opt_c == 0)
+        .count();
 
     let expected_syid_len = 8u64 + 4u64 * u64::from(grounded_story_count);
     let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_story_count);
@@ -868,6 +939,17 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         byte_len: bytes.len(),
         contents_serialization_revision: revision,
         grounded_story_count,
+        descriptor_count: descriptors.len(),
+        descriptor_opt_b_one_count,
+        descriptor_opt_c_zero_count,
+        descriptor_opt_b_c_ordinary_count,
+        syid_descriptor_metadata,
+        strs_descriptor_metadata,
+        text_descriptor_metadata,
+        syid_strs_text_opt_a_all_equal:
+            syid.opt_a == strs.opt_a && strs.opt_a == text.opt_a,
+        syid_strs_text_bit_type_all_equal:
+            syid.bit_type == strs.bit_type && strs.bit_type == text.bit_type,
         story_catalog_entries_with_unsupported_tail,
         story_catalog_scalar_profiles,
         story_catalog_scalar_pair_profiles,
@@ -939,7 +1021,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v4",
+        "schema": "chaptera.quill-story-early-text-boundary.v5",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
