@@ -232,6 +232,18 @@ mod tests {
     }
 
     #[test]
+    fn cached_presentation_rejects_malformed_wmf_payload() {
+        let malformed = [0x06u8; 18];
+        let blob = pub_cfb::CfbStreamBlob {
+            path: "/Objects/Object 73/\u{2}OlePres001".into(),
+            name: "\u{2}OlePres001".into(),
+            bytes: fixture(CF_METAFILEPICT, 4, &malformed),
+        };
+
+        assert!(parse_cached_presentation_blob(blob).is_err());
+    }
+
+    #[test]
     fn cached_presentation_rejects_noncanonical_stream_suffix() {
         let payload = [0x05u8; 18];
         let blob = pub_cfb::CfbStreamBlob {
