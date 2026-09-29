@@ -31,6 +31,8 @@ class ReaderPrClassifierTests(unittest.TestCase):
         self.assertFalse(fanout["android_render"])
         self.assertFalse(fanout["portable"])
         self.assertFalse(fanout["web_chromium"])
+        self.assertFalse(fanout["installer"])
+        self.assertFalse(fanout["updater"])
 
     def test_pr15_render_change_does_not_admit_installer_updater_or_web(self) -> None:
         fanout = MODULE.classify(
@@ -51,6 +53,8 @@ class ReaderPrClassifierTests(unittest.TestCase):
         self.assertFalse(fanout["android_render"])
         self.assertFalse(fanout["portable"])
         self.assertFalse(fanout["web_chromium"])
+        self.assertFalse(fanout["installer"])
+        self.assertFalse(fanout["updater"])
 
     def test_mobile_specific_change_admits_android_emulator_workflows(self) -> None:
         fanout = MODULE.classify(
@@ -65,6 +69,19 @@ class ReaderPrClassifierTests(unittest.TestCase):
         self.assertTrue(fanout["web_chromium"])
         self.assertTrue(fanout["portable"])
         self.assertFalse(fanout["reader_windows"])
+
+    def test_installer_and_updater_are_owned_seams(self) -> None:
+        package = MODULE.classify(["packages/product/reader-portable/v1/README.md"])
+        self.assertTrue(package["installer"])
+        self.assertFalse(package["updater"])
+
+        installer = MODULE.classify(["installer/windows/chaptera-reader.iss"])
+        self.assertTrue(installer["installer"])
+        self.assertTrue(installer["updater"])
+
+        updater = MODULE.classify(["crates/chaptera-update-engine/src/lib.rs"])
+        self.assertFalse(updater["installer"])
+        self.assertTrue(updater["updater"])
 
     def test_force_all_is_explicit_manual_full_fanout(self) -> None:
         fanout = MODULE.classify([], force_all=True)
