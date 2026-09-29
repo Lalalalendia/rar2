@@ -1,0 +1,977 @@
+{
+  "error_count": 3,
+  "errors": [
+    {
+      "error": "legacy 0x22 character FKP: FKP run directory does not fit in one page: crun=255",
+      "sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+      "stage": "formatting"
+    },
+    {
+      "error": "не удалось разобрать CFB-файл working-corpus/pub-corpus/corpus/native/unclassified/6cb88d4e02f823876a23d7f7414c7d370ca30996c30f145ec92b62f519b22170.pub: не удалось разобрать CFB-контейнер: Malformed directory entry (name length too large: 65535)",
+      "sha256": "6cb88d4e02f823876a23d7f7414c7d370ca30996c30f145ec92b62f519b22170",
+      "stage": "cfb"
+    },
+    {
+      "error": "не удалось разобрать CFB-файл working-corpus/pub-corpus/corpus/native/unclassified/d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f.pub: не удалось разобрать CFB-контейнер: Malformed MiniFAT (MiniFAT has 683 entries, but mini sector 384 points to 1431327565)",
+      "sha256": "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f",
+      "stage": "cfb"
+    }
+  ],
+  "evidence_boundary": "font_index is table-relative persisted CHPX state; this receipt does not assign font names, charsets, or Unicode semantics.",
+  "font_index_presence_counts": {
+    "10": 1,
+    "12": 1,
+    "13": 1,
+    "16": 1,
+    "19": 3,
+    "2": 2,
+    "21": 1,
+    "23": 1,
+    "24": 1,
+    "26": 1,
+    "3": 17,
+    "4": 11,
+    "5": 6,
+    "6": 4,
+    "7": 11,
+    "8": 4,
+    "9": 5
+  },
+  "high_byte_file_count": 58,
+  "high_byte_files_with_font_index": 51,
+  "high_byte_files_without_font_index": 7,
+  "row_count": 58,
+  "rows": [
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          7
+        ],
+        "0xd8": [
+          7
+        ],
+        "0xe5": [
+          4
+        ],
+        "0xe6": [
+          4
+        ]
+      },
+      "character_run_count": 69,
+      "high_byte_count": 12,
+      "high_byte_font_indexes": [
+        4,
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "02a2b240864c53159b7ddfa7aaebf9e943777bc0d3b64b819ad72c57796f66d7"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          5
+        ]
+      },
+      "character_run_count": 47,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        5
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "02e1adc9d6e815b409cec9bb35f246123d4c7a3ae01623ca8565b2904b016218"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          7
+        ],
+        "0xd8": [
+          7
+        ],
+        "0xe5": [
+          4
+        ],
+        "0xe6": [
+          4
+        ]
+      },
+      "character_run_count": 59,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [
+        4,
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "08af039a39b05d544ba20f04fec35b73436b241f364bcd7c694b70b52899c70c"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          10
+        ]
+      },
+      "character_run_count": 13,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        10
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "0efda9896207c32d164bc69d2866c53698c7f3d37196474dada93811cf164b7d"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x93": [
+          4,
+          12
+        ],
+        "0x94": [
+          3,
+          4,
+          5,
+          7,
+          8,
+          12
+        ]
+      },
+      "character_run_count": 134,
+      "high_byte_count": 11,
+      "high_byte_font_indexes": [
+        3,
+        4,
+        5,
+        7,
+        8,
+        12
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "14ed19f822ff3a5ae49c57a4c00b0dca2bf652a95694bf12c9c425a0c8c46f3b"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x8e": [
+          7
+        ],
+        "0x8f": [
+          7
+        ]
+      },
+      "character_run_count": 31,
+      "high_byte_count": 2,
+      "high_byte_font_indexes": [
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "1b88bc290bf3b53f5c7dac055b4d50bf0c2a8ab6da99e99459902fa475807387"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          2
+        ]
+      },
+      "character_run_count": 98,
+      "high_byte_count": 2,
+      "high_byte_font_indexes": [
+        2
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "1da75cd9ba65b91c4bf4f17c015e0d9dd8740952f90295b54aa4f8d48ae378f3"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          4
+        ],
+        "0x97": [
+          4
+        ],
+        "0xb7": [
+          4
+        ]
+      },
+      "character_run_count": 171,
+      "high_byte_count": 10,
+      "high_byte_font_indexes": [
+        4
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "1efdf4fb7c2d2955e79519d6bd43e22ba23a7d6cf106fb9a738ca49705eb2d86"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          5
+        ],
+        "0xa9": [
+          5
+        ]
+      },
+      "character_run_count": 117,
+      "high_byte_count": 50,
+      "high_byte_font_indexes": [
+        5
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "2205e8ce7d963b370bea42c097f66f179f673d15a35ac1d7c90aeae399e8e297"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          3
+        ]
+      },
+      "character_run_count": 6,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "2aae164a43338136efab15262c044ef30e6c38a278e90aac7c991a992d915bcc"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x97": [
+          8
+        ]
+      },
+      "character_run_count": 37,
+      "high_byte_count": 3,
+      "high_byte_font_indexes": [
+        8
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "2b9c28f42633507773dabdb1efe5b4f88343f10fccd52f36babaf1c3bb7bd8ed"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          3
+        ]
+      },
+      "character_run_count": 129,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "2d93e7712544183524eb159605b6e5099584505ebdee78774efb0697e568c5ba"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x8e": [
+          7
+        ],
+        "0x8f": [
+          7
+        ],
+        "0xf8": [
+          7
+        ]
+      },
+      "character_run_count": 31,
+      "high_byte_count": 3,
+      "high_byte_font_indexes": [
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "2f94e4880bd8eddd814f84768a9fac05659f8146cccd26790bdfcee6c9792b61"
+    },
+    {
+      "byte_to_font_indexes": {},
+      "character_run_count": 67,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [],
+      "high_byte_uncovered_count": 9,
+      "sha256": "3041c3250cf2ae0527745b642cda8223445cc52f4b570282c81294163c1b091c"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xd8": [
+          7
+        ]
+      },
+      "character_run_count": 6,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "3114f1328f49066cf3168a76758ffb279e1a838b54e618cc2c050ae163398f35"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          9
+        ],
+        "0xf8": [
+          9
+        ]
+      },
+      "character_run_count": 35,
+      "high_byte_count": 3,
+      "high_byte_font_indexes": [
+        9
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "36b3c7d4575e7d1806e83cd1c196e8b5c3b03b1be08dd94d0fb4dbd28c4dcba7"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe6": [
+          3
+        ],
+        "0xf8": [
+          3
+        ]
+      },
+      "character_run_count": 46,
+      "high_byte_count": 4,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "379997ec5cbd2efdbdcc1b7cbb8c9764a4e313aa6f3c008f3850a1e1cb725ba5"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          21
+        ]
+      },
+      "character_run_count": 20,
+      "high_byte_count": 2,
+      "high_byte_font_indexes": [
+        21
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "39d71dcc2fb70b5e43b78a2d3ab1081eaff77d4b7cfd2a38ef917c46c0d51194"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          3
+        ]
+      },
+      "character_run_count": 123,
+      "high_byte_count": 4,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "3e0ffa579d9b17fa199dca21ea427d23ee1a9d76501f40e58831b8c674102c96"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          9
+        ],
+        "0xf8": [
+          9
+        ]
+      },
+      "character_run_count": 36,
+      "high_byte_count": 10,
+      "high_byte_font_indexes": [
+        9
+      ],
+      "high_byte_uncovered_count": 5,
+      "sha256": "4960e5bb0cf62b2d9387a0c454973a1aaa02031252f180a364112b41bac87c5b"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          6
+        ]
+      },
+      "character_run_count": 4,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        6
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "53ca33b1076388d528295f2f6df4a0071a54120cf780f9c4fba31e2b2bbf8e15"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          19
+        ],
+        "0xd8": [
+          19
+        ]
+      },
+      "character_run_count": 12,
+      "high_byte_count": 3,
+      "high_byte_font_indexes": [
+        19
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "548f923111c491581a05206d216ee81fe0e619661990377dbcc027bd9d4748eb"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          3
+        ],
+        "0xe6": [
+          3
+        ],
+        "0xf8": [
+          3
+        ]
+      },
+      "character_run_count": 63,
+      "high_byte_count": 4,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "54c59e90239e8abe399e534521183adb1b7df8915a480d120ade67cd891d4a04"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          9
+        ],
+        "0xf8": [
+          9
+        ]
+      },
+      "character_run_count": 35,
+      "high_byte_count": 6,
+      "high_byte_font_indexes": [
+        9
+      ],
+      "high_byte_uncovered_count": 3,
+      "sha256": "5861117efd81d7165f5f4fc7e69f93894324c9511b7e3753692d9f576f0546e9"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          3
+        ]
+      },
+      "character_run_count": 6,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "698502865ad2f50a01b7052bf834edee831abe3a5c4a25a5b0a0a3d7d3c2b21d"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x93": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          9
+        ],
+        "0x94": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          9
+        ]
+      },
+      "character_run_count": 85,
+      "high_byte_count": 28,
+      "high_byte_font_indexes": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        9
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "7860acc670667c456fb29048a4cfa1840e4a7d5b57b7b2a2975c8d76929063dc"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          24
+        ]
+      },
+      "character_run_count": 36,
+      "high_byte_count": 8,
+      "high_byte_font_indexes": [
+        24
+      ],
+      "high_byte_uncovered_count": 7,
+      "sha256": "877800395b639164d23b4f9102e4d451a047418f5c952ff58f65da31ebb07f27"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          3
+        ],
+        "0x93": [
+          3
+        ],
+        "0x94": [
+          3
+        ]
+      },
+      "character_run_count": 69,
+      "high_byte_count": 3,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "90b5237149f75af4c26a40e76d51f1bce23a73bc7c4c9204db1020a10dc4b2cd"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x93": [
+          3,
+          7,
+          8,
+          9,
+          16
+        ],
+        "0x94": [
+          3,
+          7,
+          8,
+          9,
+          16
+        ]
+      },
+      "character_run_count": 240,
+      "high_byte_count": 14,
+      "high_byte_font_indexes": [
+        3,
+        7,
+        8,
+        9,
+        16
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "98c6375a52e11f2c1022e2959d7f462cb529bc3c63223eec16325e0acc2d7133"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          7
+        ]
+      },
+      "character_run_count": 87,
+      "high_byte_count": 6,
+      "high_byte_font_indexes": [
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "999e310a383cb492f8dc383d94b296c9eb789acf8ef29316a1d4004ef5e50780"
+    },
+    {
+      "byte_to_font_indexes": {},
+      "character_run_count": 36,
+      "high_byte_count": 4,
+      "high_byte_font_indexes": [],
+      "high_byte_uncovered_count": 4,
+      "sha256": "9c2f6506ad631738513d9e23a4967e554a55701d08900553cab04f0321358266"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xf3": [
+          5
+        ]
+      },
+      "character_run_count": 14,
+      "high_byte_count": 4,
+      "high_byte_font_indexes": [
+        5
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "9d899a909a2daa80bb28717bcbbe025db1ad4d61129e2085b0fff593ff531238"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          4
+        ],
+        "0x93": [
+          4
+        ],
+        "0x94": [
+          4
+        ]
+      },
+      "character_run_count": 72,
+      "high_byte_count": 17,
+      "high_byte_font_indexes": [
+        4
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "9e55bf04ac75807b2afd76350ec1f94314cf5b6cf4255202223135e4ae4d3199"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          23
+        ]
+      },
+      "character_run_count": 40,
+      "high_byte_count": 7,
+      "high_byte_font_indexes": [
+        23
+      ],
+      "high_byte_uncovered_count": 6,
+      "sha256": "9fd4894622c1bae4550147a7163bdfcad891aa72b270b3516fc1a00c6443eaf8"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          2
+        ]
+      },
+      "character_run_count": 187,
+      "high_byte_count": 8,
+      "high_byte_font_indexes": [
+        2
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "a4f7a754b9c2c94a6708867e873d0c9f7246dbdc676a2fbc890e79a684c9178b"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          3
+        ],
+        "0xe6": [
+          3
+        ],
+        "0xf8": [
+          3
+        ]
+      },
+      "character_run_count": 65,
+      "high_byte_count": 7,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "a9527c1fa08b9d83b96abc3cc6732529bae5d28b65e435b9a2bc62be4a0dad70"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          4
+        ]
+      },
+      "character_run_count": 56,
+      "high_byte_count": 2,
+      "high_byte_font_indexes": [
+        4
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "aa9ae88c17b9da3b945241e1e5730584e17b633026f587373a9420aed6e86559"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x97": [
+          8
+        ]
+      },
+      "character_run_count": 38,
+      "high_byte_count": 2,
+      "high_byte_font_indexes": [
+        8
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "aaeb4120e72a564aab60f5275c1dea8ed5830ec4de368d3bc22d410f7c5342c4"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          6
+        ]
+      },
+      "character_run_count": 184,
+      "high_byte_count": 30,
+      "high_byte_font_indexes": [
+        6
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "af9a3624085c10472bacc31aa1984e0777a24957371a4f53271a3fd1ecbafe76"
+    },
+    {
+      "byte_to_font_indexes": {},
+      "character_run_count": 69,
+      "high_byte_count": 19,
+      "high_byte_font_indexes": [],
+      "high_byte_uncovered_count": 19,
+      "sha256": "b688caa757e52b34e84ed6f69207ceb55fe067e16f5f5122ac09ab606a6ca778"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xf8": [
+          13
+        ]
+      },
+      "character_run_count": 9,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        13
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "ba33ccaf2f41d85a44743279dc0295389576fb1b6851cee0d1a85677bf499738"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          3
+        ],
+        "0xa9": [
+          3
+        ]
+      },
+      "character_run_count": 73,
+      "high_byte_count": 27,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "ba4aa77d85958bff01d33ae0686fbf75cca1654cb4039ba2c24c2ceb687df650"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xc5": [
+          7
+        ],
+        "0xd8": [
+          7
+        ],
+        "0xe5": [
+          4
+        ]
+      },
+      "character_run_count": 63,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [
+        4,
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "bea6c618c52cb4cdd8eb48b4ae2bff7290b79161abe6326b49329b5e6434f32a"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x93": [
+          3,
+          4,
+          5,
+          7
+        ],
+        "0x94": [
+          3,
+          4,
+          7
+        ]
+      },
+      "character_run_count": 97,
+      "high_byte_count": 12,
+      "high_byte_font_indexes": [
+        3,
+        4,
+        5,
+        7
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "c055e3d2020c42b60fec0b828352682c99ad48991f4c3de34808e425751e4159"
+    },
+    {
+      "byte_to_font_indexes": {},
+      "character_run_count": 39,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [],
+      "high_byte_uncovered_count": 9,
+      "sha256": "c8d5caae2d2339a2ccfba3d98983c1e706e15348639c332fa57ee744b70405bd"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          3
+        ],
+        "0xf8": [
+          3
+        ]
+      },
+      "character_run_count": 23,
+      "high_byte_count": 2,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "ceb00ff566915c7c3d913013663116e595c356e4f5f9ae6fca0c88d48a7b9932"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          4
+        ]
+      },
+      "character_run_count": 62,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [
+        4
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "cf35a6a02911320cde1843c68d8532d04fe9f681fa6615aa919cee32e59ef2d9"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          26
+        ],
+        "0x93": [
+          26
+        ],
+        "0x94": [
+          26
+        ]
+      },
+      "character_run_count": 53,
+      "high_byte_count": 3,
+      "high_byte_font_indexes": [
+        26
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "d149d547050332421474c957528842562ffad6816b2ce3d6326674302063d2eb"
+    },
+    {
+      "byte_to_font_indexes": {},
+      "character_run_count": 36,
+      "high_byte_count": 13,
+      "high_byte_font_indexes": [],
+      "high_byte_uncovered_count": 13,
+      "sha256": "d59d7c14627becbab2d42542f5f47d7c2ecb1f67101419f67b5fa8aba782d7c5"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          19
+        ]
+      },
+      "character_run_count": 56,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [
+        19
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "d640dddd8e23aac9d7cc3189c2d681b8b85f78fbbff4152b1e49995c314ecc9d"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xd8": [
+          3
+        ]
+      },
+      "character_run_count": 4,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "d97980d6fecd7fe3064d1b745fe57991eea828399c091d3083e5e7bca9876871"
+    },
+    {
+      "byte_to_font_indexes": {},
+      "character_run_count": 41,
+      "high_byte_count": 7,
+      "high_byte_font_indexes": [],
+      "high_byte_uncovered_count": 7,
+      "sha256": "daa5ff11fc5d81b7f516cfa20c1a4f734a30ef902c84c71fd061a3a4492b8a01"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          19
+        ]
+      },
+      "character_run_count": 53,
+      "high_byte_count": 9,
+      "high_byte_font_indexes": [
+        19
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "e26a770a0353cafb535e85b0424f0d5c1fbd93c7af48ffa7c0ca29125edfe4a1"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          4
+        ],
+        "0x97": [
+          4
+        ]
+      },
+      "character_run_count": 73,
+      "high_byte_count": 15,
+      "high_byte_font_indexes": [
+        4
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "f3de87906ce7248a2a540bff4f4d08ee8906ee4dca4291835d05156b6b7bf6a9"
+    },
+    {
+      "byte_to_font_indexes": {},
+      "character_run_count": 67,
+      "high_byte_count": 10,
+      "high_byte_font_indexes": [],
+      "high_byte_uncovered_count": 10,
+      "sha256": "f3fe04c42e8226f97f682080dcff5dfdd001397c5a01c7cac27e878027ea98fd"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x95": [
+          6
+        ]
+      },
+      "character_run_count": 65,
+      "high_byte_count": 6,
+      "high_byte_font_indexes": [
+        6
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "f824bc7932c80c411a903957131a00fdd83f88208417083644933f209f79b741"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0x92": [
+          3
+        ]
+      },
+      "character_run_count": 2,
+      "high_byte_count": 1,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "f9ed98910b4258c68312c4059dfd112fd499fa85000634f30b6d5042ec4ba4e7"
+    },
+    {
+      "byte_to_font_indexes": {
+        "0xe5": [
+          3
+        ],
+        "0xf8": [
+          3
+        ]
+      },
+      "character_run_count": 65,
+      "high_byte_count": 3,
+      "high_byte_font_indexes": [
+        3
+      ],
+      "high_byte_uncovered_count": 0,
+      "sha256": "fb975158ee8c9acb487e1fb5b83f4e63c620c085e31a45c543e4777b38552a82"
+    }
+  ],
+  "schema": "chaptera.legacy22-high-byte-font-signal.v1"
+}
