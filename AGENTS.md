@@ -40,18 +40,26 @@ There must be exactly one authoritative current implementation line for a task.
 
 Never infer task ownership from an old PR title alone. Notion task state + current GitHub owner together define the live execution line.
 
-## 2. Fresh-main rule
+## 2. Fresh-main convergence without replay churn
 
-Current implementation must converge on current `main`, not on an accidental historical stack.
+Current implementation must converge on current `main`, not on an accidental historical stack. But **main advancing is not, by itself, a reason to create a replacement PR or restart a valid acceptance cycle**.
 
 Before merge or final acceptance:
 
-- re-check the PR base;
+- re-check the PR base and current `main`;
 - ensure no stale prerequisite branch is still embedded;
-- prefer a bounded fresh-main replay over carrying unrelated ancestry;
+- compare current-main drift with the task-owned changed-file set;
 - preserve already-landed authority instead of overwriting it with an older donor copy.
 
-A green stale head is evidence about that head only. It is not proof that current main is closed.
+Restack/replay a live implementation line only when at least one is true:
+
+1. current-main drift intersects task-owned changed files;
+2. current-main changed the acceptance/workflow semantics needed to validate the task, so the old receipt is materially stale;
+3. GitHub reports a real merge conflict or an embedded stale prerequisite must be removed.
+
+If drift is disjoint, record the zero-overlap audit, let the current exact-head CI finish, and merge the bounded delta onto then-current `main`. Do **not** create a v2/v3/fresh-main successor solely to chase unrelated CI, corpus, documentation, or research commits.
+
+A green head proves that exact task delta under the acceptance semantics it actually ran. It remains usable across disjoint trunk drift; it does not remain sufficient if the relevant task files or acceptance law changed.
 
 ## 3. Push discipline — do not DDoS our own Actions
 
@@ -128,7 +136,7 @@ Classify a red run before making changes:
 3. **CI-routing/format scope defect** — fix the workflow boundary.
 4. **Transient runner/provider failure** — rerun; do not mutate source.
 5. **Stale/superseded head** — do not repair; replay/close according to current authority.
-6. **Upstream-main drift/conflict** — fresh-main reconcile; do not pile fixes onto stale ancestry.
+6. **Intersecting upstream-main drift/conflict** — reconcile when task-owned files or acceptance semantics overlap; disjoint trunk drift does not force a replay.
 
 Do not turn every red check into a product-code change.
 
