@@ -66,7 +66,7 @@ fn sandbox_host_environment() -> Result<Vec<(OsString, OsString)>, String> {
     ]);
     let system_root = environment
         .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("SystemRoot"))
+        .find(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case("SystemRoot"))
         .map(|(_, value)| PathBuf::from(value))
         .ok_or_else(|| "SystemRoot is unavailable for sandbox host launch".to_owned())?;
     let system32 = system_root.join("System32");
