@@ -949,10 +949,7 @@ mod tests {
             env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "local".to_owned())
         ));
         fs::write(&path, b"relative executor").expect("write relative executor");
-        let args = vec![
-            "--executor".to_owned(),
-            path.to_string_lossy().into_owned(),
-        ];
+        let args = vec!["--executor".to_owned(), path.to_string_lossy().into_owned()];
         let error = parse_launch_config(&args).expect_err("relative executor must fail");
         assert!(error.contains("absolute executable path"));
         fs::remove_file(path).ok();
@@ -961,10 +958,7 @@ mod tests {
     #[test]
     fn executor_is_canonicalized_and_bound_to_admission_hash() {
         let path = temp_source("executor-identity");
-        let args = vec![
-            "--executor".to_owned(),
-            path.to_string_lossy().into_owned(),
-        ];
+        let args = vec!["--executor".to_owned(), path.to_string_lossy().into_owned()];
         let config = parse_launch_config(&args)
             .expect("parse launch config")
             .expect("configured executor");
@@ -984,10 +978,7 @@ mod tests {
     #[test]
     fn executor_byte_replacement_is_rejected_before_spawn() {
         let path = temp_source("executor-replacement");
-        let args = vec![
-            "--executor".to_owned(),
-            path.to_string_lossy().into_owned(),
-        ];
+        let args = vec!["--executor".to_owned(), path.to_string_lossy().into_owned()];
         let config = parse_launch_config(&args)
             .expect("parse launch config")
             .expect("configured executor");
