@@ -1247,7 +1247,9 @@ pub fn open_mature_0x2c_geometry(
                         .nodes
                         .get(&usage.node_id)
                         .map(|node| {
-                            viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
+                            viewer_image_source_window_v1(
+                                node.payload.explicit_image_crop.as_ref(),
+                            )
                         }) {
                         Some(Ok(source_window)) => source_window,
                         Some(Err(reason)) => {
