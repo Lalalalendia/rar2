@@ -80,7 +80,7 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
-pub use imp::{DllSearchPolicyError, install_process_policy};
+pub use imp::install_process_policy;
 
 #[cfg(not(target_os = "windows"))]
 pub fn install_process_policy() -> Result<(), std::convert::Infallible> {
