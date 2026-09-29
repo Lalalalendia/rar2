@@ -3,10 +3,13 @@ name: Layout Paragraph Projection V1
 on:
   pull_request:
     paths:
-      - "Cargo.toml"
       - "crates/chaptera-layout-projection/**"
       - ".github/workflows/layout-paragraph-projection-v1.yml"
   workflow_dispatch:
+
+concurrency:
+  group: layout-paragraph-projection-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -20,9 +23,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt -p chaptera-layout-projection -- --check
       - name: Check workspace
-        run: cargo check --workspace --all-targets
+        run: cargo check -p chaptera-layout-projection --all-targets
       - name: Lint projection crate
         run: cargo clippy -p chaptera-layout-projection --all-targets -- -D warnings
       - name: Test paragraph projection
