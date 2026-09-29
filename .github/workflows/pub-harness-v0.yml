@@ -30,3 +30,20 @@ jobs:
       - name: Test PUB harness
         working-directory: services/pub-harness
         run: python -m unittest -v
+
+      - name: Emit source-safe K2C health receipt
+        working-directory: services/pub-harness
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python k2c_ci_receipt.py \
+            --source-head "$SOURCE_HEAD" \
+            --output ../../target/k2c-health-receipt.json
+
+      - name: Upload K2C health receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: k2c-health-receipt-${{ github.run_id }}
+          path: target/k2c-health-receipt.json
+          if-no-files-found: error
+          retention-days: 30
