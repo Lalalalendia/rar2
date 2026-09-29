@@ -199,6 +199,33 @@ jobs:
           )
           no_child_files = {item["source_sha256"] for item in no_child}
           direct_child_files = {item["source_sha256"] for item in direct_child}
+          declared_profiles = [
+              item.get("direct_native_declared_profile") or {}
+              for item in direct_child
+          ]
+          declared_profile_counts = Counter(
+              "fits={fits};exact={exact};wmf={wmf}".format(
+                  fits=profile.get("declared_fits_chunk") is True,
+                  exact=profile.get("exact_chunk_end") is True,
+                  wmf=profile.get("wmf_valid") is True,
+              )
+              for profile in declared_profiles
+          )
+          declared_trailing_lengths = Counter(
+              str(profile.get("trailing_len", "missing"))
+              for profile in declared_profiles
+          )
+          declared_payload_hashes = [
+              profile.get("payload_sha256")
+              for profile in declared_profiles
+              if profile.get("payload_sha256")
+          ]
+          no_child_previous_types = Counter(
+              item.get("previous_object_raw_type") or "none" for item in no_child
+          )
+          no_child_next_types = Counter(
+              item.get("next_object_raw_type") or "none" for item in no_child
+          )
 
           summary = {
               "schema": "chaptera.legacy22-image0002-census.v1",
@@ -234,6 +261,21 @@ jobs:
               "direct_native_wmf_none_count": direct_native_wmf_none,
               "direct_native_wmf_payload_reference_count": len(direct_native_payload_hashes),
               "direct_native_wmf_unique_payload_sha256_count": len(set(direct_native_payload_hashes)),
+              "direct_declared_profile_counts": dict(declared_profile_counts.most_common()),
+              "direct_declared_length_fits_chunk_count": sum(
+                  profile.get("declared_fits_chunk") is True for profile in declared_profiles
+              ),
+              "direct_declared_exact_chunk_end_count": sum(
+                  profile.get("exact_chunk_end") is True for profile in declared_profiles
+              ),
+              "direct_declared_wmf_valid_count": sum(
+                  profile.get("wmf_valid") is True for profile in declared_profiles
+              ),
+              "direct_declared_trailing_length_counts": dict(
+                  declared_trailing_lengths.most_common()
+              ),
+              "direct_declared_payload_reference_count": len(declared_payload_hashes),
+              "direct_declared_unique_payload_sha256_count": len(set(declared_payload_hashes)),
               "no_direct_image_data_owner_count": len(no_child),
               "no_direct_image_data_file_count": len(no_child_files),
               "no_direct_image_data_files_also_with_direct_image_data_count": len(
@@ -248,6 +290,24 @@ jobs:
               ),
               "no_direct_image_data_field_replacement_ref_nonzero_count": sum(
                   i.get("field_replacement_ref_at_0x8a") not in (None, 0) for i in no_child
+              ),
+              "no_direct_image_data_previous_raw_type_counts": dict(
+                  no_child_previous_types.most_common()
+              ),
+              "no_direct_image_data_previous_raw0021_count": sum(
+                  i.get("previous_object_raw_type") == "0x0021" for i in no_child
+              ),
+              "no_direct_image_data_previous_parent_matches_count": sum(
+                  i.get("previous_object_parent_matches_image") is True for i in no_child
+              ),
+              "no_direct_image_data_next_raw_type_counts": dict(
+                  no_child_next_types.most_common()
+              ),
+              "no_direct_image_data_next_raw0021_count": sum(
+                  i.get("next_object_raw_type") == "0x0021" for i in no_child
+              ),
+              "no_direct_image_data_next_parent_matches_count": sum(
+                  i.get("next_object_parent_matches_image") is True for i in no_child
               ),
               "field_replacement_ref_nonzero_count": sum(
                   i.get("field_replacement_ref_at_0x8a") not in (None, 0) for i in images
