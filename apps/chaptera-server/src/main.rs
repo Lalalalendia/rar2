@@ -268,6 +268,22 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                                 max_file_bytes: guest_config.max_file_bytes,
                             },
                         )?;
+                        let guest_cleanup_state = guest_state.clone();
+                        tokio::spawn(async move {
+                            let mut interval =
+                                tokio::time::interval(Duration::from_secs(30));
+                            interval.set_missed_tick_behavior(
+                                tokio::time::MissedTickBehavior::Delay,
+                            );
+                            loop {
+                                interval.tick().await;
+                                if let Err(error) =
+                                    guest_cleanup_state.cleanup_expired_sessions().await
+                                {
+                                    eprintln!("chaptera_guest_cleanup {error}");
+                                }
+                            }
+                        });
                         let guest_router = guest_reader_http::router(guest_state);
                         product_router = Some(match product_router {
                             Some(router) => router.merge(guest_router),
