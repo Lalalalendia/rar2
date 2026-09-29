@@ -109,3 +109,28 @@ jobs:
     needs: [classify, tier-a]
     if: needs.classify.outputs.typography == 'true'
     uses: ./.github/workflows/reader-typography-golden.yml
+
+  corpus:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.corpus == 'true'
+    uses: ./.github/workflows/reader-corpus-truth-v1.yml
+
+  android-render:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.android_render == 'true'
+    uses: ./.github/workflows/mobile-reader-android-render.yml
+
+  android-local:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.android_local == 'true'
+    uses: ./.github/workflows/mobile-reader-android-local-open.yml
+
+  local-portable:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.local_portable == 'true'
+    uses: ./.github/workflows/chaptera-local-portable-windows.yml
+
+  web-acceptance:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.web_acceptance == 'true'
+    uses: ./.github/workflows/web-acceptance-real-chromium.yml
