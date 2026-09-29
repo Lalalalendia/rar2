@@ -1,4 +1,6 @@
-use anyhow::{Result, bail};
+use crate::wmf::{WmfMetafileInfo, validate_wmf_metafile};
+use anyhow::{Context, Result, bail};
+use std::io::{Read, Seek};
 
 const STANDARD_CLIPBOARD_MARKER_ANSI: u32 = 0xffff_ffff;
 const STANDARD_CLIPBOARD_MARKER_UNICODE: u32 = 0xffff_fffe;
@@ -6,6 +8,8 @@ const CF_METAFILEPICT: u32 = 3;
 const METAFILE_RESERVED2_LEN: usize = 18;
 const MAX_PRESENTATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TARGET_DEVICE_BYTES: usize = 1024 * 1024;
+const MAX_OLE_PRESENTATION_COUNT: usize = 999;
+const OLE_PRES_STREAM_PREFIX: &str = "\u{2}OlePres";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OlePresentation<'a> {
@@ -16,6 +20,21 @@ pub struct OlePresentation<'a> {
     pub width: u32,
     pub height: u32,
     pub data: &'a [u8],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyOleCachedPresentation {
+    pub stream_path: String,
+    pub stream_name: String,
+    pub stream_ordinal: u16,
+    pub clipboard_format: u32,
+    pub aspect: u32,
+    pub lindex: u32,
+    pub advf: u32,
+    pub width: u32,
+    pub height: u32,
+    pub wmf: WmfMetafileInfo,
+    pub data: Vec<u8>,
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
@@ -76,9 +95,11 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
     let data_end = data_offset
         .checked_add(data_size)
         .ok_or_else(|| anyhow::anyhow!("OLE presentation data range overflow"))?;
-    let trailing_len = bytes.len().saturating_sub(data_end);
-    if trailing_len != 0 && trailing_len < METAFILE_RESERVED2_LEN {
-        bail!("truncated CF_METAFILEPICT OLE presentation trailer");
+    let reserved2_end = data_end
+        .checked_add(METAFILE_RESERVED2_LEN)
+        .ok_or_else(|| anyhow::anyhow!("OLE presentation trailer overflow"))?;
+    if reserved2_end > bytes.len() {
+        bail!("truncated CF_METAFILEPICT OLE presentation");
     }
 
     let data = &bytes[data_offset..data_end];
@@ -97,9 +118,80 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
     })
 }
 
+fn ole_pres_stream_ordinal(name: &str) -> Option<u16> {
+    let suffix = name.strip_prefix(OLE_PRES_STREAM_PREFIX)?;
+    if suffix.len() != 3 || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse().ok()
+}
+
+fn parse_cached_presentation_blob(
+    blob: pub_cfb::CfbStreamBlob,
+) -> Result<LegacyOleCachedPresentation> {
+    let stream_ordinal = ole_pres_stream_ordinal(&blob.name)
+        .with_context(|| format!("invalid OLE presentation stream name {}", blob.name))?;
+    let parsed = parse_cf_metafilepict_ole_presentation(&blob.bytes)
+        .with_context(|| format!("parse bounded OLE presentation {}", blob.path))?;
+    let wmf = validate_wmf_metafile(parsed.data)
+        .with_context(|| format!("validate bounded WMF payload {}", blob.path))?;
+
+    Ok(LegacyOleCachedPresentation {
+        stream_path: blob.path,
+        stream_name: blob.name,
+        stream_ordinal,
+        clipboard_format: parsed.clipboard_format,
+        aspect: parsed.aspect,
+        lindex: parsed.lindex,
+        advf: parsed.advf,
+        width: parsed.width,
+        height: parsed.height,
+        wmf,
+        data: parsed.data.to_vec(),
+    })
+}
+
+/// Reads only persisted cached OLE presentations under the proven Object N storage.
+///
+/// This function never activates OLE/COM servers. It only reads bounded direct-child
+/// OlePres streams and parses the MS-OLEDS presentation envelope.
+pub fn read_legacy_ole_cached_presentations<R: Read + Seek>(
+    reader: R,
+    storage_number: u16,
+) -> Result<Vec<LegacyOleCachedPresentation>> {
+    let storage_path = format!("/Objects/Object {storage_number}");
+    let blobs = pub_cfb::read_direct_child_streams_with_prefix_reader(
+        reader,
+        &storage_path,
+        OLE_PRES_STREAM_PREFIX,
+        MAX_OLE_PRESENTATION_COUNT,
+        MAX_PRESENTATION_BYTES,
+    )
+    .with_context(|| format!("read bounded cached presentations under {storage_path}"))?;
+
+    blobs
+        .into_iter()
+        .map(parse_cached_presentation_blob)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_wmf_payload() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&9u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300u16.to_le_bytes());
+        bytes.extend_from_slice(&12u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes
+    }
 
     fn fixture(format: u32, target_device_size: u32, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -119,6 +211,48 @@ mod tests {
         bytes.extend_from_slice(payload);
         bytes.extend_from_slice(&[0u8; METAFILE_RESERVED2_LEN]);
         bytes
+    }
+
+    #[test]
+    fn owned_cached_presentation_preserves_stream_identity_and_payload() {
+        let payload = valid_wmf_payload();
+        let blob = pub_cfb::CfbStreamBlob {
+            path: "/Objects/Object 73/\u{2}OlePres001".into(),
+            name: "\u{2}OlePres001".into(),
+            bytes: fixture(CF_METAFILEPICT, 4, &payload),
+        };
+
+        let parsed = parse_cached_presentation_blob(blob).expect("cached presentation");
+        assert_eq!(parsed.stream_path, "/Objects/Object 73/\u{2}OlePres001");
+        assert_eq!(parsed.stream_name, "\u{2}OlePres001");
+        assert_eq!(parsed.stream_ordinal, 1);
+        assert_eq!(parsed.clipboard_format, CF_METAFILEPICT);
+        assert_eq!(parsed.wmf.record_count, 1);
+        assert_eq!(parsed.data.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn cached_presentation_rejects_malformed_wmf_payload() {
+        let malformed = [0x06u8; 18];
+        let blob = pub_cfb::CfbStreamBlob {
+            path: "/Objects/Object 73/\u{2}OlePres001".into(),
+            name: "\u{2}OlePres001".into(),
+            bytes: fixture(CF_METAFILEPICT, 4, &malformed),
+        };
+
+        assert!(parse_cached_presentation_blob(blob).is_err());
+    }
+
+    #[test]
+    fn cached_presentation_rejects_noncanonical_stream_suffix() {
+        let payload = [0x05u8; 18];
+        let blob = pub_cfb::CfbStreamBlob {
+            path: "/Objects/Object 73/\u{2}OlePres01x".into(),
+            name: "\u{2}OlePres01x".into(),
+            bytes: fixture(CF_METAFILEPICT, 4, &payload),
+        };
+
+        assert!(parse_cached_presentation_blob(blob).is_err());
     }
 
     #[test]
@@ -143,14 +277,6 @@ mod tests {
         let mut bytes = fixture(CF_METAFILEPICT, 4, &payload);
         bytes.truncate(bytes.len() - 1);
         assert!(parse_cf_metafilepict_ole_presentation(&bytes).is_err());
-
-        let mut no_trailer = fixture(CF_METAFILEPICT, 4, &payload);
-        no_trailer.truncate(no_trailer.len() - METAFILE_RESERVED2_LEN);
-        assert!(parse_cf_metafilepict_ole_presentation(&no_trailer).is_ok());
-
-        let mut short_trailer = no_trailer.clone();
-        short_trailer.extend_from_slice(&[0_u8; METAFILE_RESERVED2_LEN - 1]);
-        assert!(parse_cf_metafilepict_ole_presentation(&short_trailer).is_err());
     }
 
     #[test]
