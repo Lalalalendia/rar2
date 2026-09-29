@@ -1,3 +1,4 @@
+use chaptera_process_launch::{BoundProgram, current_environment_allowlist};
 use chaptera_update_engine::{UpdateEngine, UpdateError, UpdatePhase};
 use chaptera_update_orchestrator::{OrchestrationError, UpdateOrchestrator};
 use serde::{Deserialize, Serialize};
@@ -40,45 +41,20 @@ pub struct PreparedControlHandoff {
 
 impl PreparedControlHandoff {
     pub fn spawn(&self) -> Result<Child> {
-        if !self.control_updater.is_absolute() {
-            return Err(HandoffError::ControlUpdaterIdentityChanged(
-                self.control_updater.clone(),
-            ));
-        }
-        let canonical_updater = fs::canonicalize(&self.control_updater)
-            .map_err(|_| HandoffError::ControlUpdaterMissing(self.control_updater.clone()))?;
-        if canonical_updater != self.control_updater || !canonical_updater.is_file() {
-            return Err(HandoffError::ControlUpdaterIdentityChanged(
-                self.control_updater.clone(),
-            ));
-        }
-        if sha256_file(&canonical_updater)? != self.control_updater_sha256 {
-            return Err(HandoffError::ControlUpdaterIdentityChanged(
-                self.control_updater.clone(),
-            ));
-        }
-
         if !self.request_path.is_absolute() || !self.request_path.is_file() {
             return Err(HandoffError::ControlRequestMissing(self.request_path.clone()));
         }
-        let canonical_working_directory = fs::canonicalize(&self.working_directory)
-            .map_err(|_| HandoffError::ControlWorkingDirectoryMissing(
-                self.working_directory.clone(),
-            ))?;
-        if canonical_working_directory != self.working_directory
-            || !canonical_working_directory.is_dir()
-        {
-            return Err(HandoffError::ControlWorkingDirectoryMissing(
-                self.working_directory.clone(),
-            ));
-        }
 
-        let mut command = Command::new(&canonical_updater);
-        command
-            .arg(CONTROL_MODE_ARG)
-            .arg(&self.request_path)
-            .current_dir(&canonical_working_directory);
-        apply_control_environment(&mut command);
+        let program = BoundProgram::from_expected(
+            self.control_updater.clone(),
+            self.control_updater_sha256.clone(),
+            self.working_directory.clone(),
+        )
+        .map_err(|_| HandoffError::ControlUpdaterIdentityChanged(self.control_updater.clone()))?;
+        let mut command = program
+            .command(current_environment_allowlist(CONTROL_ENV_ALLOWLIST))
+            .map_err(|_| HandoffError::ControlUpdaterIdentityChanged(self.control_updater.clone()))?;
+        command.arg(CONTROL_MODE_ARG).arg(&self.request_path);
         command.spawn().map_err(HandoffError::Io)
     }
 }
