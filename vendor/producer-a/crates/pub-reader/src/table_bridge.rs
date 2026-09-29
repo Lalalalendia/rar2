@@ -1,6 +1,6 @@
 use super::*;
 use pub_contents::{CONTENTS_RAW_TYPE_CELLS, MatureCellCoordinates, parse_confirmed_mature_cells};
-use pub_model::{SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId};
+use pub_model::{RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId};
 use pub_quill::{QuillMcldChunk, QuillStoryCatalog, bounded_mcld_table_metrics};
 
 pub const RAW_TYPE_TABLE: u16 = 0x10;
@@ -15,6 +15,8 @@ pub struct PubTableCellSource {
     pub coordinates: Option<PubTableCellCoordinates>,
     pub utf16_start: u32,
     pub utf16_end: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<RectEmu>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
 }
@@ -43,6 +45,7 @@ pub struct PubMaterializedTableCell {
     pub id: TableCellId,
     pub address: TableCellAddress,
     pub text: String,
+    pub bounds: Option<RectEmu>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +159,7 @@ pub fn materialize_bounded_simple_table_cells(
                 id: semantic.id,
                 address: semantic.address,
                 text,
+                bounds: source.bounds,
             })
         })
         .collect()
@@ -386,6 +390,7 @@ pub(crate) fn build_table_source(
             coordinates,
             utf16_start: previous_end,
             utf16_end: end.value,
+            bounds: None,
             source_refs: vec![
                 source_ref(
                     context.source,
@@ -787,6 +792,7 @@ mod tests {
                 }),
                 utf16_start: 0,
                 utf16_end: 1,
+                bounds: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -800,6 +806,7 @@ mod tests {
                 }),
                 utf16_start: 1,
                 utf16_end: 2,
+                bounds: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -813,6 +820,7 @@ mod tests {
                 }),
                 utf16_start: 2,
                 utf16_end: 3,
+                bounds: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -826,6 +834,7 @@ mod tests {
                 }),
                 utf16_start: 3,
                 utf16_end: 4,
+                bounds: None,
                 source_refs: Vec::new(),
             },
         ];
@@ -858,6 +867,7 @@ mod tests {
             }),
             utf16_start: 0,
             utf16_end: 1,
+            bounds: None,
             source_refs: Vec::new(),
         }];
 
