@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - corpus/reader-1050-baseline
+      - research/legacy-ole-wmf-special-object-census-01
     paths:
       - '.github/workflows/reader-1050-corpus-baseline.yml'
       - 'tools/corpus/pub_container_extract.py'
@@ -315,6 +316,7 @@ jobs:
               "valid_wmf_count": payload["valid_wmf_count"],
               "wmf_error_counts": payload["wmf_error_counts"],
               "function_set_profile_count": payload["function_set_profile_count"],
+              "selected_special_object_census": payload["selected_special_object_census"],
           }, indent=2, sort_keys=True))
           PY
 
