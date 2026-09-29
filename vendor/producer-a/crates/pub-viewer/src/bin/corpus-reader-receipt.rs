@@ -286,6 +286,23 @@ fn raster_rejection_detail(error: &anyhow::Error) -> String {
         "WMF selects an unsupported region graphics object" => {
             "select_unsupported_region".to_owned()
         }
+        "WMF region object is truncated" => "region_object_truncated".to_owned(),
+        "WMF region size is negative" => "region_size_negative".to_owned(),
+        "WMF region size disagrees with record payload" => "region_size_mismatch".to_owned(),
+        "WMF region scan count is negative" => "region_scan_count_negative".to_owned(),
+        "WMF region scan count exceeds bounded limit" => "region_scan_count_bound".to_owned(),
+        "WMF region maxScan is negative" => "region_maxscan_negative".to_owned(),
+        "WMF region maxScan exceeds bounded limit" => "region_maxscan_bound".to_owned(),
+        "WMF region scan coordinate count is odd" => "region_scan_count_odd".to_owned(),
+        "WMF region scan coordinate count exceeds bounded limit" => {
+            "region_scan_coordinate_bound".to_owned()
+        }
+        "WMF region scan payload is truncated" => "region_scan_truncated".to_owned(),
+        "WMF region scan Count2 disagrees with Count" => "region_scan_count2_mismatch".to_owned(),
+        "WMF region payload has trailing bytes" => "region_payload_trailing".to_owned(),
+        _ if message.starts_with("unsupported WMF region object type") => {
+            "region_object_type".to_owned()
+        }
         _ => raster_rejection_class(error).to_owned(),
     }
 }
