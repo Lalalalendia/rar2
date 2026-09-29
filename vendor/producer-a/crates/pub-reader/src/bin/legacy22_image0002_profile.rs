@@ -320,6 +320,10 @@ fn main() -> Result<()> {
             "direct_image_data_child_count": direct_image_data.len(),
             "direct_native_object_id": direct_native_entry.map(|entry| entry.object_id),
             "direct_native_chunk_len": direct_native_chunk.map(|chunk| chunk.len()),
+            "direct_native_len_u32_at_0x04": direct_native_chunk
+                .and_then(|chunk| read_u32(chunk, 0x04)),
+            "direct_native_len_after_0x08": direct_native_chunk
+                .and_then(|chunk| chunk.len().checked_sub(0x08)),
             "direct_native_wmf_valid_offsets": direct_native_wmf_offsets,
             "direct_native_wmf_payload_sha256": direct_native_payload_hashes,
             "direct_native_len_u32_at_0x08": direct_native_chunk
