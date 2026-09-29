@@ -664,6 +664,7 @@ impl GuestReaderHttpState {
         self.sessions
             .mark_expired(&session.session_id, now_ms)
             .await?;
+        self.sessions.delete_expired(&session.session_id).await?;
         Ok(())
     }
 
@@ -1024,6 +1025,25 @@ impl SqliteGuestReaderSessionStore {
         .execute(&self.pool)
         .await
         .map_err(sqlite_error)?;
+        Ok(())
+    }
+
+    async fn delete_expired(&self, session_id: &str) -> Result<(), GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM reader_guest_sessions
+            WHERE session_id=?
+              AND state='expired'
+              AND quarantine_deleted_at_ms IS NOT NULL
+            "#,
+        )
+        .bind(session_id.as_bytes())
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::conflict("guest_expiry_delete_conflict"));
+        }
         Ok(())
     }
 
