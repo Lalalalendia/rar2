@@ -4,6 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - ".github/workflows/legacy22-full-corpus-replay.yml"
       - "vendor/producer-a/crates/pub-contents/src/legacy22_directory.rs"
       - "vendor/producer-a/crates/pub-reader/src/family_classifier.rs"
       - "vendor/producer-a/crates/pub-reader/src/legacy22_graph.rs"
@@ -202,6 +203,102 @@ jobs:
           u16_summary = summarize(u16_values)
           u32_summary = summarize(u32_values)
 
+          # Hosted/offline causal join for LEGACY22-RAW0022-CAUSAL-01.
+          # Compare OleData.V (+0x0A) only against persisted CFB object-storage
+          # identities/topology; do not assign semantics from numeric shape.
+          import re
+          import olefile
+
+          sha_to_path = {path.stem.lower(): path for path in paths}
+          cfb_join = {
+              "candidate_count": len(candidates),
+              "files_with_objects_storage": 0,
+              "files_with_object_substorage": 0,
+              "files_with_olepres": 0,
+              "v_in_object_storage_number": 0,
+              "v_plus_1_in_object_storage_number": 0,
+              "v_minus_1_in_object_storage_number": 0,
+              "v_in_olepres_suffix": 0,
+              "v_in_any_numeric_cfb_component": 0,
+          }
+          object_storage_counts = Counter()
+          olepres_counts = Counter()
+          v_values = Counter()
+
+          topology_by_sha = {}
+          for row in affected:
+              source_sha = row["source_sha256"].lower()
+              path = sha_to_path.get(source_sha)
+              if path is None:
+                  raise RuntimeError(
+                      f"{source_sha}: candidate source is missing from pinned corpus paths"
+                  )
+              object_numbers = set()
+              olepres_numbers = set()
+              any_numbers = set()
+              has_objects = False
+              try:
+                  with olefile.OleFileIO(str(path)) as ole:
+                      entries = ole.listdir(streams=True, storages=True)
+              except Exception as exc:
+                  raise RuntimeError(
+                      f"{path.name}: CFB topology parse failed: {exc}"
+                  ) from exc
+              for entry in entries:
+                  for component in entry:
+                      if component.casefold() == "objects":
+                          has_objects = True
+                      m = re.fullmatch(r"Object\s*(\d+)", component, flags=re.IGNORECASE)
+                      if m:
+                          object_numbers.add(int(m.group(1)))
+                      m = re.fullmatch(r".*OlePres(\d+)", component, flags=re.IGNORECASE)
+                      if m:
+                          olepres_numbers.add(int(m.group(1)))
+                      for numeric in re.finditer(r"\d+", component):
+                          any_numbers.add(int(numeric.group(0)))
+              topology_by_sha[source_sha] = (object_numbers, olepres_numbers, any_numbers)
+              if has_objects:
+                  cfb_join["files_with_objects_storage"] += 1
+              if object_numbers:
+                  cfb_join["files_with_object_substorage"] += 1
+              if olepres_numbers:
+                  cfb_join["files_with_olepres"] += 1
+              object_storage_counts[str(len(object_numbers))] += 1
+              olepres_counts[str(len(olepres_numbers))] += 1
+
+          for item in candidates:
+              source_sha = item["source_sha256"].lower()
+              raw_v = (item.get("child_u16_first64") or {}).get("0x0a")
+              if raw_v is None:
+                  continue
+              v = int(raw_v)
+              v_values[str(v)] += 1
+              object_numbers, olepres_numbers, any_numbers = topology_by_sha.get(
+                  source_sha, (set(), set(), set())
+              )
+              if v in object_numbers:
+                  cfb_join["v_in_object_storage_number"] += 1
+              if v + 1 in object_numbers:
+                  cfb_join["v_plus_1_in_object_storage_number"] += 1
+              if v > 0 and v - 1 in object_numbers:
+                  cfb_join["v_minus_1_in_object_storage_number"] += 1
+              if v in olepres_numbers:
+                  cfb_join["v_in_olepres_suffix"] += 1
+              if v in any_numbers:
+                  cfb_join["v_in_any_numeric_cfb_component"] += 1
+
+          cfb_join["object_storage_count_distribution"] = dict(
+              sorted(object_storage_counts.items(), key=lambda item: int(item[0]))
+          )
+          cfb_join["olepres_count_distribution"] = dict(
+              sorted(olepres_counts.items(), key=lambda item: int(item[0]))
+          )
+          cfb_join["v_distinct_count"] = len(v_values)
+          cfb_join["v_top_values"] = [
+              {"value": value, "count": count}
+              for value, count in v_values.most_common(20)
+          ]
+
           summary = {
               "schema": "chaptera.legacy22-raw0022-companion-census.v1",
               "corpus_file_count": len(paths),
@@ -253,6 +350,7 @@ jobs:
                   if profile["observed_count"] == len(candidates)
                   and profile["distinct_count"] <= 8
               ],
+              "cfb_oledata_identity_join": cfb_join,
               "child_u32_low_cardinality_offsets": [
                   offset
                   for offset, profile in u32_summary.items()
