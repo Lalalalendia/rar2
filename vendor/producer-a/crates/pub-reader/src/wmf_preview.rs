@@ -437,26 +437,12 @@ fn draw_polyline(canvas: &mut Canvas, state: &PlaybackState, points: &[(i32, i32
     }
     let width = mapped_pen_width(state, canvas);
     for pair in points.windows(2) {
-        draw_line(
-            canvas,
-            state.clip,
-            pair[0],
-            pair[1],
-            width,
-            state.pen.color,
-        );
+        draw_line(canvas, state.clip, pair[0], pair[1], width, state.pen.color);
     }
     if closed {
         let first = points[0];
         let last = points[points.len() - 1];
-        draw_line(
-            canvas,
-            state.clip,
-            last,
-            first,
-            width,
-            state.pen.color,
-        );
+        draw_line(canvas, state.clip, last, first, width, state.pen.color);
     }
 }
 
