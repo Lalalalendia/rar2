@@ -1676,6 +1676,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "The current publication color scheme could not be resolved safely; scheme-indexed shape colors remain unavailable.",
         ),
+        AmbiguousOfficeArtDggDefaults { .. } => (
+            "viewer.paint.dgg_defaults_ambiguous",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "Document-wide OfficeArt drawing-group defaults are ambiguous; affected effective paint remains unresolved.",
+        ),
     };
 
     ViewerDiagnostic {
