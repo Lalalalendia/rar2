@@ -98,6 +98,116 @@ pub fn read_stream_reader<R: Read + Seek>(reader: R, stream_path: &str) -> Resul
     Ok(bytes)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CfbStreamBlob {
+    pub path: String,
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Reads bounded direct-child streams whose names match a prefix.
+pub fn read_direct_child_streams_with_prefix_reader<R: Read + Seek>(
+    reader: R,
+    storage_path: &str,
+    name_prefix: &str,
+    max_count: usize,
+    max_stream_bytes: usize,
+    max_total_bytes: usize,
+) -> Result<Vec<CfbStreamBlob>> {
+    let mut compound =
+        cfb::CompoundFile::open(reader).context("не удалось разобрать CFB-контейнер")?;
+    let storage_path = Path::new(storage_path);
+
+    let mut candidates = compound
+        .walk()
+        .filter(|entry| {
+            entry.is_stream()
+                && entry.path().parent() == Some(storage_path)
+                && entry.name().starts_with(name_prefix)
+        })
+        .map(|entry| {
+            (
+                entry.path().to_path_buf(),
+                entry.name().to_owned(),
+                entry.len(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    if candidates.len() > max_count {
+        anyhow::bail!(
+            "слишком много matching streams under {}: {} > {}",
+            storage_path.display(),
+            candidates.len(),
+            max_count
+        );
+    }
+
+    let total_bytes =
+        candidates
+            .iter()
+            .try_fold(0usize, |total, (path, _, len)| -> Result<usize> {
+                let len =
+                    usize::try_from(*len).context("размер CFB stream не помещается в usize")?;
+                if len > max_stream_bytes {
+                    anyhow::bail!(
+                        "CFB stream {} превышает bounded size: {} > {}",
+                        path.display(),
+                        len,
+                        max_stream_bytes
+                    );
+                }
+                total
+                    .checked_add(len)
+                    .context("суммарный размер matching CFB streams переполнен")
+            })?;
+    if total_bytes > max_total_bytes {
+        anyhow::bail!(
+            "суммарный размер matching streams under {} превышает bounded size: {} > {}",
+            storage_path.display(),
+            total_bytes,
+            max_total_bytes
+        );
+    }
+
+    let mut blobs = Vec::with_capacity(candidates.len());
+    for (path, name, len) in candidates {
+        let len = usize::try_from(len).context("размер CFB stream не помещается в usize")?;
+        if len > max_stream_bytes {
+            anyhow::bail!(
+                "CFB stream {} превышает bounded size: {} > {}",
+                path.display(),
+                len,
+                max_stream_bytes
+            );
+        }
+
+        let mut stream = compound
+            .open_stream(&path)
+            .with_context(|| format!("не удалось открыть stream {}", path.display()))?;
+        let mut bytes = Vec::with_capacity(len);
+        stream
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("не удалось прочитать stream {}", path.display()))?;
+        if bytes.len() != len {
+            anyhow::bail!(
+                "CFB stream {} changed size during bounded read: expected {}, got {}",
+                path.display(),
+                len,
+                bytes.len()
+            );
+        }
+        blobs.push(CfbStreamBlob {
+            path: canonical_cfb_path(&path),
+            name,
+            bytes,
+        });
+    }
+
+    Ok(blobs)
+}
+
 #[derive(Debug, Clone)]
 struct CfbRewriteEntry {
     path: PathBuf,
@@ -360,6 +470,23 @@ mod tests {
             .expect("данные Alpha/first должны записываться");
 
         compound
+            .create_storage("/Objects")
+            .expect("хранилище Objects должно создаваться");
+        compound
+            .create_storage("/Objects/Object 73")
+            .expect("Object 73 storage должно создаваться");
+        compound
+            .create_stream("/Objects/Object 73/\u{2}OlePres001")
+            .expect("OlePres001 stream должен создаваться")
+            .write_all(b"pres-1")
+            .expect("OlePres001 bytes должны записываться");
+        compound
+            .create_stream("/Objects/Object 73/\u{2}OlePres002")
+            .expect("OlePres002 stream должен создаваться")
+            .write_all(b"pres-2")
+            .expect("OlePres002 bytes должны записываться");
+
+        compound
             .set_storage_clsid(
                 "/Alpha",
                 Uuid::parse_str("12345678-1234-5678-9abc-def012345678").unwrap(),
@@ -399,7 +526,17 @@ mod tests {
 
         assert_eq!(
             paths,
-            vec!["/", "/Alpha", "/Alpha/first", "/Zoo", "/Zoo/last"]
+            vec![
+                "/",
+                "/Alpha",
+                "/Alpha/first",
+                "/Objects",
+                "/Objects/Object 73",
+                "/Objects/Object 73/\u{2}OlePres001",
+                "/Objects/Object 73/\u{2}OlePres002",
+                "/Zoo",
+                "/Zoo/last",
+            ]
         );
         assert_eq!(inventory.schema_version, CFB_INVENTORY_SCHEMA_VERSION);
     }
@@ -425,6 +562,69 @@ mod tests {
 
         assert_eq!(alpha.kind, EntryKind::Storage);
         assert_eq!(alpha.len, 0);
+    }
+
+    #[test]
+    fn reads_bounded_direct_child_streams_by_prefix() {
+        let streams = read_direct_child_streams_with_prefix_reader(
+            synthetic_cfb(),
+            "/Objects/Object 73",
+            "\u{2}OlePres",
+            2,
+            16,
+            32,
+        )
+        .expect("OlePres streams должны читаться");
+
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams[0].path, "/Objects/Object 73/\u{2}OlePres001");
+        assert_eq!(streams[0].bytes, b"pres-1");
+        assert_eq!(streams[1].path, "/Objects/Object 73/\u{2}OlePres002");
+        assert_eq!(streams[1].bytes, b"pres-2");
+    }
+
+    #[test]
+    fn bounded_direct_child_stream_reader_rejects_count_and_size_overflow() {
+        let count_error = read_direct_child_streams_with_prefix_reader(
+            synthetic_cfb(),
+            "/Objects/Object 73",
+            "\u{2}OlePres",
+            1,
+            16,
+            32,
+        )
+        .expect_err("count limit должен быть fail-closed");
+        assert!(
+            count_error
+                .to_string()
+                .contains("слишком много matching streams")
+        );
+
+        let size_error = read_direct_child_streams_with_prefix_reader(
+            synthetic_cfb(),
+            "/Objects/Object 73",
+            "\u{2}OlePres",
+            2,
+            4,
+            32,
+        )
+        .expect_err("size limit должен быть fail-closed");
+        assert!(size_error.to_string().contains("превышает bounded size"));
+
+        let total_error = read_direct_child_streams_with_prefix_reader(
+            synthetic_cfb(),
+            "/Objects/Object 73",
+            "\u{2}OlePres",
+            2,
+            16,
+            10,
+        )
+        .expect_err("aggregate byte limit должен быть fail-closed");
+        assert!(
+            total_error
+                .to_string()
+                .contains("суммарный размер matching streams")
+        );
     }
 
     #[test]
