@@ -89,6 +89,21 @@ struct McldProfile {
 }
 
 #[derive(Debug, Serialize)]
+struct FdppProfile {
+    descriptor_length: u32,
+    stored_count: Option<u16>,
+    stored_count_matches_grounded_story_count: bool,
+    tables_fit: bool,
+    boundary_count: usize,
+    distinct_boundary_count: usize,
+    boundaries_monotonic: bool,
+    boundaries_inside_text_count: usize,
+    terminal_boundary_closes_text: bool,
+    first_boundary_after_text_start: bool,
+    all_boundaries_utf16_aligned: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct BtePlcCandidate {
     carrier_index: usize,
     prefix_offset: usize,
@@ -182,6 +197,7 @@ struct WitnessRow {
     strs_descriptor_metadata: DescriptorMetadataProfile,
     text_descriptor_metadata: DescriptorMetadataProfile,
     mcld_profile: McldProfile,
+    fdpp_profile: FdppProfile,
     syid_strs_text_opt_a_all_equal: bool,
     syid_strs_text_bit_type_all_equal: bool,
     story_catalog_entries_with_unsupported_tail: usize,
@@ -985,6 +1001,88 @@ fn format_ranges(descriptors: &[&Descriptor]) -> Vec<(u64, u64)> {
         .collect()
 }
 
+fn profile_fdpp(
+    quill: &[u8],
+    descriptor: &Descriptor,
+    text_descriptor: &Descriptor,
+    grounded_story_count: u32,
+) -> Result<FdppProfile> {
+    let payload = descriptor_range(quill, descriptor)?;
+    let stored_count = u16_at(payload, 0);
+    let Some(count_u16) = stored_count else {
+        return Ok(FdppProfile {
+            descriptor_length: descriptor.data_length,
+            stored_count,
+            stored_count_matches_grounded_story_count: false,
+            tables_fit: false,
+            boundary_count: 0,
+            distinct_boundary_count: 0,
+            boundaries_monotonic: false,
+            boundaries_inside_text_count: 0,
+            terminal_boundary_closes_text: false,
+            first_boundary_after_text_start: false,
+            all_boundaries_utf16_aligned: false,
+        });
+    };
+    let count = usize::from(count_u16);
+    let offsets_start = 8usize;
+    let Some(chunk_offsets_start) = offsets_start.checked_add(count.saturating_mul(4)) else {
+        bail!("FDPP offset table overflow");
+    };
+    let Some(body_start) = chunk_offsets_start.checked_add(count.saturating_mul(2)) else {
+        bail!("FDPP style-offset table overflow");
+    };
+    let tables_fit = body_start <= payload.len();
+
+    let text_start = u64::from(text_descriptor.data_offset);
+    let text_end = text_start
+        .checked_add(u64::from(text_descriptor.data_length))
+        .context("TEXT range overflow")?;
+
+    let mut boundaries = Vec::new();
+    if tables_fit {
+        for index in 0..count {
+            let Some(value) = u32_at(payload, offsets_start + index * 4) else {
+                boundaries.clear();
+                break;
+            };
+            boundaries.push(u64::from(value));
+        }
+    }
+
+    let boundary_count = boundaries.len();
+    let distinct_boundary_count = boundaries.iter().copied().collect::<BTreeSet<_>>().len();
+    let boundaries_monotonic =
+        boundary_count == count && boundaries.windows(2).all(|pair| pair[0] <= pair[1]);
+    let boundaries_inside_text_count = boundaries
+        .iter()
+        .filter(|value| **value >= text_start && **value <= text_end)
+        .count();
+    let terminal_boundary_closes_text =
+        boundaries.last().copied() == Some(text_end);
+    let first_boundary_after_text_start = boundaries
+        .first()
+        .is_some_and(|value| *value > text_start && *value <= text_end);
+    let all_boundaries_utf16_aligned = boundaries
+        .iter()
+        .all(|value| value.checked_sub(text_start).is_some_and(|delta| delta % 2 == 0));
+
+    Ok(FdppProfile {
+        descriptor_length: descriptor.data_length,
+        stored_count,
+        stored_count_matches_grounded_story_count:
+            u32::from(count_u16) == grounded_story_count,
+        tables_fit,
+        boundary_count,
+        distinct_boundary_count,
+        boundaries_monotonic,
+        boundaries_inside_text_count,
+        terminal_boundary_closes_text,
+        first_boundary_after_text_start,
+        all_boundaries_utf16_aligned,
+    })
+}
+
 fn profile_bte_carriers(quill: &[u8], carriers: &[&Descriptor]) -> Result<Vec<BteCarrierProfile>> {
     let mut out = Vec::with_capacity(carriers.len());
 
@@ -1262,6 +1360,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         story_catalog_fixed8_pair_profiles(&story_catalog, text_utf16_units, text_bytes);
     let mcld_profile =
         profile_mcld(&quill, mcld, &story_catalog, text_utf16_units, text_bytes)?;
+    let fdpp_profile = profile_fdpp(&quill, fdpp[0], text, grounded_story_count)?;
     let story_catalog_entries_with_unsupported_tail = story_catalog
         .entries
         .iter()
@@ -1289,6 +1388,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         strs_descriptor_metadata,
         text_descriptor_metadata,
         mcld_profile,
+        fdpp_profile,
         syid_strs_text_opt_a_all_equal:
             syid.opt_a == strs.opt_a && strs.opt_a == text.opt_a,
         syid_strs_text_bit_type_all_equal:
@@ -1364,7 +1464,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v8",
+        "schema": "chaptera.quill-story-early-text-boundary.v9",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
