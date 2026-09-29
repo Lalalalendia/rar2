@@ -429,6 +429,12 @@ pub enum PubBridgeDiagnostic {
         raw_type: Option<u16>,
         reason: String,
     },
+    LegacyTextEncodingUnresolved {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner_id: Option<u32>,
+        source: RawSpan,
+        high_byte_count: usize,
+    },
     McldRecordCountMismatch {
         record_count: u32,
         record_id_count: u32,

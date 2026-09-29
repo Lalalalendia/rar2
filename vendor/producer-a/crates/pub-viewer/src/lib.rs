@@ -1551,6 +1551,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "A legacy Publisher page contains an object outside the currently admitted old-0x22 Reader profile.",
         ),
+        LegacyTextEncodingUnresolved { .. } => (
+            "viewer.text.legacy_encoding_unresolved",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "Legacy text bytes are preserved, but their character encoding is not proven; page geometry remains available without guessing text.",
+        ),
         McldRecordCountMismatch { .. } => (
             "viewer.table.mcld_layout_metrics_unavailable",
             ViewerDiagnosticSeverity::FidelityWarning,
