@@ -10,6 +10,13 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn error_chain_component_hashes(error: &anyhow::Error) -> Vec<String> {
+    error
+        .chain()
+        .map(|component| sha256_hex(component.to_string().as_bytes()))
+        .collect()
+}
+
 
 fn legacy_object_residual_census(
     bytes: &[u8],
@@ -124,6 +131,8 @@ fn main() -> Result<()> {
                 "source_sha256": source_sha256,
                 "byte_len": bytes.len(),
                 "open_error_kind": "viewer_open_failed",
+                "open_error_chain_depth": error.chain().count(),
+                "open_error_chain_component_sha256": error_chain_component_hashes(&error),
                 "open_error_signature_sha256": sha256_hex(error_text.as_bytes()),
                 "visual_fidelity_proven": false,
             })

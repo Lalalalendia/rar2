@@ -70,7 +70,8 @@ pub use ole_presentation::{OlePresentation, parse_cf_metafilepict_ole_presentati
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
     Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
-    RawContentsBlock, RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    RawContentsBlock, RawContentsBlockBody, StoryCatalogReadError, parse_0x2c_header,
+    parse_bounded_empty_mature_story_catalog_variant, parse_confirmed_0x2c_chunk,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
     parse_confirmed_controlling_page_list, parse_confirmed_document_page_list,
     parse_confirmed_margins_page_extent, parse_confirmed_mature_color_scheme,
@@ -91,8 +92,8 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillTypographyValueSource, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    QuillMcldReadError, QuillStoryReadError, QuillTypographyValueSource, parse_bounded_mcld,
+    parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -1850,18 +1851,49 @@ pub fn build_mature_0x2c_from_streams(
     )?;
     let story_catalog_chunk =
         chunk_for_reference(contents_stream.clone(), contents, story_catalog_reference)?;
-    let story_catalog = parse_confirmed_mature_story_catalog(contents, &story_catalog_chunk)
-        .context("parse mature Story catalog 0x65")?;
-    let story_layout_keys: BTreeMap<_, _> = story_catalog
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            Some((
-                entry.text_id,
-                (entry.layout_key?, entry.layout_key_source.as_ref()?.clone()),
-            ))
-        })
-        .collect();
+    let (story_layout_keys, physical_empty_story_catalog): (BTreeMap<_, _>, bool) =
+        match parse_confirmed_mature_story_catalog(contents, &story_catalog_chunk) {
+            Ok(story_catalog) => (
+                story_catalog
+                    .entries
+                    .iter()
+                    .filter_map(|entry| {
+                        Some((
+                            entry.text_id,
+                            (entry.layout_key?, entry.layout_key_source.as_ref()?.clone()),
+                        ))
+                    })
+                    .collect(),
+                false,
+            ),
+            Err(StoryCatalogReadError::MissingDeclaredCount) => {
+                let _physical_empty =
+                    parse_bounded_empty_mature_story_catalog_variant(contents, &story_catalog_chunk)
+                        .context("parse bounded physical-empty Story catalog 0x65 variant")?;
+
+                let mut referenced_story_ids = BTreeSet::new();
+                for reference in references.values() {
+                    if !matches!(
+                        single_raw_type(reference),
+                        Some(RAW_TYPE_SHAPE) | Some(RAW_TYPE_TABLE)
+                    ) {
+                        continue;
+                    }
+                    let chunk = chunk_for_reference(contents_stream.clone(), contents, reference)?;
+                    if let Some((text_id, _)) = unique_u32_field(&chunk, FIELD_STORY_ID)? {
+                        referenced_story_ids.insert(text_id);
+                    }
+                }
+                if !referenced_story_ids.is_empty() {
+                    bail!(
+                        "physical-empty Story catalog 0x65 conflicts with live Story references: {:?}",
+                        referenced_story_ids
+                    );
+                }
+                (BTreeMap::new(), true)
+            }
+            Err(error) => return Err(error).context("parse mature Story catalog 0x65"),
+        };
 
     let document_reference =
         unique_reference_by_raw_type(&references, RAW_TYPE_DOCUMENT, "DOCUMENT")?;
@@ -1973,51 +2005,74 @@ pub fn build_mature_0x2c_from_streams(
     graph.pages = pages;
 
     let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
-    let quill_catalog = parse_confirmed_story_catalog(quill_stream.clone(), quill)
-        .context("parse grounded Quill story catalog")?;
-    let typography_catalog = match parse_bounded_typography(quill, &quill_catalog) {
-        Ok(catalog) => {
-            let mut unknown = catalog.unknown_block_types_assumed_zero_length.clone();
-            unknown.extend(
-                catalog
-                    .inheritance_unknown_block_types_assumed_zero_length
-                    .iter()
-                    .copied(),
-            );
-            unknown.sort_unstable();
-            unknown.dedup();
-            if !unknown.is_empty() {
-                diagnostics.push(PubBridgeDiagnostic::TypographyUnknownFixedBlockTypes {
-                    block_types: unknown,
-                });
-            }
-            Some(catalog)
-        }
-        Err(error) => {
+    let quill_catalog = match parse_confirmed_story_catalog(quill_stream.clone(), quill) {
+        Ok(catalog) => Some(catalog),
+        Err(QuillStoryReadError::MissingRequiredChunk { name })
+            if physical_empty_story_catalog && name == *b"STRS" =>
+        {
             diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
-                reason: error.to_string(),
+                reason: "physical-empty Story catalog has no live Story references and Quill omits STRS; admitting geometry-only publication without fabricating Story text".to_owned(),
             });
             None
         }
+        Err(error) => return Err(error).context("parse grounded Quill story catalog"),
     };
-    let mcld = match parse_bounded_mcld(quill_stream, quill, &quill_catalog.descriptor_nodes) {
-        Ok(mcld) => Some(mcld),
-        Err(QuillMcldReadError::MissingMcldDescriptor) => None,
-        Err(QuillMcldReadError::RecordCountMismatch {
-            record_count,
-            record_id_count,
-        }) => {
-            diagnostics.push(PubBridgeDiagnostic::McldRecordCountMismatch {
+    let typography_catalog = if let Some(quill_catalog) = quill_catalog.as_ref() {
+        match parse_bounded_typography(quill, quill_catalog) {
+            Ok(catalog) => {
+                let mut unknown = catalog.unknown_block_types_assumed_zero_length.clone();
+                unknown.extend(
+                    catalog
+                        .inheritance_unknown_block_types_assumed_zero_length
+                        .iter()
+                        .copied(),
+                );
+                unknown.sort_unstable();
+                unknown.dedup();
+                if !unknown.is_empty() {
+                    diagnostics.push(PubBridgeDiagnostic::TypographyUnknownFixedBlockTypes {
+                        block_types: unknown,
+                    });
+                }
+                Some(catalog)
+            }
+            Err(error) => {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: error.to_string(),
+                });
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mcld = if let Some(quill_catalog) = quill_catalog.as_ref() {
+        match parse_bounded_mcld(
+            quill_stream.clone(),
+            quill,
+            &quill_catalog.descriptor_nodes,
+        ) {
+            Ok(mcld) => Some(mcld),
+            Err(QuillMcldReadError::MissingMcldDescriptor) => None,
+            Err(QuillMcldReadError::RecordCountMismatch {
                 record_count,
                 record_id_count,
-            });
-            None
+            }) => {
+                diagnostics.push(PubBridgeDiagnostic::McldRecordCountMismatch {
+                    record_count,
+                    record_id_count,
+                });
+                None
+            }
+            Err(error) => return Err(error).context("parse bounded Quill MCLD"),
         }
-        Err(error) => return Err(error).context("parse bounded Quill MCLD"),
+    } else {
+        None
     };
     let mut story_by_syid = BTreeMap::new();
 
-    for story_slice in &quill_catalog.stories {
+    if let Some(quill_catalog) = quill_catalog.as_ref() {
+        for story_slice in &quill_catalog.stories {
         let syid = story_slice.syid.0;
         let story_id = derive_pub_story_id(&source_hash, syid)?;
         let object_key = quill_story_object_key(syid);
@@ -2057,7 +2112,8 @@ pub fn build_mature_0x2c_from_streams(
                 source_refs,
             },
         );
-        story_by_syid.insert(syid, story_id);
+            story_by_syid.insert(syid, story_id);
+        }
     }
 
     let mut typography_runs = Vec::new();
@@ -2320,20 +2376,27 @@ pub fn build_mature_0x2c_from_streams(
             None
         };
         let (table_story, table) = if raw_type == Some(RAW_TYPE_TABLE) {
-            let context = table_bridge::TableBridgeContext {
-                source: &graph.source,
-                contents_stream: &contents_stream,
-                contents,
-                references: &references,
-                quill_catalog: &quill_catalog,
-                story_by_syid: &story_by_syid,
-                story_layout_keys: &story_layout_keys,
-                mcld: mcld.as_ref(),
-            };
-            (
-                table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
-                table_bridge::build_table_source(&context, seq_num, &chunk, &mut diagnostics)?,
-            )
+            if let Some(quill_catalog) = quill_catalog.as_ref() {
+                let context = table_bridge::TableBridgeContext {
+                    source: &graph.source,
+                    contents_stream: &contents_stream,
+                    contents,
+                    references: &references,
+                    quill_catalog,
+                    story_by_syid: &story_by_syid,
+                    story_layout_keys: &story_layout_keys,
+                    mcld: mcld.as_ref(),
+                };
+                (
+                    table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
+                    table_bridge::build_table_source(&context, seq_num, &chunk, &mut diagnostics)?,
+                )
+            } else {
+                // The only no-catalog admission is the already-fenced physical-empty
+                // Story65 variant with no live SHAPE/TABLE Story identity. Do not
+                // fabricate Quill/TCD-backed table semantics in that geometry-only path.
+                (None, None)
+            }
         } else {
             (None, None)
         };
