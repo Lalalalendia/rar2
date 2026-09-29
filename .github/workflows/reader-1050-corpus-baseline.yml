@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - corpus/reader-1050-baseline
+      - reader/story65-derived-empty-01
     paths:
       - '.github/workflows/reader-1050-corpus-baseline.yml'
       - 'tools/corpus/pub_container_extract.py'
