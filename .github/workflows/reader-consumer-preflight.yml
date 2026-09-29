@@ -1,0 +1,54 @@
+name: Reader consumer preflight
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/chaptera-desktop/src/render_backend.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-layout/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - ".github/workflows/reader-consumer-preflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-shared-seam:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Format shared Reader seam
+        run: |
+          cargo fmt -p chaptera-desktop -- --check
+          cargo fmt --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml -- --check
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer -- --check
+
+      - name: Check shared Reader seam
+        run: |
+          cargo check -p chaptera-desktop --all-targets
+          cargo check --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --all-targets --features projected-scene-instances
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer --all-targets
+
+      - name: Clippy shared Reader seam
+        run: |
+          cargo clippy -p chaptera-desktop --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --all-targets --features projected-scene-instances -- -D warnings
+          cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer --all-targets -- -D warnings
+
+      - name: Test source-free semantic boundaries
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-layout
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --features cmo-slot-compose
+          cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml --features projected-scene-instances
