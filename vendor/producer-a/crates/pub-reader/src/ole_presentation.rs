@@ -38,6 +38,19 @@ pub struct LegacyOleCachedPresentation {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyOleCachedPresentationDiagnostic {
+    pub stream_path: String,
+    pub stream_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LegacyOleCachedPresentationScan {
+    pub presentations: Vec<LegacyOleCachedPresentation>,
+    pub diagnostics: Vec<LegacyOleCachedPresentationDiagnostic>,
+}
+
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
@@ -150,14 +163,15 @@ fn parse_cached_presentation_blob(
     })
 }
 
-/// Reads only persisted cached OLE presentations under the proven Object N storage.
+/// Scans persisted cached OLE presentations under the proven Object N storage.
 ///
-/// This function never activates OLE/COM servers. It only reads bounded direct-child
-/// OlePres streams and parses the MS-OLEDS presentation envelope.
-pub fn read_legacy_ole_cached_presentations<R: Read + Seek>(
+/// CFB count/per-stream/aggregate byte limits are fail-closed. Individual malformed
+/// OlePres siblings become diagnostics so a separate valid cached presentation can
+/// remain available to a higher-layer preview policy.
+pub fn scan_legacy_ole_cached_presentations<R: Read + Seek>(
     reader: R,
     storage_number: u16,
-) -> Result<Vec<LegacyOleCachedPresentation>> {
+) -> Result<LegacyOleCachedPresentationScan> {
     let storage_path = format!("/Objects/Object {storage_number}");
     let blobs = pub_cfb::read_direct_child_streams_with_prefix_reader(
         reader,
@@ -169,15 +183,65 @@ pub fn read_legacy_ole_cached_presentations<R: Read + Seek>(
     )
     .with_context(|| format!("read bounded cached presentations under {storage_path}"))?;
 
-    blobs
-        .into_iter()
-        .map(parse_cached_presentation_blob)
-        .collect()
+    let mut scan = LegacyOleCachedPresentationScan::default();
+    for blob in blobs {
+        let stream_path = blob.path.clone();
+        let stream_name = blob.name.clone();
+        match parse_cached_presentation_blob(blob) {
+            Ok(presentation) => scan.presentations.push(presentation),
+            Err(error) => scan
+                .diagnostics
+                .push(LegacyOleCachedPresentationDiagnostic {
+                    stream_path,
+                    stream_name,
+                    reason: error.to_string(),
+                }),
+        }
+    }
+    Ok(scan)
+}
+
+/// Strict compatibility wrapper for callers that require every persisted OlePres
+/// sibling to validate. Preview consumers should use the scan API and surface its
+/// diagnostics while selecting only successfully validated candidates.
+pub fn read_legacy_ole_cached_presentations<R: Read + Seek>(
+    reader: R,
+    storage_number: u16,
+) -> Result<Vec<LegacyOleCachedPresentation>> {
+    let scan = scan_legacy_ole_cached_presentations(reader, storage_number)?;
+    if !scan.diagnostics.is_empty() {
+        bail!(
+            "{} cached OLE presentation stream(s) were rejected",
+            scan.diagnostics.len()
+        );
+    }
+    Ok(scan.presentations)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Write};
+
+    fn cached_presentation_cfb(streams: &[(&str, Vec<u8>)]) -> Cursor<Vec<u8>> {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("create test CFB");
+        compound.create_storage("/Objects").expect("Objects storage");
+        compound
+            .create_storage("/Objects/Object 73")
+            .expect("Object 73 storage");
+        for (name, bytes) in streams {
+            compound
+                .create_stream(format!("/Objects/Object 73/{name}"))
+                .expect("create OlePres stream")
+                .write_all(bytes)
+                .expect("write OlePres stream");
+        }
+        compound.flush().expect("flush test CFB");
+        let mut cursor = compound.into_inner();
+        cursor.set_position(0);
+        cursor
+    }
 
     fn valid_wmf_payload() -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -241,6 +305,25 @@ mod tests {
         };
 
         assert!(parse_cached_presentation_blob(blob).is_err());
+    }
+
+    #[test]
+    fn scan_keeps_valid_sibling_and_reports_malformed_sibling() {
+        let valid = fixture(CF_METAFILEPICT, 4, &valid_wmf_payload());
+        let malformed = fixture(CF_METAFILEPICT, 4, &[0x06_u8; 18]);
+        let scan = scan_legacy_ole_cached_presentations(
+            cached_presentation_cfb(&[
+                ("\u{2}OlePres001", valid),
+                ("\u{2}OlePres002", malformed),
+            ]),
+            73,
+        )
+        .expect("bounded scan");
+
+        assert_eq!(scan.presentations.len(), 1);
+        assert_eq!(scan.presentations[0].stream_ordinal, 1);
+        assert_eq!(scan.diagnostics.len(), 1);
+        assert_eq!(scan.diagnostics[0].stream_name, "\u{2}OlePres002");
     }
 
     #[test]
