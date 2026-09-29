@@ -28,6 +28,16 @@ jobs:
           toolchain: "1.94.1"
           components: rustfmt, clippy
 
+      - name: Resolve Visual Studio dumpbin
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path "${env:ProgramFiles(x86)}" "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found" }
+          $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          if (-not $dumpbin -or -not (Test-Path $dumpbin)) { throw "dumpbin.exe not found through vswhere" }
+          "CHAPTERA_DUMPBIN=$dumpbin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using dumpbin: $dumpbin"
+
       - name: Format containment launcher
         shell: pwsh
         run: cargo fmt --manifest-path apps/chaptera-desktop-open-sandbox/Cargo.toml -- --check
@@ -58,10 +68,35 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP "chaptera-contained-stage"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item (Join-Path $workerTarget "release\chaptera-desktop-open-worker.exe") (Join-Path $stage "chaptera-desktop-open-worker.exe")
+          Copy-Item (Join-Path $sandboxTarget "release\chaptera-desktop-sandbox-bootstrap-probe.exe") (Join-Path $stage "chaptera-desktop-sandbox-bootstrap-probe.exe")
           Copy-Item (Join-Path $sandboxTarget "release\chaptera-desktop-sandbox-negative-probe.exe") (Join-Path $stage "chaptera-desktop-sandbox-negative-probe.exe")
 
           "CHAPTERA_SANDBOX_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHAPTERA_SANDBOX_HOST=$sandboxTarget" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Inspect containment executable imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in @(
+            "chaptera-desktop-sandbox-bootstrap-probe.exe",
+            "chaptera-desktop-sandbox-negative-probe.exe",
+            "chaptera-desktop-open-worker.exe"
+          )) {
+            $exe = Join-Path $env:CHAPTERA_SANDBOX_STAGE $name
+            Write-Host "===== DEPENDENTS $name ====="
+            & $env:CHAPTERA_DUMPBIN /DEPENDENTS $exe
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $name" }
+          }
+
+      - name: Prove strict containment starts minimal Rust bootstrap
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
+          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
+          & $hostExe $probe
+          if ($LASTEXITCODE -ne 0) { throw "strict bootstrap containment failed: $LASTEXITCODE" }
 
       - name: Create forbidden parent-only witness
         shell: pwsh
