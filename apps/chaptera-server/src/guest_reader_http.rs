@@ -387,7 +387,10 @@ async fn open_session(
             state.delete_quarantine(&session, now_ms).await?;
             return open_response_from_stored(&session);
         }
-        GuestSessionState::Rejected => return open_response_from_stored(&session),
+        GuestSessionState::Rejected => {
+            state.delete_quarantine(&session, now_ms).await?;
+            return open_response_from_stored(&session);
+        }
         GuestSessionState::Opening => {
             return Err(GuestReaderError::conflict("guest_open_in_progress"));
         }
