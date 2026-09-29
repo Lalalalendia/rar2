@@ -9,7 +9,8 @@ use pub_contents::{Legacy0x22Directory, Legacy0x22DirectoryEntry, parse_legacy_0
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
     Affine2D, AuthorityClass, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
-    Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceRole, Story,
+    Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceRole,
+    Story,
 };
 use pub_quill::parse_confirmed_story_catalog;
 use std::collections::{BTreeMap, BTreeSet};
