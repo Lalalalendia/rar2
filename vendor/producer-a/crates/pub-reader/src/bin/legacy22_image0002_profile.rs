@@ -817,10 +817,7 @@ fn postscript_ignore_blocker_profile(params: &[u8]) -> Value {
     })
 }
 
-fn allocate_probe_object(
-    objects: &mut Vec<Option<(u16, usize)>>,
-    object: (u16, usize),
-) -> usize {
+fn allocate_probe_object(objects: &mut Vec<Option<(u16, usize)>>, object: (u16, usize)) -> usize {
     if let Some((index, slot)) = objects
         .iter_mut()
         .enumerate()
