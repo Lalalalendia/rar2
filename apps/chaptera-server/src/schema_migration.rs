@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(report.target_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(
             report.pending_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         );
         assert!(!path.exists());
     }
@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(first.state, "current");
         assert_eq!(
             first.applied_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         );
 
         let second = runtime.migrate_up().await.unwrap();
@@ -751,7 +751,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 final_report.applied_versions,
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
             );
 
             cleanup(&path);
