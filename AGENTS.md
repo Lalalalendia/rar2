@@ -1,8 +1,8 @@
 # AGENTS.md — Chaptera / Rar execution contract
 
-This file is mandatory operational guidance for every AI agent, automation, or human-assisted agent modifying `HeisLuka/rar`.
+This file is mandatory operational guidance for every AI agent, automation, or human-assisted agent modifying `Lalalalendia/rar2`.
 
-`HeisLuka/rar` is the single active repository/workspace for current Chaptera implementation. Historical repositories are provenance unless a task explicitly says otherwise.
+`Lalalalendia/rar2` is the single active repository/workspace for current Chaptera implementation. `HeisLuka/rar` is the immediate historical predecessor/upstream. Older repositories are provenance unless a task explicitly says otherwise.
 
 ## 0. Read before touching anything
 
