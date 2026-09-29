@@ -9,7 +9,6 @@ import re
 from collections import Counter
 from pathlib import Path
 
-import olefile
 
 STANDARD_MARKERS = {0xFFFFFFFF, 0xFFFFFFFE}
 CF_METAFILEPICT = 3
@@ -189,6 +188,8 @@ def percentile(values: list[int], numerator: int, denominator: int) -> int | Non
 
 
 def profile_corpus(corpus_dir: Path) -> dict:
+    import olefile
+
     paths = sorted(corpus_dir.glob("*.pub"))
 
     files_with_olepres = 0
