@@ -36,6 +36,8 @@ on:
       - "tools/ci/test_reader_consumer_preflight.py"
       - "tools/ci/reader_pr_fanout.py"
       - "tools/ci/test_reader_pr_fanout.py"
+      - "tools/reader_active_content_guard.py"
+      - ".github/workflows/reader-active-content-inert.yml"
       - "tools/package_reader_portable.py"
       - "tools/test_package_reader_portable.py"
       - "tools/package_editor_live_trial.py"

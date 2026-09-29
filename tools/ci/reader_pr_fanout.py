@@ -72,6 +72,8 @@ TIER_A = READER_SHARED + (
     "tools/ci/test_reader_consumer_preflight.py",
     "tools/ci/reader_pr_fanout.py",
     "tools/ci/test_reader_pr_fanout.py",
+    "tools/reader_active_content_guard.py",
+    ".github/workflows/reader-active-content-inert.yml",
     ".github/workflows/reader-pr-ci.yml",
     ".github/workflows/reader-consumer-preflight.yml",
 )
