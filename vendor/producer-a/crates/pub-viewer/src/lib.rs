@@ -1828,12 +1828,14 @@ fn viewer_tables_from_resolved(
                 id: cell.id,
                 address: cell.address,
                 text: cell.text,
-                bounds: resolved_bounds.as_ref().and_then(|resolved| {
-                    resolved
-                        .cells
-                        .iter()
-                        .find(|candidate| candidate.origin == cell.id)
-                        .map(|candidate| candidate.bounds)
+                bounds: cell.bounds.or_else(|| {
+                    resolved_bounds.as_ref().and_then(|resolved| {
+                        resolved
+                            .cells
+                            .iter()
+                            .find(|candidate| candidate.origin == cell.id)
+                            .map(|candidate| candidate.bounds)
+                    })
                 }),
             })
             .collect();
