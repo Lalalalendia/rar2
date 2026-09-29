@@ -45,10 +45,9 @@ def main():
         ["crates/chaptera-viewer-render-plan/src/lib.rs"],
         tier_a=True,
         reader_windows=True,
-        editor_windows=True,
+        editor_windows=False,
         visual_oracle=True,
         typography_golden=True,
-        editor_windows=False,
         android=False,
     )
     assert_scope(
