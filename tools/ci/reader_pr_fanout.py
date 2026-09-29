@@ -10,6 +10,10 @@ import subprocess
 from typing import Iterable
 
 
+EVIDENCE_ONLY_PATHS = {
+    "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs",
+}
+
 SCOPES = (
     "tier_a",
     "reader_windows",
@@ -222,6 +226,7 @@ SHARED_DESKTOP_FILES = {
 
 
 def classify(paths: list[str]) -> dict[str, bool]:
+    semantic_paths = [path for path in paths if path not in EVIDENCE_ONLY_PATHS]
     mapping = {
         "tier_a": TIER_A,
         "reader_windows": READER_WINDOWS,
@@ -237,7 +242,7 @@ def classify(paths: list[str]) -> dict[str, bool]:
         "update_accept": UPDATE_ACCEPT,
     }
     result = {
-        scope: any(matches(path, patterns) for path in paths)
+        scope: any(matches(path, patterns) for path in semantic_paths)
         for scope, patterns in mapping.items()
     }
     # Full Editor Windows acceptance is product-surface validation, not a tax on
@@ -245,7 +250,7 @@ def classify(paths: list[str]) -> dict[str, bool]:
     if any(
         path.startswith("apps/chaptera-desktop/")
         and path not in SHARED_DESKTOP_FILES
-        for path in paths
+        for path in semantic_paths
     ):
         result["editor_windows"] = True
     return result
