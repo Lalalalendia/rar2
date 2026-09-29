@@ -659,6 +659,224 @@ pub struct ViewerEmbeddedImage {
     pub bytes: Vec<u8>,
 }
 
+fn encode_viewer_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>> {
+    let expected = usize::try_from(
+        u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| anyhow!("OLE preview PNG byte count overflow"))?,
+    )
+    .map_err(|_| anyhow!("OLE preview PNG byte count does not fit address space"))?;
+    if rgba.len() != expected {
+        return Err(anyhow!(
+            "OLE preview RGBA length {} does not match {}x{}",
+            rgba.len(),
+            width,
+            height
+        ));
+    }
+
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .context("write bounded OLE preview PNG header")?;
+        writer
+            .write_image_data(rgba)
+            .context("write bounded OLE preview PNG pixels")?;
+    }
+    Ok(encoded)
+}
+
+fn legacy_ole_preview_resource_id(
+    source_hash: &Sha256Digest,
+    storage_number: u16,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let digest = Sha256::digest(wmf_bytes);
+    let digest_hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let object_key = format!(
+        "objects/object-{storage_number}/cached-wmf-sha256-{digest_hex}"
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &object_key,
+        semantic_role: "legacy-ole-preview-v1",
+    })
+    .map_err(|error| anyhow!("derive legacy OLE preview resource id: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+fn viewer_legacy_ole_preview_images(
+    bytes: &[u8],
+    graph: &PubResolvedGraph,
+    document: &mut ViewerDocument,
+) -> Vec<ViewerEmbeddedImage> {
+    let mut uses_by_storage = BTreeMap::<u16, Vec<NodeId>>::new();
+    for (node_id, node) in &graph.nodes {
+        if node.kind != NodeKind::Unsupported {
+            continue;
+        }
+        let Some(legacy_ole) = node.payload.legacy_ole.as_ref() else {
+            continue;
+        };
+        uses_by_storage
+            .entry(legacy_ole.storage_number)
+            .or_default()
+            .push(*node_id);
+    }
+
+    let mut images = Vec::new();
+    let mut malformed_sibling_count = 0usize;
+    let mut unavailable_count = 0usize;
+    let mut ambiguous_count = 0usize;
+    let mut raster_failed_count = 0usize;
+    let mut applied_node_count = 0usize;
+    let mut equivalent_duplicate_count = 0usize;
+
+    for (storage_number, mut node_ids) in uses_by_storage {
+        node_ids.sort();
+        node_ids.dedup();
+
+        let scan = match scan_legacy_ole_cached_presentations(
+            Cursor::new(bytes),
+            storage_number,
+        ) {
+            Ok(scan) => scan,
+            Err(_) => {
+                unavailable_count += node_ids.len();
+                continue;
+            }
+        };
+        malformed_sibling_count += scan.diagnostics.len();
+
+        let selected = match select_unambiguous_legacy_ole_cached_presentation(&scan) {
+            LegacyOleCachedPresentationSelection::None => {
+                unavailable_count += node_ids.len();
+                continue;
+            }
+            LegacyOleCachedPresentationSelection::Ambiguous { .. } => {
+                ambiguous_count += node_ids.len();
+                continue;
+            }
+            LegacyOleCachedPresentationSelection::Selected {
+                presentation,
+                equivalent_candidate_count,
+            } => {
+                equivalent_duplicate_count += equivalent_candidate_count.saturating_sub(1);
+                presentation
+            }
+        };
+
+        let preview = match rasterize_wmf_preview(
+            &selected.data,
+            selected.width,
+            selected.height,
+        ) {
+            Ok(preview) => preview,
+            Err(_) => {
+                raster_failed_count += node_ids.len();
+                continue;
+            }
+        };
+        let png_bytes = match encode_viewer_rgba_png(
+            preview.width,
+            preview.height,
+            &preview.rgba,
+        ) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                raster_failed_count += node_ids.len();
+                continue;
+            }
+        };
+        let resource_id = match legacy_ole_preview_resource_id(
+            &graph.source.source_hash,
+            storage_number,
+            &selected.data,
+        ) {
+            Ok(resource_id) => resource_id,
+            Err(_) => {
+                raster_failed_count += node_ids.len();
+                continue;
+            }
+        };
+
+        applied_node_count += node_ids.len();
+        images.push(ViewerEmbeddedImage {
+            resource_id,
+            mime: "image/png".to_owned(),
+            node_ids,
+            placements: Vec::new(),
+            bytes: png_bytes,
+        });
+    }
+
+    if applied_node_count > 0 {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.ole.cached_preview_applied".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "Rendered inert cached OLE preview images for {applied_node_count} legacy object node(s) without activating embedded content."
+            ),
+        });
+    }
+    if equivalent_duplicate_count > 0 {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.ole.cached_preview_equivalent_duplicates".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "{equivalent_duplicate_count} additional cached OLE presentation stream(s) were byte-equivalent to the selected preview."
+            ),
+        });
+    }
+    if malformed_sibling_count > 0 {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.ole.cached_preview_sibling_rejected".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{malformed_sibling_count} cached OLE presentation stream(s) were malformed or outside the bounded WMF profile and were ignored."
+            ),
+        });
+    }
+    if ambiguous_count > 0 {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.ole.cached_preview_ambiguous".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{ambiguous_count} legacy OLE node(s) had multiple distinct valid cached presentations; no preview was selected."
+            ),
+        });
+    }
+    if unavailable_count > 0 {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.ole.cached_preview_unavailable".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{unavailable_count} legacy OLE node(s) had no bounded cached presentation available; geometry remains visible without preview paint."
+            ),
+        });
+    }
+    if raster_failed_count > 0 {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.ole.cached_preview_raster_unsupported".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{raster_failed_count} legacy OLE node(s) used valid cached WMF outside the current bounded raster subset; geometry remains visible without preview paint."
+            ),
+        });
+    }
+
+    images
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerSource {
     pub format: String,
