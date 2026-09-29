@@ -1,4 +1,4 @@
-use chaptera_process_launch::{BoundProgram, current_environment_allowlist};
+use chaptera_process_launch::{BoundProgram, LaunchError, current_environment_allowlist};
 use chaptera_update_engine::{UpdateEngine, UpdateError, UpdatePhase};
 use chaptera_update_orchestrator::{OrchestrationError, UpdateOrchestrator};
 use serde::{Deserialize, Serialize};
@@ -50,10 +50,10 @@ impl PreparedControlHandoff {
             self.control_updater_sha256.clone(),
             self.working_directory.clone(),
         )
-        .map_err(|_| HandoffError::ControlUpdaterIdentityChanged(self.control_updater.clone()))?;
+        .map_err(map_control_launch_error)?;
         let mut command = program
             .command(current_environment_allowlist(CONTROL_ENV_ALLOWLIST))
-            .map_err(|_| HandoffError::ControlUpdaterIdentityChanged(self.control_updater.clone()))?;
+            .map_err(map_control_launch_error)?;
         command.arg(CONTROL_MODE_ARG).arg(&self.request_path);
         command.spawn().map_err(HandoffError::Io)
     }
@@ -109,6 +109,20 @@ impl fmt::Display for HandoffError {
 }
 
 impl std::error::Error for HandoffError {}
+
+fn map_control_launch_error(error: LaunchError) -> HandoffError {
+    match error {
+        LaunchError::Io(error) => HandoffError::Io(error),
+        LaunchError::ExecutableMissing(path) => HandoffError::ControlUpdaterMissing(path),
+        LaunchError::WorkingDirectoryMissing(path) => {
+            HandoffError::ControlWorkingDirectoryMissing(path)
+        }
+        LaunchError::ExecutableNotAbsolute(path)
+        | LaunchError::ExecutableIdentityChanged(path) => {
+            HandoffError::ControlUpdaterIdentityChanged(path)
+        }
+    }
+}
 
 impl From<io::Error> for HandoffError {
     fn from(value: io::Error) -> Self {
