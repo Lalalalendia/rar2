@@ -1,0 +1,34 @@
+name: WMF format helper
+
+on:
+  push:
+    branches:
+      - research/wmf-format-helper-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: reader/legacy22-ole-wmf-preview-01
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Format exact WMF slice
+        run: |
+          rustfmt --edition 2024 vendor/producer-a/crates/pub-reader/src/lib.rs
+          rustfmt --edition 2024 vendor/producer-a/crates/pub-reader/src/wmf_preview.rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wmf-formatted-${{ github.run_id }}
+          path: |
+            vendor/producer-a/crates/pub-reader/src/lib.rs
+            vendor/producer-a/crates/pub-reader/src/wmf_preview.rs
+          if-no-files-found: error
+          retention-days: 7
