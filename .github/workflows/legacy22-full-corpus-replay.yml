@@ -583,7 +583,7 @@ jobs:
           assert len(perlost_candidates) == 2, len(perlost_candidates)
           assert len(legacy_existing) == 226, len(legacy_existing)
           assert len(existing_with_scene) == 217, len(existing_with_scene)
-          assert existing_scene_nodes == 2556, existing_scene_nodes
+          assert existing_scene_nodes == 2583, existing_scene_nodes
           assert existing_story_frames == 1430, existing_story_frames
           assert existing_text_fragments == 1383, existing_text_fragments
           assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files
