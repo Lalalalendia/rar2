@@ -10,6 +10,8 @@ chaptera-update-engine = { path = "../chaptera-update-engine" }
 chaptera-update-orchestrator = { path = "../chaptera-update-orchestrator" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
+same-file = "1"
 tempfile = "3"
