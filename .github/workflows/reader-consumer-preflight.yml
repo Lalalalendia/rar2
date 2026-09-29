@@ -26,6 +26,9 @@ jobs:
       - name: Test Reader preflight planner
         run: python tools/ci/test_reader_consumer_preflight.py
 
+      - name: Test Reader PR fanout classifier
+        run: python tools/ci/test_reader_pr_fanout.py
+
       - name: Enforce active-content inertness
         run: |
           python tools/reader_active_content_guard.py --self-test
