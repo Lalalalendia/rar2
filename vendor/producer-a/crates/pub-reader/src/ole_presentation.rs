@@ -25,6 +25,7 @@ pub struct OlePresentation<'a> {
 pub struct LegacyOleCachedPresentation {
     pub stream_path: String,
     pub stream_name: String,
+    pub stream_ordinal: u16,
     pub clipboard_format: u32,
     pub aspect: u32,
     pub lindex: u32,
@@ -115,15 +116,26 @@ pub fn parse_cf_metafilepict_ole_presentation(bytes: &[u8]) -> Result<OlePresent
     })
 }
 
+fn ole_pres_stream_ordinal(name: &str) -> Option<u16> {
+    let suffix = name.strip_prefix(OLE_PRES_STREAM_PREFIX)?;
+    if suffix.len() != 3 || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse().ok()
+}
+
 fn parse_cached_presentation_blob(
     blob: pub_cfb::CfbStreamBlob,
 ) -> Result<LegacyOleCachedPresentation> {
+    let stream_ordinal = ole_pres_stream_ordinal(&blob.name)
+        .with_context(|| format!("invalid OLE presentation stream name {}", blob.name))?;
     let parsed = parse_cf_metafilepict_ole_presentation(&blob.bytes)
         .with_context(|| format!("parse bounded OLE presentation {}", blob.path))?;
 
     Ok(LegacyOleCachedPresentation {
         stream_path: blob.path,
         stream_name: blob.name,
+        stream_ordinal,
         clipboard_format: parsed.clipboard_format,
         aspect: parsed.aspect,
         lindex: parsed.lindex,
@@ -194,8 +206,21 @@ mod tests {
         let parsed = parse_cached_presentation_blob(blob).expect("cached presentation");
         assert_eq!(parsed.stream_path, "/Objects/Object 73/\u{2}OlePres001");
         assert_eq!(parsed.stream_name, "\u{2}OlePres001");
+        assert_eq!(parsed.stream_ordinal, 1);
         assert_eq!(parsed.clipboard_format, CF_METAFILEPICT);
-        assert_eq!(parsed.data, payload);
+        assert_eq!(parsed.data.as_slice(), payload);
+    }
+
+    #[test]
+    fn cached_presentation_rejects_noncanonical_stream_suffix() {
+        let payload = [0x05u8; 18];
+        let blob = pub_cfb::CfbStreamBlob {
+            path: "/Objects/Object 73/\u{2}OlePres01x".into(),
+            name: "\u{2}OlePres01x".into(),
+            bytes: fixture(CF_METAFILEPICT, 4, &payload),
+        };
+
+        assert!(parse_cached_presentation_blob(blob).is_err());
     }
 
     #[test]
