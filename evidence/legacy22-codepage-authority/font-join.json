@@ -1,0 +1,2096 @@
+{
+  "schema": "chaptera.legacy22-high-byte-font-record-join.v1",
+  "high_byte_file_count": 58,
+  "files_with_resolved_font_record_ordinal": 51,
+  "files_with_readable_string_candidate_in_used_font_record": 51,
+  "font_list_count_distribution": {
+    "1": 58
+  },
+  "labelled_examples": [
+    {
+      "sha256": "02a2b240864c53159b7ddfa7aaebf9e943777bc0d3b64b819ad72c57796f66d7",
+      "label": "VLINEAR",
+      "high_byte_count": 12,
+      "font_indexes": [
+        4,
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 22,
+                "sha256": "b1de76b22ea2de7c4ecaa241ec2aa8a846cee66980dcdb9853d5ab401033267e",
+                "ascii_candidates": [
+                  "Rockwell Extra Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c20457874726120426f6c6400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "1b88bc290bf3b53f5c7dac055b4d50bf0c2a8ab6da99e99459902fa475807387",
+      "label": "FAX2-pub3",
+      "high_byte_count": 2,
+      "font_indexes": [
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 11,
+                "sha256": "c81796db857da08fb29a518a3eee98bef5357f035ca6d653d7986d2931a00db4",
+                "ascii_candidates": [
+                  "Rockwell"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "2f94e4880bd8eddd814f84768a9fac05659f8146cccd26790bdfcee6c9792b61",
+      "label": "FAX2-pub97",
+      "high_byte_count": 3,
+      "font_indexes": [
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 11,
+                "sha256": "c81796db857da08fb29a518a3eee98bef5357f035ca6d653d7986d2931a00db4",
+                "ascii_candidates": [
+                  "Rockwell"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c00"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "sha256": "02a2b240864c53159b7ddfa7aaebf9e943777bc0d3b64b819ad72c57796f66d7",
+      "label": "VLINEAR",
+      "high_byte_count": 12,
+      "font_indexes": [
+        4,
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 22,
+                "sha256": "b1de76b22ea2de7c4ecaa241ec2aa8a846cee66980dcdb9853d5ab401033267e",
+                "ascii_candidates": [
+                  "Rockwell Extra Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c20457874726120426f6c6400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "02e1adc9d6e815b409cec9bb35f246123d4c7a3ae01623ca8565b2904b016218",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        5
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 5,
+          "candidates": [
+            {
+              "object_id": 314,
+              "record": {
+                "ordinal": 5,
+                "byte_len": 8,
+                "sha256": "af1cf5e5a67447981ab3b7b95d71532203816889aa8cc3317bda3396a1359f17",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a2417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "08af039a39b05d544ba20f04fec35b73436b241f364bcd7c694b70b52899c70c",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [
+        4,
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 22,
+                "sha256": "b1de76b22ea2de7c4ecaa241ec2aa8a846cee66980dcdb9853d5ab401033267e",
+                "ascii_candidates": [
+                  "Rockwell Extra Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c20457874726120426f6c6400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "0efda9896207c32d164bc69d2866c53698c7f3d37196474dada93811cf164b7d",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        10
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 10,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 10,
+                "byte_len": 17,
+                "sha256": "bec6f555fb004842590b03d1b55cc7c8c9c9c25d7e06b49539c4d498e27a56c0",
+                "ascii_candidates": [
+                  "OCR A Extended"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00b44f4352204120457874656e64656400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "14ed19f822ff3a5ae49c57a4c00b0dca2bf652a95694bf12c9c425a0c8c46f3b",
+      "label": null,
+      "high_byte_count": 11,
+      "font_indexes": [
+        3,
+        4,
+        5,
+        7,
+        8,
+        12
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 26,
+                "sha256": "be9748b6929de601f98cff6602256bbb1e22d1322a7675bb410e0ba63d18add6",
+                "ascii_candidates": [
+                  "Copperplate Gothic Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4436f70706572706c61746520476f7468696320426f6c6400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 9,
+                "sha256": "a28765b592ab88f8727ccb49e0e9a5a4699256649d98273a9980c9df9ef11fbe",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4496d7061637400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 5,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 5,
+                "byte_len": 27,
+                "sha256": "3755c8d70573674301ad151e812e5959b278c99b570ed7211d0effbb4b367b7a",
+                "ascii_candidates": [
+                  "Copperplate Gothic Light"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4436f70706572706c61746520476f74686963204c6967687400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 18,
+                "sha256": "dcb1d685257cbad65078bb68cf77957e0b5b88c575f0e867a457688e458f7ef0",
+                "ascii_candidates": [
+                  "Goudy Old Style"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094476f756479204f6c64205374796c6500"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 8,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 8,
+                "byte_len": 21,
+                "sha256": "aba151b459d4381ededc5c03a01f713f70a1f681f3ec54a6f5fb2eb9de6ade35",
+                "ascii_candidates": [
+                  "Rockwell Condensed"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c20436f6e64656e73656400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 12,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 12,
+                "byte_len": 20,
+                "sha256": "8212238a8e8854248951b99d70000649b815bb529bb9b7f284ff4af750926f83",
+                "ascii_candidates": [
+                  "Imprint MT Shadow"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00d4496d7072696e74204d5420536861646f7700"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "1b88bc290bf3b53f5c7dac055b4d50bf0c2a8ab6da99e99459902fa475807387",
+      "label": "FAX2-pub3",
+      "high_byte_count": 2,
+      "font_indexes": [
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 11,
+                "sha256": "c81796db857da08fb29a518a3eee98bef5357f035ca6d653d7986d2931a00db4",
+                "ascii_candidates": [
+                  "Rockwell"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "1da75cd9ba65b91c4bf4f17c015e0d9dd8740952f90295b54aa4f8d48ae378f3",
+      "label": null,
+      "high_byte_count": 2,
+      "font_indexes": [
+        2
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 2,
+          "candidates": [
+            {
+              "object_id": 338,
+              "record": {
+                "ordinal": 2,
+                "byte_len": 18,
+                "sha256": "ee3119434feb1d876df64b96e209078d12e7e0bf1c27dd4fa8d09a6a6b39bae6",
+                "ascii_candidates": [
+                  "Times New Roman"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "009254696d6573204e657720526f6d616e00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "1efdf4fb7c2d2955e79519d6bd43e22ba23a7d6cf106fb9a738ca49705eb2d86",
+      "label": null,
+      "high_byte_count": 10,
+      "font_indexes": [
+        4
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 405,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 18,
+                "sha256": "ee3119434feb1d876df64b96e209078d12e7e0bf1c27dd4fa8d09a6a6b39bae6",
+                "ascii_candidates": [
+                  "Times New Roman"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "009254696d6573204e657720526f6d616e00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "2205e8ce7d963b370bea42c097f66f179f673d15a35ac1d7c90aeae399e8e297",
+      "label": null,
+      "high_byte_count": 50,
+      "font_indexes": [
+        5
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 5,
+          "candidates": [
+            {
+              "object_id": 394,
+              "record": {
+                "ordinal": 5,
+                "byte_len": 8,
+                "sha256": "af1cf5e5a67447981ab3b7b95d71532203816889aa8cc3317bda3396a1359f17",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a2417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "2aae164a43338136efab15262c044ef30e6c38a278e90aac7c991a992d915bcc",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 316,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 27,
+                "sha256": "3755c8d70573674301ad151e812e5959b278c99b570ed7211d0effbb4b367b7a",
+                "ascii_candidates": [
+                  "Copperplate Gothic Light"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4436f70706572706c61746520476f74686963204c6967687400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "2b9c28f42633507773dabdb1efe5b4f88343f10fccd52f36babaf1c3bb7bd8ed",
+      "label": null,
+      "high_byte_count": 3,
+      "font_indexes": [
+        8
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 8,
+          "candidates": [
+            {
+              "object_id": 256,
+              "record": {
+                "ordinal": 8,
+                "byte_len": 8,
+                "sha256": "0c396506aca3729d2693e4aa28b6699da41098749c5c01e7b3ae6c7a0f407c60",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "2d93e7712544183524eb159605b6e5099584505ebdee78774efb0697e568c5ba",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 469,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 8,
+                "sha256": "af1cf5e5a67447981ab3b7b95d71532203816889aa8cc3317bda3396a1359f17",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a2417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "2f94e4880bd8eddd814f84768a9fac05659f8146cccd26790bdfcee6c9792b61",
+      "label": "FAX2-pub97",
+      "high_byte_count": 3,
+      "font_indexes": [
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 11,
+                "sha256": "c81796db857da08fb29a518a3eee98bef5357f035ca6d653d7986d2931a00db4",
+                "ascii_candidates": [
+                  "Rockwell"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "3041c3250cf2ae0527745b642cda8223445cc52f4b570282c81294163c1b091c",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": []
+    },
+    {
+      "sha256": "3114f1328f49066cf3168a76758ffb279e1a838b54e618cc2c050ae163398f35",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 277,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 20,
+                "sha256": "12de84009be7d02bf3bff464f02e2d01c0021a0ad859c45a3416a96cf26e72ba",
+                "ascii_candidates": [
+                  "Placard Condensed"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4506c616361726420436f6e64656e73656400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "36b3c7d4575e7d1806e83cd1c196e8b5c3b03b1be08dd94d0fb4dbd28c4dcba7",
+      "label": null,
+      "high_byte_count": 3,
+      "font_indexes": [
+        9
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 9,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 9,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "379997ec5cbd2efdbdcc1b7cbb8c9764a4e313aa6f3c008f3850a1e1cb725ba5",
+      "label": null,
+      "high_byte_count": 4,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 355,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "39d71dcc2fb70b5e43b78a2d3ab1081eaff77d4b7cfd2a38ef917c46c0d51194",
+      "label": null,
+      "high_byte_count": 2,
+      "font_indexes": [
+        21
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 21,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 21,
+                "byte_len": 26,
+                "sha256": "be9748b6929de601f98cff6602256bbb1e22d1322a7675bb410e0ba63d18add6",
+                "ascii_candidates": [
+                  "Copperplate Gothic Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4436f70706572706c61746520476f7468696320426f6c6400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "3e0ffa579d9b17fa199dca21ea427d23ee1a9d76501f40e58831b8c674102c96",
+      "label": null,
+      "high_byte_count": 4,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 256,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 18,
+                "sha256": "ee3119434feb1d876df64b96e209078d12e7e0bf1c27dd4fa8d09a6a6b39bae6",
+                "ascii_candidates": [
+                  "Times New Roman"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "009254696d6573204e657720526f6d616e00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "4960e5bb0cf62b2d9387a0c454973a1aaa02031252f180a364112b41bac87c5b",
+      "label": null,
+      "high_byte_count": 10,
+      "font_indexes": [
+        9
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 9,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 9,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "53ca33b1076388d528295f2f6df4a0071a54120cf780f9c4fba31e2b2bbf8e15",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        6
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 6,
+          "candidates": [
+            {
+              "object_id": 350,
+              "record": {
+                "ordinal": 6,
+                "byte_len": 9,
+                "sha256": "a28765b592ab88f8727ccb49e0e9a5a4699256649d98273a9980c9df9ef11fbe",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4496d7061637400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "548f923111c491581a05206d216ee81fe0e619661990377dbcc027bd9d4748eb",
+      "label": null,
+      "high_byte_count": 3,
+      "font_indexes": [
+        19
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 19,
+          "candidates": [
+            {
+              "object_id": 405,
+              "record": {
+                "ordinal": 19,
+                "byte_len": 16,
+                "sha256": "dd34e715c4fb8a82b2d638c3c387316a222fad64bdc136b347b22d18a3382991",
+                "ascii_candidates": [
+                  "Felix Titling"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "009446656c6978205469746c696e6700"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "54c59e90239e8abe399e534521183adb1b7df8915a480d120ade67cd891d4a04",
+      "label": null,
+      "high_byte_count": 4,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 9,
+                "sha256": "a28765b592ab88f8727ccb49e0e9a5a4699256649d98273a9980c9df9ef11fbe",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4496d7061637400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "5861117efd81d7165f5f4fc7e69f93894324c9511b7e3753692d9f576f0546e9",
+      "label": null,
+      "high_byte_count": 6,
+      "font_indexes": [
+        9
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 9,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 9,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "698502865ad2f50a01b7052bf834edee831abe3a5c4a25a5b0a0a3d7d3c2b21d",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 322,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 20,
+                "sha256": "8212238a8e8854248951b99d70000649b815bb529bb9b7f284ff4af750926f83",
+                "ascii_candidates": [
+                  "Imprint MT Shadow"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00d4496d7072696e74204d5420536861646f7700"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "7860acc670667c456fb29048a4cfa1840e4a7d5b57b7b2a2975c8d76929063dc",
+      "label": null,
+      "high_byte_count": 28,
+      "font_indexes": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        9
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 20,
+                "sha256": "8212238a8e8854248951b99d70000649b815bb529bb9b7f284ff4af750926f83",
+                "ascii_candidates": [
+                  "Imprint MT Shadow"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00d4496d7072696e74204d5420536861646f7700"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 13,
+                "sha256": "7809006b6e78c0af973cdbcbd3701b7763e9c60f9abde8fa24ca0ca848319861",
+                "ascii_candidates": [
+                  "Harrington"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00d448617272696e67746f6e00"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 5,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 5,
+                "byte_len": 26,
+                "sha256": "be9748b6929de601f98cff6602256bbb1e22d1322a7675bb410e0ba63d18add6",
+                "ascii_candidates": [
+                  "Copperplate Gothic Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4436f70706572706c61746520476f7468696320426f6c6400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 6,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 6,
+                "byte_len": 21,
+                "sha256": "03398a0c1142cfb0de1e762a56ee65e3a2d748f7531b4c23220ed851faa94842",
+                "ascii_candidates": [
+                  "Lucida Calligraphy"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00c44c75636964612043616c6c6967726170687900"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 18,
+                "sha256": "dcb1d685257cbad65078bb68cf77957e0b5b88c575f0e867a457688e458f7ef0",
+                "ascii_candidates": [
+                  "Goudy Old Style"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094476f756479204f6c64205374796c6500"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 9,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 9,
+                "byte_len": 11,
+                "sha256": "c81796db857da08fb29a518a3eee98bef5357f035ca6d653d7986d2931a00db4",
+                "ascii_candidates": [
+                  "Rockwell"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "877800395b639164d23b4f9102e4d451a047418f5c952ff58f65da31ebb07f27",
+      "label": null,
+      "high_byte_count": 8,
+      "font_indexes": [
+        24
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 24,
+          "candidates": [
+            {
+              "object_id": 359,
+              "record": {
+                "ordinal": 24,
+                "byte_len": 26,
+                "sha256": "cc32d10bea5e28d6c14b57022f3db99d948e8ff00e2e3917868e194aebea82a7",
+                "ascii_candidates": [
+                  "Copperplate Gothic Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0436f70706572706c61746520476f7468696320426f6c6400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "90b5237149f75af4c26a40e76d51f1bce23a73bc7c4c9204db1020a10dc4b2cd",
+      "label": null,
+      "high_byte_count": 3,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 276,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 9,
+                "sha256": "621ce06e1fe248bd832c298665fcabe5430034bc987e4d1258d5024ba948710a",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0496d7061637400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "98c6375a52e11f2c1022e2959d7f462cb529bc3c63223eec16325e0acc2d7133",
+      "label": null,
+      "high_byte_count": 14,
+      "font_indexes": [
+        3,
+        7,
+        8,
+        9,
+        16
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 10,
+                "sha256": "7893522002123c21b1003c440d1089179d3f0b3b0335ae99701dcb6bcd7c184d",
+                "ascii_candidates": [
+                  "Flexure"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00d4466c657875726500"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 21,
+                "sha256": "7a677dd59e7154f97a34803b0246c2cacf8afc0dd4026fe469cfc7ab0119ef4b",
+                "ascii_candidates": [
+                  "Lucida Handwriting"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00c44c75636964612048616e6477726974696e6700"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 8,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 8,
+                "byte_len": 9,
+                "sha256": "a28765b592ab88f8727ccb49e0e9a5a4699256649d98273a9980c9df9ef11fbe",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4496d7061637400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 9,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 9,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 16,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 16,
+                "byte_len": 11,
+                "sha256": "c81796db857da08fb29a518a3eee98bef5357f035ca6d653d7986d2931a00db4",
+                "ascii_candidates": [
+                  "Rockwell"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "999e310a383cb492f8dc383d94b296c9eb789acf8ef29316a1d4004ef5e50780",
+      "label": null,
+      "high_byte_count": 6,
+      "font_indexes": [
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 465,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 21,
+                "sha256": "183b922d96cabe80c6d3cd45522e1bb5cab63d29ffaccd1ac2b3c9d54d3c8499",
+                "ascii_candidates": [
+                  "Footlight MT Light"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0092466f6f746c69676874204d54204c6967687400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "9c2f6506ad631738513d9e23a4967e554a55701d08900553cab04f0321358266",
+      "label": null,
+      "high_byte_count": 4,
+      "font_indexes": [],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": []
+    },
+    {
+      "sha256": "9d899a909a2daa80bb28717bcbbe025db1ad4d61129e2085b0fff593ff531238",
+      "label": null,
+      "high_byte_count": 4,
+      "font_indexes": [
+        5
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 5,
+          "candidates": [
+            {
+              "object_id": 414,
+              "record": {
+                "ordinal": 5,
+                "byte_len": 14,
+                "sha256": "85b68e6c9b9d06bb7797f0040770fd59350baf30b537e77b42d54994bc9deab2",
+                "ascii_candidates": [
+                  "Wingdings 2"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "029057696e6764696e6773203200"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "9e55bf04ac75807b2afd76350ec1f94314cf5b6cf4255202223135e4ae4d3199",
+      "label": null,
+      "high_byte_count": 17,
+      "font_indexes": [
+        4
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 8,
+                "sha256": "0c396506aca3729d2693e4aa28b6699da41098749c5c01e7b3ae6c7a0f407c60",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "9fd4894622c1bae4550147a7163bdfcad891aa72b270b3516fc1a00c6443eaf8",
+      "label": null,
+      "high_byte_count": 7,
+      "font_indexes": [
+        23
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 23,
+          "candidates": [
+            {
+              "object_id": 359,
+              "record": {
+                "ordinal": 23,
+                "byte_len": 26,
+                "sha256": "cc32d10bea5e28d6c14b57022f3db99d948e8ff00e2e3917868e194aebea82a7",
+                "ascii_candidates": [
+                  "Copperplate Gothic Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0436f70706572706c61746520476f7468696320426f6c6400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "a4f7a754b9c2c94a6708867e873d0c9f7246dbdc676a2fbc890e79a684c9178b",
+      "label": null,
+      "high_byte_count": 8,
+      "font_indexes": [
+        2
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 2,
+          "candidates": [
+            {
+              "object_id": 511,
+              "record": {
+                "ordinal": 2,
+                "byte_len": 18,
+                "sha256": "ee3119434feb1d876df64b96e209078d12e7e0bf1c27dd4fa8d09a6a6b39bae6",
+                "ascii_candidates": [
+                  "Times New Roman"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "009254696d6573204e657720526f6d616e00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "a9527c1fa08b9d83b96abc3cc6732529bae5d28b65e435b9a2bc62be4a0dad70",
+      "label": null,
+      "high_byte_count": 7,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 9,
+                "sha256": "a28765b592ab88f8727ccb49e0e9a5a4699256649d98273a9980c9df9ef11fbe",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4496d7061637400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "aa9ae88c17b9da3b945241e1e5730584e17b633026f587373a9420aed6e86559",
+      "label": null,
+      "high_byte_count": 2,
+      "font_indexes": [
+        4
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 477,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 18,
+                "sha256": "ee3119434feb1d876df64b96e209078d12e7e0bf1c27dd4fa8d09a6a6b39bae6",
+                "ascii_candidates": [
+                  "Times New Roman"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "009254696d6573204e657720526f6d616e00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "aaeb4120e72a564aab60f5275c1dea8ed5830ec4de368d3bc22d410f7c5342c4",
+      "label": null,
+      "high_byte_count": 2,
+      "font_indexes": [
+        8
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 8,
+          "candidates": [
+            {
+              "object_id": 256,
+              "record": {
+                "ordinal": 8,
+                "byte_len": 8,
+                "sha256": "0c396506aca3729d2693e4aa28b6699da41098749c5c01e7b3ae6c7a0f407c60",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "af9a3624085c10472bacc31aa1984e0777a24957371a4f53271a3fd1ecbafe76",
+      "label": null,
+      "high_byte_count": 30,
+      "font_indexes": [
+        6
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 6,
+          "candidates": [
+            {
+              "object_id": 436,
+              "record": {
+                "ordinal": 6,
+                "byte_len": 18,
+                "sha256": "ee3119434feb1d876df64b96e209078d12e7e0bf1c27dd4fa8d09a6a6b39bae6",
+                "ascii_candidates": [
+                  "Times New Roman"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "009254696d6573204e657720526f6d616e00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "b688caa757e52b34e84ed6f69207ceb55fe067e16f5f5122ac09ab606a6ca778",
+      "label": null,
+      "high_byte_count": 19,
+      "font_indexes": [],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": []
+    },
+    {
+      "sha256": "ba33ccaf2f41d85a44743279dc0295389576fb1b6851cee0d1a85677bf499738",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        13
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 13,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 13,
+                "byte_len": 16,
+                "sha256": "d833af0c050567e5dfa7409e29d60c636571a25593981a4474e9196437e923e0",
+                "ascii_candidates": [
+                  "Comic Sans MS"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00c4436f6d69632053616e73204d5300"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "ba4aa77d85958bff01d33ae0686fbf75cca1654cb4039ba2c24c2ceb687df650",
+      "label": null,
+      "high_byte_count": 27,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 487,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 8,
+                "sha256": "af1cf5e5a67447981ab3b7b95d71532203816889aa8cc3317bda3396a1359f17",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a2417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "bea6c618c52cb4cdd8eb48b4ae2bff7290b79161abe6326b49329b5e6434f32a",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [
+        4,
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 22,
+                "sha256": "b1de76b22ea2de7c4ecaa241ec2aa8a846cee66980dcdb9853d5ab401033267e",
+                "ascii_candidates": [
+                  "Rockwell Extra Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "0094526f636b77656c6c20457874726120426f6c6400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "c055e3d2020c42b60fec0b828352682c99ad48991f4c3de34808e425751e4159",
+      "label": null,
+      "high_byte_count": 12,
+      "font_indexes": [
+        3,
+        4,
+        5,
+        7
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 9,
+                "sha256": "621ce06e1fe248bd832c298665fcabe5430034bc987e4d1258d5024ba948710a",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0496d7061637400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 26,
+                "sha256": "cc32d10bea5e28d6c14b57022f3db99d948e8ff00e2e3917868e194aebea82a7",
+                "ascii_candidates": [
+                  "Copperplate Gothic Bold"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0436f70706572706c61746520476f7468696320426f6c6400"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 5,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 5,
+                "byte_len": 10,
+                "sha256": "e4a8f2bdc7a2912a95c8ba1ba63146753bf076967e171a2d8666d8bd4928a557",
+                "ascii_candidates": [
+                  "Flexure"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00d0466c657875726500"
+              }
+            }
+          ]
+        },
+        {
+          "font_index": 7,
+          "candidates": [
+            {
+              "object_id": 269,
+              "record": {
+                "ordinal": 7,
+                "byte_len": 8,
+                "sha256": "0c396506aca3729d2693e4aa28b6699da41098749c5c01e7b3ae6c7a0f407c60",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "c8d5caae2d2339a2ccfba3d98983c1e706e15348639c332fa57ee744b70405bd",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": []
+    },
+    {
+      "sha256": "ceb00ff566915c7c3d913013663116e595c356e4f5f9ae6fca0c88d48a7b9932",
+      "label": null,
+      "high_byte_count": 2,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 399,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 8,
+                "sha256": "0c396506aca3729d2693e4aa28b6699da41098749c5c01e7b3ae6c7a0f407c60",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "cf35a6a02911320cde1843c68d8532d04fe9f681fa6615aa919cee32e59ef2d9",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [
+        4
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 8,
+                "sha256": "0c396506aca3729d2693e4aa28b6699da41098749c5c01e7b3ae6c7a0f407c60",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "d149d547050332421474c957528842562ffad6816b2ce3d6326674302063d2eb",
+      "label": null,
+      "high_byte_count": 3,
+      "font_indexes": [
+        26
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 26,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 26,
+                "byte_len": 27,
+                "sha256": "3755c8d70573674301ad151e812e5959b278c99b570ed7211d0effbb4b367b7a",
+                "ascii_candidates": [
+                  "Copperplate Gothic Light"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4436f70706572706c61746520476f74686963204c6967687400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "d59d7c14627becbab2d42542f5f47d7c2ecb1f67101419f67b5fa8aba782d7c5",
+      "label": null,
+      "high_byte_count": 13,
+      "font_indexes": [],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": []
+    },
+    {
+      "sha256": "d640dddd8e23aac9d7cc3189c2d681b8b85f78fbbff4152b1e49995c314ecc9d",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [
+        19
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 19,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 19,
+                "byte_len": 14,
+                "sha256": "40fda015abf0acf86cf33e0cd71e5efb25b4d674db311210ad3cf0b2bb434ebb",
+                "ascii_candidates": [
+                  "Maiandra GD"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a44d6169616e64726120474400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "d97980d6fecd7fe3064d1b745fe57991eea828399c091d3083e5e7bca9876871",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 324,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 8,
+                "sha256": "ba5bcbeb2b2b4dbf04437a6f6a3d3e5e249fc232db43035182419aa2201fff77",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "daa5ff11fc5d81b7f516cfa20c1a4f734a30ef902c84c71fd061a3a4492b8a01",
+      "label": null,
+      "high_byte_count": 7,
+      "font_indexes": [],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": []
+    },
+    {
+      "sha256": "e26a770a0353cafb535e85b0424f0d5c1fbd93c7af48ffa7c0ca29125edfe4a1",
+      "label": null,
+      "high_byte_count": 9,
+      "font_indexes": [
+        19
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 19,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 19,
+                "byte_len": 14,
+                "sha256": "40fda015abf0acf86cf33e0cd71e5efb25b4d674db311210ad3cf0b2bb434ebb",
+                "ascii_candidates": [
+                  "Maiandra GD"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a44d6169616e64726120474400"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "f3de87906ce7248a2a540bff4f4d08ee8906ee4dca4291835d05156b6b7bf6a9",
+      "label": null,
+      "high_byte_count": 15,
+      "font_indexes": [
+        4
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 4,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 4,
+                "byte_len": 8,
+                "sha256": "0c396506aca3729d2693e4aa28b6699da41098749c5c01e7b3ae6c7a0f407c60",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a0417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "f3fe04c42e8226f97f682080dcff5dfdd001397c5a01c7cac27e878027ea98fd",
+      "label": null,
+      "high_byte_count": 10,
+      "font_indexes": [],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": []
+    },
+    {
+      "sha256": "f824bc7932c80c411a903957131a00fdd83f88208417083644933f209f79b741",
+      "label": null,
+      "high_byte_count": 6,
+      "font_indexes": [
+        6
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 6,
+          "candidates": [
+            {
+              "object_id": 321,
+              "record": {
+                "ordinal": 6,
+                "byte_len": 8,
+                "sha256": "af1cf5e5a67447981ab3b7b95d71532203816889aa8cc3317bda3396a1359f17",
+                "ascii_candidates": [
+                  "Arial"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a2417269616c00"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "f9ed98910b4258c68312c4059dfd112fd499fa85000634f30b6d5042ec4ba4e7",
+      "label": null,
+      "high_byte_count": 1,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 16,
+                "sha256": "d833af0c050567e5dfa7409e29d60c636571a25593981a4474e9196437e923e0",
+                "ascii_candidates": [
+                  "Comic Sans MS"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00c4436f6d69632053616e73204d5300"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sha256": "fb975158ee8c9acb487e1fb5b83f4e63c620c085e31a45c543e4777b38552a82",
+      "label": null,
+      "high_byte_count": 3,
+      "font_indexes": [
+        3
+      ],
+      "font_pointer_error": null,
+      "font_list_count": 1,
+      "slot_rows": [
+        {
+          "font_index": 3,
+          "candidates": [
+            {
+              "object_id": 261,
+              "record": {
+                "ordinal": 3,
+                "byte_len": 9,
+                "sha256": "a28765b592ab88f8727ccb49e0e9a5a4699256649d98273a9980c9df9ef11fbe",
+                "ascii_candidates": [
+                  "Impact"
+                ],
+                "utf16le_candidates": [],
+                "head_hex": "00a4496d7061637400"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "evidence_boundary": "ordinal join only; readable strings are candidate font metadata, not yet semantic charset authority"
+}
