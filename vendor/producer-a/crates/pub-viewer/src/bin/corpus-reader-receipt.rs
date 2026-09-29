@@ -20,6 +20,58 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn legacy_ole_raster_rejection_reason(error: &anyhow::Error) -> String {
+    let message = error.to_string();
+
+    if let Some(rest) = message.strip_prefix("unsupported WMF record function 0x") {
+        let hex = rest.chars().take(4).collect::<String>();
+        if hex.len() == 4 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return format!("unsupported_record_function_0x{}", hex.to_ascii_lowercase());
+        }
+    }
+
+    for (prefix, code) in [
+        ("unsupported WMF raster profile ", "unsupported_raster_profile"),
+        ("unsupported WMF map mode ", "unsupported_map_mode"),
+        ("unsupported WMF ROP2 mode ", "unsupported_rop2_mode"),
+        ("unsupported WMF relative/absolute mode ", "unsupported_relative_mode"),
+        ("unsupported WMF polygon fill mode ", "unsupported_polygon_fill_mode"),
+        ("unsupported WMF stretch mode ", "unsupported_stretch_mode"),
+        ("unsupported WMF pen style ", "unsupported_pen_style"),
+        ("unsupported WMF brush style ", "unsupported_brush_style"),
+        ("unsupported WMF escape function ", "unsupported_escape_function"),
+        ("unsupported WMF escape comment payload", "unsupported_escape_payload"),
+    ] {
+        if message.starts_with(prefix) {
+            return code.to_owned();
+        }
+    }
+
+    if message.contains("work budget") {
+        return "work_budget_exceeded".to_owned();
+    }
+    if message.contains("object table") {
+        return "object_table_limit_or_state".to_owned();
+    }
+    if message.contains("point count") || message.contains("points") {
+        return "point_limit_or_shape_state".to_owned();
+    }
+    if message.contains("record count") {
+        return "record_count_limit".to_owned();
+    }
+    if message.contains("coordinate transform") || message.contains("window extent") {
+        return "coordinate_transform_rejected".to_owned();
+    }
+    if message.contains("RESTOREDC") || message.contains("SAVEDC") {
+        return "dc_stack_state_rejected".to_owned();
+    }
+    if message.contains("SELECTOBJECT") || message.contains("DELETEOBJECT") {
+        return "gdi_object_state_rejected".to_owned();
+    }
+
+    "other_bounded_raster_rejection".to_owned()
+}
+
 
 fn legacy_object_residual_census(
     bytes: &[u8],
@@ -135,6 +187,7 @@ fn legacy_ole_preview_funnel(
     let mut selection_ambiguous_node_count = 0usize;
     let mut raster_success_node_count = 0usize;
     let mut raster_rejected_node_count = 0usize;
+    let mut raster_rejection_reason_counts = BTreeMap::<String, usize>::new();
 
     for (storage_number, node_ids) in &uses_by_storage {
         let node_count = node_ids.len();
@@ -174,7 +227,11 @@ fn legacy_ole_preview_funnel(
 
         match rasterize_wmf_preview(&selected.data, selected.width, selected.height) {
             Ok(_) => raster_success_node_count += node_count,
-            Err(_) => raster_rejected_node_count += node_count,
+            Err(error) => {
+                raster_rejected_node_count += node_count;
+                let reason = legacy_ole_raster_rejection_reason(&error);
+                *raster_rejection_reason_counts.entry(reason).or_default() += node_count;
+            }
         }
     }
 
@@ -213,6 +270,7 @@ fn legacy_ole_preview_funnel(
         "selection_ambiguous_node_count": selection_ambiguous_node_count,
         "raster_success_node_count": raster_success_node_count,
         "raster_rejected_node_count": raster_rejected_node_count,
+        "raster_rejection_reason_counts": raster_rejection_reason_counts,
         "viewer_preview_resource_count": viewer_preview_resource_count,
         "viewer_preview_node_count": viewer_preview_node_count,
         "viewer_preview_unavailable_node_count": admitted_node_count.saturating_sub(viewer_preview_node_count),
