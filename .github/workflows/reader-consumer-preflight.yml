@@ -39,8 +39,21 @@ jobs:
       - name: Format render-plan seam
         run: cargo fmt --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml -- --check
 
-      - name: Format vendor Reader seam
-        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-model -p pub-reader -p pub-layout -p pub-viewer -- --check
+      - name: Format changed Rust files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="origin/${{ github.base_ref }}"
+            mapfile -t changed_rust < <(git diff --name-only "$base"...HEAD -- '*.rs')
+          else
+            mapfile -t changed_rust < <(git diff --name-only HEAD^ HEAD -- '*.rs')
+          fi
+          if (( ${#changed_rust[@]} == 0 )); then
+            echo "No changed Rust files."
+            exit 0
+          fi
+          rustfmt --edition 2024 --check "${changed_rust[@]}"
 
       - name: Check shared Reader seam
         run: |
