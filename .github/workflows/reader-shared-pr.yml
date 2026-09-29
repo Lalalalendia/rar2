@@ -114,8 +114,3 @@ jobs:
     needs: [classify, tier-a]
     if: needs.classify.outputs.corpus == 'true'
     uses: ./.github/workflows/reader-corpus-truth-v1.yml
-
-  android-render:
-    needs: [classify, tier-a]
-    if: needs.classify.outputs.android_render == 'true'
-    uses: ./.github/workflows/mobile-reader-android-render.yml
