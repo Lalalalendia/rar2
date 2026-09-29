@@ -729,3 +729,8 @@ mod tests {
     }
 }
 // CI measurement replay: inherited Desktop clippy debt must not block changed-line admission.
+
+#[allow(dead_code)]
+fn ci_desktop_lint_delta_negative_probe_replay() -> bool {
+    1 == 1
+}
