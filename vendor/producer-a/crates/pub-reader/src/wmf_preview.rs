@@ -347,36 +347,44 @@ fn clip_line_to_rect(
 
         let code = if c0 != 0 { c0 } else { c1 };
         let (nx, ny) = if code & 8 != 0 {
-            let dy = i64::from(y1) - i64::from(y0);
+            let dy = i128::from(y1) - i128::from(y0);
             if dy == 0 {
                 return None;
             }
-            let x = i64::from(x0)
-                + (i64::from(x1) - i64::from(x0)) * (i64::from(bottom) - i64::from(y0)) / dy;
+            let x = i128::from(x0)
+                + (i128::from(x1) - i128::from(x0))
+                    * (i128::from(bottom) - i128::from(y0))
+                    / dy;
             (i32::try_from(x).ok()?, bottom)
         } else if code & 4 != 0 {
-            let dy = i64::from(y1) - i64::from(y0);
+            let dy = i128::from(y1) - i128::from(y0);
             if dy == 0 {
                 return None;
             }
-            let x = i64::from(x0)
-                + (i64::from(x1) - i64::from(x0)) * (i64::from(rect.top) - i64::from(y0)) / dy;
+            let x = i128::from(x0)
+                + (i128::from(x1) - i128::from(x0))
+                    * (i128::from(rect.top) - i128::from(y0))
+                    / dy;
             (i32::try_from(x).ok()?, rect.top)
         } else if code & 2 != 0 {
-            let dx = i64::from(x1) - i64::from(x0);
+            let dx = i128::from(x1) - i128::from(x0);
             if dx == 0 {
                 return None;
             }
-            let y = i64::from(y0)
-                + (i64::from(y1) - i64::from(y0)) * (i64::from(right) - i64::from(x0)) / dx;
+            let y = i128::from(y0)
+                + (i128::from(y1) - i128::from(y0))
+                    * (i128::from(right) - i128::from(x0))
+                    / dx;
             (right, i32::try_from(y).ok()?)
         } else {
-            let dx = i64::from(x1) - i64::from(x0);
+            let dx = i128::from(x1) - i128::from(x0);
             if dx == 0 {
                 return None;
             }
-            let y = i64::from(y0)
-                + (i64::from(y1) - i64::from(y0)) * (i64::from(rect.left) - i64::from(x0)) / dx;
+            let y = i128::from(y0)
+                + (i128::from(y1) - i128::from(y0))
+                    * (i128::from(rect.left) - i128::from(x0))
+                    / dx;
             (rect.left, i32::try_from(y).ok()?)
         };
 
@@ -1085,6 +1093,14 @@ mod tests {
             clip_line_to_rect(rect, i32::MIN / 2, 50, i32::MAX / 2, 50),
             Some((0, 50, 99, 50))
         );
+    }
+
+    #[test]
+    fn clips_extreme_diagonal_without_intersection_overflow() {
+        let rect = RectPx::full(100, 100);
+        let clipped = clip_line_to_rect(rect, i32::MIN, i32::MIN, i32::MAX, i32::MAX)
+            .expect("extreme diagonal intersects bounded canvas");
+        assert_eq!(clipped, (0, 0, 99, 99));
     }
 
     #[test]
