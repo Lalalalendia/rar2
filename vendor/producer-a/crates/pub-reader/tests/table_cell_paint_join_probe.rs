@@ -195,17 +195,37 @@ fn sample_table_cell_officeart_geometry_join_probe() {
                         "coordinates": cell.coordinates,
                         "cell_bounds": bounds,
                         "projected_child_bounds": projected,
-                        "child_shape_source": shape.source,
+                        "child_shape_source": &shape.source,
                         "fill_0181_raw_values": fill_values,
                         "disposition": "exact_geometry_match"
                     }));
                 }
                 [] => {
                     unmatched_count += 1;
+                    let nearest = children
+                        .iter()
+                        .map(|(shape, projected, fill_values)| {
+                            let delta = [
+                                projected[0] - bounds[0],
+                                projected[1] - bounds[1],
+                                projected[2] - bounds[2],
+                                projected[3] - bounds[3],
+                            ];
+                            let score = delta.iter().map(|value| value.unsigned_abs()).sum::<u64>();
+                            (score, shape, projected, fill_values, delta)
+                        })
+                        .min_by_key(|(score, _, _, _, _)| *score);
                     cells.push(serde_json::json!({
                         "stored_record_index": cell.stored_record_index,
                         "coordinates": cell.coordinates,
                         "cell_bounds": bounds,
+                        "nearest_child": nearest.map(|(score, shape, projected, fill_values, delta)| serde_json::json!({
+                            "score": score,
+                            "delta": delta,
+                            "projected_child_bounds": projected,
+                            "child_shape_source": &shape.source,
+                            "fill_0181_raw_values": fill_values
+                        })),
                         "disposition": "no_exact_geometry_match"
                     }));
                 }
@@ -231,6 +251,11 @@ fn sample_table_cell_officeart_geometry_join_probe() {
             "ambiguous_match_count": ambiguous_match_count,
             "unmatched_count": unmatched_count,
             "exact_matches_with_fill_0181": exact_matches_with_fill_0181,
+            "projected_children": children.iter().map(|(shape, projected, fill_values)| serde_json::json!({
+                "projected_bounds": projected,
+                "child_shape_source": &shape.source,
+                "fill_0181_raw_values": fill_values
+            })).collect::<Vec<_>>(),
             "disposition": if exact_match_count == table.cells.len() {
                 "complete_exact_geometry_join"
             } else {
