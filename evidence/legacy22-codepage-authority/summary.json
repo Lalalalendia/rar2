@@ -56,5 +56,9 @@
     "ValueError:invalid text range 0x3e8..0x0/0x178d6": 1,
     "ValueError:invalid text range 0x3e8..0x0/0x1f982": 1
   },
+  "font_pointer_error_count": 1,
+  "font_pointer_error_counts": {
+    "ValueError:directory_chunk_oob": 1
+  },
   "evidence_boundary": "OLE Property Set PID_CODEPAGE governs strings in that property set. It is profiled here only as a persisted discriminator candidate; it is not assumed to encode Publisher body text."
 }
