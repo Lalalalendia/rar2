@@ -34,13 +34,16 @@ jobs:
           python -m py_compile \
             tools/corpus/harvest_pub.py \
             tools/corpus/corpus_manifest_union.py \
-            tools/corpus/warc_completeness_audit.py
+            tools/corpus/warc_completeness_audit.py \
+            tools/corpus/profile_olepres_wmf.py \
+            tools/corpus/test_profile_olepres_wmf.py
 
       - name: Run offline corpus regressions
         run: |
           set -euo pipefail
           python tools/corpus/test_corpus_manifest_union.py
           python tools/corpus/test_warc_completeness_audit.py
+          python tools/corpus/test_profile_olepres_wmf.py
           python - <<'PY'
           import sys
           from pathlib import Path
