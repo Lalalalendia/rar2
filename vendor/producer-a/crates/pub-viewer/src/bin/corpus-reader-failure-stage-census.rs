@@ -44,6 +44,7 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
     let classification = classify_pub_family(bytes);
     let source_sha256 = sha256_hex(bytes);
     let mut stage = "family_route".to_owned();
+    let mut stage_error_signature_sha256: Option<String> = None;
 
     let lower_ok = match classification.route {
         PubReaderRoute::Mature2c => {
@@ -51,9 +52,18 @@ fn diagnose(bytes: &[u8]) -> FailureStageRow {
             match build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash(bytes)) {
                 Ok(source) => {
                     stage = "mature.resolve_graph".to_owned();
-                    resolve_pub_source_graph(&source.graph).is_ok()
+                    match resolve_pub_source_graph(&source.graph) {
+                        Ok(_) => true,
+                        Err(error) => {
+                            stage_error_signature_sha256 =
+                                Some(sha256_hex(format!("{error:#}").as_bytes()));
+                            false
+                        }
+                    }
                 }
-                Err(_) => {
+                Err(error) => {
+                    stage_error_signature_sha256 =
+                        Some(sha256_hex(format!("{error:#}").as_bytes()));
                     let substage =
                         probe_mature_0x2c_source_graph_failure_stage(bytes, source_hash(bytes))
                             .map(|value| value.as_str())
