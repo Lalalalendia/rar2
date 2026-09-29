@@ -135,6 +135,11 @@ jobs:
             -p pub-viewer \
             --release \
             --bin corpus-reader-receipt
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin legacy22_table_resolution_census
 
       - name: Save Reader 1050 Cargo build cache
         if: steps.reader-1050-cargo-cache.outputs.cache-hit != 'true'
@@ -279,6 +284,14 @@ jobs:
           mkdir -p "$target"
           cp out/materialized/native/*.pub "$target"/
           test "$(find "$target" -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 1050
+
+      - name: Classify legacy22 table resolver failures
+        run: |
+          set -euo pipefail
+          mkdir -p out/reader1050
+          "${CARGO_TARGET_DIR}/release/legacy22_table_resolution_census" \
+            out/materialized/native \
+            out/reader1050/legacy22-table-resolution-census.json
 
       - name: Deep-profile full 1050 corpus through current Reader
         run: |
