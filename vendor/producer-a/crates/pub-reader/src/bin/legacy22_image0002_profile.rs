@@ -54,10 +54,7 @@ fn read_i32(bytes: &[u8], offset: usize) -> Option<i32> {
     Some(i32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
 }
 
-fn chunk_bytes<'a>(
-    contents: &'a [u8],
-    entry: &Legacy0x22DirectoryEntry,
-) -> Option<&'a [u8]> {
+fn chunk_bytes<'a>(contents: &'a [u8], entry: &Legacy0x22DirectoryEntry) -> Option<&'a [u8]> {
     let start = usize::try_from(entry.chunk_source.offset).ok()?;
     let len = usize::try_from(entry.chunk_source.len).ok()?;
     contents.get(start..start.checked_add(len)?)
@@ -84,10 +81,7 @@ fn list_ids(chunk: &[u8]) -> Option<Vec<u16>> {
         .collect()
 }
 
-fn active_page_ids(
-    contents: &[u8],
-    directory: &Legacy0x22Directory,
-) -> Result<BTreeSet<u16>> {
+fn active_page_ids(contents: &[u8], directory: &Legacy0x22Directory) -> Result<BTreeSet<u16>> {
     let document = directory
         .entries
         .iter()
@@ -100,10 +94,7 @@ fn active_page_ids(
         .collect())
 }
 
-fn reader_reachable_ids(
-    contents: &[u8],
-    directory: &Legacy0x22Directory,
-) -> Result<BTreeSet<u16>> {
+fn reader_reachable_ids(contents: &[u8], directory: &Legacy0x22Directory) -> Result<BTreeSet<u16>> {
     let active_pages = active_page_ids(contents, directory)?;
     let mut reachable = BTreeSet::new();
     let mut queue = VecDeque::new();
@@ -236,27 +227,24 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let contents = match pub_cfb::read_stream_reader(
-        Cursor::new(bytes.as_slice()),
-        CONTENTS_STREAM_PATH,
-    ) {
-        Ok(contents) => contents,
-        Err(strict_error) => pub_cfb::recover_root_regular_stream_reader(
-            Cursor::new(bytes.as_slice()),
-            CONTENTS_STREAM_PATH,
-        )
-        .with_context(|| {
-            format!(
-                "strict legacy Contents read failed ({strict_error}); bounded root recovery failed"
-            )
-        })?
-        .bytes,
-    };
-    let directory = parse_legacy_0x22_directory(
-        StreamPath(CONTENTS_STREAM_PATH.into()),
-        &contents,
-    )
-    .context("parse legacy 0x22 directory")?;
+    let contents =
+        match pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), CONTENTS_STREAM_PATH) {
+            Ok(contents) => contents,
+            Err(strict_error) => {
+                pub_cfb::recover_root_regular_stream_reader(
+                    Cursor::new(bytes.as_slice()),
+                    CONTENTS_STREAM_PATH,
+                )
+                .with_context(|| {
+                    format!(
+                        "strict legacy Contents read failed ({strict_error}); bounded root recovery failed"
+                    )
+                })?
+                .bytes
+            }
+        };
+    let directory = parse_legacy_0x22_directory(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
+        .context("parse legacy 0x22 directory")?;
     let reachable = reader_reachable_ids(&contents, &directory)?;
 
     let physical_image_count = directory
