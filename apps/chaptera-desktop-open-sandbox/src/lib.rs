@@ -693,10 +693,14 @@ mod platform {
                     )
                 };
                 if localappdata_ok != 0 {
-                    let diagnostic_process =
-                        Handle::new(localappdata_info.hProcess, "LOCALAPPDATA diagnostic process handle")?;
-                    let diagnostic_thread =
-                        Handle::new(localappdata_info.hThread, "LOCALAPPDATA diagnostic thread handle")?;
+                    let diagnostic_process = Handle::new(
+                        localappdata_info.hProcess,
+                        "LOCALAPPDATA diagnostic process handle",
+                    )?;
+                    let diagnostic_thread = Handle::new(
+                        localappdata_info.hThread,
+                        "LOCALAPPDATA diagnostic thread handle",
+                    )?;
                     drop(diagnostic_thread);
                     unsafe {
                         TerminateJobObject(job.raw(), 203);
