@@ -89,6 +89,22 @@ def main():
         installer=False,
     )
     assert_scope(
+        ["tools/reader_active_content_guard.py"],
+        tier_a=True,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        typography_golden=False,
+        corpus_truth=False,
+        android=False,
+        web=False,
+        local_portable=False,
+        installer=False,
+        path_identity=False,
+        update_accept=False,
+        lifecycle_soak=False,
+    )
+    assert_scope(
         ["docs/notes.md"],
         tier_a=False,
         reader_windows=False,
