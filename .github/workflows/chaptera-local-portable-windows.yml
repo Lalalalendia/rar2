@@ -38,6 +38,17 @@ env:
   RUSTFLAGS: -C target-feature=+crt-static
 
 jobs:
+  reader-consumer-admission:
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+    uses: ./.github/workflows/reader-consumer-admission.yml
+    with:
+      event_name: ${{ github.event_name }}
+      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
+
   portable-surface:
     runs-on: ubuntu-latest
     outputs:
@@ -76,8 +87,8 @@ jobs:
           echo "present=$head_present" >> "$GITHUB_OUTPUT"
 
   build-portable:
-    needs: portable-surface
-    if: needs.portable-surface.outputs.present == 'true'
+    needs: [portable-surface, reader-consumer-admission]
+    if: needs.portable-surface.outputs.present == 'true' && needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
