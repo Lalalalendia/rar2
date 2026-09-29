@@ -15,17 +15,18 @@ use chaptera_layout_projection::{
 #[cfg(feature = "cmo-slot-compose")]
 use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1, cmo_story_slot_instance_v1};
 use pub_layout::{
-    BoundedAuthoringSlice, BoundedNodeGeometryInput, BoundedTextFlowEnvironment,
-    BoundedTextMetrics, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
-    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow,
+    BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput, BoundedTableInput,
+    BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
+    ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode, project_bounded,
+    resolve_bounded_geometry, resolve_bounded_text_flow, resolve_bounded_uniform_table_cells,
 };
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
-use pub_model::{
-    Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence,
-    ResourceId, Sha256Digest, SourceRole, StoryFrame, StoryId,
-};
 #[cfg(feature = "cmo-slot-compose")]
-use pub_model::{CanonicalId, RectEmu};
+use pub_model::CanonicalId;
+use pub_model::{
+    Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
+    ResourceId, Sha256Digest, SourceRole, StoryFrame, StoryId, TableCellAddress, TableCellId,
+};
 use pub_paint_bridge::{
     PubExplicitFillSourceV1, PubExplicitLineSourceV1, PubExplicitShapePaintSourceV1,
     PubPaintSourceProvenanceV1, PubPaintSourceRoleV1, project_explicit_source_paint_to_viewer_v1,
@@ -49,7 +50,8 @@ use pub_reader::{
     PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload, PubSourceGraphBuild,
     analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, derive_pub_page_id, resolve_pub_source_graph,
+    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
+    resolve_pub_source_graph,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -204,6 +206,8 @@ pub struct ViewerGeometryDocument {
     pub text_fragments: Vec<ViewerTextFragment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<ViewerTypographyRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<ViewerTable>,
     #[cfg(feature = "cmo-slot-compose")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projected_instances: Vec<ViewerProjectedSceneInstanceV1>,
@@ -241,6 +245,7 @@ impl ViewerGeometryDocument {
         let authoring = bounded_authoring_slice_from_resolved_pages(graph, &effective_page_ids)?;
         let projection = project_bounded(authoring);
         let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+        let (tables, table_diagnostics) = viewer_tables_from_resolved(graph, &projection);
 
         let stories = graph
             .stories
@@ -264,6 +269,7 @@ impl ViewerGeometryDocument {
         diagnostics
             .retain(|diagnostic| !is_refreshable_text_flow_diagnostic(diagnostic.code.as_str()));
         diagnostics.extend(text_flow_diagnostics.iter().map(map_scene_diagnostic));
+        diagnostics.extend(table_diagnostics);
         if !text_fragments.is_empty() {
             diagnostics.push(viewer_fallback_flow_metrics_diagnostic());
         }
@@ -272,6 +278,7 @@ impl ViewerGeometryDocument {
         self.document.stories = stories;
         self.story_frames = story_frames;
         self.text_fragments = text_fragments;
+        self.tables = tables;
         self.document.diagnostics = diagnostics;
         Ok(())
     }
@@ -403,6 +410,24 @@ impl ViewerGeometryDocument {
         self.scene.nodes = next_nodes;
         Ok(seen)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTable {
+    pub node_id: NodeId,
+    pub story_id: StoryId,
+    pub rows: u32,
+    pub columns: u32,
+    pub cells: Vec<ViewerTableCell>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTableCell {
+    pub id: TableCellId,
+    pub address: TableCellAddress,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<RectEmu>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -740,6 +765,7 @@ pub fn open_legacy_0x22_noquill_geometry(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images: Vec::new(),
@@ -849,6 +875,7 @@ pub fn open_legacy_0x22_quill_geometry(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images: Vec::new(),
@@ -944,6 +971,10 @@ pub fn open_mature_0x2c_geometry(
             ),
         });
     }
+
+    let (tables, table_diagnostics) =
+        viewer_tables_from_resolved(&pipeline.resolved.graph, &projection);
+    document.diagnostics.extend(table_diagnostics);
 
     let images = match build_mature_0x2c_asset_export_bundle_from_bytes(
         bytes,
@@ -1053,6 +1084,7 @@ pub fn open_mature_0x2c_geometry(
         story_frames,
         text_fragments,
         typography_runs,
+        tables,
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances,
         images,
@@ -1476,15 +1508,120 @@ fn bounded_authoring_slice_from_resolved_pages(
         })
         .collect();
 
+    let tables = graph
+        .nodes
+        .values()
+        .filter(|node| page_origins.contains(&node.header.parent_id))
+        .filter_map(|node| {
+            let table = node.payload.table.as_ref()?.simple_table.as_ref()?.clone();
+            Some(BoundedTableInput {
+                node_id: node.header.id,
+                table,
+            })
+        })
+        .collect();
+
     Ok(BoundedAuthoringSlice {
         pages,
         node_geometry,
         stories,
         story_frames,
-        tables: Vec::new(),
+        tables,
         guides: Vec::new(),
         unknown_layout_state: Vec::new(),
     })
+}
+
+fn viewer_tables_from_resolved(
+    graph: &PubResolvedGraph,
+    projection: &BoundedLayoutProjection,
+) -> (Vec<ViewerTable>, Vec<ViewerDiagnostic>) {
+    let mut tables = Vec::new();
+    let mut diagnostics = Vec::new();
+
+    for projected in &projection.tables {
+        let Some(node) = graph.nodes.get(&projected.origin) else {
+            continue;
+        };
+        let Some(source) = node.payload.table.as_ref() else {
+            continue;
+        };
+        let Some(story_id) = source.story_id else {
+            continue;
+        };
+        let Some(story) = graph.stories.get(&story_id) else {
+            continue;
+        };
+
+        let materialized = match materialize_bounded_simple_table_cells(source, story) {
+            Ok(cells) => cells,
+            Err(error) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.table.cell_text_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message: format!(
+                        "Bounded table cell text could not be materialized safely ({error:?})."
+                    ),
+                });
+                continue;
+            }
+        };
+
+        let resolved_bounds = source.layout_metrics.as_ref().and_then(|metrics| {
+            let mut table_projection = projection.clone();
+            table_projection
+                .tables
+                .retain(|table| table.origin == projected.origin);
+            table_projection
+                .node_geometry
+                .retain(|geometry| geometry.origin == projected.origin);
+            table_projection.diagnostics.clear();
+
+            resolve_bounded_uniform_table_cells(
+                &table_projection,
+                &[BoundedUniformTableMetrics {
+                    table_origin: projected.origin,
+                    cell_width: metrics.cell_width,
+                    row_pitch: metrics.row_pitch,
+                }],
+            )
+            .ok()
+        });
+
+        if source.layout_metrics.is_some() && resolved_bounds.is_none() {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.table.cell_geometry_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message: "Exact table metrics were recovered, but the bounded cell-geometry resolver rejected this table; semantic cells remain available.".to_owned(),
+            });
+        }
+
+        let cells = materialized
+            .into_iter()
+            .map(|cell| ViewerTableCell {
+                id: cell.id,
+                address: cell.address,
+                text: cell.text,
+                bounds: resolved_bounds.as_ref().and_then(|resolved| {
+                    resolved
+                        .cells
+                        .iter()
+                        .find(|candidate| candidate.origin == cell.id)
+                        .map(|candidate| candidate.bounds)
+                }),
+            })
+            .collect();
+
+        tables.push(ViewerTable {
+            node_id: projected.origin,
+            story_id,
+            rows: projected.rows,
+            columns: projected.columns,
+            cells,
+        });
+    }
+
+    (tables, diagnostics)
 }
 
 fn sha256_digest(bytes: &[u8]) -> Result<Sha256Digest> {
@@ -2283,7 +2420,7 @@ mod tests {
                         image_slot: None,
                         explicit_image_crop: None,
                         explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
-                        effective_paint: None,
+                effective_paint: None,
                         story_frame: Some(PubResolvedStoryFrame {
                             story_id: Some(story_id),
                             ordinal: 0,
@@ -2401,6 +2538,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
@@ -2441,7 +2579,7 @@ mod tests {
                 image_slot: None,
                 explicit_image_crop: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
-                effective_paint: None,
+                        effective_paint: None,
                 story_frame: Some(PubResolvedStoryFrame {
                     story_id: Some(story_id),
                     ordinal: 0,
@@ -2551,6 +2689,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
@@ -2988,6 +3127,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
@@ -3092,6 +3232,7 @@ mod tests {
             story_frames: initial_frames.clone(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
@@ -3157,6 +3298,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
