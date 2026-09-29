@@ -299,11 +299,7 @@ pub fn from_viewer_geometry(
 
         let mut cells = Vec::with_capacity(table.cells.len());
         for cell in &table.cells {
-            let bounds = cell
-                .bounds
-                .as_ref()
-                .map(rect_from_serialized)
-                .transpose()?;
+            let bounds = cell.bounds.as_ref().map(rect_from_serialized).transpose()?;
             if bounds
                 .as_ref()
                 .is_some_and(|bounds| bounds.width <= 0 || bounds.height <= 0)
