@@ -1501,10 +1501,7 @@ mod tests {
             .mark_stored(&session.session_id, 1024, "generation-1", "etag-1", 1_001)
             .await
             .unwrap();
-        store
-            .claim_open(&session.session_id, 1_002)
-            .await
-            .unwrap();
+        store.claim_open(&session.session_id, 1_002).await.unwrap();
         let opened = store
             .finish_opened(
                 &session.session_id,
