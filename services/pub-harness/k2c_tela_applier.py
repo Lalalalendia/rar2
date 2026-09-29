@@ -49,6 +49,7 @@ class TelaPageSnapshot:
     page_id: int
     space_id: int
     updated_at: str
+    section_paths: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -147,6 +148,8 @@ class TelaPatchManifest:
             raise ManifestError("missing manifest field: operations") from exc
         if not isinstance(raw_ops, Sequence) or isinstance(raw_ops, (str, bytes)):
             raise ManifestError("operations must be a JSON array")
+        if any(not isinstance(item, Mapping) for item in raw_ops):
+            raise ManifestError("every operations entry must be a JSON object")
         try:
             return cls(
                 schema_version=str(value["schema_version"]),
@@ -155,7 +158,6 @@ class TelaPatchManifest:
                 operations=tuple(
                     TelaPatchOperation.from_dict(item)
                     for item in raw_ops
-                    if isinstance(item, Mapping)
                 ),
             )
         except KeyError as exc:
@@ -311,6 +313,8 @@ def _replay_pages(
         return set()
     if not previous_receipt.completed:
         return set()
+    if not previous_receipt.apply_requested:
+        return set()
     if previous_receipt.manifest_sha256 != manifest.manifest_sha256():
         return set()
 
@@ -354,6 +358,11 @@ def _preflight(
 
     for index, op in enumerate(manifest.operations):
         snapshot = snapshots[op.page_id]
+        if op.target not in snapshot.section_paths:
+            raise PreconditionError(
+                f"operation {index}: target {op.target!r} is not present "
+                f"in page {op.page_id} heading map"
+            )
         if op.page_id in replay_pages:
             continue
         if snapshot.updated_at != op.expected_updated_at:
