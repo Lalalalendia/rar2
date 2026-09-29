@@ -125,6 +125,7 @@ EDITOR_WINDOWS = (
 
 VISUAL_ORACLE = (
     "crates/pub-presentation-profile/**",
+    "crates/pub-model/**",
     "vendor/producer-a/crates/pub-reader/**",
     "vendor/producer-a/crates/pub-layout/**",
     "vendor/producer-a/crates/pub-viewer/**",
