@@ -2744,6 +2744,7 @@ mod tests {
                 officeart_shape_type: None,
                 officeart_spid: None,
                 image_slot: None,
+                legacy_ole: None,
                 explicit_image_crop: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                 effective_paint: None,
