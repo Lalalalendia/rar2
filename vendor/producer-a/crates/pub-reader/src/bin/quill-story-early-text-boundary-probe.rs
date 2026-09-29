@@ -76,6 +76,38 @@ struct StoryCatalogScalarFieldProfile {
 }
 
 #[derive(Debug, Serialize)]
+struct StoryCatalogScalarPairProfile {
+    start_field_id: u16,
+    end_field_id: u16,
+    all_end_ge_start: bool,
+    contiguous: bool,
+    sum_deltas_equals_text_utf16_units: bool,
+    sum_deltas_equals_text_bytes: bool,
+    outer_span_equals_text_utf16_units: bool,
+    outer_span_equals_text_bytes: bool,
+    first_start_is_zero: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StoryCatalogFixed8PairProfile {
+    field_id: u16,
+    present_entry_count: usize,
+    fixed8_entry_count: usize,
+    duplicate_entry_count: usize,
+    wire_types: Vec<u8>,
+    all_entries_present_once_fixed8: bool,
+    first_words_monotonic: bool,
+    second_words_monotonic: bool,
+    all_second_ge_first: bool,
+    contiguous: bool,
+    sum_deltas_equals_text_utf16_units: bool,
+    sum_deltas_equals_text_bytes: bool,
+    outer_span_equals_text_utf16_units: bool,
+    outer_span_equals_text_bytes: bool,
+    first_start_is_zero: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct WitnessRow {
     source_sha256: String,
     byte_len: usize,
@@ -83,6 +115,8 @@ struct WitnessRow {
     grounded_story_count: u32,
     story_catalog_entries_with_unsupported_tail: usize,
     story_catalog_scalar_profiles: Vec<StoryCatalogScalarFieldProfile>,
+    story_catalog_scalar_pair_profiles: Vec<StoryCatalogScalarPairProfile>,
+    story_catalog_fixed8_pair_profiles: Vec<StoryCatalogFixed8PairProfile>,
 
     syid_descriptor_length: u32,
     syid_length_matches_grounded_count: bool,
@@ -337,6 +371,214 @@ fn story_catalog_scalar_profiles(
             }
         })
         .collect()
+}
+
+fn complete_story_scalar_vector(catalog: &MatureStoryCatalog, field_id: u16) -> Option<Vec<u64>> {
+    let mut values = Vec::with_capacity(catalog.entries.len());
+    for entry in &catalog.entries {
+        let matches = entry
+            .fields
+            .iter()
+            .filter(|field| field.id == field_id)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return None;
+        }
+        let value = match &matches[0].body {
+            RawContentsBlockBody::U16 { value, .. } => u64::from(*value),
+            RawContentsBlockBody::U32 { value, .. } => u64::from(*value),
+            _ => return None,
+        };
+        values.push(value);
+    }
+    Some(values)
+}
+
+fn profile_offset_pair(
+    starts: &[u64],
+    ends: &[u64],
+    text_utf16_units: u64,
+    text_bytes: u64,
+) -> (bool, bool, bool, bool, bool, bool, bool) {
+    if starts.len() != ends.len() || starts.is_empty() {
+        return (false, false, false, false, false, false, false);
+    }
+
+    let all_end_ge_start = starts
+        .iter()
+        .zip(ends.iter())
+        .all(|(start, end)| end >= start);
+    let contiguous = ends
+        .iter()
+        .take(ends.len().saturating_sub(1))
+        .zip(starts.iter().skip(1))
+        .all(|(end, next_start)| end == next_start);
+    let sum_deltas = if all_end_ge_start {
+        starts
+            .iter()
+            .zip(ends.iter())
+            .try_fold(0u64, |acc, (start, end)| acc.checked_add(end - start))
+    } else {
+        None
+    };
+    let outer_span = ends
+        .last()
+        .zip(starts.first())
+        .and_then(|(end, start)| end.checked_sub(*start));
+
+    (
+        all_end_ge_start,
+        contiguous,
+        sum_deltas == Some(text_utf16_units),
+        sum_deltas == Some(text_bytes),
+        outer_span == Some(text_utf16_units),
+        outer_span == Some(text_bytes),
+        starts.first().copied() == Some(0),
+    )
+}
+
+fn story_catalog_scalar_pair_profiles(
+    catalog: &MatureStoryCatalog,
+    text_utf16_units: u64,
+    text_bytes: u64,
+) -> Vec<StoryCatalogScalarPairProfile> {
+    let ids = catalog
+        .entries
+        .iter()
+        .flat_map(|entry| entry.fields.iter().map(|field| field.id))
+        .collect::<BTreeSet<_>>();
+
+    let vectors = ids
+        .iter()
+        .filter_map(|id| complete_story_scalar_vector(catalog, *id).map(|values| (*id, values)))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut out = Vec::new();
+    for (start_id, starts) in &vectors {
+        for (end_id, ends) in &vectors {
+            if start_id == end_id {
+                continue;
+            }
+            let (
+                all_end_ge_start,
+                contiguous,
+                sum_deltas_equals_text_utf16_units,
+                sum_deltas_equals_text_bytes,
+                outer_span_equals_text_utf16_units,
+                outer_span_equals_text_bytes,
+                first_start_is_zero,
+            ) = profile_offset_pair(starts, ends, text_utf16_units, text_bytes);
+
+            out.push(StoryCatalogScalarPairProfile {
+                start_field_id: *start_id,
+                end_field_id: *end_id,
+                all_end_ge_start,
+                contiguous,
+                sum_deltas_equals_text_utf16_units,
+                sum_deltas_equals_text_bytes,
+                outer_span_equals_text_utf16_units,
+                outer_span_equals_text_bytes,
+                first_start_is_zero,
+            });
+        }
+    }
+    out
+}
+
+fn story_catalog_fixed8_pair_profiles(
+    catalog: &MatureStoryCatalog,
+    text_utf16_units: u64,
+    text_bytes: u64,
+) -> Vec<StoryCatalogFixed8PairProfile> {
+    let ids = catalog
+        .entries
+        .iter()
+        .flat_map(|entry| entry.fields.iter().map(|field| field.id))
+        .collect::<BTreeSet<_>>();
+    let mut out = Vec::new();
+
+    for field_id in ids {
+        let mut present_entry_count = 0usize;
+        let mut fixed8_entry_count = 0usize;
+        let mut duplicate_entry_count = 0usize;
+        let mut wire_types = BTreeSet::new();
+        let mut first_words = Vec::new();
+        let mut second_words = Vec::new();
+
+        for entry in &catalog.entries {
+            let matches = entry
+                .fields
+                .iter()
+                .filter(|field| field.id == field_id)
+                .collect::<Vec<_>>();
+            if !matches.is_empty() {
+                present_entry_count += 1;
+            }
+            if matches.len() > 1 {
+                duplicate_entry_count += 1;
+            }
+            for field in &matches {
+                wire_types.insert(field.block_type);
+            }
+            if matches.len() == 1 {
+                if let RawContentsBlockBody::Fixed8 { bytes, .. } = &matches[0].body {
+                    fixed8_entry_count += 1;
+                    first_words.push(u64::from(u32::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3],
+                    ])));
+                    second_words.push(u64::from(u32::from_le_bytes([
+                        bytes[4], bytes[5], bytes[6], bytes[7],
+                    ])));
+                }
+            }
+        }
+
+        if fixed8_entry_count == 0 {
+            continue;
+        }
+
+        let all_entries_present_once_fixed8 =
+            present_entry_count == catalog.entries.len()
+                && fixed8_entry_count == catalog.entries.len()
+                && duplicate_entry_count == 0;
+        let first_words_monotonic = all_entries_present_once_fixed8
+            && first_words.windows(2).all(|pair| pair[0] <= pair[1]);
+        let second_words_monotonic = all_entries_present_once_fixed8
+            && second_words.windows(2).all(|pair| pair[0] <= pair[1]);
+        let (
+            all_second_ge_first,
+            contiguous,
+            sum_deltas_equals_text_utf16_units,
+            sum_deltas_equals_text_bytes,
+            outer_span_equals_text_utf16_units,
+            outer_span_equals_text_bytes,
+            first_start_is_zero,
+        ) = if all_entries_present_once_fixed8 {
+            profile_offset_pair(&first_words, &second_words, text_utf16_units, text_bytes)
+        } else {
+            (false, false, false, false, false, false, false)
+        };
+
+        out.push(StoryCatalogFixed8PairProfile {
+            field_id,
+            present_entry_count,
+            fixed8_entry_count,
+            duplicate_entry_count,
+            wire_types: wire_types.into_iter().collect(),
+            all_entries_present_once_fixed8,
+            first_words_monotonic,
+            second_words_monotonic,
+            all_second_ge_first,
+            contiguous,
+            sum_deltas_equals_text_utf16_units,
+            sum_deltas_equals_text_bytes,
+            outer_span_equals_text_utf16_units,
+            outer_span_equals_text_bytes,
+            first_start_is_zero,
+        });
+    }
+
+    out
 }
 
 fn format_ranges(descriptors: &[&Descriptor]) -> Vec<(u64, u64)> {
@@ -604,6 +846,10 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let text_utf16_units = text_bytes / 2;
     let story_catalog_scalar_profiles =
         story_catalog_scalar_profiles(&story_catalog, text_utf16_units, text_bytes);
+    let story_catalog_scalar_pair_profiles =
+        story_catalog_scalar_pair_profiles(&story_catalog, text_utf16_units, text_bytes);
+    let story_catalog_fixed8_pair_profiles =
+        story_catalog_fixed8_pair_profiles(&story_catalog, text_utf16_units, text_bytes);
     let story_catalog_entries_with_unsupported_tail = story_catalog
         .entries
         .iter()
@@ -624,6 +870,8 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         grounded_story_count,
         story_catalog_entries_with_unsupported_tail,
         story_catalog_scalar_profiles,
+        story_catalog_scalar_pair_profiles,
+        story_catalog_fixed8_pair_profiles,
 
         syid_descriptor_length: syid.data_length,
         syid_length_matches_grounded_count: u64::from(syid.data_length) == expected_syid_len,
@@ -691,7 +939,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v3",
+        "schema": "chaptera.quill-story-early-text-boundary.v4",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
