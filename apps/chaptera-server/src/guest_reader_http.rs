@@ -17,7 +17,6 @@ use axum::{
     routing::{get, post, put},
 };
 use futures_util::StreamExt;
-use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,7 +25,7 @@ use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     blob_store::{BlobStoreError, BlobStoreService},
@@ -34,7 +33,7 @@ use crate::{
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
-    reader_scene_v1::{ReaderSceneV1, from_viewer_geometry},
+    guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
     upload_admission::{
@@ -80,6 +79,7 @@ pub struct GuestReaderHttpState {
     sessions: SqliteGuestReaderSessionStore,
     blob_store: BlobStoreService,
     scanner: Arc<ProductionSourceSecurityScanner>,
+    scene_worker: IsolatedGuestSceneProducer,
     config: GuestReaderHttpConfig,
 }
 
@@ -90,6 +90,7 @@ impl GuestReaderHttpState {
         sessions: SqliteGuestReaderSessionStore,
         blob_store: BlobStoreService,
         scanner: ProductionSourceSecurityScanner,
+        scene_worker: IsolatedGuestSceneProducer,
         config: GuestReaderHttpConfig,
     ) -> Result<Self, GuestReaderError> {
         config.validate(&admission)?;
@@ -99,6 +100,7 @@ impl GuestReaderHttpState {
             sessions,
             blob_store,
             scanner: Arc::new(scanner),
+            scene_worker,
             config,
         })
     }
@@ -152,8 +154,10 @@ struct GuestUploadResponse {
 struct GuestOpenResponse {
     protocol_version: &'static str,
     session_id: String,
-    classification: &'static str,
+    classification: String,
     expires_at_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,6 +170,8 @@ struct GuestSceneResponse {
     session_id: String,
     classification: String,
     expires_at_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -361,7 +367,7 @@ async fn open_session(
         .observed_byte_len
         .ok_or_else(|| GuestReaderError::internal("guest_storage_identity_missing"))?;
 
-    let first = state
+    let first = match state
         .blob_store
         .open_quarantine_exact(
             GUEST_SERVICE_TENANT_ID,
@@ -371,9 +377,22 @@ async fn open_session(
             observed,
         )
         .await
-        .map_err(map_blob_error)?;
+    {
+        Ok(input) => input,
+        Err(error) => {
+            state.sessions.reset_open(&opening.session_id, now_ms).await?;
+            return Err(map_blob_error(error));
+        }
+    };
     let mut scan_input = first;
-    match state.scanner.scan(&mut *scan_input).await.map_err(map_scan_error)? {
+    let scan_outcome = match state.scanner.scan(&mut *scan_input).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            state.sessions.reset_open(&opening.session_id, now_ms).await?;
+            return Err(map_scan_error(error));
+        }
+    };
+    match scan_outcome {
         SourceSecurityScanOutcome::Accepted(_) => {}
         SourceSecurityScanOutcome::Rejected { code } => {
             let rejected = state
@@ -385,81 +404,61 @@ async fn open_session(
             return Ok(Json(GuestOpenResponse {
                 protocol_version: GUEST_PROTOCOL_V1,
                 session_id: rejected.session_id,
-                classification: "rejected",
+                classification: "rejected".to_owned(),
                 expires_at_ms: rejected.expires_at_ms,
+                source_sha256: None,
                 terminal_code: rejected.terminal_code,
                 scene: None,
             }));
         }
     }
 
-    let second = state
-        .blob_store
-        .open_quarantine_exact(
+    let receipt = match state
+        .scene_worker
+        .produce_from_quarantine(
+            &state.blob_store,
             GUEST_SERVICE_TENANT_ID,
             &opening.upload_id,
             generation,
             etag,
             observed,
+            &opening.session_id,
         )
         .await
-        .map_err(map_blob_error)?;
-    let bytes = read_exact_bounded(second, observed, state.config.max_file_bytes).await?;
-    let source_sha256 = hex_sha256(&bytes);
-
-    let geometry = match open_pub_geometry(&bytes, viewer_geometry_environment_v0_1()) {
-        Ok(geometry) => geometry,
-        Err(_) => {
-            let unsupported = state
-                .sessions
-                .finish_opened(
-                    &opening.session_id,
-                    "unsupported",
-                    &source_sha256,
-                    None,
-                    Some("reader_scene_open_failed"),
-                    now_ms,
-                )
-                .await?;
-            state.release_admission(&unsupported, now_ms).await?;
-            return Ok(Json(GuestOpenResponse {
-                protocol_version: GUEST_PROTOCOL_V1,
-                session_id: unsupported.session_id,
-                classification: "unsupported",
-                expires_at_ms: unsupported.expires_at_ms,
-                terminal_code: unsupported.terminal_code,
-                scene: None,
-            }));
+    {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            state.sessions.reset_open(&opening.session_id, now_ms).await?;
+            return Err(map_scene_worker_error(error));
         }
     };
 
-    let scene = from_viewer_geometry(
-        format!("guest:{}", opaque_suffix(&opening.session_id)),
-        source_sha256.clone(),
-        "guest:source".to_owned(),
-        &geometry,
-    )
-    .map_err(|_| GuestReaderError::internal("guest_reader_scene_projection_failed"))?;
-
-    let classification = if scene.fidelity.state == "supported" {
-        "supported"
-    } else {
-        "partial"
-    };
-    let scene_json = serde_json::to_vec(&scene)
+    let mut classification = receipt.classification;
+    let mut terminal_code = receipt.terminal_code;
+    let mut scene = receipt.scene;
+    let mut scene_json = scene
+        .as_ref()
+        .map(serde_json::to_vec)
+        .transpose()
         .map_err(|_| GuestReaderError::internal("guest_reader_scene_serialize_failed"))?;
-    if scene_json.len() > MAX_SCENE_BYTES {
-        return Err(GuestReaderError::internal("guest_reader_scene_too_large"));
+    if scene_json
+        .as_ref()
+        .is_some_and(|encoded| encoded.len() > MAX_SCENE_BYTES)
+    {
+        classification = "unsupported".to_owned();
+        terminal_code = Some("reader_scene_too_large".to_owned());
+        scene = None;
+        scene_json = None;
     }
 
     let opened = state
         .sessions
         .finish_opened(
             &opening.session_id,
-            classification,
-            &source_sha256,
-            Some(&scene_json),
-            None,
+            &classification,
+            &receipt.source_sha256,
+            scene_json.as_deref(),
+            terminal_code.as_deref(),
             now_ms,
         )
         .await?;
@@ -470,11 +469,9 @@ async fn open_session(
         session_id: opened.session_id,
         classification,
         expires_at_ms: opened.expires_at_ms,
-        terminal_code: None,
-        scene: Some(
-            serde_json::to_value(&scene)
-                .map_err(|_| GuestReaderError::internal("guest_reader_scene_serialize_failed"))?,
-        ),
+        source_sha256: Some(receipt.source_sha256),
+        terminal_code,
+        scene,
     }))
 }
 
@@ -511,6 +508,7 @@ async fn get_scene(
             .classification
             .unwrap_or_else(|| "rejected".to_owned()),
         expires_at_ms: session.expires_at_ms,
+        source_sha256: session.source_sha256,
         terminal_code: session.terminal_code,
         scene,
     }))
@@ -861,6 +859,30 @@ impl SqliteGuestReaderSessionStore {
             .ok_or_else(|| GuestReaderError::internal("guest_session_disappeared"))
     }
 
+    async fn reset_open(
+        &self,
+        session_id: &str,
+        now_ms: i64,
+    ) -> Result<(), GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE reader_guest_sessions
+            SET state='stored', updated_at_ms=?
+            WHERE session_id=? AND state='opening' AND expires_at_ms>?
+            "#,
+        )
+        .bind(now_ms)
+        .bind(session_id.as_bytes())
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::conflict("guest_open_reset_conflict"));
+        }
+        Ok(())
+    }
+
     async fn finish_opened(
         &self,
         session_id: &str,
@@ -1050,8 +1072,9 @@ fn open_response_from_stored(
     Ok(Json(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: session.session_id.clone(),
-        classification,
+        classification: classification.to_owned(),
         expires_at_ms: session.expires_at_ms,
+        source_sha256: session.source_sha256.clone(),
         terminal_code: session.terminal_code.clone(),
         scene,
     }))
@@ -1076,28 +1099,6 @@ fn admission_request_hash(session_id: &str, expected_byte_len: u64) -> String {
     hasher.update(session_id.as_bytes());
     hasher.update(expected_byte_len.to_be_bytes());
     format!("{:x}", hasher.finalize())
-}
-
-async fn read_exact_bounded(
-    mut input: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
-    expected: u64,
-    max_file_bytes: u64,
-) -> Result<Vec<u8>, GuestReaderError> {
-    if expected == 0 || expected > max_file_bytes {
-        return Err(GuestReaderError::payload_too_large("guest_upload_too_large"));
-    }
-    let capacity = usize::try_from(expected)
-        .map_err(|_| GuestReaderError::payload_too_large("guest_upload_too_large"))?;
-    let mut bytes = Vec::with_capacity(capacity);
-    input
-        .take(expected.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|_| GuestReaderError::internal("guest_quarantine_read_failed"))?;
-    if bytes.len() != capacity {
-        return Err(GuestReaderError::internal("guest_quarantine_length_mismatch"));
-    }
-    Ok(bytes)
 }
 
 fn content_length(headers: &HeaderMap) -> Result<u64, GuestReaderError> {
@@ -1147,10 +1148,6 @@ fn opaque_suffix(value: &str) -> &str {
 
 fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn bytes_string(bytes: Vec<u8>) -> Result<String, GuestReaderError> {
@@ -1209,6 +1206,10 @@ fn map_rate_error(_error: PublicRateLimitError) -> GuestReaderError {
 
 fn map_scan_error(_error: crate::source_ingress::IngressError) -> GuestReaderError {
     GuestReaderError::unprocessable("guest_source_scan_failed")
+}
+
+fn map_scene_worker_error(_error: GuestSceneWorkerError) -> GuestReaderError {
+    GuestReaderError::internal("guest_scene_worker_failed")
 }
 
 fn sqlite_error(error: impl fmt::Display) -> GuestReaderError {
