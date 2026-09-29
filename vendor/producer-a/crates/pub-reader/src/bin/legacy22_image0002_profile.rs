@@ -291,8 +291,7 @@ fn main() -> Result<()> {
         let field_repl_entry = field_repl_ref
             .filter(|id| *id != 0)
             .and_then(|id| directory.entry_by_object_id(id));
-        let field_repl_chunk =
-            field_repl_entry.and_then(|entry| chunk_bytes(&contents, entry));
+        let field_repl_chunk = field_repl_entry.and_then(|entry| chunk_bytes(&contents, entry));
 
         let child_types = directory
             .entries_by_parent_id(image.object_id)
