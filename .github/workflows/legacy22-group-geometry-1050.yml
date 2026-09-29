@@ -114,6 +114,35 @@ jobs:
               i for i in active
               if (i.get("geometry_current") or {}).get("positive_rect") is not True
           ]
+          reader_target_invalid = [
+              i for i in invalid if i.get("parent_raw_type") == "0x0014"
+          ]
+
+          def invalid_class(item):
+              g = item.get("geometry_current") or {}
+              if g.get("carrier_present") is not True:
+                  return "missing"
+              w = int(g["width"])
+              h = int(g["height"])
+              if w == 0 and h == 0:
+                  return "point"
+              if w < 0 or h < 0:
+                  return "reversed"
+              if w == 0 or h == 0:
+                  return "axis"
+              return "other"
+
+          def cohort_key(item):
+              return ":".join([
+                  invalid_class(item),
+                  "alt04_positive=" + str(
+                      (item.get("geometry_start_0x04") or {}).get("positive_rect") is True
+                  ).lower(),
+                  "rev=" + str(item.get("serialization_revision")),
+                  "service=" + str(item.get("service_word")),
+                  "len=" + str(item.get("chunk_len")),
+                  "children=" + str(item.get("child_count")),
+              ])
 
           def sign(v):
               return "negative" if v < 0 else "positive" if v > 0 else "zero"
@@ -145,6 +174,20 @@ jobs:
               "raw000f_instance_count": len(instances),
               "active_group_count": len(active),
               "active_current_invalid_geometry_count": len(invalid),
+              "reader_target_invalid_geometry_count": len(reader_target_invalid),
+              "reader_target_invalid_class_counts": dict(
+                  Counter(invalid_class(i) for i in reader_target_invalid).most_common()
+              ),
+              "reader_target_invalid_alt04_positive_count": sum(
+                  (i.get("geometry_start_0x04") or {}).get("positive_rect") is True
+                  for i in reader_target_invalid
+              ),
+              "reader_target_invalid_revision_counts": dict(
+                  Counter(str(i.get("serialization_revision")) for i in reader_target_invalid).most_common()
+              ),
+              "reader_target_invalid_cohort_counts": dict(
+                  Counter(cohort_key(i) for i in reader_target_invalid).most_common()
+              ),
               "active_invalid_current_carrier_missing_count": missing,
               "active_invalid_current_point_count": points,
               "active_invalid_current_axis_aligned_count": axis,
