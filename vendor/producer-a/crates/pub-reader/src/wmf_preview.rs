@@ -20,6 +20,7 @@ const META_SETRELABS: u16 = 0x0105;
 const META_SETPOLYFILLMODE: u16 = 0x0106;
 const META_SETSTRETCHBLTMODE: u16 = 0x0107;
 const META_RESTOREDC: u16 = 0x0127;
+const META_SELECTCLIPREGION: u16 = 0x012c;
 const META_SELECTOBJECT: u16 = 0x012d;
 const META_SETTEXTALIGN: u16 = 0x012e;
 const META_DIBCREATEPATTERNBRUSH: u16 = 0x0142;
@@ -87,6 +88,7 @@ struct Brush {
 enum GdiObject {
     Pen(Pen),
     Brush(Brush),
+    RegionCompatibility,
     Unsupported,
 }
 
@@ -588,6 +590,66 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
     Ok(())
 }
 
+fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
+    // Exact-1050 evidence for the seven Publisher Region compatibility objects:
+    // 42-byte payload, ObjectType=6, RegionSize=42, one scan, maxScan=2.
+    // The one scan is structurally valid (Count=Count2=2) and the corpus profile
+    // carries an additional bounded eight-byte tail that is playback-inert here.
+    if params.len() != 42 {
+        bail!("unsupported WMF Region compatibility payload length {}", params.len());
+    }
+
+    let object_type =
+        read_i16(params, 2).ok_or_else(|| anyhow!("WMF Region ObjectType is truncated"))?;
+    let region_size =
+        read_i16(params, 8).ok_or_else(|| anyhow!("WMF RegionSize is truncated"))?;
+    let scan_count =
+        read_i16(params, 10).ok_or_else(|| anyhow!("WMF Region ScanCount is truncated"))?;
+    let max_scan =
+        read_i16(params, 12).ok_or_else(|| anyhow!("WMF Region maxScan is truncated"))?;
+    if object_type != 6 || region_size != 42 || scan_count != 1 || max_scan != 2 {
+        bail!(
+            "unsupported WMF Region compatibility profile type={object_type} size={region_size} scans={scan_count} max_scan={max_scan}"
+        );
+    }
+
+    // BoundingRectangle is present in the fixed Region header. Values are not
+    // interpreted because this compatibility object never becomes the active
+    // clipping region in the admitted sequence.
+    for offset in [14usize, 16, 18, 20] {
+        read_i16(params, offset)
+            .ok_or_else(|| anyhow!("WMF Region bounding rectangle is truncated"))?;
+    }
+
+    let count =
+        read_u16(params, 22).ok_or_else(|| anyhow!("WMF Region Scan Count is truncated"))?;
+    let top = read_u16(params, 24).ok_or_else(|| anyhow!("WMF Region Scan Top is truncated"))?;
+    let bottom =
+        read_u16(params, 26).ok_or_else(|| anyhow!("WMF Region Scan Bottom is truncated"))?;
+    if count != 2 {
+        bail!("unsupported WMF Region scan coordinate count {count}");
+    }
+    let _left =
+        read_u16(params, 28).ok_or_else(|| anyhow!("WMF Region Scan left is truncated"))?;
+    let _right =
+        read_u16(params, 30).ok_or_else(|| anyhow!("WMF Region Scan right is truncated"))?;
+    let count2 =
+        read_u16(params, 32).ok_or_else(|| anyhow!("WMF Region Scan Count2 is truncated"))?;
+    if count2 != count {
+        bail!("WMF Region Scan Count2 does not match Count");
+    }
+    if bottom < top {
+        bail!("WMF Region scan vertical bounds are inverted");
+    }
+
+    // Exact corpus profile has an eight-byte compatibility tail. Keep it
+    // bounded but opaque because Region geometry is not activated in this slice.
+    if params.len() - 34 != 8 {
+        bail!("unsupported WMF Region compatibility tail length");
+    }
+    Ok(())
+}
+
 fn parse_points(params: &[u8], count: usize, offset: usize) -> Result<Vec<(i16, i16)>> {
     if count > MAX_POINTS_PER_RECORD {
         bail!("WMF point count exceeds bounded limit");
@@ -765,6 +827,7 @@ pub fn rasterize_wmf_preview(
     let mut offset = 18usize;
     let mut records = 0usize;
     let mut eof_seen = false;
+    let mut pending_region_compat_cliprect = false;
 
     while offset < declared_len {
         records += 1;
@@ -794,6 +857,15 @@ pub fn rasterize_wmf_preview(
             bail!("WMF record 0x{function:04x} exceeds declared metafile size");
         }
         let params = &bytes[offset + 6..next];
+
+        if pending_region_compat_cliprect {
+            if function != META_INTERSECTCLIPRECT {
+                bail!(
+                    "WMF Region compatibility SELECTOBJECT is not followed by META_INTERSECTCLIPRECT"
+                );
+            }
+            pending_region_compat_cliprect = false;
+        }
 
         match function {
             META_EOF => {
@@ -944,8 +1016,12 @@ pub fn rasterize_wmf_preview(
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
             }
-            META_DIBCREATEPATTERNBRUSH | META_CREATEREGION => {
+            META_DIBCREATEPATTERNBRUSH => {
                 allocate_object(&mut objects, GdiObject::Unsupported)?;
+            }
+            META_CREATEREGION => {
+                validate_region_compatibility_object(params)?;
+                allocate_object(&mut objects, GdiObject::RegionCompatibility)?;
             }
             META_DELETEOBJECT => {
                 let index = usize::from(
@@ -967,10 +1043,16 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
+                    GdiObject::RegionCompatibility => {
+                        pending_region_compat_cliprect = true;
+                    }
                     GdiObject::Unsupported => {
                         bail!("WMF selects an unsupported graphics object");
                     }
                 }
+            }
+            META_SELECTCLIPREGION => {
+                bail!("WMF META_SELECTCLIPREGION remains unsupported");
             }
             META_POLYGON | META_POLYLINE => {
                 let count = usize::from(
