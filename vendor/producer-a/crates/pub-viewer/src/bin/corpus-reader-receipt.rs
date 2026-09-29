@@ -60,7 +60,24 @@ fn legacy_object_residual_census(
 fn raster_rejection_class(error: &anyhow::Error) -> &'static str {
     let message = error.to_string();
     if message.starts_with("unsupported WMF record function") {
-        "unsupported_record_function"
+        match message.rsplit_once(' ').map(|(_, code)| code) {
+            Some("0x012c") => "unsupported_record_0x012c",
+            Some("0x0209") => "unsupported_record_0x0209",
+            Some("0x0214") => "unsupported_record_0x0214",
+            Some("0x02fb") => "unsupported_record_0x02fb",
+            Some("0x0418") => "unsupported_record_0x0418",
+            Some("0x0a32") => "unsupported_record_0x0a32",
+            Some("0x0b41") => "unsupported_record_0x0b41",
+            _ => "unsupported_record_other",
+        }
+    } else if message == "WMF selects an unsupported graphics object" {
+        "selected_unsupported_graphics_object"
+    } else if message == "WMF SELECTOBJECT refers to an empty slot" {
+        "selectobject_empty_slot"
+    } else if message == "WMF DELETEOBJECT index is out of bounds" {
+        "deleteobject_index_oob"
+    } else if message == "WMF object table is full" {
+        "object_table_full"
     } else if message.starts_with("unsupported WMF pen style") {
         "unsupported_pen_style"
     } else if message.starts_with("unsupported WMF brush style") {
@@ -86,7 +103,7 @@ fn raster_rejection_class(error: &anyhow::Error) -> &'static str {
     {
         "unsupported_raster_profile"
     } else if message.contains("object table") || message.contains("graphics object") {
-        "object_table_or_object_kind"
+        "object_table_or_object_kind_other"
     } else if message.contains("raster work") {
         "raster_work_limit"
     } else if message.contains("output") || message.contains("zero output extent") {
