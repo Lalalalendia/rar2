@@ -127,6 +127,12 @@ jobs:
         if: needs.classify.outputs.tier_a_required == 'true'
         run: python tools/ci/test_reader_consumer_preflight.py
 
+      - name: Enforce active-content inertness
+        if: needs.classify.outputs.tier_a_required == 'true'
+        run: |
+          python tools/reader_active_content_guard.py --self-test
+          python tools/reader_active_content_guard.py
+
       - name: Run exact-head Reader seam preflight
         if: needs.classify.outputs.tier_a_required == 'true'
         shell: bash
