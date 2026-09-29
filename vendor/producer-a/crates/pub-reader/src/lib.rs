@@ -67,12 +67,12 @@ pub use legacy22_noquill_graph::{
 };
 use pub_contents::{
     BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
-    Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, RawContentsBlock,
-    RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, MatureColorScheme,
+    RawContentsBlock, RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_chunk,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
     parse_confirmed_controlling_page_list, parse_confirmed_document_page_list,
-    parse_confirmed_margins_page_extent, parse_confirmed_mature_story_catalog,
-    parse_confirmed_oid_identity_payload,
+    parse_confirmed_margins_page_extent, parse_confirmed_mature_color_scheme,
+    parse_confirmed_mature_story_catalog, parse_confirmed_oid_identity_payload,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
@@ -129,6 +129,7 @@ const RAW_TYPE_DOCUMENT: u16 = 0x44;
 const RAW_TYPE_MARGINS: u16 = 0x4C;
 const RAW_TYPE_CONTROLLING: u16 = 0x4D;
 const RAW_TYPE_PAGE_LIST_SPECIAL: u16 = 0x59;
+const RAW_TYPE_COLOR_SCHEME: u16 = 0x5C;
 
 const OFFICEART_PROPERTY_ROTATION: u16 = 0x0004;
 const OFFICEART_FSP_FLIP_H: u32 = 1 << 6;
@@ -534,6 +535,9 @@ pub enum PubBridgeDiagnostic {
     },
     TypographyUnknownFixedBlockTypes {
         block_types: Vec<u8>,
+    },
+    ColorSchemeProjectionUnavailable {
+        reason: String,
     },
 }
 
@@ -1796,6 +1800,16 @@ pub fn build_mature_0x2c_from_streams(
         .context("parse DOCUMENT PageList")?;
 
     let mut diagnostics = Vec::new();
+    let color_scheme =
+        match current_publication_color_scheme(contents_stream.clone(), contents, &references) {
+            Ok(scheme) => scheme,
+            Err(error) => {
+                diagnostics.push(PubBridgeDiagnostic::ColorSchemeProjectionUnavailable {
+                    reason: error.to_string(),
+                });
+                None
+            }
+        };
     let (page_width_emu, page_height_emu, margins_count) =
         consensus_publication_page_extent(contents_stream.clone(), contents, &references)?;
     if margins_count > 1 {
@@ -2195,7 +2209,8 @@ pub fn build_mature_0x2c_from_streams(
 
         let node_id = derive_pub_node_id(&source_hash, seq_num)?;
         let image_slot = exact_image_slot(shape, seq_num, &mut diagnostics);
-        let explicit_paint = explicit_officeart_paint(shape);
+        let explicit_paint =
+            explicit_officeart_paint(shape, color_scheme.as_ref().map(|scheme| &scheme.scheme));
         let explicit_image_crop = image_slot
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
@@ -2263,6 +2278,19 @@ pub fn build_mature_0x2c_from_streams(
                 AuthorityClass::Authoritative,
                 ReadConfidence::Exact,
             ));
+        }
+        if shape_uses_officeart_scheme_color(shape) {
+            if let Some(color_scheme) = &color_scheme {
+                source_refs.push(source_ref(
+                    &graph.source,
+                    &color_scheme.scheme.source,
+                    Some(contents_object_key(color_scheme.seq_num)),
+                    Some("OplSccm/current-color-scheme".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
         }
         for (depth, span) in grouped_sources.iter().enumerate() {
             source_refs.push(source_ref(
@@ -2571,6 +2599,38 @@ fn build_reference_index(
     Ok(references)
 }
 
+#[derive(Debug, Clone)]
+struct PubPublicationColorScheme {
+    seq_num: u32,
+    scheme: MatureColorScheme,
+}
+
+fn current_publication_color_scheme(
+    stream: StreamPath,
+    contents: &[u8],
+    references: &BTreeMap<u32, Contents0x2cChunkReference>,
+) -> Result<Option<PubPublicationColorScheme>> {
+    let matches = references
+        .values()
+        .filter(|reference| single_raw_type(reference) == Some(RAW_TYPE_COLOR_SCHEME))
+        .collect::<Vec<_>>();
+
+    let reference = match matches.as_slice() {
+        [] => return Ok(None),
+        [reference] => *reference,
+        many => bail!(
+            "multiple OplSccm/current ColorScheme raw type 0x{RAW_TYPE_COLOR_SCHEME:02X} objects: {}",
+            many.len()
+        ),
+    };
+
+    let seq_num = seq_u32(reference.seq_num)?;
+    let chunk = chunk_for_reference(stream, contents, reference)?;
+    let scheme = parse_confirmed_mature_color_scheme(contents, &chunk)
+        .with_context(|| format!("parse OplSccm current ColorScheme seq {seq_num}"))?;
+    Ok(Some(PubPublicationColorScheme { seq_num, scheme }))
+}
+
 fn consensus_publication_page_extent(
     stream: StreamPath,
     contents: &[u8],
@@ -2790,17 +2850,18 @@ fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObser
 
 fn explicit_officeart_paint(
     shape: &pub_escher::SpContainerObservation,
+    color_scheme: Option<&MatureColorScheme>,
 ) -> PubExplicitShapePaintSource {
     let fill_type = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_TYPE);
     let fill_color = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
-        .and_then(direct_officeart_rgb);
+        .and_then(|value| bounded_officeart_rgb(value, color_scheme));
     let fill_visible =
         unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_BOOLEANS).and_then(|value| {
             (value & FILL_USE_FILLED_BIT != 0).then_some(value & FILL_FILLED_BIT != 0)
         });
 
     let line_color = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_COLOR)
-        .and_then(direct_officeart_rgb);
+        .and_then(|value| bounded_officeart_rgb(value, color_scheme));
     let line_width = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
         .and_then(|value| (value <= 0x0132_F540).then_some(i64::from(value)));
     let line_visible = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_BOOLEANS)
@@ -2904,6 +2965,32 @@ fn direct_officeart_rgb(value: u32) -> Option<[u8; 3]> {
     }
     let bytes = value.to_le_bytes();
     Some([bytes[0], bytes[1], bytes[2]])
+}
+
+fn bounded_officeart_rgb(value: u32, color_scheme: Option<&MatureColorScheme>) -> Option<[u8; 3]> {
+    match (value >> 24) as u8 {
+        0x00 => direct_officeart_rgb(value),
+        0x08 => {
+            let ordinal = usize::try_from(value & 0x00FF_FFFF).ok()?;
+            color_scheme?.slots.get(ordinal)?.rgb
+        }
+        _ => None,
+    }
+}
+
+fn shape_uses_officeart_scheme_color(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| {
+            matches!(
+                property.property_id(),
+                OFFICE_ART_FILL_COLOR | OFFICE_ART_LINE_COLOR
+            ) && !property.f_bid()
+                && !property.f_complex()
+        })
+        .any(|property| (property.op >> 24) as u8 == 0x08)
 }
 
 fn exact_image_slot(
@@ -3551,6 +3638,57 @@ mod tests {
         assert_eq!(direct_officeart_rgb(0x0000_FF00), Some([0x00, 0xFF, 0x00]));
         assert_eq!(direct_officeart_rgb(0x00FF_0000), Some([0x00, 0x00, 0xFF]));
         assert_eq!(direct_officeart_rgb(0x0800_0007), None);
+    }
+
+    #[test]
+    fn officeart_scheme_index_resolves_only_in_range_non_dummy_slots() {
+        let scheme = MatureColorScheme {
+            source: crop_test_span(100, 40),
+            declared_count: 3,
+            declared_count_source: crop_test_span(106, 4),
+            slots: vec![
+                pub_contents::MatureColorSchemeSlot {
+                    ordinal: 0,
+                    rgb: Some([0x10, 0x20, 0x30]),
+                    source: crop_test_span(110, 12),
+                    rgb_source: Some(crop_test_span(118, 4)),
+                },
+                pub_contents::MatureColorSchemeSlot {
+                    ordinal: 1,
+                    rgb: Some([0, 0, 0]),
+                    source: crop_test_span(122, 2),
+                    rgb_source: None,
+                },
+                pub_contents::MatureColorSchemeSlot {
+                    ordinal: 2,
+                    rgb: Some([0xAA, 0xBB, 0xCC]),
+                    source: crop_test_span(124, 12),
+                    rgb_source: Some(crop_test_span(132, 4)),
+                },
+            ],
+            name: Some("fixture".into()),
+            name_source: Some(crop_test_span(136, 14)),
+        };
+
+        assert_eq!(
+            bounded_officeart_rgb(0x0800_0000, Some(&scheme)),
+            Some([0x10, 0x20, 0x30])
+        );
+        assert_eq!(
+            bounded_officeart_rgb(0x0800_0001, Some(&scheme)),
+            Some([0, 0, 0])
+        );
+        assert_eq!(
+            bounded_officeart_rgb(0x0800_0002, Some(&scheme)),
+            Some([0xAA, 0xBB, 0xCC])
+        );
+        assert_eq!(bounded_officeart_rgb(0x0800_0003, Some(&scheme)), None);
+        assert_eq!(bounded_officeart_rgb(0x0800_0000, None), None);
+        assert_eq!(
+            bounded_officeart_rgb(0x0000_00FF, Some(&scheme)),
+            Some([0xFF, 0x00, 0x00])
+        );
+        assert_eq!(bounded_officeart_rgb(0x1000_0000, Some(&scheme)), None);
     }
 
     #[test]
