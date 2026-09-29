@@ -16,11 +16,21 @@ pub const STORY_CATALOG_WIRE_U16_SERVICE: u8 = 0x10;
 pub const STORY_CATALOG_WIRE_U32_SERVICE: u8 = 0x58;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "authority", rename_all = "snake_case")]
+pub enum StoryCatalogCardinalityAuthority {
+    Declared { count: u32, source: RawSpan },
+    DerivedEmptyEntryArray,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatureStoryCatalog {
     pub source: RawSpan,
     pub fields: Vec<RawContentsBlock>,
-    pub declared_count: u32,
-    pub declared_count_source: RawSpan,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_count_source: Option<RawSpan>,
+    pub cardinality_authority: StoryCatalogCardinalityAuthority,
     pub entry_array_source: RawSpan,
     pub entries: Vec<MatureStoryCatalogEntry>,
 }
@@ -62,6 +72,8 @@ pub enum StoryCatalogReadError {
     InvalidLayoutKey { entry_index: usize },
     DuplicateTextIdentity { text_id: u32 },
     EntryCountMismatch { declared: u32, actual: usize },
+    DerivedEmptyVariantRequiresFullyDecodedChunk,
+    DerivedEmptyVariantRequiresEmptyEntryArray { actual: usize },
 }
 
 impl fmt::Display for StoryCatalogReadError {
@@ -98,18 +110,40 @@ pub fn parse_confirmed_mature_story_catalog(
     bytes: &[u8],
     chunk: &Contents0x2cChunk,
 ) -> Result<MatureStoryCatalog, StoryCatalogReadError> {
+    parse_mature_story_catalog(bytes, chunk, false)
+}
+
+/// Parses the one bounded mature-0x65 variant where field 0x01 is absent and
+/// field 0x02 is a completely decoded empty entry array.
+///
+/// This does not make declared Story count optional in general. The caller must
+/// separately prove that live document geometry carries no source-backed Story
+/// identity that would require inventing a catalog entry.
+pub fn parse_bounded_mature_story_catalog_empty_variant(
+    bytes: &[u8],
+    chunk: &Contents0x2cChunk,
+) -> Result<MatureStoryCatalog, StoryCatalogReadError> {
+    parse_mature_story_catalog(bytes, chunk, true)
+}
+
+fn parse_mature_story_catalog(
+    bytes: &[u8],
+    chunk: &Contents0x2cChunk,
+    allow_derived_empty_entry_array: bool,
+) -> Result<MatureStoryCatalog, StoryCatalogReadError> {
     let mut count_blocks = chunk
         .fields
         .iter()
         .filter(|field| field.id == STORY_CATALOG_DECLARED_COUNT_ID);
-    let count_block = count_blocks
-        .next()
-        .ok_or(StoryCatalogReadError::MissingDeclaredCount)?;
+    let count_block = count_blocks.next();
     if count_blocks.next().is_some() {
         return Err(StoryCatalogReadError::DuplicateDeclaredCount);
     }
-    let (declared_count, declared_count_source) =
-        scalar_u32(count_block).ok_or(StoryCatalogReadError::InvalidDeclaredCount)?;
+    let declared = count_block
+        .map(|block| {
+            scalar_u32(block).ok_or(StoryCatalogReadError::InvalidDeclaredCount)
+        })
+        .transpose()?;
 
     let mut array_blocks = chunk
         .fields
@@ -182,18 +216,51 @@ pub fn parse_confirmed_mature_story_catalog(
         });
     }
 
-    if usize::try_from(declared_count).ok() != Some(entries.len()) {
-        return Err(StoryCatalogReadError::EntryCountMismatch {
-            declared: declared_count,
-            actual: entries.len(),
-        });
-    }
+    let (declared_count, declared_count_source, cardinality_authority) = match declared {
+        Some((declared_count, declared_count_source)) => {
+            if usize::try_from(declared_count).ok() != Some(entries.len()) {
+                return Err(StoryCatalogReadError::EntryCountMismatch {
+                    declared: declared_count,
+                    actual: entries.len(),
+                });
+            }
+            (
+                Some(declared_count),
+                Some(declared_count_source.clone()),
+                StoryCatalogCardinalityAuthority::Declared {
+                    count: declared_count,
+                    source: declared_count_source,
+                },
+            )
+        }
+        None => {
+            if !allow_derived_empty_entry_array {
+                return Err(StoryCatalogReadError::MissingDeclaredCount);
+            }
+            if chunk.unsupported_tail.is_some() {
+                return Err(StoryCatalogReadError::DerivedEmptyVariantRequiresFullyDecodedChunk);
+            }
+            if !entries.is_empty() {
+                return Err(
+                    StoryCatalogReadError::DerivedEmptyVariantRequiresEmptyEntryArray {
+                        actual: entries.len(),
+                    },
+                );
+            }
+            (
+                None,
+                None,
+                StoryCatalogCardinalityAuthority::DerivedEmptyEntryArray,
+            )
+        }
+    };
 
     Ok(MatureStoryCatalog {
         source: chunk.source.clone(),
         fields: chunk.fields.clone(),
         declared_count,
         declared_count_source,
+        cardinality_authority,
         entry_array_source: entry_array_source.clone(),
         entries,
     })
@@ -461,7 +528,11 @@ mod tests {
         let chunk = parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
         let catalog = parse_confirmed_mature_story_catalog(&bytes, &chunk).unwrap();
 
-        assert_eq!(catalog.declared_count, 2);
+        assert_eq!(catalog.declared_count, Some(2));
+        assert!(matches!(
+            catalog.cardinality_authority,
+            StoryCatalogCardinalityAuthority::Declared { count: 2, .. }
+        ));
         assert_eq!(
             catalog
                 .entries
@@ -469,6 +540,89 @@ mod tests {
                 .map(|entry| (entry.text_id, entry.layout_key))
                 .collect::<Vec<_>>(),
             vec![(6, Some(4)), (9, Some(12))]
+        );
+    }
+
+    #[test]
+    fn missing_count_empty_array_is_bounded_derived_variant_only() {
+        let fields = container(
+            STORY_CATALOG_ENTRY_ARRAY_ID,
+            BLOCK_TYPE_CONTAINER_A0,
+            &[],
+        );
+        let mut bytes = u32::try_from(fields.len() + 4)
+            .unwrap()
+            .to_le_bytes()
+            .to_vec();
+        bytes.extend_from_slice(&fields);
+        let chunk =
+            parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+
+        assert_eq!(
+            parse_confirmed_mature_story_catalog(&bytes, &chunk),
+            Err(StoryCatalogReadError::MissingDeclaredCount)
+        );
+
+        let catalog =
+            parse_bounded_mature_story_catalog_empty_variant(&bytes, &chunk).unwrap();
+        assert_eq!(catalog.declared_count, None);
+        assert_eq!(catalog.declared_count_source, None);
+        assert!(catalog.entries.is_empty());
+        assert_eq!(
+            catalog.cardinality_authority,
+            StoryCatalogCardinalityAuthority::DerivedEmptyEntryArray
+        );
+    }
+
+    #[test]
+    fn missing_count_nonempty_array_stays_rejected() {
+        let mut entry = Vec::new();
+        push_u32(&mut entry, STORY_CATALOG_ENTRY_TEXT_ID, 6);
+        push_u32(&mut entry, STORY_CATALOG_ENTRY_LAYOUT_KEY_ID, 4);
+        let array = container(0, BLOCK_TYPE_CONTAINER_88, &entry);
+        let fields = container(
+            STORY_CATALOG_ENTRY_ARRAY_ID,
+            BLOCK_TYPE_CONTAINER_A0,
+            &array,
+        );
+        let mut bytes = u32::try_from(fields.len() + 4)
+            .unwrap()
+            .to_le_bytes()
+            .to_vec();
+        bytes.extend_from_slice(&fields);
+        let chunk =
+            parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+
+        assert_eq!(
+            parse_bounded_mature_story_catalog_empty_variant(&bytes, &chunk),
+            Err(
+                StoryCatalogReadError::DerivedEmptyVariantRequiresEmptyEntryArray {
+                    actual: 1,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn missing_count_with_opaque_top_level_tail_stays_rejected() {
+        let fields = container(
+            STORY_CATALOG_ENTRY_ARRAY_ID,
+            BLOCK_TYPE_CONTAINER_A0,
+            &[],
+        );
+        let mut bytes = u32::try_from(fields.len() + 6)
+            .unwrap()
+            .to_le_bytes()
+            .to_vec();
+        bytes.extend_from_slice(&fields);
+        bytes.extend_from_slice(&[0x01, 0xC0]);
+        let chunk =
+            parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+        assert!(chunk.unsupported_tail.is_some());
+
+        assert_eq!(
+            parse_bounded_mature_story_catalog_empty_variant(&bytes, &chunk),
+            Err(StoryCatalogReadError::DerivedEmptyVariantRequiresFullyDecodedChunk)
         );
     }
 
