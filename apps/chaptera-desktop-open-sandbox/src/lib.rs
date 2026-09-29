@@ -358,18 +358,19 @@ mod platform {
     }
 
     fn minimal_environment(cwd: &Path) -> Vec<u16> {
-        let mut entries = [
-            "SystemRoot",
-            "WINDIR",
-            "ComSpec",
-            "PATHEXT",
-            "TEMP",
-            "TMP",
-            "PATH",
-        ]
+        let mut entries = ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "TEMP", "TMP"]
             .into_iter()
             .filter_map(|key| std::env::var_os(key).map(|value| (key.to_owned(), value)))
             .collect::<Vec<(String, OsString)>>();
+
+        if let Some(system_root) = std::env::var_os("SystemRoot") {
+            entries.push((
+                "PATH".to_owned(),
+                std::path::PathBuf::from(system_root)
+                    .join("System32")
+                    .into_os_string(),
+            ));
+        }
 
         if let Some(Component::Prefix(prefix)) = cwd.components().next() {
             let drive = match prefix.kind() {
