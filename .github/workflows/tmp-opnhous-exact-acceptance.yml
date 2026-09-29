@@ -183,6 +183,7 @@ jobs:
       - name: Add source-safe exact acceptance test
         run: |
           set -euo pipefail
+          mkdir -p vendor/producer-a/crates/pub-viewer/tests
           cat > vendor/producer-a/crates/pub-viewer/tests/opnhous_exact_acceptance.rs <<'RS'
           use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
           use std::{env, fs};
@@ -233,8 +234,8 @@ jobs:
           set -euo pipefail
           mkdir -p out
           cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --release --bin corpus-reader-receipt
-          "$CARGO_TARGET_DIR/release/corpus-reader-receipt" /tmp/chaptera-opnhous/valid.pub out/valid.json
-          "$CARGO_TARGET_DIR/release/corpus-reader-receipt" /tmp/chaptera-opnhous/malformed.pub out/malformed.json
+          vendor/producer-a/target/release/corpus-reader-receipt /tmp/chaptera-opnhous/valid.pub out/valid.json
+          vendor/producer-a/target/release/corpus-reader-receipt /tmp/chaptera-opnhous/malformed.pub out/malformed.json
           python - <<'PY'
           import json
           from pathlib import Path
