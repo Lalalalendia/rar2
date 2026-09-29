@@ -252,6 +252,11 @@ pub enum QuillStoryFailureEvidence {
         required_fits_before_next_boundary: bool,
         strs_declared_count: Option<u32>,
         strs_service_span: Option<u32>,
+        strs_descriptor_length: u32,
+        strs_header_word2: Option<u32>,
+        strs_tail_u32_count_from_12: Option<u32>,
+        strs_tail_utf16_units_sum_from_12: Option<u64>,
+        strs_tail_text_bytes_from_12: Option<u64>,
         strs_count_matches: Option<bool>,
         text_descriptor_length: u32,
     },
@@ -278,6 +283,27 @@ fn descriptor_u32_at(
         .checked_add(relative)?;
     let raw = bytes.get(start..start.checked_add(4)?)?;
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn descriptor_u32_tail_metrics(
+    bytes: &[u8],
+    descriptor: &QuillChunkDescriptor,
+    relative: usize,
+) -> Option<(u32, u64)> {
+    let start = usize::try_from(descriptor.data_offset.value).ok()?;
+    let len = usize::try_from(descriptor.data_length.value).ok()?;
+    if len < relative || (len - relative) % 4 != 0 {
+        return None;
+    }
+    let tail_start = start.checked_add(relative)?;
+    let end = start.checked_add(len)?;
+    let tail = bytes.get(tail_start..end)?;
+    let mut sum = 0_u64;
+    for word in tail.chunks_exact(4) {
+        let value = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        sum = sum.checked_add(u64::from(value))?;
+    }
+    Some((u32::try_from(tail.len() / 4).ok()?, sum))
 }
 
 fn next_descriptor_boundary(
@@ -353,6 +379,13 @@ fn probe_syid_id_array_evidence(
         next_descriptor_boundary(bytes, descriptors, syid_descriptor.data_offset.value);
     let strs_declared_count = descriptor_u32_at(bytes, strs_descriptor, 0);
     let strs_service_span = descriptor_u32_at(bytes, strs_descriptor, 4);
+    let strs_header_word2 = descriptor_u32_at(bytes, strs_descriptor, 8);
+    let (strs_tail_u32_count_from_12, strs_tail_utf16_units_sum_from_12) =
+        descriptor_u32_tail_metrics(bytes, strs_descriptor, 12)
+            .map(|(count, sum)| (Some(count), Some(sum)))
+            .unwrap_or((None, None));
+    let strs_tail_text_bytes_from_12 =
+        strs_tail_utf16_units_sum_from_12.and_then(|sum| sum.checked_mul(2));
 
     Some(QuillStoryFailureEvidence::SyidIdArray {
         declared_count: count,
@@ -364,6 +397,11 @@ fn probe_syid_id_array_evidence(
         required_fits_before_next_boundary: required_chunk_length <= available_to_next_boundary,
         strs_declared_count,
         strs_service_span,
+        strs_descriptor_length: strs_descriptor.data_length.value,
+        strs_header_word2,
+        strs_tail_u32_count_from_12,
+        strs_tail_utf16_units_sum_from_12,
+        strs_tail_text_bytes_from_12,
         strs_count_matches: strs_declared_count.map(|value| value == count),
         text_descriptor_length: text_descriptor.data_length.value,
     })
