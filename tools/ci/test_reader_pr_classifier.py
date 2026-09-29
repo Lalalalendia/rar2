@@ -22,11 +22,29 @@ class ReaderPrClassifierTests(unittest.TestCase):
             ]
         )
         self.assertTrue(fanout["tier_a_required"])
-        self.assertTrue(fanout["reader_windows"])
+        self.assertFalse(fanout["reader_windows"])
         self.assertTrue(fanout["desktop_windows"])
         self.assertTrue(fanout["visual_oracle"])
         self.assertTrue(fanout["typography"])
         self.assertTrue(fanout["android_core"])
+        self.assertFalse(fanout["android_local_open"])
+        self.assertFalse(fanout["android_render"])
+        self.assertFalse(fanout["portable"])
+        self.assertFalse(fanout["web_chromium"])
+        self.assertFalse(fanout["installer"])
+        self.assertFalse(fanout["updater"])
+
+
+    def test_pub_contents_only_change_stays_on_tier_a(self) -> None:
+        fanout = MODULE.classify(
+            ["vendor/producer-a/crates/pub-contents/src/document.rs"]
+        )
+        self.assertTrue(fanout["tier_a_required"])
+        self.assertFalse(fanout["reader_windows"])
+        self.assertFalse(fanout["desktop_windows"])
+        self.assertFalse(fanout["visual_oracle"])
+        self.assertFalse(fanout["typography"])
+        self.assertFalse(fanout["android_core"])
         self.assertFalse(fanout["android_local_open"])
         self.assertFalse(fanout["android_render"])
         self.assertFalse(fanout["portable"])
