@@ -139,12 +139,19 @@ jobs:
       - name: Enforce cancellation-responsive selective fanout
         shell: bash
         env:
-          CHECK_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           target="$(mktemp)"
           trap 'rm -f "$target"' EXIT
-          git show "$CHECK_SHA:.github/workflows/reader-pr-ci.yml" > "$target"
+          check_sha="$BASE_SHA"
+          if [[ "$HEAD_SHA" != "$BASE_SHA" ]] &&
+             git diff --name-only "$BASE_SHA...$HEAD_SHA" |
+               grep -Fxq '.github/workflows/reader-pr-ci.yml'; then
+            check_sha="$HEAD_SHA"
+          fi
+          git show "$check_sha:.github/workflows/reader-pr-ci.yml" > "$target"
           python - "$target" <<'PY'
           from pathlib import Path
           import sys
