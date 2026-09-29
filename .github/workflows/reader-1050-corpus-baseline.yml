@@ -1,0 +1,311 @@
+name: Reader 1050 corpus baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - corpus/reader-1050-baseline
+    paths:
+      - '.github/workflows/reader-1050-corpus-baseline.yml'
+      - 'tools/corpus/pub_container_extract.py'
+      - 'tools/corpus/test_pub_container_extract.py'
+      - 'tools/corpus/materialize_corpus_1000.py'
+      - 'tools/corpus/materialization_container_first_wave.csv'
+      - 'tools/corpus/receipts/container-first-wave-425-2026-09-29.json'
+      - 'tools/corpus/receipts/current-rar-1556.sha256.txt'
+      - 'tools/corpus/structural_novelty.py'
+      - 'vendor/producer-a/crates/pub-contents/**'
+      - 'vendor/producer-a/crates/pub-reader/**'
+      - 'vendor/producer-a/crates/pub-viewer/**'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader-1050-corpus-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout exact rar2 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download pinned exact 1050 materialization
+        id: pinned-1050
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Adopt pinned exact 1050 materialization
+        if: steps.pinned-1050.outcome == 'success'
+        run: |
+          set -euo pipefail
+          rm -rf out/materialized
+          cp -a out/pinned1050/materialized out/materialized
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+
+      - name: Checkout current materialized donor and profiling code
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: main
+          path: corpus-src
+          sparse-checkout: |
+            pub-corpus/corpus
+            pub-corpus/data
+            pub-corpus/scripts
+          sparse-checkout-cone-mode: true
+
+      - name: Install profiling dependency
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Install archive fallback tools
+        if: steps.pinned-1050.outcome != 'success'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y p7zip-full
+
+      - name: Validate corpus recovery tooling
+        run: |
+          set -euo pipefail
+          python -m py_compile \
+            tools/corpus/pub_container_extract.py \
+            tools/corpus/test_pub_container_extract.py \
+            tools/corpus/materialize_corpus_1000.py
+          python tools/corpus/test_pub_container_extract.py
+          python tools/corpus/test_materialize_corpus_1000.py
+
+      - name: Build Reader 1050 Cargo cache key
+        id: reader-1050-cache-key
+        shell: bash
+        env:
+          MANIFEST_HASH: ${{ hashFiles('vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=reader-1050-release-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore/save Reader 1050 Cargo build cache
+        id: reader-1050-cargo-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: rar2-target
+          key: ${{ steps.reader-1050-cache-key.outputs.key }}
+
+      - name: Build source-free Reader receipt producer
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin corpus-reader-receipt
+
+      - name: Restore exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success'
+        id: historical-425-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: out/container
+          key: reader-historical-425-b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef-v1
+
+      - name: Rehydrate pinned historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p out/container/pub
+          python tools/corpus/pub_container_extract.py \
+            --seed tools/corpus/materialization_container_first_wave.csv \
+            --out out/container/manifest.json \
+            --materialize-dir out/container/pub \
+            --max-containers 3 \
+            --max-container-bytes 200000000 \
+            --max-member-bytes 104857600 \
+            --max-total-expanded 1073741824 \
+            --max-members 600 \
+            --max-depth 2 \
+            --timeout 45 \
+            --command-timeout 90
+
+      - name: Verify exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+
+          expected_count=425
+          expected_digest="b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef"
+          paths=sorted(Path("out/container/pub").glob("*.pub"))
+          shas=[p.stem.casefold() for p in paths]
+          digest=hashlib.sha256("".join(x+"\n" for x in shas).encode("ascii")).hexdigest()
+          summary=json.loads(Path("out/container/manifest.summary.json").read_text())
+          assert summary["errors"]==0,summary
+          assert len(shas)==expected_count,(len(shas),summary)
+          assert summary["publisher_cfb_unique_sha256"]==expected_count,summary
+          assert digest==expected_digest,(digest,expected_digest)
+          print(json.dumps({
+              "publisher_unique_sha256":len(shas),
+              "sha_list_digest":"sha256:"+digest,
+          },indent=2))
+          PY
+
+      - name: Save exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/container
+          key: reader-historical-425-b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef-v1
+
+      - name: Materialize exact 1050-file working corpus
+        if: steps.pinned-1050.outcome != 'success'
+        run: |
+          set -euo pipefail
+          python tools/corpus/materialize_corpus_1000.py \
+            --input lalamu_625=corpus-src/pub-corpus/corpus \
+            --input historical_container_first_wave=out/container/pub \
+            --authority tools/corpus/receipts/current-rar-1556.sha256.txt \
+            --out out/materialized \
+            --min-count 1050
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("out/materialized/summary.json").read_text())
+          assert summary["unique_publisher_cfb"] == 1050, summary
+          assert summary["authority_overlap"] == 1050, summary
+          assert summary["outside_authority"] == 0, summary
+          assert summary["rejections"] == 0, summary
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Verify exact 1050 materialization
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+
+          expected_count = 1050
+          expected_digest = "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          paths = sorted(Path("out/materialized/native").glob("*.pub"))
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256("".join(x + "\n" for x in shas).encode("ascii")).hexdigest()
+          summary = json.loads(Path("out/materialized/summary.json").read_text())
+
+          assert len(shas) == expected_count, len(shas)
+          assert digest == expected_digest, (digest, expected_digest)
+          assert summary["unique_publisher_cfb"] == 1050, summary
+          assert summary["authority_overlap"] == 1050, summary
+          assert summary["outside_authority"] == 0, summary
+          assert summary["rejections"] == 0, summary
+          print(json.dumps({
+              "publisher_unique_sha256": len(shas),
+              "sha_list_digest": "sha256:" + digest,
+              "source": "pinned_artifact" if Path("out/pinned1050/materialized").exists() else "reconstructed",
+          }, indent=2))
+          PY
+
+      - name: Replace donor bytes with exact 1050 union
+        run: |
+          set -euo pipefail
+          target=corpus-src/pub-corpus/corpus/native/unclassified
+          rm -rf "$target"
+          mkdir -p "$target"
+          cp out/materialized/native/*.pub "$target"/
+          test "$(find "$target" -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 1050
+
+      - name: Deep-profile full 1050 corpus through current Reader
+        run: |
+          set -euo pipefail
+          rm -rf out/reader1050
+          python corpus-src/pub-corpus/scripts/deep_profile.py \
+            --corpus-root corpus-src/pub-corpus \
+            --rar-tools tools/corpus \
+            --reader-receipt-exe "${CARGO_TARGET_DIR}/release/corpus-reader-receipt" \
+            --rar-ref "rar2:${GITHUB_SHA}" \
+            --out out/reader1050 \
+            --workers 8
+
+      - name: Guard 1050 corpus identity on fresh main
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("out/reader1050/summary.json").read_text())
+          materialized = json.loads(Path("out/materialized/summary.json").read_text())
+
+          assert summary["corpus_file_count"] == 1050, summary["corpus_file_count"]
+          assert summary["structural_probe_error_count"] == 0, summary
+          assert materialized["unique_publisher_cfb"] == 1050, materialized
+          assert materialized["sha_list_digest"] == "sha256:21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", materialized
+          assert materialized["authority_overlap"] == 1050, materialized
+          assert materialized["outside_authority"] == 0, materialized
+          assert materialized["rejections"] == 0, materialized
+
+          receipt = {
+              "schema": "chaptera.reader-1050-corpus-baseline.v1",
+              "rar_ref": summary["rar_ref"],
+              "corpus_file_count": summary["corpus_file_count"],
+              "materialized_sha_list_digest": materialized["sha_list_digest"],
+              "authority_overlap": materialized["authority_overlap"],
+              "outside_authority": materialized["outside_authority"],
+              "reader": summary["reader"],
+              "contents_family_physical_counts": summary["contents_family_physical_counts"],
+              "structural_cluster_count": summary["structural_cluster_count"],
+              "structural_singleton_count": summary["structural_singleton_count"],
+              "path_cluster_count": summary["path_cluster_count"],
+              "path_singleton_count": summary["path_singleton_count"],
+              "carrier_pattern_counts": summary["carrier_pattern_counts"],
+              "files_with_embedded_object_storage": summary["files_with_embedded_object_storage"],
+              "max_embedded_object_storage_count": summary["max_embedded_object_storage_count"],
+              "evidence_boundary": summary["evidence_boundary"],
+          }
+          Path("out/reader1050/acceptance.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-free Reader 1050 receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-1050-corpus-baseline-${{ github.run_id }}
+          path: |
+            out/reader1050/**
+            out/materialized/summary.json
+            out/materialized/sha256.txt
+            out/materialized/rejections.json
+            out/container/manifest.json
+            out/container/manifest.summary.json
+          if-no-files-found: error
+          retention-days: 90
