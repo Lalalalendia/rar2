@@ -174,7 +174,10 @@ fn main() -> Result<()> {
             continue;
         };
         for child_id in child_ids {
-            memberships.entry(child_id).or_default().push(page_entry.object_id);
+            memberships
+                .entry(child_id)
+                .or_default()
+                .push(page_entry.object_id);
         }
     }
 
