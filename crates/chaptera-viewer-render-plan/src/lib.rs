@@ -103,6 +103,8 @@ pub struct RenderTextFragmentV1 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography: Vec<RenderTypographyRunV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_font_resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<RenderTextLayoutV1>,
 }
 
@@ -611,6 +613,9 @@ where
             transform: node.transform.clone(),
         };
         let resolved_font = resolve_font(fragment);
+        fragment.backend_font_resource_id = resolved_font
+            .as_ref()
+            .map(|font| font.resource_id.to_owned());
         let font = resolved_font.as_ref().unwrap_or(fallback_font);
         fragment.layout = Some(resolve_text_layout_v1(visual, target, fragment, font));
     }
