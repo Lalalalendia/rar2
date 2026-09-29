@@ -627,8 +627,7 @@ fn build_legacy_table_projection(
         let id = derive_legacy_table_cell_id(source_hash, chunk_id, cell.cell_index)?;
         let column_index =
             usize::try_from(address.column).context("legacy table column index overflow")?;
-        let row_index =
-            usize::try_from(address.row).context("legacy table row index overflow")?;
+        let row_index = usize::try_from(address.row).context("legacy table row index overflow")?;
         let column = table
             .object
             .columns
