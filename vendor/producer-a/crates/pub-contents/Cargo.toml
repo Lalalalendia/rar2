@@ -1,3 +1,4 @@
+# CI measurement control for CI-READER-WINDOWS-SPLIT-01; no semantic change.
 [package]
 name="pub-contents"
 version.workspace=true
