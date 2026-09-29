@@ -78,9 +78,31 @@ impl AdmittedSource {
             .map_err(|error| source_path_error("canonicalize", path, error))?;
         let mut file = File::open(&locator_path)
             .map_err(|error| source_path_error("open", &locator_path, error))?;
+        let policy = chaptera_untrusted_pub_scan::PubScanPolicyV1::default()
+            .validate()
+            .map_err(|error| format!("invalid shared PUB admission policy: {error}"))?;
+        let declared_len = file
+            .metadata()
+            .map_err(|error| source_path_error("stat", &locator_path, error))?
+            .len();
+        if declared_len > policy.max_file_bytes {
+            return Err(format!(
+                "source_rejected_by_policy: input_size_limit: {declared_len} > {}",
+                policy.max_file_bytes
+            ));
+        }
+
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
+        file.by_ref()
+            .take(policy.max_file_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
             .map_err(|error| format!("read {}: {error}", locator_path.display()))?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.max_file_bytes {
+            return Err(format!(
+                "source_rejected_by_policy: input_size_limit: streamed bytes exceed {}",
+                policy.max_file_bytes
+            ));
+        }
         let sha256 = sha256_bytes(&bytes);
         Ok(Self {
             display_path,
@@ -485,6 +507,24 @@ mod tests {
             packet.context.capability,
             "reader_failure_recovery_eligible"
         );
+        fs::remove_file(source).ok();
+    }
+
+    #[test]
+    fn admitted_source_rejects_oversize_before_materializing_bytes() {
+        let source = temp_pub("oversize-pre-read");
+        let file = File::options()
+            .write(true)
+            .open(&source)
+            .expect("open sparse oversize witness");
+        file.set_len(chaptera_untrusted_pub_scan::DEFAULT_MAX_FILE_BYTES + 1)
+            .expect("extend oversize witness");
+        drop(file);
+
+        let error = AdmittedSource::open(&source)
+            .expect_err("oversize input must be rejected before full read");
+        assert!(error.contains("source_rejected_by_policy"));
+        assert!(error.contains("input_size_limit"));
         fs::remove_file(source).ok();
     }
 

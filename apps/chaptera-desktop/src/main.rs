@@ -1204,32 +1204,35 @@ impl ViewerApp {
 
     fn prepare_document_open(path: PathBuf) -> Result<PreparedDocumentOpen, ViewerLoadFailure> {
         let stamp_before = source_file_stamp(&path).ok();
-        let bytes = fs::read(&path).map_err(|error| ViewerLoadFailure {
-            kind: ViewerLoadFailureKind::FileAccess,
-            attempted_path: Some(path.clone()),
-            message: format!("Could not read {}: {error}", path.display()),
-            classification: None,
-            diagnostic_json: None,
+        let admitted = chaptera_suite_handoff::AdmittedSource::open(&path).map_err(|error| {
+            ViewerLoadFailure {
+                kind: ViewerLoadFailureKind::FileAccess,
+                attempted_path: Some(path.clone()),
+                message: format!("Could not admit {}: {error}", path.display()),
+                classification: None,
+                diagnostic_json: None,
+            }
         })?;
+        let bytes = admitted.bytes();
         let stamp_after = source_file_stamp(&path).ok();
         let source_file_stamp = (stamp_before.is_some() && stamp_before == stamp_after)
             .then_some(stamp_after)
             .flatten();
 
         let visual =
-            diagnostic_sweep::open_for_product(&bytes).map_err(|error| ViewerLoadFailure {
+            diagnostic_sweep::open_for_product(bytes).map_err(|error| ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
                 attempted_path: Some(path.clone()),
                 message: format!("Could not open {}: {error:#}", path.display()),
-                classification: Some(classify_failure_candidate(&bytes)),
-                diagnostic_json: pub_viewer::local_failure_diagnostic_json(&bytes).ok(),
+                classification: Some(classify_failure_candidate(bytes)),
+                diagnostic_json: pub_viewer::local_failure_diagnostic_json(bytes).ok(),
             })?;
 
         let (editor, editor_load_error, project_status) = if reader_only_mode() {
             (None, None, None)
         } else {
             let source_hash = visual.document.source.source_hash;
-            match pub_editor::open_mature_0x2c_editor(&bytes, source_hash) {
+            match pub_editor::open_mature_0x2c_editor(bytes, source_hash) {
                 Ok(mut editor) => {
                     let project_status = match load_editor_project_sidecar(&path, &mut editor) {
                         Ok(Some((sidecar, operation_count))) => Some(format!(
