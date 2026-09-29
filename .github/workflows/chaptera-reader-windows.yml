@@ -278,6 +278,9 @@ jobs:
           name: chaptera-reader-windows-x86_64
           path: |
             target/release/chaptera-reader.exe
+            target/release/chaptera-desktop-open-worker.exe
+            target/release/chaptera-desktop-open-sandbox-host.exe
+            target/release/chaptera-desktop-open-runtime.json
             target/release/chaptera-reader.desktop-build.json
             target/release/chaptera-reader.real-pub-smoke.json
             target/release/chaptera-reader.shell-activation.json
