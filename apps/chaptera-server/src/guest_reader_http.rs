@@ -30,10 +30,10 @@ use tokio::io::AsyncWriteExt;
 use crate::{
     blob_store::{BlobStoreError, BlobStoreService},
     edge::ClientIp,
+    guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
-    guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
     upload_admission::{
@@ -204,7 +204,9 @@ async fn issue_session(
         .await?;
 
     if body.expected_byte_len == 0 || body.expected_byte_len > state.config.max_file_bytes {
-        return Err(GuestReaderError::payload_too_large("guest_upload_too_large"));
+        return Err(GuestReaderError::payload_too_large(
+            "guest_upload_too_large",
+        ));
     }
 
     let session_id = random_id("guest")?;
@@ -224,7 +226,11 @@ async fn issue_session(
         expected_bytes,
         request_hash,
     };
-    match state.admission.reserve(admission_request.clone(), now_ms).await {
+    match state
+        .admission
+        .reserve(admission_request.clone(), now_ms)
+        .await
+    {
         Ok(ReserveUploadOutcome::Reserved(_)) => {}
         Ok(ReserveUploadOutcome::Existing(_)) => {
             return Err(GuestReaderError::internal("guest_reservation_collision"));
@@ -253,7 +259,10 @@ async fn issue_session(
     };
 
     if let Err(error) = state.sessions.insert(&session).await {
-        let _ = state.admission.release_exact(admission_request, now_ms).await;
+        let _ = state
+            .admission
+            .release_exact(admission_request, now_ms)
+            .await;
         return Err(error);
     }
 
@@ -282,22 +291,26 @@ async fn put_content(
         .admit_network(client_ip.0, PublicRateClass::ReaderSessionUpload, now_ms)
         .await?;
 
-    let session = state.authorized_session(&session_id, &headers, now_ms).await?;
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms)
+        .await?;
     if session.state != GuestSessionState::Issued {
         return Err(GuestReaderError::conflict("guest_upload_state_conflict"));
     }
 
     let declared = content_length(&headers)?;
     if declared != session.expected_byte_len {
-        return Err(GuestReaderError::bad_request("guest_upload_length_mismatch"));
+        return Err(GuestReaderError::bad_request(
+            "guest_upload_length_mismatch",
+        ));
     }
 
     let (mut writer, mut reader) = tokio::io::duplex(STREAM_BUFFER_BYTES);
     let mut stream = body.into_data_stream();
     let pump = async move {
         while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|_| GuestReaderError::bad_request("guest_upload_body_read_failed"))?;
+            let chunk = chunk
+                .map_err(|_| GuestReaderError::bad_request("guest_upload_body_read_failed"))?;
             writer
                 .write_all(&chunk)
                 .await
@@ -350,7 +363,9 @@ async fn open_session(
         .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now_ms)
         .await?;
 
-    let session = state.authorized_session(&session_id, &headers, now_ms).await?;
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms)
+        .await?;
     match session.state {
         GuestSessionState::Opened => return open_response_from_stored(&session),
         GuestSessionState::Rejected => return open_response_from_stored(&session),
@@ -366,7 +381,10 @@ async fn open_session(
         GuestSessionState::Stored => {}
     }
 
-    let opening = state.sessions.claim_open(&session.session_id, now_ms).await?;
+    let opening = state
+        .sessions
+        .claim_open(&session.session_id, now_ms)
+        .await?;
     let generation = opening
         .storage_generation
         .as_deref()
@@ -392,7 +410,10 @@ async fn open_session(
     {
         Ok(input) => input,
         Err(error) => {
-            state.sessions.reset_open(&opening.session_id, now_ms).await?;
+            state
+                .sessions
+                .reset_open(&opening.session_id, now_ms)
+                .await?;
             return Err(map_blob_error(error));
         }
     };
@@ -400,7 +421,10 @@ async fn open_session(
     let scan_outcome = match state.scanner.scan(&mut *scan_input).await {
         Ok(outcome) => outcome,
         Err(error) => {
-            state.sessions.reset_open(&opening.session_id, now_ms).await?;
+            state
+                .sessions
+                .reset_open(&opening.session_id, now_ms)
+                .await?;
             return Err(map_scan_error(error));
         }
     };
@@ -440,7 +464,10 @@ async fn open_session(
     {
         Ok(receipt) => receipt,
         Err(error) => {
-            state.sessions.reset_open(&opening.session_id, now_ms).await?;
+            state
+                .sessions
+                .reset_open(&opening.session_id, now_ms)
+                .await?;
             return Err(map_scene_worker_error(error));
         }
     };
@@ -499,7 +526,9 @@ async fn get_scene(
         .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now_ms)
         .await?;
 
-    let session = state.authorized_session(&session_id, &headers, now_ms).await?;
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms)
+        .await?;
     if !matches!(
         session.state,
         GuestSessionState::Opened | GuestSessionState::Rejected
@@ -632,7 +661,9 @@ impl GuestReaderHttpState {
     ) -> Result<(), GuestReaderError> {
         let _ = self.release_admission(&session, now_ms).await;
         self.delete_quarantine(&session, now_ms).await?;
-        self.sessions.mark_expired(&session.session_id, now_ms).await?;
+        self.sessions
+            .mark_expired(&session.session_id, now_ms)
+            .await?;
         Ok(())
     }
 
@@ -717,7 +748,9 @@ impl SqliteGuestReaderSessionStore {
             return Err(GuestReaderError::internal("guest_session_pool_invalid"));
         }
         if busy_timeout.is_zero() || busy_timeout > Duration::from_secs(30) {
-            return Err(GuestReaderError::internal("guest_session_busy_timeout_invalid"));
+            return Err(GuestReaderError::internal(
+                "guest_session_busy_timeout_invalid",
+            ));
         }
         let path = path.as_ref().to_path_buf();
         if !path.exists() {
@@ -778,9 +811,10 @@ impl SqliteGuestReaderSessionStore {
         .bind(&session.access_token_hash)
         .bind(session.upload_id.as_bytes())
         .bind(session.reservation_id.as_bytes())
-        .bind(i64::try_from(session.expected_byte_len).map_err(|_| {
-            GuestReaderError::payload_too_large("guest_upload_too_large")
-        })?)
+        .bind(
+            i64::try_from(session.expected_byte_len)
+                .map_err(|_| GuestReaderError::payload_too_large("guest_upload_too_large"))?,
+        )
         .bind(session.state.as_str())
         .bind(session.created_at_ms)
         .bind(session.updated_at_ms)
@@ -871,11 +905,7 @@ impl SqliteGuestReaderSessionStore {
             .ok_or_else(|| GuestReaderError::internal("guest_session_disappeared"))
     }
 
-    async fn reset_open(
-        &self,
-        session_id: &str,
-        now_ms: i64,
-    ) -> Result<(), GuestReaderError> {
+    async fn reset_open(&self, session_id: &str, now_ms: i64) -> Result<(), GuestReaderError> {
         let result = sqlx::query(
             r#"
             UPDATE reader_guest_sessions
@@ -979,11 +1009,7 @@ impl SqliteGuestReaderSessionStore {
         Ok(())
     }
 
-    async fn mark_expired(
-        &self,
-        session_id: &str,
-        now_ms: i64,
-    ) -> Result<(), GuestReaderError> {
+    async fn mark_expired(&self, session_id: &str, now_ms: i64) -> Result<(), GuestReaderError> {
         sqlx::query(
             r#"
             UPDATE reader_guest_sessions
@@ -1155,7 +1181,10 @@ fn constant_time_eq(stored: &[u8], expected: &[u8; 32]) -> bool {
 }
 
 fn opaque_suffix(value: &str) -> &str {
-    value.split_once(':').map(|(_, suffix)| suffix).unwrap_or(value)
+    value
+        .split_once(':')
+        .map(|(_, suffix)| suffix)
+        .unwrap_or(value)
 }
 
 fn hex_bytes(bytes: &[u8]) -> String {
@@ -1404,7 +1433,10 @@ mod tests {
             !String::from_utf8_lossy(&bytes)
                 .contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
-        assert_eq!(store.get(&session.session_id).await.unwrap().unwrap().state, GuestSessionState::Issued);
+        assert_eq!(
+            store.get(&session.session_id).await.unwrap().unwrap().state,
+            GuestSessionState::Issued
+        );
 
         store.close().await;
         let _ = fs::remove_file(path);
