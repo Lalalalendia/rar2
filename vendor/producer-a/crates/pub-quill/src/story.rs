@@ -188,6 +188,129 @@ impl fmt::Display for QuillStoryReadError {
 
 impl std::error::Error for QuillStoryReadError {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuillStoryFailureStage {
+    DescriptorList,
+    RequiredSyidDescriptor,
+    RequiredStrsDescriptor,
+    RequiredTextDescriptor,
+    SyidChunk,
+    StrsChunk,
+    TextChunk,
+    StoryCount,
+    TextLength,
+    StorySlices,
+    TcdChunks,
+    ToknChunks,
+}
+
+impl QuillStoryFailureStage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DescriptorList => "descriptor_list",
+            Self::RequiredSyidDescriptor => "required_syid_descriptor",
+            Self::RequiredStrsDescriptor => "required_strs_descriptor",
+            Self::RequiredTextDescriptor => "required_text_descriptor",
+            Self::SyidChunk => "syid_chunk",
+            Self::StrsChunk => "strs_chunk",
+            Self::TextChunk => "text_chunk",
+            Self::StoryCount => "story_count",
+            Self::TextLength => "text_length",
+            Self::StorySlices => "story_slices",
+            Self::TcdChunks => "tcd_chunks",
+            Self::ToknChunks => "tokn_chunks",
+        }
+    }
+}
+
+/// Source-safe localization of the first failing grounded Quill story-catalog stage.
+///
+/// This mirrors the fatal gates in `parse_confirmed_story_catalog` but returns
+/// only a stable stage name. It does not retain raw error text, offsets, counts,
+/// chunk names, story text, stream bytes, or source paths.
+pub fn probe_confirmed_story_catalog_failure_stage(
+    stream: StreamPath,
+    bytes: &[u8],
+) -> Option<QuillStoryFailureStage> {
+    let descriptor_nodes = match parse_descriptor_nodes(stream.clone(), bytes) {
+        Ok(value) => value,
+        Err(_) => return Some(QuillStoryFailureStage::DescriptorList),
+    };
+    let descriptors = descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .collect::<Vec<_>>();
+    let syid_descriptor = match required_descriptor(&descriptors, SYID) {
+        Ok(value) => value,
+        Err(_) => return Some(QuillStoryFailureStage::RequiredSyidDescriptor),
+    };
+    let strs_descriptor = match required_descriptor(&descriptors, STRS) {
+        Ok(value) => value,
+        Err(_) => return Some(QuillStoryFailureStage::RequiredStrsDescriptor),
+    };
+    let text_descriptor = match required_descriptor(&descriptors, TEXT) {
+        Ok(value) => value,
+        Err(_) => return Some(QuillStoryFailureStage::RequiredTextDescriptor),
+    };
+
+    let syid = match parse_syid(stream.clone(), bytes, syid_descriptor) {
+        Ok(value) => value,
+        Err(_) => return Some(QuillStoryFailureStage::SyidChunk),
+    };
+    let strs = match parse_strs(stream.clone(), bytes, strs_descriptor) {
+        Ok(value) => value,
+        Err(_) => return Some(QuillStoryFailureStage::StrsChunk),
+    };
+    if parse_text(stream.clone(), bytes, text_descriptor).is_err() {
+        return Some(QuillStoryFailureStage::TextChunk);
+    }
+
+    if syid.count.value != strs.count.value {
+        return Some(QuillStoryFailureStage::StoryCount);
+    }
+
+    let expected_bytes = strs.lengths.iter().try_fold(0_u64, |sum, length| {
+        u64::from(length.value)
+            .checked_mul(2)
+            .and_then(|len| sum.checked_add(len))
+    });
+    let Some(expected_bytes) = expected_bytes else {
+        return Some(QuillStoryFailureStage::TextLength);
+    };
+    if expected_bytes != u64::from(text_descriptor.data_length.value) {
+        return Some(QuillStoryFailureStage::TextLength);
+    }
+
+    let Some(mut cursor) = usize::try_from(text_descriptor.data_offset.value).ok() else {
+        return Some(QuillStoryFailureStage::StorySlices);
+    };
+    for length in &strs.lengths {
+        let Some(byte_len) = usize::try_from(length.value)
+            .ok()
+            .and_then(|units| units.checked_mul(2))
+        else {
+            return Some(QuillStoryFailureStage::StorySlices);
+        };
+        let Some(end) = cursor.checked_add(byte_len) else {
+            return Some(QuillStoryFailureStage::StorySlices);
+        };
+        if bytes.get(cursor..end).is_none() {
+            return Some(QuillStoryFailureStage::StorySlices);
+        }
+        cursor = end;
+    }
+
+    if parse_tcd_chunks(stream.clone(), bytes, &descriptors, &syid, &strs).is_err() {
+        return Some(QuillStoryFailureStage::TcdChunks);
+    }
+    if parse_tokn_chunks(stream, bytes, &descriptors, &syid.ids).is_err() {
+        return Some(QuillStoryFailureStage::ToknChunks);
+    }
+
+    None
+}
+
 /// Parses only the grounded Quill descriptor/SYID/STRS/TEXT subset.
 ///
 /// The reader preserves raw field bytes and exact spans, follows descriptor

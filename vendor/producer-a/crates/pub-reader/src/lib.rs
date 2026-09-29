@@ -941,6 +941,16 @@ pub fn probe_mature_0x2c_quill_story_error_kind(bytes: &[u8]) -> Option<&'static
     })
 }
 
+/// Returns only the stable internal Quill story-catalog stage that fails.
+pub fn probe_mature_0x2c_quill_story_failure_stage(bytes: &[u8]) -> Option<&'static str> {
+    let quill = pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM_PATH).ok()?;
+    pub_quill::probe_confirmed_story_catalog_failure_stage(
+        StreamPath(QUILL_STREAM_PATH.into()),
+        &quill,
+    )
+    .map(|stage| stage.as_str())
+}
+
 /// Source-safe localization for a mature-0x2C source-graph build failure.
 ///
 /// This intentionally reports only a stable parser stage. It does not return
