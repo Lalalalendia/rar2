@@ -39,6 +39,7 @@ fn main() -> Result<()> {
         "advf": presentation.advf,
         "width": presentation.width,
         "height": presentation.height,
+        "reserved2_present": presentation.reserved2_present,
         "wmf": {
             "placeable": wmf.placeable,
             "file_type": wmf.file_type,
