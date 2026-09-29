@@ -5,12 +5,8 @@ name: Reader canonical Cmo scene-instance compose V1
 on:
   pull_request:
     paths:
-      - 'vendor/producer-a/crates/pub-viewer/**'
-      - '!vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs'
-      - 'crates/chaptera-viewer-render-plan/**'
       - 'crates/chaptera-scene-instance/**'
       - 'crates/chaptera-layout-projection/**'
-      - 'apps/chaptera-desktop/**'
       - '.github/workflows/reader-cmo-scene-instance-compose-v1.yml'
   workflow_dispatch:
 
