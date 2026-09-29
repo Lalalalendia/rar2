@@ -77,6 +77,7 @@ pub enum StoryCatalogReadError {
     DuplicateTextIdentity { text_id: u32 },
     EntryCountMismatch { declared: u32, actual: usize },
     UnexpectedDeclaredCountInDerivedEmptyVariant,
+    DerivedEmptyAmbiguousTail { source: RawSpan },
     DerivedEmptyEntryArrayNotEmpty { actual: usize },
 }
 
@@ -225,6 +226,12 @@ pub fn parse_bounded_empty_mature_story_catalog_variant(
     bytes: &[u8],
     chunk: &Contents0x2cChunk,
 ) -> Result<MatureEmptyStoryCatalogVariant, StoryCatalogReadError> {
+    if let Some(source) = &chunk.unsupported_tail {
+        return Err(StoryCatalogReadError::DerivedEmptyAmbiguousTail {
+            source: source.clone(),
+        });
+    }
+
     if chunk
         .fields
         .iter()
@@ -558,6 +565,32 @@ mod tests {
 
         let strict = parse_confirmed_mature_story_catalog(&bytes, &chunk);
         assert_eq!(strict, Err(StoryCatalogReadError::MissingDeclaredCount));
+    }
+
+    #[test]
+    fn derived_empty_variant_rejects_ambiguous_chunk_tail() {
+        let array = container(STORY_CATALOG_ENTRY_ARRAY_ID, BLOCK_TYPE_CONTAINER_A0, &[]);
+        let mut bytes = u32::try_from(array.len() + 4)
+            .unwrap()
+            .to_le_bytes()
+            .to_vec();
+        bytes.extend_from_slice(&array);
+
+        let mut chunk =
+            parse_confirmed_0x2c_chunk(StreamPath("/Contents".into()), &bytes, 0).unwrap();
+        let ambiguous = RawSpan {
+            stream: StreamPath("/Contents".into()),
+            offset: u64::try_from(bytes.len()).unwrap(),
+            len: 1,
+        };
+        chunk.unsupported_tail = Some(ambiguous.clone());
+
+        assert_eq!(
+            parse_bounded_empty_mature_story_catalog_variant(&bytes, &chunk),
+            Err(StoryCatalogReadError::DerivedEmptyAmbiguousTail {
+                source: ambiguous
+            })
+        );
     }
 
     #[test]
