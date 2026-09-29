@@ -543,9 +543,15 @@ jobs:
 
           assert companion["candidate_count"] == 305, companion["candidate_count"]
           assert len(legacy_with_scene) == 217, len(legacy_with_scene)
-          # #160 admits exactly the 305 authoritative PAGE OLE candidates and no
-          # other old-0x22 object class into the scene geometry projection.
-          assert legacy_scene_nodes == 1963 + companion["candidate_count"], legacy_scene_nodes
+          # #160 admits exactly the 305 authoritative PAGE OLE candidates.
+          # #93 additionally admits exactly the 288 measured active PAGE LINE
+          # endpoint nodes on the pinned 625 corpus. Reader open/text/story
+          # counts remain unchanged.
+          legacy_line_endpoint_node_gain = 288
+          assert (
+              legacy_scene_nodes
+              == 1963 + companion["candidate_count"] + legacy_line_endpoint_node_gain
+          ), legacy_scene_nodes
           assert legacy_story_frames == 1430, legacy_story_frames
           assert legacy_text_fragments == 1383, legacy_text_fragments
           assert unresolved_encoding_files == 58, unresolved_encoding_files
@@ -560,6 +566,7 @@ jobs:
               "legacy_files_with_scene_nodes": len(legacy_with_scene),
               "legacy_scene_node_count": legacy_scene_nodes,
               "legacy_ole_candidate_count": companion["candidate_count"],
+              "legacy_line_endpoint_node_gain": legacy_line_endpoint_node_gain,
               "legacy_story_frame_count": legacy_story_frames,
               "legacy_text_fragment_count": legacy_text_fragments,
               "legacy_unresolved_encoding_file_count": unresolved_encoding_files,
