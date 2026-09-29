@@ -413,8 +413,9 @@ impl SqlitePublicRateLimitAuthority {
                 hasher.update(ip.octets());
             }
             IpAddr::V6(ip) => {
+                let octets = ip.octets();
                 hasher.update([6]);
-                hasher.update(ip.octets());
+                hasher.update(&octets[..8]);
             }
         }
         hasher.finalize().into()
@@ -605,6 +606,43 @@ mod tests {
         );
 
         reopened.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn ipv6_addresses_share_a_network_subject_within_one_slash64() {
+        let path = migrated_path("ipv6-prefix").await;
+        let authority = SqlitePublicRateLimitAuthority::open(
+            &path,
+            1,
+            Duration::from_secs(5),
+            config(100),
+            b"ipv6-prefix-secret-0123456789abcd",
+        )
+        .await
+        .unwrap();
+        let first = IpAddr::V6("2001:db8:1234:5678::1".parse().unwrap());
+        let second = IpAddr::V6("2001:db8:1234:5678::ffff".parse().unwrap());
+
+        assert_eq!(
+            authority
+                .admit(first, PublicRateClass::ReaderSessionUpload, 0)
+                .await
+                .unwrap(),
+            PublicRateDecision::Allowed
+        );
+        assert!(matches!(
+            authority
+                .admit(second, PublicRateClass::ReaderSessionUpload, 0)
+                .await
+                .unwrap(),
+            PublicRateDecision::Limited {
+                code: "public_rate_limited",
+                ..
+            }
+        ));
+
+        authority.close().await;
         let _ = fs::remove_file(path);
     }
 
