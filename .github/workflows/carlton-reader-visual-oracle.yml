@@ -7,6 +7,10 @@ on:
         required: false
         type: boolean
         default: false
+      run_windows_shared_core_smoke:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -23,24 +27,110 @@ jobs:
         with:
           toolchain: "1.94.1"
 
-      - name: Acquire pinned SampleNewsletter for combined typography receipt
-        if: inputs.run_typography_golden
+      - name: Acquire pinned SampleNewsletter for combined receipts
+        if: inputs.run_typography_golden || inputs.run_windows_shared_core_smoke
         shell: pwsh
         run: |
           $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub" -OutFile $fixture
           $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
           if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
             throw "SampleNewsletter SHA-256 mismatch: $hash"
           }
-          $out = Join-Path $env:RUNNER_TEMP "chaptera-reader-golden-samplenewsletter"
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          "CHAPTERA_GOLDEN_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CHAPTERA_GOLDEN_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ("${{ inputs.run_typography_golden }}" -eq "true") {
+            $out = Join-Path $env:RUNNER_TEMP "chaptera-reader-golden-samplenewsletter"
+            New-Item -ItemType Directory -Force -Path $out | Out-Null
+            "CHAPTERA_GOLDEN_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            "CHAPTERA_GOLDEN_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
       - name: Check bounded typography parser for combined receipt
         if: inputs.run_typography_golden
         run: cargo test --manifest-path vendor/producer-a/crates/pub-quill/Cargo.toml typography -- --nocapture
+
+      - name: Build Reader-only Windows shared-core smoke binary
+        if: inputs.run_windows_shared_core_smoke
+        run: cargo build -p chaptera-desktop --features reader-only
+
+      - name: Run bounded Reader product and real-PUB smoke
+        if: inputs.run_windows_shared_core_smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = "target/reader-windows-shared-core-smoke"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          $built = "target/debug/chaptera-editor.exe"
+          $exe = Join-Path $out "chaptera-reader.exe"
+          if (-not (Test-Path $built)) {
+            throw "reader-only Windows build did not produce target/debug/chaptera-editor.exe"
+          }
+          Copy-Item $built $exe -Force
+
+          $binaryHash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $binaryBytes = (Get-Item $exe).Length
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_SHA256 = $binaryHash
+          $env:CHAPTERA_PRODUCT_SMOKE_BINARY_BYTE_LEN = [string]$binaryBytes
+
+          $productReceipt = Join-Path $out "product-smoke.json"
+          $product = Start-Process -FilePath $exe -ArgumentList @("--product-smoke-v1", $productReceipt) -Wait -PassThru
+          if ($product.ExitCode -ne 0) {
+            throw "Reader shared-core product smoke failed: exit $($product.ExitCode)"
+          }
+
+          $smoke = Get-Content -Raw $productReceipt | ConvertFrom-Json
+          if ($smoke.product -ne "Chaptera PUB Reader") { throw "shared-core smoke identified the wrong product" }
+          if ($smoke.reader_only -ne $true) { throw "shared-core smoke binary is not reader-only" }
+          if ($smoke.editor_controls_enabled -ne $false) { throw "shared-core smoke exposed Editor controls" }
+          if ($smoke.native_save_pub_claimed -ne $false) { throw "shared-core smoke widened native PUB save claims" }
+          if ($smoke.binary_sha256 -ne $binaryHash) { throw "shared-core product smoke binary hash mismatch" }
+          if ([int64]$smoke.binary_byte_len -ne $binaryBytes) { throw "shared-core product smoke binary size mismatch" }
+
+          $fixture = $env:CHAPTERA_SAMPLE_NEWSLETTER
+          if (-not $fixture -or -not (Test-Path $fixture)) {
+            throw "shared-core smoke SampleNewsletter fixture is missing"
+          }
+          $before = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $fixtureBytes = (Get-Item $fixture).Length
+          $viewer = Start-Process -FilePath $exe -ArgumentList @("--smoke-check", $fixture) -Wait -PassThru
+          if ($viewer.ExitCode -ne 0) {
+            throw "Reader shared-core real-PUB smoke failed: exit $($viewer.ExitCode)"
+          }
+          $after = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($before -ne $after) {
+            throw "Reader shared-core smoke mutated the source PUB"
+          }
+
+          @{
+            schema_version = "chaptera.reader-windows-shared-core-smoke.v1"
+            product_id = "chaptera.reader"
+            target = "x86_64-pc-windows-msvc"
+            profile = "debug"
+            binary_sha256 = $binaryHash
+            binary_byte_len = $binaryBytes
+            product_smoke_passed = $true
+            fixture_sha256 = $before
+            fixture_byte_len = $fixtureBytes
+            real_pub_smoke_passed = $true
+            source_unchanged = $true
+            source_commit = "${{ github.sha }}"
+          } | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $out "receipt.json")
+
+      - name: Upload combined Windows shared-core smoke receipt
+        if: inputs.run_windows_shared_core_smoke && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-reader-windows-shared-core-smoke
+          path: |
+            target/reader-windows-shared-core-smoke/product-smoke.json
+            target/reader-windows-shared-core-smoke/receipt.json
+          if-no-files-found: error
+
 
       - uses: actions/setup-python@v5
         with:
