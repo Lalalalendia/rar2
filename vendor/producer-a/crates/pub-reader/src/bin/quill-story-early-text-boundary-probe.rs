@@ -56,16 +56,24 @@ struct McldScalarCandidate {
 
 #[derive(Debug, Serialize)]
 struct McldProfile {
-    record_count: u32,
-    record_id_count: u32,
-    record_count_matches_grounded_story_count: bool,
-    record_id_count_matches_grounded_story_count: bool,
+    descriptor_length: u32,
+    chunk_all_ff: bool,
+    prefix_8_all_ff: bool,
+    first_u32_is_ff: bool,
+    second_u32_is_ff: bool,
+    modern_framing_admitted: bool,
+    record_count_matches_grounded_story_count: Option<bool>,
+    record_id_count_matches_grounded_story_count: Option<bool>,
     layout_key_count: usize,
     all_story_entries_have_layout_key: bool,
-    layout_key_set_matches_record_ids: bool,
+    layout_key_set_matches_record_ids: Option<bool>,
     record_body_lengths: Vec<usize>,
     story_order_record_lengths: Vec<usize>,
     scalar_candidates: Vec<McldScalarCandidate>,
+    fixed_tail_record_width: Option<usize>,
+    fixed_tail_record_count_matches_grounded_story_count: bool,
+    fixed_tail_all_ff_record_count: usize,
+    fixed_tail_unique_record_hash_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -809,61 +817,114 @@ fn profile_mcld(
     text_bytes: u64,
 ) -> Result<McldProfile> {
     let payload = descriptor_range(quill, descriptor)?;
-    let (record_count, record_id_count, record_ids, spans) =
-        parse_mcld_record_spans(payload)?;
-
     let layout_keys = story_catalog
         .entries
         .iter()
         .filter_map(|entry| entry.layout_key)
         .collect::<Vec<_>>();
     let all_story_entries_have_layout_key = layout_keys.len() == story_catalog.entries.len();
-    let layout_key_set = layout_keys.iter().copied().collect::<BTreeSet<_>>();
-    let record_id_set = record_ids.iter().copied().collect::<BTreeSet<_>>();
-    let layout_key_set_matches_record_ids =
-        all_story_entries_have_layout_key && layout_key_set == record_id_set;
 
-    let record_body_lengths = spans
-        .iter()
-        .map(|(start, end)| end.saturating_sub(*start))
-        .collect::<Vec<_>>();
+    let fixed_tail_record_width = usize::try_from(story_catalog.declared_count)
+        .ok()
+        .filter(|count| *count > 0)
+        .and_then(|count| {
+            payload
+                .len()
+                .checked_sub(8)
+                .filter(|tail_len| tail_len % count == 0)
+                .map(|tail_len| tail_len / count)
+        });
 
-    let mut story_order_records = Vec::new();
-    let mut story_order_record_lengths = Vec::new();
-    if layout_key_set_matches_record_ids {
-        for layout_key in &layout_keys {
-            let index = record_ids
-                .iter()
-                .position(|record_id| record_id == layout_key)
-                .context("MCLD layout key set matched but record id lookup failed")?;
-            let (start, end) = spans[index];
-            let record = payload
-                .get(start..end)
-                .context("MCLD story-order record range outside payload")?;
-            story_order_record_lengths.push(record.len());
-            story_order_records.push(record);
+    let mut fixed_tail_all_ff_record_count = 0usize;
+    let mut fixed_tail_hashes = BTreeSet::new();
+    if let (Some(width), Ok(count)) = (
+        fixed_tail_record_width,
+        usize::try_from(story_catalog.declared_count),
+    ) {
+        if width > 0 {
+            for index in 0..count {
+                let start = 8usize
+                    .checked_add(index.saturating_mul(width))
+                    .context("MCLD fixed-tail record start overflow")?;
+                if let Some(record) = payload.get(start..start.saturating_add(width)) {
+                    if record.iter().all(|byte| *byte == 0xff) {
+                        fixed_tail_all_ff_record_count += 1;
+                    }
+                    fixed_tail_hashes.insert(sha256_hex(record));
+                }
+            }
         }
     }
 
-    let scalar_candidates = if layout_key_set_matches_record_ids {
-        mcld_scalar_candidates(&story_order_records, text_utf16_units, text_bytes)
-    } else {
-        Vec::new()
-    };
+    let mut modern_framing_admitted = false;
+    let mut record_count_matches_grounded_story_count = None;
+    let mut record_id_count_matches_grounded_story_count = None;
+    let mut layout_key_set_matches_record_ids = None;
+    let mut record_body_lengths = Vec::new();
+    let mut story_order_record_lengths = Vec::new();
+    let mut scalar_candidates = Vec::new();
+
+    if let Ok((record_count, record_id_count, record_ids, spans)) =
+        parse_mcld_record_spans(payload)
+    {
+        modern_framing_admitted = true;
+        record_count_matches_grounded_story_count =
+            Some(record_count == story_catalog.declared_count);
+        record_id_count_matches_grounded_story_count =
+            Some(record_id_count == story_catalog.declared_count);
+
+        let layout_key_set = layout_keys.iter().copied().collect::<BTreeSet<_>>();
+        let record_id_set = record_ids.iter().copied().collect::<BTreeSet<_>>();
+        let set_matches =
+            all_story_entries_have_layout_key && layout_key_set == record_id_set;
+        layout_key_set_matches_record_ids = Some(set_matches);
+
+        record_body_lengths = spans
+            .iter()
+            .map(|(start, end)| end.saturating_sub(*start))
+            .collect::<Vec<_>>();
+
+        if set_matches {
+            let mut story_order_records = Vec::new();
+            for layout_key in &layout_keys {
+                let index = record_ids
+                    .iter()
+                    .position(|record_id| record_id == layout_key)
+                    .context("MCLD layout key set matched but record id lookup failed")?;
+                let (start, end) = spans[index];
+                let record = payload
+                    .get(start..end)
+                    .context("MCLD story-order record range outside payload")?;
+                story_order_record_lengths.push(record.len());
+                story_order_records.push(record);
+            }
+            scalar_candidates =
+                mcld_scalar_candidates(&story_order_records, text_utf16_units, text_bytes);
+        }
+    }
 
     Ok(McldProfile {
-        record_count,
-        record_id_count,
-        record_count_matches_grounded_story_count:
-            record_count == story_catalog.declared_count,
-        record_id_count_matches_grounded_story_count:
-            record_id_count == story_catalog.declared_count,
+        descriptor_length: descriptor.data_length,
+        chunk_all_ff: payload.iter().all(|byte| *byte == 0xff),
+        prefix_8_all_ff: payload
+            .get(0..8)
+            .is_some_and(|prefix| prefix.iter().all(|byte| *byte == 0xff)),
+        first_u32_is_ff: u32_at(payload, 0) == Some(u32::MAX),
+        second_u32_is_ff: u32_at(payload, 4) == Some(u32::MAX),
+        modern_framing_admitted,
+        record_count_matches_grounded_story_count,
+        record_id_count_matches_grounded_story_count,
         layout_key_count: layout_keys.len(),
         all_story_entries_have_layout_key,
         layout_key_set_matches_record_ids,
         record_body_lengths,
         story_order_record_lengths,
         scalar_candidates,
+        fixed_tail_record_width,
+        fixed_tail_record_count_matches_grounded_story_count:
+            fixed_tail_record_width.is_some(),
+        fixed_tail_all_ff_record_count,
+        fixed_tail_unique_record_hash_count: fixed_tail_hashes.len(),
     })
 }
 
@@ -1255,7 +1316,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v6",
+        "schema": "chaptera.quill-story-early-text-boundary.v7",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
