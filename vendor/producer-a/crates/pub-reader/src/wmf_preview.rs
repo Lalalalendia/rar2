@@ -2088,9 +2088,9 @@ mod tests {
         );
 
         let image = rasterize_wmf_preview(&bytes, 4, 4).expect("cropped STRETCHDIB");
-        let left = ((1 * 4 + 0) * 4) as usize;
-        let top_right = ((0 * 4 + 3) * 4) as usize;
-        let bottom_right = ((3 * 4 + 3) * 4) as usize;
+        let left = 16_usize;
+        let top_right = 12_usize;
+        let bottom_right = 60_usize;
         assert_eq!(&image.rgba[left..left + 4], &[0, 0, 0, 0]);
         assert_eq!(&image.rgba[top_right..top_right + 4], &[0, 255, 0, 255]);
         assert_eq!(
