@@ -736,6 +736,36 @@ mod tests {
     }
 
     #[test]
+    fn backend_fallback_uses_explicit_source_font_resource_when_available() {
+        let fragment: RenderTextFragmentV1 = serde_json::from_value(serde_json::json!({
+            "story_id": "00000000-0000-0000-0000-000000000001",
+            "scalar_start": 0,
+            "scalar_end": 4,
+            "text": "ABCD",
+            "line_count": 1,
+            "typography": [
+                {"scalar_start":0,"scalar_end":4,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
+            ],
+            "backend_font_resource_id": "chaptera.desktop.environment-font.test.face0"
+        }))
+        .expect("render text fragment");
+
+        let (job, usage) = layout_document_text(
+            &fragment,
+            1.0 / 12_700.0,
+            400.0,
+            fragment.backend_font_resource_id.as_deref(),
+        );
+        assert_eq!(usage.source_typography_sections, 1);
+        assert_eq!(usage.fallback_sections, 0);
+        assert_eq!(job.sections.len(), 1);
+        assert_eq!(
+            job.sections[0].format.font_id.family,
+            egui::FontFamily::Name("chaptera.desktop.environment-font.test.face0".into())
+        );
+    }
+
+    #[test]
     fn overlapping_typography_fails_closed_to_one_fallback_section() {
         let fragment: RenderTextFragmentV1 = serde_json::from_value(serde_json::json!({
             "story_id": "00000000-0000-0000-0000-000000000001",
