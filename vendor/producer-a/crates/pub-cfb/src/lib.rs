@@ -275,10 +275,11 @@ fn recover_root_regular_stream_from_bytes(
         }
         let name = recovery_directory_name(entry)?;
         root_entry_names.push(name.clone());
-        if obj_type == 2 && name.eq_ignore_ascii_case(stream_name) {
-            if matching_stream_sid.replace(sid).is_some() {
-                anyhow::bail!("duplicate root stream name {stream_name}");
-            }
+        if obj_type == 2
+            && name.eq_ignore_ascii_case(stream_name)
+            && matching_stream_sid.replace(sid).is_some()
+        {
+            anyhow::bail!("duplicate root stream name {stream_name}");
         }
         pending.push(recovery_u32(entry, 68)?);
         pending.push(recovery_u32(entry, 72)?);
@@ -287,9 +288,8 @@ fn recover_root_regular_stream_from_bytes(
 
     let stream_sid =
         matching_stream_sid.with_context(|| format!("root stream {stream_name} is absent"))?;
-    let start =
-        usize::try_from(stream_sid).context("stream SID does not fit usize")?
-            * RECOVERY_DIR_ENTRY_LEN;
+    let start = usize::try_from(stream_sid).context("stream SID does not fit usize")?
+        * RECOVERY_DIR_ENTRY_LEN;
     let entry = &directory[start..start + RECOVERY_DIR_ENTRY_LEN];
     let start_sector = recovery_u32(entry, 116)?;
     let low_len = recovery_u32(entry, 120)? as u64;
@@ -365,32 +365,28 @@ fn recovery_u32(bytes: &[u8], offset: usize) -> Result<u32> {
     Ok(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
 }
 
-fn recovery_sector<'a>(
-    source: &'a [u8],
-    sector_len: usize,
-    sector_id: u32,
-) -> Result<&'a [u8]> {
+fn recovery_sector(source: &[u8], sector_len: usize, sector_id: u32) -> Result<&[u8]> {
     let sector = usize::try_from(sector_id).context("sector index does not fit usize")?;
     let start = sector
         .checked_add(1)
         .and_then(|value| value.checked_mul(sector_len))
         .context("sector offset overflow")?;
-    let end = start.checked_add(sector_len).context("sector end overflow")?;
+    let end = start
+        .checked_add(sector_len)
+        .context("sector end overflow")?;
     source
         .get(start..end)
         .with_context(|| format!("sector {sector_id} lies outside CFB"))
 }
 
-fn recovery_require_regular_sector(
-    sector: u32,
-    num_sectors: usize,
-    label: &str,
-) -> Result<()> {
+fn recovery_require_regular_sector(sector: u32, num_sectors: usize, label: &str) -> Result<()> {
     if matches!(
         sector,
         RECOVERY_FREE_SECTOR | RECOVERY_END_OF_CHAIN | RECOVERY_FAT_SECTOR | RECOVERY_DIFAT_SECTOR
     ) || sector > RECOVERY_MAX_REGULAR_SECTOR
-        || usize::try_from(sector).ok().is_none_or(|value| value >= num_sectors)
+        || usize::try_from(sector)
+            .ok()
+            .is_none_or(|value| value >= num_sectors)
     {
         anyhow::bail!("{label} references invalid sector {sector}");
     }
@@ -775,8 +771,7 @@ mod tests {
     fn corrupt_first_minifat_entry(mut bytes: Vec<u8>) -> Vec<u8> {
         let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
         let sector_len = 1usize << sector_shift;
-        let minifat_sector =
-            u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
+        let minifat_sector = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
         assert_ne!(minifat_sector, RECOVERY_END_OF_CHAIN);
         let offset = (minifat_sector as usize + 1) * sector_len;
         bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
@@ -785,8 +780,8 @@ mod tests {
 
     #[test]
     fn recovery_reads_intact_root_regular_stream_without_validating_minifat() {
-        let mut compound = cfb::CompoundFile::create(Cursor::new(Vec::new()))
-            .expect("synthetic recovery CFB");
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic recovery CFB");
         compound
             .create_storage("/Objects")
             .expect("Objects storage");
