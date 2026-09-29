@@ -89,6 +89,15 @@ struct McldProfile {
 }
 
 #[derive(Debug, Serialize)]
+struct FdppBoundaryStructure {
+    ordinal: usize,
+    style_len: usize,
+    style_structure_sha256: String,
+    selector_0x19_count: usize,
+    unknown_wire_type_count: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct FdppProfile {
     descriptor_length: u32,
     stored_count: Option<u16>,
@@ -101,6 +110,12 @@ struct FdppProfile {
     terminal_boundary_closes_text: bool,
     first_boundary_after_text_start: bool,
     all_boundaries_utf16_aligned: bool,
+    distinct_style_offset_count: usize,
+    distinct_style_length_count: usize,
+    distinct_structure_hash_count: usize,
+    selector_0x19_boundary_count: usize,
+    unknown_wire_boundary_count: usize,
+    boundary_structures: Vec<FdppBoundaryStructure>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1001,6 +1016,110 @@ fn format_ranges(descriptors: &[&Descriptor]) -> Vec<(u64, u64)> {
         .collect()
 }
 
+fn decode_quill_style_tag_probe(raw_tag: [u8; 2]) -> (u16, u8) {
+    let raw_type = raw_tag[1];
+    if raw_type & 0x07 == 0x02 {
+        (
+            u16::from(raw_tag[0]) | (u16::from(raw_type & 0x07) << 8),
+            raw_type & 0xf8,
+        )
+    } else {
+        (u16::from(raw_tag[0]), raw_type)
+    }
+}
+
+fn quill_style_fixed_width(id: u16, block_type: u8) -> Option<usize> {
+    match block_type {
+        0x00 if matches!(id, 0x0202 | 0x0237) => Some(0),
+        0x78 | 0x05 | 0x08 => Some(0),
+        0x10 | 0x18 | 0x07 => Some(2),
+        0x20 | 0x58 | 0x68 | 0x70 | 0xb8 => Some(4),
+        0x28 => Some(8),
+        0x38 => Some(16),
+        0x48 => Some(24),
+        _ => None,
+    }
+}
+
+fn fdpp_style_structure(
+    payload: &[u8],
+    style_start: usize,
+) -> Result<(usize, String, usize, usize)> {
+    let style_len = usize::try_from(
+        u32_at(payload, style_start).context("FDPP style length truncated")?,
+    )
+    .context("FDPP style length too large")?;
+    if style_len < 4 {
+        bail!("FDPP style length below minimum");
+    }
+    let style_end = style_start
+        .checked_add(style_len)
+        .context("FDPP style end overflow")?;
+    if style_end > payload.len() {
+        bail!("FDPP style outside payload");
+    }
+
+    let mut cursor = style_start + 4;
+    let mut structure = Vec::new();
+    let mut selector_0x19_count = 0usize;
+    let mut unknown_wire_types = BTreeSet::new();
+    const VARIABLE_BLOCK_TYPES: [u8; 6] = [0xc0, 0x80, 0x88, 0x90, 0x98, 0xa0];
+
+    while cursor < style_end {
+        let header = payload
+            .get(cursor..cursor + 2)
+            .context("FDPP style block header truncated")?;
+        let raw_tag = [header[0], header[1]];
+        let (id, block_type) = decode_quill_style_tag_probe(raw_tag);
+        let data_offset = cursor + 2;
+        let block_end = if VARIABLE_BLOCK_TYPES.contains(&block_type) {
+            let declared = usize::try_from(
+                u32_at(payload, data_offset).context("FDPP variable block length truncated")?,
+            )
+            .context("FDPP variable block length too large")?;
+            if declared < 4 {
+                bail!("FDPP variable block length below minimum");
+            }
+            data_offset
+                .checked_add(declared)
+                .context("FDPP variable block end overflow")?
+        } else if let Some(width) = quill_style_fixed_width(id, block_type) {
+            data_offset
+                .checked_add(width)
+                .context("FDPP fixed block end overflow")?
+        } else {
+            unknown_wire_types.insert(raw_tag[1]);
+            data_offset
+        };
+        if block_end > style_end {
+            bail!("FDPP style block exceeds style record");
+        }
+
+        structure.extend_from_slice(&id.to_le_bytes());
+        structure.push(block_type);
+        structure.extend_from_slice(
+            &u32::try_from(block_end - cursor)
+                .context("FDPP style block length exceeds u32")?
+                .to_le_bytes(),
+        );
+        if id == 0x0019 {
+            selector_0x19_count += 1;
+        }
+
+        cursor = block_end;
+    }
+    if cursor != style_end {
+        bail!("FDPP style structure did not close exactly");
+    }
+
+    Ok((
+        style_len,
+        sha256_hex(&structure),
+        selector_0x19_count,
+        unknown_wire_types.len(),
+    ))
+}
+
 fn profile_fdpp(
     quill: &[u8],
     descriptor: &Descriptor,
@@ -1022,6 +1141,12 @@ fn profile_fdpp(
             terminal_boundary_closes_text: false,
             first_boundary_after_text_start: false,
             all_boundaries_utf16_aligned: false,
+            distinct_style_offset_count: 0,
+            distinct_style_length_count: 0,
+            distinct_structure_hash_count: 0,
+            selector_0x19_boundary_count: 0,
+            unknown_wire_boundary_count: 0,
+            boundary_structures: Vec::new(),
         });
     };
     let count = usize::from(count_u16);
@@ -1040,6 +1165,8 @@ fn profile_fdpp(
         .context("TEXT range overflow")?;
 
     let mut boundaries = Vec::new();
+    let mut style_offsets = Vec::new();
+    let mut boundary_structures = Vec::new();
     if tables_fit {
         for index in 0..count {
             let Some(value) = u32_at(payload, offsets_start + index * 4) else {
@@ -1047,6 +1174,21 @@ fn profile_fdpp(
                 break;
             };
             boundaries.push(u64::from(value));
+
+            let relative_style_offset = usize::from(
+                u16_at(payload, chunk_offsets_start + index * 2)
+                    .context("FDPP style offset truncated")?,
+            );
+            style_offsets.push(relative_style_offset);
+            let (style_len, style_structure_sha256, selector_0x19_count, unknown_wire_type_count) =
+                fdpp_style_structure(payload, relative_style_offset)?;
+            boundary_structures.push(FdppBoundaryStructure {
+                ordinal: index,
+                style_len,
+                style_structure_sha256,
+                selector_0x19_count,
+                unknown_wire_type_count,
+            });
         }
     }
 
@@ -1067,6 +1209,27 @@ fn profile_fdpp(
         .iter()
         .all(|value| value.checked_sub(text_start).is_some_and(|delta| delta % 2 == 0));
 
+    let distinct_style_offset_count =
+        style_offsets.iter().copied().collect::<BTreeSet<_>>().len();
+    let distinct_style_length_count = boundary_structures
+        .iter()
+        .map(|item| item.style_len)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let distinct_structure_hash_count = boundary_structures
+        .iter()
+        .map(|item| item.style_structure_sha256.clone())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let selector_0x19_boundary_count = boundary_structures
+        .iter()
+        .filter(|item| item.selector_0x19_count > 0)
+        .count();
+    let unknown_wire_boundary_count = boundary_structures
+        .iter()
+        .filter(|item| item.unknown_wire_type_count > 0)
+        .count();
+
     Ok(FdppProfile {
         descriptor_length: descriptor.data_length,
         stored_count,
@@ -1080,6 +1243,12 @@ fn profile_fdpp(
         terminal_boundary_closes_text,
         first_boundary_after_text_start,
         all_boundaries_utf16_aligned,
+        distinct_style_offset_count,
+        distinct_style_length_count,
+        distinct_structure_hash_count,
+        selector_0x19_boundary_count,
+        unknown_wire_boundary_count,
+        boundary_structures,
     })
 }
 
@@ -1464,7 +1633,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v9",
+        "schema": "chaptera.quill-story-early-text-boundary.v10",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
