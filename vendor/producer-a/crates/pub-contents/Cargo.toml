@@ -10,3 +10,5 @@ serde.workspace=true
 
 [dev-dependencies]
 pub-cfb={path="../pub-cfb"}
+
+# CI fanout control: comment-only pub-contents change; do not merge.
