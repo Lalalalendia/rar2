@@ -25,7 +25,8 @@ pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceRole, StoryFrame, StoryId, TableCellAddress, TableCellId,
+    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryFrame, StoryId,
+    TableCellAddress, TableCellId, derive_source_canonical_id,
 };
 use pub_paint_bridge::{
     PubEffectiveFillSourceV1, PubEffectiveLineSourceV1, PubEffectivePaintAuthorityV1,
@@ -49,17 +50,19 @@ pub use pub_reader::{
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
-    FailureTelemetryChoice, PubAssetExportDiagnostic, PubBridgeDiagnostic,
-    PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubSourceGraphBuild,
-    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
-    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
-    resolve_pub_source_graph,
+    FailureTelemetryChoice, LegacyOleCachedPresentationSelection, PubAssetExportDiagnostic,
+    PubBridgeDiagnostic, PubEffectivePaintAuthority, PubExplicitImageCropSource,
+    PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload,
+    PubSourceGraphBuild, analyze_mature_0x2c_page_roles, build_failure_envelope,
+    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
+    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    derive_pub_page_id, materialize_bounded_simple_table_cells, rasterize_wmf_preview,
+    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
 pub const VIEWER_DOCUMENT_SCHEMA_V0_1: &str = "0.1";
