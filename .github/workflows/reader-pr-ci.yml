@@ -206,11 +206,13 @@ jobs:
     needs: [classify, tier-a]
     if: ${{ always() && needs.classify.outputs.visual_oracle == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/carlton-reader-visual-oracle.yml
+    with:
+      run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
 
   typography-golden:
     name: Reader typography golden
     needs: [classify, tier-a]
-    if: ${{ always() && needs.classify.outputs.typography_golden == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ always() && needs.classify.outputs.typography_golden == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/reader-typography-golden.yml
 
   android-core:
