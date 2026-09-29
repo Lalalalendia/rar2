@@ -90,9 +90,10 @@ use pub_model::{
     SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
     derive_source_canonical_id,
 };
+pub use pub_quill::QuillStoryFailureEvidence;
 use pub_quill::{
-    QuillMcldReadError, QuillStoryFailureEvidence, QuillStoryReadError, QuillTypographyValueSource,
-    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
+    QuillMcldReadError, QuillStoryReadError, QuillTypographyValueSource, parse_bounded_mcld,
+    parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
