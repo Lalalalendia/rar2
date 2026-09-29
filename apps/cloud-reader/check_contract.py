@@ -20,6 +20,7 @@ forbidden = [
     "method: \"POST\"",
     "method:'POST'",
     'method:"POST"',
+    "payload.geometry",
 ]
 for needle in forbidden:
     if needle in HTML:
