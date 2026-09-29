@@ -42,6 +42,7 @@ pub const PUBLISHER_FIELD_YE: u16 = 0x2004;
 pub const PUBLISHER_FIELD_SHAPE_ID: u16 = 0x6801;
 
 pub const SP_CONTAINER_INVENTORY_SCHEMA_VERSION: u32 = 2;
+pub const DGG_DEFAULT_OPTIONS_INVENTORY_SCHEMA_VERSION: u32 = 1;
 
 /// Сырая запись OfficeArtFOPTE и её сложные данные, если они присутствуют.
 ///
@@ -183,6 +184,21 @@ pub struct FoptObservation {
     pub rec_type: u16,
     pub source: RawSpan,
     pub properties: Vec<Fopte>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DggDefaultOptionsObservation {
+    pub source: RawSpan,
+    pub primary_options: Vec<FoptObservation>,
+    pub tertiary_options: Vec<FoptObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DggDefaultOptionsInventory {
+    pub schema_version: u32,
+    pub stream: StreamPath,
+    pub stream_len: u64,
+    pub drawing_groups: Vec<DggDefaultOptionsObservation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,6 +347,22 @@ pub fn inspect_sp_containers(
         stream,
         stream_len: bytes.len() as u64,
         shapes,
+    })
+}
+
+pub fn inspect_dgg_default_options(
+    stream: StreamPath,
+    bytes: &[u8],
+) -> Result<DggDefaultOptionsInventory, OfficeArtReadError> {
+    let parsed = parse_officeart_stream(stream.clone(), bytes)?;
+    let mut drawing_groups = Vec::new();
+    collect_dgg_default_options(&parsed.records, &mut drawing_groups);
+
+    Ok(DggDefaultOptionsInventory {
+        schema_version: DGG_DEFAULT_OPTIONS_INVENTORY_SCHEMA_VERSION,
+        stream,
+        stream_len: bytes.len() as u64,
+        drawing_groups,
     })
 }
 
@@ -644,6 +676,45 @@ fn parse_publisher_fields(
             .then(|| raw_span(stream, offset, end - offset))
             .transpose()?,
     })
+}
+
+fn collect_dgg_default_options(
+    records: &[OfficeArtRecord],
+    output: &mut Vec<DggDefaultOptionsObservation>,
+) {
+    for record in records {
+        if record.header.rec_type == OFFICE_ART_DGG_CONTAINER {
+            if let OfficeArtBody::Container { children } = &record.body {
+                let mut primary_options = Vec::new();
+                let mut tertiary_options = Vec::new();
+                for child in children {
+                    let OfficeArtBody::Fopt(fopt) = &child.body else {
+                        continue;
+                    };
+                    let observation = FoptObservation {
+                        rec_type: child.header.rec_type,
+                        source: child.source.clone(),
+                        properties: fopt.properties.clone(),
+                    };
+                    match child.header.rec_type {
+                        OFFICE_ART_FOPT => primary_options.push(observation),
+                        OFFICE_ART_TERTIARY_FOPT => tertiary_options.push(observation),
+                        _ => {}
+                    }
+                }
+                output.push(DggDefaultOptionsObservation {
+                    source: record.source.clone(),
+                    primary_options,
+                    tertiary_options,
+                });
+            }
+            continue;
+        }
+
+        if let OfficeArtBody::Container { children } = &record.body {
+            collect_dgg_default_options(children, output);
+        }
+    }
 }
 
 fn collect_sp_containers(records: &[OfficeArtRecord], output: &mut Vec<SpContainerObservation>) {
@@ -981,6 +1052,54 @@ mod tests {
             )),
             Some((100, 200, 300, 400))
         );
+    }
+
+    #[test]
+    fn observes_document_wide_dgg_primary_and_tertiary_defaults() {
+        let mut primary_payload = Vec::new();
+        primary_payload.extend_from_slice(&0x0181u16.to_le_bytes());
+        primary_payload.extend_from_slice(&0x0011_2233u32.to_le_bytes());
+        let primary = header((1 << 4) | 0x3, OFFICE_ART_FOPT, &primary_payload);
+
+        let mut tertiary_payload = Vec::new();
+        tertiary_payload.extend_from_slice(&0x01CBu16.to_le_bytes());
+        tertiary_payload.extend_from_slice(&0x0000_2535u32.to_le_bytes());
+        let tertiary = header(
+            (1 << 4) | 0x3,
+            OFFICE_ART_TERTIARY_FOPT,
+            &tertiary_payload,
+        );
+
+        let mut dgg_children = Vec::new();
+        dgg_children.extend_from_slice(&primary);
+        dgg_children.extend_from_slice(&tertiary);
+        let bytes = container(OFFICE_ART_DGG_CONTAINER, &dgg_children);
+
+        let inventory =
+            inspect_dgg_default_options(stream(), &bytes).expect("DGG defaults inventory");
+        assert_eq!(
+            inventory.schema_version,
+            DGG_DEFAULT_OPTIONS_INVENTORY_SCHEMA_VERSION
+        );
+        assert_eq!(inventory.drawing_groups.len(), 1);
+        let dgg = &inventory.drawing_groups[0];
+        assert_eq!(dgg.primary_options.len(), 1);
+        assert_eq!(dgg.tertiary_options.len(), 1);
+        assert_eq!(dgg.primary_options[0].rec_type, OFFICE_ART_FOPT);
+        assert_eq!(
+            dgg.primary_options[0].properties[0].property_id(),
+            0x0181
+        );
+        assert_eq!(dgg.primary_options[0].properties[0].op, 0x0011_2233);
+        assert_eq!(
+            dgg.tertiary_options[0].rec_type,
+            OFFICE_ART_TERTIARY_FOPT
+        );
+        assert_eq!(
+            dgg.tertiary_options[0].properties[0].property_id(),
+            0x01CB
+        );
+        assert_eq!(dgg.tertiary_options[0].properties[0].op, 0x0000_2535);
     }
 
     #[test]
