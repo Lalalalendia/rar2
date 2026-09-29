@@ -841,6 +841,169 @@ pub fn derive_pub_story_id(source_hash: &Sha256Digest, syid: u32) -> Result<Stor
     )?))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubMatureSourceGraphFailureStage {
+    ContentsStream,
+    QuillStream,
+    EscherStream,
+    ContentsHeader,
+    ContentsTrailer,
+    ReferenceIndex,
+    StoryCatalogReference,
+    StoryCatalogChunk,
+    StoryCatalogParse,
+    DocumentReference,
+    DocumentChunk,
+    DocumentPageListBlock,
+    DocumentPageListParse,
+    PublicationPageExtent,
+    QuillStoryCatalog,
+    QuillStoryTextDecode,
+    QuillMcld,
+    EscherInventory,
+    EscherDggDefaults,
+    GraphMaterialization,
+}
+
+impl PubMatureSourceGraphFailureStage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ContentsStream => "contents_stream",
+            Self::QuillStream => "quill_stream",
+            Self::EscherStream => "escher_stream",
+            Self::ContentsHeader => "contents_header",
+            Self::ContentsTrailer => "contents_trailer",
+            Self::ReferenceIndex => "reference_index",
+            Self::StoryCatalogReference => "story_catalog_reference",
+            Self::StoryCatalogChunk => "story_catalog_chunk",
+            Self::StoryCatalogParse => "story_catalog_parse",
+            Self::DocumentReference => "document_reference",
+            Self::DocumentChunk => "document_chunk",
+            Self::DocumentPageListBlock => "document_page_list_block",
+            Self::DocumentPageListParse => "document_page_list_parse",
+            Self::PublicationPageExtent => "publication_page_extent",
+            Self::QuillStoryCatalog => "quill_story_catalog",
+            Self::QuillStoryTextDecode => "quill_story_text_decode",
+            Self::QuillMcld => "quill_mcld",
+            Self::EscherInventory => "escher_inventory",
+            Self::EscherDggDefaults => "escher_dgg_defaults",
+            Self::GraphMaterialization => "graph_materialization",
+        }
+    }
+}
+
+/// Source-safe localization for a mature-0x2C source-graph build failure.
+///
+/// This intentionally reports only a stable parser stage. It does not return
+/// raw parser errors, document text, filenames, stream bytes, or source paths.
+/// The probe mirrors fatal gates in `build_mature_0x2c_from_streams`; bounded
+/// optional projections that already degrade to diagnostics are not failures.
+pub fn probe_mature_0x2c_source_graph_failure_stage(
+    bytes: &[u8],
+    source_hash: Sha256Digest,
+) -> Option<PubMatureSourceGraphFailureStage> {
+    let contents =
+        match pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH) {
+            Ok(value) => value,
+            Err(_) => return Some(PubMatureSourceGraphFailureStage::ContentsStream),
+        };
+    let quill = match pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM_PATH) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::QuillStream),
+    };
+    let escher = match pub_cfb::read_stream_reader(Cursor::new(bytes), ESCHER_STREAM_PATH) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::EscherStream),
+    };
+
+    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let header = match parse_0x2c_header(contents_stream.clone(), &contents) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::ContentsHeader),
+    };
+    let trailer = match parse_confirmed_0x2c_trailer_root(&contents, &header) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::ContentsTrailer),
+    };
+    let references = match build_reference_index(&contents, &trailer.directory) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::ReferenceIndex),
+    };
+
+    let story_catalog_reference = match unique_reference_by_raw_type(
+        &references,
+        CONTENTS_RAW_TYPE_STORY_CATALOG,
+        "Story catalog 0x65",
+    ) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::StoryCatalogReference),
+    };
+    let story_catalog_chunk = match chunk_for_reference(
+        contents_stream.clone(),
+        &contents,
+        story_catalog_reference,
+    ) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::StoryCatalogChunk),
+    };
+    if parse_confirmed_mature_story_catalog(&contents, &story_catalog_chunk).is_err() {
+        return Some(PubMatureSourceGraphFailureStage::StoryCatalogParse);
+    }
+
+    let document_reference =
+        match unique_reference_by_raw_type(&references, RAW_TYPE_DOCUMENT, "DOCUMENT") {
+            Ok(value) => value,
+            Err(_) => return Some(PubMatureSourceGraphFailureStage::DocumentReference),
+        };
+    let document_chunk =
+        match chunk_for_reference(contents_stream.clone(), &contents, document_reference) {
+            Ok(value) => value,
+            Err(_) => return Some(PubMatureSourceGraphFailureStage::DocumentChunk),
+        };
+    let page_list_block = match unique_block(&document_chunk, DOCUMENT_PAGE_LIST_ID) {
+        Ok(value) => value.clone(),
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::DocumentPageListBlock),
+    };
+    if parse_confirmed_document_page_list(&contents, page_list_block).is_err() {
+        return Some(PubMatureSourceGraphFailureStage::DocumentPageListParse);
+    }
+
+    if consensus_publication_page_extent(contents_stream.clone(), &contents, &references).is_err() {
+        return Some(PubMatureSourceGraphFailureStage::PublicationPageExtent);
+    }
+
+    let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
+    let quill_catalog = match parse_confirmed_story_catalog(quill_stream.clone(), &quill) {
+        Ok(value) => value,
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::QuillStoryCatalog),
+    };
+    for story_slice in &quill_catalog.stories {
+        if decode_utf16le_strict(&story_slice.utf16le).is_err() {
+            return Some(PubMatureSourceGraphFailureStage::QuillStoryTextDecode);
+        }
+    }
+    match parse_bounded_mcld(quill_stream, &quill, &quill_catalog.descriptor_nodes) {
+        Ok(_)
+        | Err(QuillMcldReadError::MissingMcldDescriptor)
+        | Err(QuillMcldReadError::RecordCountMismatch { .. }) => {}
+        Err(_) => return Some(PubMatureSourceGraphFailureStage::QuillMcld),
+    }
+
+    if inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher).is_err() {
+        return Some(PubMatureSourceGraphFailureStage::EscherInventory);
+    }
+    if inspect_dgg_default_options(StreamPath(ESCHER_STREAM_PATH.into()), &escher).is_err() {
+        return Some(PubMatureSourceGraphFailureStage::EscherDggDefaults);
+    }
+
+    if build_mature_0x2c_from_streams(source_hash, &contents, &quill, &escher).is_err() {
+        return Some(PubMatureSourceGraphFailureStage::GraphMaterialization);
+    }
+
+    None
+}
+
 /// Builds a bounded mature-0x2C SourceGraph from one complete CFB file.
 ///
 /// The caller supplies a verified SHA-256 digest. This function deliberately
