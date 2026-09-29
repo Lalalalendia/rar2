@@ -129,6 +129,8 @@ fn main() -> Result<()> {
         .context("read legacy Contents")?;
     let directory = parse_legacy_0x22_directory(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
         .context("parse legacy 0x22 directory")?;
+    let serialization_revision =
+        read_u16(&contents, 12).context("legacy Contents serialization revision")?;
 
     let document_entry = directory
         .entries
@@ -196,6 +198,7 @@ fn main() -> Result<()> {
             "parent_is_document_page": parent_type == Some(LEGACY_PAGE_TYPE)
                 && document_page_ids.contains(&entry.parent_id),
             "parent_is_group": parent_type == Some(LEGACY_GROUP_TYPE),
+            "serialization_revision": serialization_revision,
             "service_word": entry.service_word,
             "chunk_len": chunk.len(),
             "child_count": child_ids.len(),
