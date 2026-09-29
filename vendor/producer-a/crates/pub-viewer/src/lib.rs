@@ -1193,7 +1193,7 @@ fn open_legacy_0x22_noquill_bundle(
             .map(map_scene_diagnostic),
     );
 
-    let preview_source_hash = document.source.source_hash.clone();
+    let preview_source_hash = document.source.source_hash;
     let images = viewer_legacy_ole_cached_preview_images(
         bytes,
         &preview_source_hash,
@@ -1324,7 +1324,7 @@ fn open_legacy_0x22_quill_bundle(
             .map(map_scene_diagnostic),
     );
 
-    let preview_source_hash = document.source.source_hash.clone();
+    let preview_source_hash = document.source.source_hash;
     let images = viewer_legacy_ole_cached_preview_images(
         bytes,
         &preview_source_hash,
