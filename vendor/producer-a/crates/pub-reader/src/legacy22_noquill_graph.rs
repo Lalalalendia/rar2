@@ -3,7 +3,8 @@ use super::{
     PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyOleSource,
     PubNodePayload, PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource,
     PubTableCellCoordinates, PubTableCellSource, PubTableSource, PubTableStoryOwnershipSource,
-    ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, derive_pub_id, source_ref,
+    ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, bounded_wmf_metafile, derive_pub_id,
+    source_ref,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
@@ -24,6 +25,9 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
 const LEGACY_TEXT_SHAPE_TYPE: u16 = 0x0000;
+const LEGACY_IMAGE_TYPE: u16 = 0x0002;
+const LEGACY_IMAGE_DATA_TYPE: u16 = 0x0021;
+const LEGACY_IMAGE_DATA_PAYLOAD_OFFSET: usize = 0x08;
 const LEGACY_OLE_TYPE: u16 = 0x0003;
 const LEGACY_OLE_DATA_TYPE: u16 = 0x0022;
 const LEGACY_OLE_DATA_LEN: usize = 18;
@@ -42,6 +46,73 @@ const LEGACY_SHAPE_YE_OFFSET: usize = 0x12;
 #[derive(Debug, Clone)]
 struct LegacyIdList {
     ids: Vec<(u16, RawSpan)>,
+}
+
+#[derive(Debug, Clone)]
+struct LegacyImageWmfProfile {
+    source: RawSpan,
+    normalized_bytes: Vec<u8>,
+}
+
+pub fn read_legacy_0x22_image_wmfs<R: Read + Seek>(
+    mut reader: R,
+    image_object_ids: &[u16],
+) -> Result<BTreeMap<u16, Vec<u8>>> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut pub_bytes = Vec::new();
+    reader.read_to_end(&mut pub_bytes)?;
+    let contents = match pub_cfb::read_stream_reader(
+        Cursor::new(pub_bytes.as_slice()),
+        CONTENTS_STREAM_PATH,
+    ) {
+        Ok(contents) => contents,
+        Err(strict_error) => {
+            let recovered = pub_cfb::recover_root_regular_stream_reader(
+                Cursor::new(pub_bytes.as_slice()),
+                CONTENTS_STREAM_PATH,
+            )
+            .with_context(|| {
+                format!(
+                    "strict CFB read failed ({strict_error}); bounded root Contents recovery failed"
+                )
+            })?;
+            if recovered.root_entry_names.iter().any(|name| {
+                name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher")
+            }) {
+                bail!(
+                    "bounded root Contents recovery is forbidden when Quill or Escher is present"
+                );
+            }
+            recovered.bytes
+        }
+    };
+    let stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let directory = parse_legacy_0x22_directory(stream, &contents)
+        .context("parse legacy no-Quill 0x22 Contents directory")?;
+    let mut images = BTreeMap::new();
+    for image_object_id in image_object_ids {
+        if images.contains_key(image_object_id) {
+            continue;
+        }
+        let profile = legacy_image_wmf_profile(&contents, &directory, *image_object_id)
+            .with_context(|| {
+                format!(
+                    "legacy IMAGE object {image_object_id} has no admitted direct native WMF payload"
+                )
+            })?;
+        images.insert(*image_object_id, profile.normalized_bytes);
+    }
+    Ok(images)
+}
+
+pub fn read_legacy_0x22_image_wmf<R: Read + Seek>(
+    reader: R,
+    image_object_id: u16,
+) -> Result<Vec<u8>> {
+    let mut images = read_legacy_0x22_image_wmfs(reader, &[image_object_id])?;
+    images
+        .remove(&image_object_id)
+        .context("legacy IMAGE batch result omitted requested object")
 }
 
 pub fn build_legacy_0x22_noquill_source_graph<R: Read + Seek>(
@@ -376,9 +447,23 @@ fn materialize_legacy_noquill_child(
     }
 
     let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
+    let is_legacy_image = child_entry.chunk_type == LEGACY_IMAGE_TYPE;
     let is_group = child_entry.chunk_type == LEGACY_GROUP_TYPE;
     let is_legacy_ole = child_entry.chunk_type == LEGACY_OLE_TYPE;
     let is_table = child_entry.chunk_type == LEGACY_0X22_TABLE_CHUNK_TYPE;
+    let legacy_image_source = if is_legacy_image {
+        let Some(profile) = legacy_image_wmf_profile(contents, directory, child_object_id) else {
+            diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
+                object_id: u32::from(child_object_id),
+                raw_type: Some(child_entry.chunk_type),
+                reason: "legacy_image_native_wmf_not_admitted_v1".into(),
+            });
+            return Ok(());
+        };
+        Some(profile.source)
+    } else {
+        None
+    };
     let (legacy_ole, legacy_ole_source) = if is_legacy_ole {
         let Some(profile) = legacy_ole_profile(contents, directory, child_object_id) else {
             diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
@@ -393,6 +478,7 @@ fn materialize_legacy_noquill_child(
         (None, None)
     };
     if !is_text_shape
+        && !is_legacy_image
         && !is_group
         && !is_legacy_ole
         && !is_table
@@ -517,12 +603,25 @@ fn materialize_legacy_noquill_child(
             ReadConfidence::Exact,
         ));
     }
+    if let Some(source) = legacy_image_source {
+        source_refs.push(source_ref(
+            &graph.source,
+            &source,
+            Some(format!("contents/0x22/object/{child_object_id}")),
+            Some("legacy_image_wmf".into()),
+            SourceRole::Semantic,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ));
+    }
 
     graph.nodes.insert(
         node_id,
         Node {
             kind: if is_group {
                 NodeKind::Group
+            } else if is_legacy_image {
+                NodeKind::ImageFrame
             } else if is_legacy_ole {
                 NodeKind::Unsupported
             } else if is_table {
@@ -1144,6 +1243,40 @@ fn parse_legacy_ole_data_chunk(chunk: &[u8]) -> Option<PubLegacyOleSource> {
     })
 }
 
+fn legacy_image_wmf_profile(
+    contents: &[u8],
+    directory: &Legacy0x22Directory,
+    image_object_id: u16,
+) -> Option<LegacyImageWmfProfile> {
+    let mut image_data = directory
+        .entries_by_parent_id(image_object_id)
+        .filter(|entry| entry.chunk_type == LEGACY_IMAGE_DATA_TYPE);
+    let child = image_data.next()?;
+    if image_data.next().is_some() {
+        return None;
+    }
+
+    let chunk = chunk_bytes(contents, child).ok()?;
+    let declared_len = usize::try_from(read_u32(chunk, 0x04)?).ok()?;
+    let payload_end = LEGACY_IMAGE_DATA_PAYLOAD_OFFSET.checked_add(declared_len)?;
+    let payload = chunk.get(LEGACY_IMAGE_DATA_PAYLOAD_OFFSET..payload_end)?;
+    let bounded = bounded_wmf_metafile(payload).ok()?;
+    let source_len = u64::try_from(bounded.source_len).ok()?;
+    let source_offset = child
+        .chunk_source
+        .offset
+        .checked_add(LEGACY_IMAGE_DATA_PAYLOAD_OFFSET as u64)?;
+
+    Some(LegacyImageWmfProfile {
+        source: RawSpan {
+            stream: child.chunk_source.stream.clone(),
+            offset: source_offset,
+            len: source_len,
+        },
+        normalized_bytes: bounded.normalized_bytes,
+    })
+}
+
 fn legacy_ole_profile(
     contents: &[u8],
     directory: &Legacy0x22Directory,
@@ -1366,6 +1499,79 @@ mod tests {
     }
 
     #[test]
+    fn legacy_image_profile_uses_direct_image_data_and_bounded_first_eof() {
+        let stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let span = |offset: u64, len: u64| RawSpan {
+            stream: stream.clone(),
+            offset,
+            len,
+        };
+        let directory = Legacy0x22Directory {
+            trailer_offset: 96,
+            trailer_offset_source: span(96, 4),
+            entry_count: 2,
+            entry_count_source: span(96, 2),
+            entries: vec![
+                Legacy0x22DirectoryEntry {
+                    directory_index: 0,
+                    entry_source: span(98, 10),
+                    service_word: 0,
+                    service_word_source: span(98, 2),
+                    object_id: 10,
+                    object_id_source: span(100, 2),
+                    parent_id: 1,
+                    parent_id_source: span(102, 2),
+                    chunk_offset: 0,
+                    chunk_offset_source: span(104, 4),
+                    chunk_type: LEGACY_IMAGE_TYPE,
+                    chunk_type_source: span(0, 2),
+                    chunk_source: span(0, 32),
+                },
+                Legacy0x22DirectoryEntry {
+                    directory_index: 1,
+                    entry_source: span(108, 10),
+                    service_word: 0,
+                    service_word_source: span(108, 2),
+                    object_id: 11,
+                    object_id_source: span(110, 2),
+                    parent_id: 10,
+                    parent_id_source: span(112, 2),
+                    chunk_offset: 32,
+                    chunk_offset_source: span(114, 4),
+                    chunk_type: LEGACY_IMAGE_DATA_TYPE,
+                    chunk_type_source: span(32, 2),
+                    chunk_source: span(32, 34),
+                },
+            ],
+        };
+
+        let mut wmf = Vec::new();
+        wmf.extend_from_slice(&1u16.to_le_bytes());
+        wmf.extend_from_slice(&9u16.to_le_bytes());
+        wmf.extend_from_slice(&0x0300u16.to_le_bytes());
+        wmf.extend_from_slice(&11u32.to_le_bytes()); // stale: actual first-EOF size is 12 words
+        wmf.extend_from_slice(&0u16.to_le_bytes());
+        wmf.extend_from_slice(&3u32.to_le_bytes());
+        wmf.extend_from_slice(&0u16.to_le_bytes());
+        wmf.extend_from_slice(&3u32.to_le_bytes());
+        wmf.extend_from_slice(&0u16.to_le_bytes());
+
+        let mut contents = vec![0u8; 66];
+        contents[0..2].copy_from_slice(&LEGACY_IMAGE_TYPE.to_le_bytes());
+        contents[32..34].copy_from_slice(&LEGACY_IMAGE_DATA_TYPE.to_le_bytes());
+        contents[36..40].copy_from_slice(&(wmf.len() as u32).to_le_bytes());
+        contents[40..64].copy_from_slice(&wmf);
+        contents[64..66].copy_from_slice(&[0xaa, 0xbb]);
+
+        let profile = legacy_image_wmf_profile(&contents, &directory, 10).expect("image WMF");
+        assert_eq!(profile.source.offset, 40);
+        assert_eq!(profile.source.len, 24);
+        assert_eq!(read_u32(&profile.normalized_bytes, 6), Some(12));
+        assert!(crate::wmf::validate_wmf_metafile(&profile.normalized_bytes).is_ok());
+        assert!(legacy_image_wmf_profile(&contents, &directory, 11).is_none());
+    }
+
+    #[test]
     fn legacy_ole_data_profile_is_exact_and_preserves_opaque_flag() {
         let mut chunk = vec![0_u8; LEGACY_OLE_DATA_LEN];
         chunk[0x00..0x02].copy_from_slice(&LEGACY_OLE_DATA_TYPE.to_le_bytes());
@@ -1399,7 +1605,7 @@ mod tests {
             LEGACY_TEXT_SHAPE_TYPE,
             LEGACY_OLE_TYPE, // OLE is admitted only through its bounded OleData profile
             LEGACY_0X22_TABLE_CHUNK_TYPE, // low/no-Quill table, admitted separately
-            0x0002,          // image
+            LEGACY_IMAGE_TYPE, // image is admitted only through direct bounded IMAGE_2K_DATA
             0x0008,          // Quill-era text shape
             0x000a,          // table
             LEGACY_GROUP_TYPE, // group is admitted separately from simple geometry
