@@ -254,6 +254,17 @@ jobs:
           child_suffixes = Counter(
               str(item["suffix32_sha256"]) for item in child_profiles
           )
+          child_u16_value_counts = [Counter() for _ in range(9)]
+          child_u32_value_counts = [Counter() for _ in range(4)]
+          for item in child_profiles:
+              words = item.get("u16_le_words") or []
+              dwords = item.get("u32_le_dwords") or []
+              assert len(words) == 9, len(words)
+              assert len(dwords) == 4, len(dwords)
+              for index, value in enumerate(words):
+                  child_u16_value_counts[index][str(value)] += 1
+              for index, value in enumerate(dwords):
+                  child_u32_value_counts[index][str(value)] += 1
           parent_child_pairs = Counter(
               (
                   str((item.get("geometry") or {}).get("normalized_chunk_sha256")),
@@ -380,6 +391,18 @@ jobs:
               ),
               "child_0x0022_prefix32_cluster_count": len(child_prefixes),
               "child_0x0022_suffix32_cluster_count": len(child_suffixes),
+              "child_0x0022_u16_le_value_counts": {
+                  f"0x{index * 2:02x}": dict(
+                      sorted(counter.items(), key=lambda item: int(item[0]))
+                  )
+                  for index, counter in enumerate(child_u16_value_counts)
+              },
+              "child_0x0022_u32_le_value_counts": {
+                  f"0x{index * 4:02x}": dict(
+                      sorted(counter.items(), key=lambda item: int(item[0]))
+                  )
+                  for index, counter in enumerate(child_u32_value_counts)
+              },
               "parent_child_exact_pair_cluster_count": len(parent_child_pairs),
               "parent_child_exact_pair_singleton_count": sum(
                   count == 1 for count in parent_child_pairs.values()
@@ -419,6 +442,14 @@ jobs:
                   "clusters are profiled independently before any semantic admission"
               ),
           }
+
+          # Scalar words are retained only as aggregate distributions in the
+          # census. Remove per-instance values before writing source-free artifacts.
+          for item in instances:
+              child = item.get("child_0x0022")
+              if isinstance(child, dict):
+                  child.pop("u16_le_words", None)
+                  child.pop("u32_le_dwords", None)
 
           Path("out/legacy625/raw0003-instances.json").write_text(
               json.dumps(instances, indent=2, sort_keys=True) + "\n"
