@@ -32,6 +32,11 @@ def main():
         typography_golden=False,
     )
     assert_scope(
+        ["crates/pub-model/src/lib.rs"],
+        tier_a=False,
+        visual_oracle=True,
+    )
+    assert_scope(
         ["vendor/producer-a/crates/pub-viewer/src/lib.rs"],
         tier_a=True,
         reader_windows_smoke=True,
