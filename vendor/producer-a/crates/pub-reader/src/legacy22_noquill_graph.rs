@@ -931,12 +931,9 @@ mod tests {
     fn legacy_line_geometry_accepts_axis_aligned_endpoints_without_fake_thickness() {
         let page = legacy_geometry_test_page();
 
-        let horizontal = legacy_shape_bounds(
-            &page,
-            0x0004,
-            &legacy_geometry_chunk(-100, 20, 100, 20),
-        )
-        .expect("horizontal line");
+        let horizontal =
+            legacy_shape_bounds(&page, 0x0004, &legacy_geometry_chunk(-100, 20, 100, 20))
+                .expect("horizontal line");
         assert_eq!(
             horizontal,
             RectEmu::new(
@@ -947,12 +944,8 @@ mod tests {
             )
         );
 
-        let vertical = legacy_shape_bounds(
-            &page,
-            0x0004,
-            &legacy_geometry_chunk(30, -90, 30, 110),
-        )
-        .expect("vertical line");
+        let vertical = legacy_shape_bounds(&page, 0x0004, &legacy_geometry_chunk(30, -90, 30, 110))
+            .expect("vertical line");
         assert_eq!(
             vertical,
             RectEmu::new(
@@ -967,12 +960,9 @@ mod tests {
     #[test]
     fn legacy_line_geometry_normalizes_reversed_endpoints_and_rejects_points() {
         let page = legacy_geometry_test_page();
-        let reversed = legacy_shape_bounds(
-            &page,
-            0x0004,
-            &legacy_geometry_chunk(100, 80, -100, -20),
-        )
-        .expect("reversed line");
+        let reversed =
+            legacy_shape_bounds(&page, 0x0004, &legacy_geometry_chunk(100, 80, -100, -20))
+                .expect("reversed line");
         assert_eq!(
             reversed,
             RectEmu::new(
@@ -983,17 +973,13 @@ mod tests {
             )
         );
 
-        assert!(
-            legacy_shape_bounds(&page, 0x0004, &legacy_geometry_chunk(7, 9, 7, 9)).is_none()
-        );
+        assert!(legacy_shape_bounds(&page, 0x0004, &legacy_geometry_chunk(7, 9, 7, 9)).is_none());
     }
 
     #[test]
     fn non_line_simple_geometry_keeps_positive_rectangle_requirement() {
         let page = legacy_geometry_test_page();
-        assert!(
-            legacy_shape_bounds(&page, 0x0005, &legacy_geometry_chunk(0, 0, 100, 0)).is_none()
-        );
+        assert!(legacy_shape_bounds(&page, 0x0005, &legacy_geometry_chunk(0, 0, 100, 0)).is_none());
         assert!(
             legacy_shape_bounds(&page, 0x0005, &legacy_geometry_chunk(100, 0, 0, 100)).is_none()
         );
