@@ -248,6 +248,46 @@ jobs:
               or ("none" if prefix.get("prefix_valid") is True else "unclassified")
               for prefix in prefix_profiles
           )
+          raster_profiles = [
+              item.get("direct_native_raster_profile") or {}
+              for item in direct_child
+          ]
+          raster_recovery_classes = Counter(
+              profile.get("recovery_class") or "none"
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+          )
+          raster_success_recovery_classes = Counter(
+              profile.get("recovery_class") or "none"
+              for profile in raster_profiles
+              if profile.get("raster_success") is True
+          )
+          raster_error_classes = Counter(
+              profile.get("raster_error_class") or "unclassified"
+              for profile in raster_profiles
+              if profile.get("candidate") is True
+              and profile.get("raster_success") is not True
+          )
+          raster_success_files = {
+              item["source_sha256"]
+              for item, profile in zip(direct_child, raster_profiles)
+              if profile.get("raster_success") is True
+          }
+          raster_positive_geometry_candidate_count = sum(
+              profile.get("candidate") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, profile in zip(direct_child, raster_profiles)
+          )
+          raster_positive_geometry_success_count = sum(
+              profile.get("raster_success") is True
+              and (item.get("geometry") or {}).get("positive_rect") is True
+              for item, profile in zip(direct_child, raster_profiles)
+          )
+          raster_nonpositive_geometry_success_count = sum(
+              profile.get("raster_success") is True
+              and (item.get("geometry") or {}).get("positive_rect") is not True
+              for item, profile in zip(direct_child, raster_profiles)
+          )
           strict_invalid_profiles = [
               profile for profile in declared_profiles
               if profile.get("wmf_valid") is not True
@@ -357,6 +397,25 @@ jobs:
               "direct_wmf_prefix_validation_error_counts": dict(
                   prefix_validation_errors.most_common()
               ),
+              "direct_raster_candidate_count": sum(
+                  profile.get("candidate") is True for profile in raster_profiles
+              ),
+              "direct_raster_success_count": sum(
+                  profile.get("raster_success") is True for profile in raster_profiles
+              ),
+              "direct_raster_recovery_class_counts": dict(
+                  raster_recovery_classes.most_common()
+              ),
+              "direct_raster_success_recovery_class_counts": dict(
+                  raster_success_recovery_classes.most_common()
+              ),
+              "direct_raster_error_class_counts": dict(
+                  raster_error_classes.most_common()
+              ),
+              "direct_raster_success_file_count": len(raster_success_files),
+              "direct_raster_positive_geometry_candidate_count": raster_positive_geometry_candidate_count,
+              "direct_raster_positive_geometry_success_count": raster_positive_geometry_success_count,
+              "direct_raster_nonpositive_geometry_success_count": raster_nonpositive_geometry_success_count,
               "direct_strict_invalid_outer_size_rewrite_valid_count": sum(
                   profile.get("outer_size_rewrite_valid") is True
                   for profile in strict_invalid_profiles
