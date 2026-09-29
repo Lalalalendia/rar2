@@ -19,7 +19,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  reader-consumer-admission:
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: read
+    uses: ./.github/workflows/reader-consumer-admission.yml
+    with:
+      event_name: ${{ github.event_name }}
+      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
+
   corpus-truth:
+    needs: reader-consumer-admission
+    if: needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
