@@ -87,6 +87,7 @@ fn graph() -> PubResolvedGraph {
                     officeart_shape_type: Some(1),
                     officeart_spid: Some(1),
                     image_slot: None,
+                    legacy_ole: None,
                     explicit_image_crop: None,
                     explicit_paint: PubExplicitShapePaintSource::default(),
                     effective_paint: None,
