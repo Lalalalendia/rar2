@@ -59,9 +59,9 @@ use pub_reader::{
     PubSourceGraphBuild, WmfPreviewRgba, analyze_mature_0x2c_page_roles, build_failure_envelope,
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    derive_pub_page_id, materialize_bounded_simple_table_cells, rasterize_wmf_preview,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
-    select_unambiguous_legacy_ole_cached_presentation,
+    derive_pub_page_id, materialize_bounded_simple_table_cells,
+    rasterize_wmf_preview, read_legacy_noquill_image_wmf, resolve_pub_source_graph,
+    scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -753,7 +753,7 @@ pub struct ViewerDiagnostic {
     pub message: String,
 }
 
-fn encode_legacy_ole_preview_png(preview: &WmfPreviewRgba) -> Result<Vec<u8>> {
+fn encode_wmf_preview_png(preview: &WmfPreviewRgba) -> Result<Vec<u8>> {
     let pixel_count = u64::from(preview.width)
         .checked_mul(u64::from(preview.height))
         .ok_or_else(|| anyhow!("legacy OLE preview pixel count overflow"))?;
@@ -890,7 +890,7 @@ fn viewer_legacy_ole_preview_image_from_scan(
             return None;
         }
     };
-    let png = match encode_legacy_ole_preview_png(&preview) {
+    let png = match encode_wmf_preview_png(&preview) {
         Ok(png) => png,
         Err(_) => {
             diagnostics.push(ViewerDiagnostic {
@@ -985,6 +985,126 @@ fn viewer_legacy_ole_cached_preview_images(
         ) {
             images.push(image);
         }
+    }
+
+    images
+}
+
+
+fn legacy_image_resource_id(
+    source_hash: &Sha256Digest,
+    image_object_id: u16,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let digest = Sha256::digest(wmf_bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
+        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    let source_object_key =
+        format!("legacy-image/object-{image_object_id}/native-wmf-sha256-{wmf_sha256}");
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &source_object_key,
+        semantic_role: "viewer.legacy-image-native-wmf-v1",
+    })
+    .map_err(|error| anyhow!("derive legacy image resource identity: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+fn viewer_legacy_noquill_native_images(
+    bytes: &[u8],
+    source_hash: &Sha256Digest,
+    graph: &PubResolvedGraph,
+    scene: &BoundedResolvedScene,
+    diagnostics: &mut Vec<ViewerDiagnostic>,
+) -> Vec<ViewerEmbeddedImage> {
+    const RASTER_HINT: u32 = 512;
+
+    let renderable_node_ids = scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let mut images = Vec::new();
+
+    for node in graph.nodes.values() {
+        if node.kind != NodeKind::Image || !renderable_node_ids.contains(&node.header.id) {
+            continue;
+        }
+        let Ok(image_object_id) = u16::try_from(node.payload.contents_seq_num) else {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_image.identity_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message: "A bounded legacy image node has an object identity outside the old-0x22 range."
+                    .to_owned(),
+            });
+            continue;
+        };
+
+        let wmf = match read_legacy_noquill_image_wmf(Cursor::new(bytes), image_object_id) {
+            Ok(wmf) => wmf,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_image.native_wmf_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "The grounded legacy image no longer exposes one bounded direct native WMF payload."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let preview = match rasterize_wmf_preview(&wmf, RASTER_HINT, RASTER_HINT) {
+            Ok(preview) => preview,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_image.native_wmf_raster_unsupported".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "The grounded legacy native WMF is structurally valid but outside the bounded Viewer raster profile."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let png = match encode_wmf_preview_png(&preview) {
+            Ok(png) => png,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_image.native_wmf_encode_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "The bounded legacy native WMF could not be materialized as a Viewer image resource."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let resource_id = match legacy_image_resource_id(source_hash, image_object_id, &wmf) {
+            Ok(resource_id) => resource_id,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_image.identity_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "The bounded legacy native WMF could not receive a deterministic Viewer resource identity."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+
+        images.push(ViewerEmbeddedImage {
+            resource_id,
+            mime: "image/png".to_owned(),
+            node_ids: vec![node.header.id],
+            placements: Vec::new(),
+            bytes: png,
+        });
     }
 
     images
@@ -1194,19 +1314,26 @@ fn open_legacy_0x22_noquill_bundle(
     );
 
     let preview_source_hash = document.source.source_hash;
-    let images = viewer_legacy_ole_cached_preview_images(
+    let mut images = viewer_legacy_noquill_native_images(
         bytes,
         &preview_source_hash,
         &resolved.graph,
         &scene,
         &mut document.diagnostics,
     );
+    images.extend(viewer_legacy_ole_cached_preview_images(
+        bytes,
+        &preview_source_hash,
+        &resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    ));
 
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Legacy no-Quill text and text-box geometry are recovered only where grounded. Exact source typography, non-ASCII codepages, ordinary legacy image classes, effects, groups and unsupported legacy object kinds remain explicit fidelity gaps; cached OLE previews are shown only when one persisted presentation validates."
+            message: "Legacy no-Quill text, grounded geometry and bounded direct native-WMF images are recovered where source-backed. Exact source typography, non-ASCII codepages, legacy image containers without a proven native payload, effects and unsupported object kinds remain explicit fidelity gaps; cached OLE previews are shown only when one persisted presentation validates."
                 .to_owned(),
         });
     }
