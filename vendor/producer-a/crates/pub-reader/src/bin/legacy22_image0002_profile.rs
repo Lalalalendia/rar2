@@ -176,6 +176,52 @@ fn wmf_payload_offsets(chunk: &[u8]) -> Vec<usize> {
         .collect()
 }
 
+fn wmf_declared_profile(chunk: &[u8]) -> Value {
+    let Some(declared_u32) = read_u32(chunk, 0x04) else {
+        return json!({
+            "length_present": false,
+            "declared_fits_chunk": false,
+            "exact_chunk_end": false,
+            "wmf_valid": false,
+        });
+    };
+    let Ok(declared_len) = usize::try_from(declared_u32) else {
+        return json!({
+            "length_present": true,
+            "declared_fits_chunk": false,
+            "exact_chunk_end": false,
+            "wmf_valid": false,
+        });
+    };
+    let Some(end) = 0x08_usize.checked_add(declared_len) else {
+        return json!({
+            "length_present": true,
+            "declared_fits_chunk": false,
+            "exact_chunk_end": false,
+            "wmf_valid": false,
+        });
+    };
+    let Some(payload) = chunk.get(0x08..end) else {
+        return json!({
+            "length_present": true,
+            "declared_len": declared_len,
+            "declared_fits_chunk": false,
+            "exact_chunk_end": false,
+            "wmf_valid": false,
+        });
+    };
+    let wmf_valid = validate_wmf_metafile(payload).is_ok();
+    json!({
+        "length_present": true,
+        "declared_len": declared_len,
+        "declared_fits_chunk": true,
+        "exact_chunk_end": end == chunk.len(),
+        "trailing_len": chunk.len() - end,
+        "wmf_valid": wmf_valid,
+        "payload_sha256": wmf_valid.then(|| sha256_hex(payload)),
+    })
+}
+
 fn read_contents(bytes: &[u8]) -> Result<Vec<u8>> {
     let strict_error = match pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH) {
         Ok(contents) => return Ok(contents),
@@ -289,6 +335,16 @@ fn main() -> Result<()> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let direct_native_declared_profile = direct_native_chunk.map(wmf_declared_profile);
+
+        let previous_entry = image
+            .object_id
+            .checked_sub(1)
+            .and_then(|id| directory.entry_by_object_id(id));
+        let next_entry = image
+            .object_id
+            .checked_add(1)
+            .and_then(|id| directory.entry_by_object_id(id));
 
         let field_repl_ref = read_u16(chunk, REPL_REF);
         let field_repl_entry = field_repl_ref
@@ -326,6 +382,15 @@ fn main() -> Result<()> {
                 .and_then(|chunk| chunk.len().checked_sub(0x08)),
             "direct_native_wmf_valid_offsets": direct_native_wmf_offsets,
             "direct_native_wmf_payload_sha256": direct_native_payload_hashes,
+            "direct_native_declared_profile": direct_native_declared_profile,
+            "previous_object_raw_type": previous_entry
+                .map(|entry| format!("0x{:04x}", entry.chunk_type)),
+            "previous_object_parent_matches_image": previous_entry
+                .is_some_and(|entry| entry.parent_id == image.object_id),
+            "next_object_raw_type": next_entry
+                .map(|entry| format!("0x{:04x}", entry.chunk_type)),
+            "next_object_parent_matches_image": next_entry
+                .is_some_and(|entry| entry.parent_id == image.object_id),
             "direct_native_len_u32_at_0x08": direct_native_chunk
                 .and_then(|chunk| read_u32(chunk, 0x08)),
             "direct_native_len_u32_at_0x0c": direct_native_chunk
