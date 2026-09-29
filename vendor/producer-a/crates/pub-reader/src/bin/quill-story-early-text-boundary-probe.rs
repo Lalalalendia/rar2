@@ -1,8 +1,9 @@
 use anyhow::{bail, Context, Result};
 use pub_contents::{
-    CONTENTS_RAW_TYPE_STORY_CATALOG, parse_0x2c_header, parse_confirmed_0x2c_chunk,
-    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
-    parse_confirmed_mature_story_catalog, MatureStoryCatalog, RawContentsBlockBody,
+    BlockReadError, CONTENTS_RAW_TYPE_STORY_CATALOG, Contents0x2cChunk, ContentsCursor,
+    MatureStoryCatalog, RawContentsBlock, RawContentsBlockBody, decode_packed_field_tag,
+    parse_0x2c_header, parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
+    parse_confirmed_block, parse_confirmed_chunk_reference, parse_confirmed_mature_story_catalog,
 };
 use pub_core::StreamPath;
 use serde::Serialize;
@@ -20,6 +21,14 @@ const DESCRIPTOR_ROOT: u32 = 0x18;
 const DESCRIPTOR_END: u32 = 0xffff_ffff;
 const DESCRIPTOR_SIZE: usize = 24;
 const DESCRIPTOR_PRESENT: u16 = 0x0018;
+const CONTENTS_RAW_TYPE_STORY_FRAME_INDEX: u16 = 0x61;
+const STORY_FRAME_INDEX_DECLARED_COUNT_ID: u16 = 0x01;
+const STORY_FRAME_INDEX_ENTRY_ARRAY_ID: u16 = 0x02;
+const STORY_FRAME_ENTRY_TEXT_ID: u16 = 0x01;
+const STORY_FRAME_ENTRY_ORDINAL_ID: u16 = 0x02;
+const STORY_FRAME_ENTRY_SHAPE_REF_ID: u16 = 0x03;
+const STORY_FRAME_WIRE_U16_SERVICE: u8 = 0x10;
+const STORY_FRAME_WIRE_U32_SERVICE: u8 = 0x58;
 
 #[derive(Debug, Clone)]
 struct Descriptor {
@@ -197,6 +206,47 @@ struct StoryCatalogFixed8PairProfile {
     first_start_is_zero: bool,
 }
 
+#[derive(Debug, Clone)]
+struct StoryFrameEntryProbe {
+    fields: Vec<RawContentsBlock>,
+    text_id: Option<u32>,
+    unsupported_tail: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StoryFrameScalarFieldProfile {
+    field_id: u16,
+    present_entry_count: usize,
+    scalar_entry_count: usize,
+    duplicate_entry_count: usize,
+    wire_types: Vec<u8>,
+    grounded_story_constant_value_count: usize,
+    all_grounded_stories_have_constant_scalar: bool,
+    monotonic_non_decreasing_in_story_order: bool,
+    all_values_match_fdpp_absolute_quill_offsets: bool,
+    all_values_match_fdpp_relative_bytes: bool,
+    all_values_match_fdpp_utf16_units: bool,
+    last_equals_text_end_absolute_quill_offset: bool,
+    last_equals_text_bytes: bool,
+    last_equals_text_utf16_units: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StoryFrameIndexProfile {
+    declared_count: Option<u32>,
+    entry_count: usize,
+    declared_count_matches_entry_count: bool,
+    top_level_unsupported_tail: bool,
+    entries_with_unsupported_tail: usize,
+    entries_with_text_id: usize,
+    all_entry_text_ids_grounded: bool,
+    grounded_stories_with_frames: usize,
+    grounded_stories_without_frames: usize,
+    distinct_entry_field_ids: Vec<u16>,
+    extra_entry_field_ids: Vec<u16>,
+    scalar_field_profiles: Vec<StoryFrameScalarFieldProfile>,
+}
+
 #[derive(Debug, Serialize)]
 struct WitnessRow {
     source_sha256: String,
@@ -213,6 +263,7 @@ struct WitnessRow {
     text_descriptor_metadata: DescriptorMetadataProfile,
     mcld_profile: McldProfile,
     fdpp_profile: FdppProfile,
+    story_frame_index_profile: StoryFrameIndexProfile,
     syid_strs_text_opt_a_all_equal: bool,
     syid_strs_text_bit_type_all_equal: bool,
     story_catalog_entries_with_unsupported_tail: usize,
@@ -412,6 +463,416 @@ fn scan_direct_generic_plc_count(payload: &[u8], grounded_count: u32) -> usize {
     (0..=max_prefix)
         .filter(|prefix| u32_at(payload, *prefix) == Some(grounded_count))
         .count()
+}
+
+fn scalar_u64_block(field: &RawContentsBlock) -> Option<u64> {
+    match &field.body {
+        RawContentsBlockBody::U16 { value, .. } => Some(u64::from(*value)),
+        RawContentsBlockBody::U32 { value, .. } => Some(u64::from(*value)),
+        _ => None,
+    }
+}
+
+fn parse_story_frame_block(
+    cursor: &mut ContentsCursor<'_>,
+) -> Result<RawContentsBlock> {
+    let original = cursor.clone();
+    match parse_confirmed_block(cursor) {
+        Ok(block) => return Ok(block),
+        Err(BlockReadError::UnsupportedType { .. }) => {
+            *cursor = original;
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    let mut probe = cursor.clone();
+    let start = probe.position();
+    let (tag0, tag0_source) = probe.read_u8()?;
+    let (tag1, _) = probe.read_u8()?;
+    let raw_tag = [tag0, tag1];
+    let (id, block_type) = decode_packed_field_tag(raw_tag);
+    let tag_source = pub_core::RawSpan {
+        stream: tag0_source.stream.clone(),
+        offset: tag0_source.offset,
+        len: 2,
+    };
+
+    let body = match block_type {
+        STORY_FRAME_WIRE_U16_SERVICE => {
+            let (value, value_source) = probe.read_u16_le()?;
+            RawContentsBlockBody::U16 {
+                value,
+                value_source,
+            }
+        }
+        STORY_FRAME_WIRE_U32_SERVICE => {
+            let (value, value_source) = probe.read_u32_le()?;
+            RawContentsBlockBody::U32 {
+                value,
+                value_source,
+            }
+        }
+        _ => bail!(
+            "unsupported StoryFrame entry wire 0x{block_type:02x} at relative parse offset {start}"
+        ),
+    };
+
+    let end = probe.position();
+    let block = RawContentsBlock {
+        id,
+        block_type,
+        raw_tag,
+        tag_source,
+        source: pub_core::RawSpan {
+            stream: tag0_source.stream,
+            offset: tag0_source.offset,
+            len: u64::try_from(end.saturating_sub(start))
+                .context("StoryFrame block length does not fit u64")?,
+        },
+        body,
+    };
+    *cursor = probe;
+    Ok(block)
+}
+
+fn blocks_in_span_story_frame(
+    contents: &[u8],
+    source: &pub_core::RawSpan,
+    stop_on_unsupported: bool,
+) -> Result<(Vec<RawContentsBlock>, bool)> {
+    let start = usize::try_from(source.offset).context("StoryFrame span offset too large")?;
+    let len = usize::try_from(source.len).context("StoryFrame span length too large")?;
+    let mut cursor = ContentsCursor::bounded(source.stream.clone(), contents, start, len)?;
+    let mut fields = Vec::new();
+
+    while cursor.remaining() > 0 {
+        let checkpoint = cursor.clone();
+        match parse_story_frame_block(&mut cursor) {
+            Ok(field) => fields.push(field),
+            Err(error) if stop_on_unsupported => {
+                cursor = checkpoint;
+                let _ = error;
+                return Ok((fields, cursor.remaining() > 0));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok((fields, false))
+}
+
+fn strict_contents_chunk_by_raw_type(
+    contents: &[u8],
+    raw_type: u16,
+    label: &str,
+) -> Result<Contents0x2cChunk> {
+    let stream = StreamPath(CONTENTS_STREAM.into());
+    let header =
+        parse_0x2c_header(stream.clone(), contents).context("parse mature Contents header")?;
+    let trailer = parse_confirmed_0x2c_trailer_root(contents, &header)
+        .context("parse mature Contents trailer")?;
+
+    let mut found = Vec::new();
+    for seq_num in 0..trailer.directory.slots.len() {
+        let Some(reference) =
+            parse_confirmed_chunk_reference(contents, &trailer.directory, seq_num)
+                .with_context(|| format!("parse chunk reference {seq_num}"))?
+        else {
+            continue;
+        };
+        if reference.raw_types.len() == 1
+            && reference.raw_types[0].value == raw_type
+            && reference.chunk_offsets.len() == 1
+        {
+            found.push(reference);
+        }
+    }
+    if found.len() != 1 {
+        bail!("expected exactly one strict {label} reference, found {}", found.len());
+    }
+
+    parse_confirmed_0x2c_chunk(stream, contents, found[0].chunk_offsets[0].value)
+        .with_context(|| format!("parse {label} chunk"))
+}
+
+fn fdpp_boundary_sets(
+    quill: &[u8],
+    descriptor: &Descriptor,
+    text_descriptor: &Descriptor,
+) -> Result<(BTreeSet<u64>, BTreeSet<u64>, BTreeSet<u64>)> {
+    let payload = descriptor_range(quill, descriptor)?;
+    let count = usize::from(u16_at(payload, 0).context("FDPP stored count missing")?);
+    let offsets_start = 8usize;
+    let table_end = offsets_start
+        .checked_add(count.saturating_mul(4))
+        .context("FDPP boundary table overflow")?;
+    if table_end > payload.len() {
+        bail!("FDPP boundary table outside payload");
+    }
+
+    let text_start = u64::from(text_descriptor.data_offset);
+    let mut absolute = BTreeSet::new();
+    let mut relative_bytes = BTreeSet::new();
+    let mut utf16_units = BTreeSet::new();
+
+    for index in 0..count {
+        let boundary = u64::from(
+            u32_at(payload, offsets_start + index * 4)
+                .context("FDPP boundary word truncated")?,
+        );
+        absolute.insert(boundary);
+        if let Some(delta) = boundary.checked_sub(text_start) {
+            relative_bytes.insert(delta);
+            if delta % 2 == 0 {
+                utf16_units.insert(delta / 2);
+            }
+        }
+    }
+
+    Ok((absolute, relative_bytes, utf16_units))
+}
+
+fn profile_story_frame_index(
+    contents: &[u8],
+    chunk: &Contents0x2cChunk,
+    story_catalog: &MatureStoryCatalog,
+    quill: &[u8],
+    fdpp: &Descriptor,
+    text: &Descriptor,
+) -> Result<StoryFrameIndexProfile> {
+    let declared_count = chunk
+        .fields
+        .iter()
+        .filter(|field| field.id == STORY_FRAME_INDEX_DECLARED_COUNT_ID)
+        .filter_map(scalar_u64_block)
+        .next()
+        .and_then(|value| u32::try_from(value).ok());
+
+    let array_fields = chunk
+        .fields
+        .iter()
+        .filter(|field| field.id == STORY_FRAME_INDEX_ENTRY_ARRAY_ID)
+        .collect::<Vec<_>>();
+    if array_fields.len() != 1 {
+        bail!(
+            "StoryFrame index requires exactly one entry array, found {}",
+            array_fields.len()
+        );
+    }
+    let RawContentsBlockBody::Container {
+        content_source: array_source,
+        ..
+    } = &array_fields[0].body
+    else {
+        bail!("StoryFrame index entry array is not a container");
+    };
+
+    let (entry_blocks, array_unsupported) =
+        blocks_in_span_story_frame(contents, array_source, false)?;
+    if array_unsupported {
+        bail!("StoryFrame index array has unsupported top-level tail");
+    }
+
+    let mut entries = Vec::with_capacity(entry_blocks.len());
+    for item in entry_blocks {
+        if item.id != 0 {
+            bail!("StoryFrame index entry id is not zero");
+        }
+        let RawContentsBlockBody::Container {
+            content_source: entry_source,
+            ..
+        } = item.body
+        else {
+            bail!("StoryFrame index entry is not a container");
+        };
+
+        let (fields, unsupported_tail) =
+            blocks_in_span_story_frame(contents, &entry_source, true)?;
+        let text_matches = fields
+            .iter()
+            .filter(|field| field.id == STORY_FRAME_ENTRY_TEXT_ID)
+            .filter_map(scalar_u64_block)
+            .collect::<Vec<_>>();
+        let text_id = (text_matches.len() == 1)
+            .then(|| u32::try_from(text_matches[0]).ok())
+            .flatten();
+
+        entries.push(StoryFrameEntryProbe {
+            fields,
+            text_id,
+            unsupported_tail,
+        });
+    }
+
+    let grounded_story_ids = story_catalog
+        .entries
+        .iter()
+        .map(|entry| entry.text_id)
+        .collect::<BTreeSet<_>>();
+    let entries_with_text_id = entries.iter().filter(|entry| entry.text_id.is_some()).count();
+    let all_entry_text_ids_grounded = entries.iter().all(|entry| {
+        entry
+            .text_id
+            .is_some_and(|text_id| grounded_story_ids.contains(&text_id))
+    });
+
+    let grounded_stories_with_frames = story_catalog
+        .entries
+        .iter()
+        .filter(|story| entries.iter().any(|entry| entry.text_id == Some(story.text_id)))
+        .count();
+    let grounded_stories_without_frames =
+        story_catalog.entries.len().saturating_sub(grounded_stories_with_frames);
+
+    let mut distinct_entry_field_ids = BTreeSet::new();
+    for entry in &entries {
+        for field in &entry.fields {
+            distinct_entry_field_ids.insert(field.id);
+        }
+    }
+    let extra_entry_field_ids = distinct_entry_field_ids
+        .iter()
+        .copied()
+        .filter(|id| {
+            !matches!(
+                *id,
+                STORY_FRAME_ENTRY_TEXT_ID
+                    | STORY_FRAME_ENTRY_ORDINAL_ID
+                    | STORY_FRAME_ENTRY_SHAPE_REF_ID
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let (fdpp_absolute, fdpp_relative_bytes, fdpp_utf16_units) =
+        fdpp_boundary_sets(quill, fdpp, text)?;
+    let text_start = u64::from(text.data_offset);
+    let text_bytes = u64::from(text.data_length);
+    let text_utf16_units = text_bytes / 2;
+    let text_end = text_start
+        .checked_add(text_bytes)
+        .context("TEXT end overflow while profiling StoryFrame index")?;
+
+    let mut scalar_field_profiles = Vec::new();
+    for field_id in distinct_entry_field_ids.iter().copied() {
+        let mut present_entry_count = 0usize;
+        let mut scalar_entry_count = 0usize;
+        let mut duplicate_entry_count = 0usize;
+        let mut wire_types = BTreeSet::new();
+
+        for entry in &entries {
+            let matches = entry
+                .fields
+                .iter()
+                .filter(|field| field.id == field_id)
+                .collect::<Vec<_>>();
+            if !matches.is_empty() {
+                present_entry_count += 1;
+            }
+            if matches.len() > 1 {
+                duplicate_entry_count += 1;
+            }
+            for field in &matches {
+                wire_types.insert(field.block_type);
+            }
+            if matches.len() == 1 && scalar_u64_block(matches[0]).is_some() {
+                scalar_entry_count += 1;
+            }
+        }
+
+        let mut story_values = Vec::new();
+        for story in &story_catalog.entries {
+            let frames = entries
+                .iter()
+                .filter(|entry| entry.text_id == Some(story.text_id))
+                .collect::<Vec<_>>();
+            if frames.is_empty() {
+                continue;
+            }
+            let mut values = Vec::with_capacity(frames.len());
+            let mut valid = true;
+            for frame in frames {
+                let matches = frame
+                    .fields
+                    .iter()
+                    .filter(|field| field.id == field_id)
+                    .collect::<Vec<_>>();
+                if matches.len() != 1 {
+                    valid = false;
+                    break;
+                }
+                let Some(value) = scalar_u64_block(matches[0]) else {
+                    valid = false;
+                    break;
+                };
+                values.push(value);
+            }
+            if valid
+                && values
+                    .first()
+                    .is_some_and(|first| values.iter().all(|value| value == first))
+            {
+                story_values.push(values[0]);
+            }
+        }
+
+        let all_grounded_stories_have_constant_scalar =
+            story_values.len() == story_catalog.entries.len();
+        let monotonic_non_decreasing_in_story_order =
+            all_grounded_stories_have_constant_scalar
+                && story_values.windows(2).all(|pair| pair[0] <= pair[1]);
+        let all_values_match_fdpp_absolute_quill_offsets =
+            all_grounded_stories_have_constant_scalar
+                && story_values
+                    .iter()
+                    .all(|value| fdpp_absolute.contains(value));
+        let all_values_match_fdpp_relative_bytes =
+            all_grounded_stories_have_constant_scalar
+                && story_values
+                    .iter()
+                    .all(|value| fdpp_relative_bytes.contains(value));
+        let all_values_match_fdpp_utf16_units =
+            all_grounded_stories_have_constant_scalar
+                && story_values
+                    .iter()
+                    .all(|value| fdpp_utf16_units.contains(value));
+        let last = story_values.last().copied();
+
+        scalar_field_profiles.push(StoryFrameScalarFieldProfile {
+            field_id,
+            present_entry_count,
+            scalar_entry_count,
+            duplicate_entry_count,
+            wire_types: wire_types.into_iter().collect(),
+            grounded_story_constant_value_count: story_values.len(),
+            all_grounded_stories_have_constant_scalar,
+            monotonic_non_decreasing_in_story_order,
+            all_values_match_fdpp_absolute_quill_offsets,
+            all_values_match_fdpp_relative_bytes,
+            all_values_match_fdpp_utf16_units,
+            last_equals_text_end_absolute_quill_offset:
+                all_grounded_stories_have_constant_scalar && last == Some(text_end),
+            last_equals_text_bytes:
+                all_grounded_stories_have_constant_scalar && last == Some(text_bytes),
+            last_equals_text_utf16_units:
+                all_grounded_stories_have_constant_scalar && last == Some(text_utf16_units),
+        });
+    }
+
+    Ok(StoryFrameIndexProfile {
+        declared_count,
+        entry_count: entries.len(),
+        declared_count_matches_entry_count:
+            declared_count.and_then(|value| usize::try_from(value).ok()) == Some(entries.len()),
+        top_level_unsupported_tail: chunk.unsupported_tail.is_some(),
+        entries_with_unsupported_tail:
+            entries.iter().filter(|entry| entry.unsupported_tail).count(),
+        entries_with_text_id,
+        all_entry_text_ids_grounded,
+        grounded_stories_with_frames,
+        grounded_stories_without_frames,
+        distinct_entry_field_ids: distinct_entry_field_ids.into_iter().collect(),
+        extra_entry_field_ids,
+        scalar_field_profiles,
+    })
 }
 
 fn grounded_contents_story_catalog(contents: &[u8]) -> Result<(u16, MatureStoryCatalog)> {
@@ -1485,6 +1946,11 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         .context("read Quill stream")?;
 
     let (revision, story_catalog) = grounded_contents_story_catalog(&contents)?;
+    let story_frame_index_chunk = strict_contents_chunk_by_raw_type(
+        &contents,
+        CONTENTS_RAW_TYPE_STORY_FRAME_INDEX,
+        "StoryFrame index 0x61",
+    )?;
     let grounded_story_count = story_catalog.declared_count;
 
     let descriptors = parse_descriptor_directory(&quill)?;
@@ -1530,6 +1996,14 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let mcld_profile =
         profile_mcld(&quill, mcld, &story_catalog, text_utf16_units, text_bytes)?;
     let fdpp_profile = profile_fdpp(&quill, fdpp[0], text, grounded_story_count)?;
+    let story_frame_index_profile = profile_story_frame_index(
+        &contents,
+        &story_frame_index_chunk,
+        &story_catalog,
+        &quill,
+        fdpp[0],
+        text,
+    )?;
     let story_catalog_entries_with_unsupported_tail = story_catalog
         .entries
         .iter()
@@ -1558,6 +2032,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         text_descriptor_metadata,
         mcld_profile,
         fdpp_profile,
+        story_frame_index_profile,
         syid_strs_text_opt_a_all_equal:
             syid.opt_a == strs.opt_a && strs.opt_a == text.opt_a,
         syid_strs_text_bit_type_all_equal:
@@ -1633,7 +2108,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v10",
+        "schema": "chaptera.quill-story-early-text-boundary.v11",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
