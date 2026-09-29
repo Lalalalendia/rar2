@@ -996,6 +996,8 @@ pub fn probe_mature_0x2c_contents_story_count(bytes: &[u8]) -> Option<u32> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PubMatureContentsStoryDemand {
+    pub catalog_text_id_count: usize,
+    pub catalog_text_ids_equal_live_field_27_set: bool,
     pub live_shape_chunk_count: usize,
     pub live_table_chunk_count: usize,
     pub live_shape_chunks_with_field_27: usize,
@@ -1019,6 +1021,22 @@ pub fn probe_mature_0x2c_contents_story_demand(
     let header = parse_0x2c_header(contents_stream.clone(), &contents).ok()?;
     let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header).ok()?;
     let references = build_reference_index(&contents, &trailer.directory).ok()?;
+
+    let story_catalog_reference = unique_reference_by_raw_type(
+        &references,
+        CONTENTS_RAW_TYPE_STORY_CATALOG,
+        "Story catalog 0x65",
+    )
+    .ok()?;
+    let story_catalog_chunk =
+        chunk_for_reference(contents_stream.clone(), &contents, story_catalog_reference).ok()?;
+    let story_catalog =
+        parse_confirmed_mature_story_catalog(&contents, &story_catalog_chunk).ok()?;
+    let catalog_text_ids = story_catalog
+        .entries
+        .iter()
+        .map(|entry| entry.text_id)
+        .collect::<BTreeSet<_>>();
 
     let document_reference =
         unique_reference_by_raw_type(&references, RAW_TYPE_DOCUMENT, "DOCUMENT").ok()?;
@@ -1099,6 +1117,8 @@ pub fn probe_mature_0x2c_contents_story_demand(
         }
     }
 
+    result.catalog_text_id_count = catalog_text_ids.len();
+    result.catalog_text_ids_equal_live_field_27_set = catalog_text_ids == distinct_values;
     result.live_distinct_field_27_value_count = distinct_values.len();
     Some(result)
 }
