@@ -52,10 +52,14 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         ids = {command["id"] for command in plan["commands"]}
         self.assertIn("desktop-reader-check", ids)
         self.assertIn("desktop-editor-check", ids)
-        self.assertNotIn("desktop-reader-clippy", ids)
+        self.assertNotIn("desktop-reader-clippy-delta", ids)
         self.assertIn("mobile-reader-core-check", ids)
+        clippy = next(command for command in plan["commands"] if command["id"] == "desktop-reader-clippy-delta")
+        self.assertIn("tools/ci/check_desktop_clippy_delta.py", clippy["argv"])
+        self.assertIn("--path", clippy["argv"])
+        self.assertIn("apps/chaptera-desktop/src/render_backend.rs", clippy["argv"])
         self.assertTrue(plan["desktop_reader_integration"])
-        self.assertFalse(plan["desktop_reader_clippy"])
+        self.assertTrue(plan["desktop_reader_clippy"])
         self.assertTrue(plan["mobile_reader_integration"])
         reader_check = next(command for command in plan["commands"] if command["id"] == "desktop-reader-check")
         editor_check = next(command for command in plan["commands"] if command["id"] == "desktop-editor-check")
@@ -86,7 +90,7 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("projected-scene-instances", render_clippy["argv"])
         self.assertEqual(render_clippy["argv"][-2:], ["-D", "warnings"])
 
-    def test_direct_desktop_change_uses_compile_gates_without_whole_crate_clippy(self) -> None:
+    def test_direct_desktop_change_uses_delta_aware_clippy(self) -> None:
         plan = MODULE.build_plan(
             ["apps/chaptera-desktop/src/render_backend.rs"],
             "BASE",
@@ -95,7 +99,7 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         ids = {command["id"] for command in plan["commands"]}
         self.assertIn("desktop-reader-check", ids)
         self.assertIn("desktop-editor-check", ids)
-        self.assertNotIn("desktop-reader-clippy", ids)
+        self.assertIn("desktop-reader-clippy-delta", ids)
         reader_check = next(command for command in plan["commands"] if command["id"] == "desktop-reader-check")
         editor_check = next(command for command in plan["commands"] if command["id"] == "desktop-editor-check")
         self.assertIn("--all-targets", reader_check["argv"])
