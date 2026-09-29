@@ -275,13 +275,12 @@ pub fn classify_pub_family(bytes: &[u8]) -> PubFamilyClassification {
 }
 
 fn classify_recoverable_legacy_low_text(bytes: &[u8]) -> PubFamilyClassification {
-    let recovered = match pub_cfb::recover_root_regular_stream_reader(
-        Cursor::new(bytes),
-        CONTENTS_STREAM_PATH,
-    ) {
-        Ok(recovered) => recovered,
-        Err(_) => return cfb_parse_failed_classification(),
-    };
+    let recovered =
+        match pub_cfb::recover_root_regular_stream_reader(Cursor::new(bytes), CONTENTS_STREAM_PATH)
+        {
+            Ok(recovered) => recovered,
+            Err(_) => return cfb_parse_failed_classification(),
+        };
 
     let has_quill = recovered
         .root_entry_names
@@ -528,9 +527,7 @@ mod tests {
             .expect("create regular Contents")
             .write_all(&contents)
             .expect("write regular Contents");
-        compound
-            .create_storage("/Objects")
-            .expect("create Objects");
+        compound.create_storage("/Objects").expect("create Objects");
         compound
             .create_stream("/Objects/damaged")
             .expect("create damaged mini stream")
@@ -552,8 +549,7 @@ mod tests {
 
         let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
         let sector_len = 1usize << sector_shift;
-        let minifat_sector =
-            u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
+        let minifat_sector = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
         let offset = (minifat_sector as usize + 1) * sector_len;
         bytes[offset..offset + 4].copy_from_slice(&0x1234_5678u32.to_le_bytes());
         bytes
