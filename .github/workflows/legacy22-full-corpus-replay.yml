@@ -154,6 +154,40 @@ jobs:
                   for item in items
               )
 
+          active_invalid_current_carrier_missing = 0
+          active_invalid_current_point = 0
+          active_invalid_current_axis_aligned = 0
+          active_invalid_current_reversed = 0
+          active_invalid_current_nondegenerate_line = 0
+          active_invalid_current_delta_signs = Counter()
+
+          def sign(value):
+              if value < 0:
+                  return "negative"
+              if value > 0:
+                  return "positive"
+              return "zero"
+
+          for item in invalid_active:
+              geometry = item.get("geometry_current") or {}
+              if geometry.get("carrier_present") is not True:
+                  active_invalid_current_carrier_missing += 1
+                  active_invalid_current_delta_signs["missing"] += 1
+                  continue
+              width = int(geometry["width"])
+              height = int(geometry["height"])
+              active_invalid_current_delta_signs[
+                  f"{sign(width)}:{sign(height)}"
+              ] += 1
+              if width == 0 and height == 0:
+                  active_invalid_current_point += 1
+              else:
+                  active_invalid_current_nondegenerate_line += 1
+              if (width == 0) != (height == 0):
+                  active_invalid_current_axis_aligned += 1
+              if width < 0 or height < 0:
+                  active_invalid_current_reversed += 1
+
           summary = {
               "schema": "chaptera.legacy22-geometry-census.v1",
               "corpus_file_count": len(paths),
@@ -168,6 +202,34 @@ jobs:
               ),
               "active_invalid_positive_at_0x08": positive_at(
                   invalid_active, "geometry_start_0x08"
+              ),
+              "active_invalid_current_carrier_missing_count": (
+                  active_invalid_current_carrier_missing
+              ),
+              "active_invalid_current_point_count": active_invalid_current_point,
+              "active_invalid_current_axis_aligned_count": (
+                  active_invalid_current_axis_aligned
+              ),
+              "active_invalid_current_reversed_delta_count": (
+                  active_invalid_current_reversed
+              ),
+              "active_invalid_current_nondegenerate_line_count": (
+                  active_invalid_current_nondegenerate_line
+              ),
+              "active_invalid_current_delta_sign_counts": dict(
+                  active_invalid_current_delta_signs.most_common()
+              ),
+              "active_invalid_chunk_length_counts": dict(
+                  Counter(str(item["chunk_len"]) for item in invalid_active).most_common()
+              ),
+              "active_invalid_service_word_counts": dict(
+                  Counter(str(item["service_word"]) for item in invalid_active).most_common()
+              ),
+              "active_invalid_parent_raw_type_counts": dict(
+                  Counter(
+                      str(item.get("parent_raw_type") or "none")
+                      for item in invalid_active
+                  ).most_common()
               ),
               "invalid_chunk_length_counts": dict(
                   Counter(str(item["chunk_len"]) for item in invalid_current).most_common()
@@ -184,9 +246,10 @@ jobs:
                   if item.get("normalized_geometry_sha256")
               }),
               "evidence_boundary": (
-                  "research-only partition of raw 0x0004 LINE records; +0x04/+0x08 "
-                  "are observational alternate carrier probes only and do not change "
-                  "Reader decoding without repeated active-page evidence"
+                  "research-only partition of raw 0x0004 LINE records; current "
+                  "endpoint deltas are classified separately from rectangle validity "
+                  "because axis-aligned or reversed LINE endpoints can be non-degenerate "
+                  "without width>0 and height>0; +0x04/+0x08 remain observational probes"
               ),
           }
 
