@@ -151,9 +151,16 @@ jobs:
               for item in row.get("instances") or []:
                   instances.append({"source_sha256": row["source_sha256"], **item})
 
-          object_like = [
+          page_object_like = [
               item for item in instances
-              if (item.get("child_raw_type_counts") or {}) == {"0x0022": 1}
+              if item.get("parent_raw_type") == "0x0014"
+              and (item.get("child_raw_type_counts") or {}) == {"0x0022": 1}
+              and (item.get("geometry") or {}).get("positive_rect") is True
+          ]
+          nested_group_object_like = [
+              item for item in instances
+              if item.get("parent_raw_type") == "0x000f"
+              and (item.get("child_raw_type_counts") or {}) == {"0x0022": 1}
               and (item.get("geometry") or {}).get("positive_rect") is True
           ]
           service_prototypes = [
@@ -175,11 +182,11 @@ jobs:
               and item.get("next_directory_raw_type") == "0x0004"
           ]
           candidates = [
-              item for item in object_like
+              item for item in page_object_like
               if item.get("matching_parent_page_membership") is True
           ]
           parent_mismatches = [
-              item for item in object_like
+              item for item in page_object_like
               if int(item.get("page_child_membership_count") or 0) > 0
               and item.get("matching_parent_page_membership") is not True
           ]
@@ -188,10 +195,12 @@ jobs:
               if item not in service_prototypes
               and item not in candidates
               and item not in parent_mismatches
+              and item not in nested_group_object_like
           ]
           candidate_files = {item["source_sha256"] for item in candidates}
           mismatch_files = {item["source_sha256"] for item in parent_mismatches}
           service_files = {item["source_sha256"] for item in service_prototypes}
+          nested_group_files = {item["source_sha256"] for item in nested_group_object_like}
           unlisted_files = {item["source_sha256"] for item in unlisted_or_nested}
 
           parent_types = Counter(
@@ -325,7 +334,9 @@ jobs:
               "all_directory_instance_count": len(instances),
               "service_prototype_count": len(service_prototypes),
               "service_prototype_file_count": len(service_files),
-              "object_like_count": len(object_like),
+              "page_object_like_count": len(page_object_like),
+              "nested_group_object_like_count": len(nested_group_object_like),
+              "nested_group_object_like_file_count": len(nested_group_files),
               "reader_candidate_count": len(candidates),
               "reader_candidate_file_count": len(candidate_files),
               "page_child_parent_mismatch_count": len(parent_mismatches),
@@ -442,7 +453,8 @@ jobs:
           # remain available for inspection on red runs.
           assert len(service_prototypes) == 223, len(service_prototypes)
           assert len(service_files) == 223, len(service_files)
-          assert len(object_like) == 314, len(object_like)
+          assert len(page_object_like) == 314, len(page_object_like)
+          assert len(nested_group_object_like) == 238, len(nested_group_object_like)
           assert len(candidates) == 305, len(candidates)
           assert len(candidate_files) == 102, len(candidate_files)
           assert len(parent_mismatches) == 9, len(parent_mismatches)
@@ -452,6 +464,7 @@ jobs:
               len(service_prototypes)
               + len(candidates)
               + len(parent_mismatches)
+              + len(nested_group_object_like)
               + len(unlisted_or_nested)
               == len(instances)
           )
