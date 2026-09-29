@@ -43,13 +43,13 @@ mod windows_probe {
         }
 
         let mut buffer = vec![0_u16; 32_768];
-        let len = unsafe {
-            GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32)
-        };
+        let len = unsafe { GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32) };
         let free_ok = unsafe { FreeLibrary(module) };
         if len == 0 {
             let error = unsafe { GetLastError() };
-            return Err(format!("GetModuleFileNameW failed with Win32 error {error}"));
+            return Err(format!(
+                "GetModuleFileNameW failed with Win32 error {error}"
+            ));
         }
         if free_ok == 0 {
             let error = unsafe { GetLastError() };
