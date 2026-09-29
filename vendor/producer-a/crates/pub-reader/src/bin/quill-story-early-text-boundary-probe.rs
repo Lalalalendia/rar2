@@ -567,10 +567,7 @@ fn main() -> Result<()> {
         "schema": "chaptera.quill-story-early-text-boundary.v1",
         "witness_count": rows.len(),
         "rows": rows,
-        "evidence_boundary": (
-            "exact witness SHA plus source-safe structural counts, lengths, booleans and hashes only; "
-            "no filenames, paths, document text, Story IDs, raw payload bytes or parser error text"
-        ),
+        "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths, booleans and hashes only; no filenames, paths, document text, Story IDs, raw payload bytes or parser error text",
     });
 
     if let Some(parent) = output.parent() {
