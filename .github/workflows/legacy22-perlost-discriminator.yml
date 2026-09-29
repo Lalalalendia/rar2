@@ -160,6 +160,8 @@ jobs:
 
           p=Path("corpus-src/pub-corpus/corpus/native/unclassified/d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f.pub")
           with olefile.OleFileIO(str(p)) as ole:
+              ole.loadminifat()
+              ole.loaddirectory()
               mf=list(ole.minifat)
               max_regular=0xFFFFFFFA
               terminal={0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFD,0xFFFFFFFC}
