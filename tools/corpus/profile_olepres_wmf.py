@@ -651,6 +651,9 @@ def profile_corpus(corpus_dir: Path) -> dict:
                             "first_functions": selection["first_functions"],
                             "supported_draw_counts": selection["supported_draw_counts"],
                             "fill_draw_counts": selection["fill_draw_counts"],
+                            "first_cliprect_tail_relation": selection.get(
+                                "first_cliprect_tail_relation"
+                            ),
                         }
                         special_followup_profiles[kind][_profile_key(followup)] += 1
                     for event_key in stream_special_kinds:
