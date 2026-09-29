@@ -1,18 +1,10 @@
 name: Mobile Reader Android local open
 
 on:
+  workflow_call:
   push:
     branches:
       - "mob-reader-local-open-01-v1"
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - "apps/chaptera-mobile-android/**"
-      - "crates/chaptera-mobile-reader-core/**"
-      - "crates/chaptera-mobile-reader-jni/**"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "vendor/producer-a/**"
-      - ".github/workflows/mobile-reader-android-local-open.yml"
   workflow_dispatch:
 
 concurrency:
@@ -23,20 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  reader-consumer-admission:
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
-    uses: ./.github/workflows/reader-consumer-admission.yml
-    with:
-      event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-      pr_number: ${{ format('{0}', github.event.pull_request.number || '') }}
 
   android-local-open:
-    needs: reader-consumer-admission
-    if: needs.reader-consumer-admission.outputs.admit == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
