@@ -57,11 +57,8 @@ jobs:
           $workerTarget = Join-Path $env:RUNNER_TEMP "chaptera-worker-target"
           $sandboxTarget = Join-Path $env:RUNNER_TEMP "chaptera-sandbox-target"
 
-          # AppContainer startup on windows-latest fails before Rust main with
-          # STATUS_DLL_INIT_FAILED when the contained child imports the dynamic
-          # MSVC/UCRT bootstrap. The contained boundary does not require a dynamic
-          # CRT, so make child release artifacts self-contained and keep dumpbin
-          # below as an executable proof of the dependency boundary.
+          # Keep contained release artifacts self-contained. Hosted AppContainer
+          # acceptance proved the dynamic MSVC/UCRT bootstrap is not required.
           $env:RUSTFLAGS = "-C target-feature=+crt-static"
 
           $env:CARGO_TARGET_DIR = $workerTarget
@@ -77,7 +74,6 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP "chaptera-contained-stage"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item (Join-Path $workerTarget "release\chaptera-desktop-open-worker.exe") (Join-Path $stage "chaptera-desktop-open-worker.exe")
-          Copy-Item (Join-Path $sandboxTarget "release\chaptera-desktop-sandbox-init-probe.exe") (Join-Path $stage "chaptera-desktop-sandbox-init-probe.exe")
           Copy-Item (Join-Path $sandboxTarget "release\chaptera-desktop-sandbox-bootstrap-probe.exe") (Join-Path $stage "chaptera-desktop-sandbox-bootstrap-probe.exe")
           Copy-Item (Join-Path $sandboxTarget "release\chaptera-desktop-sandbox-negative-probe.exe") (Join-Path $stage "chaptera-desktop-sandbox-negative-probe.exe")
 
@@ -89,7 +85,6 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           foreach ($name in @(
-            "chaptera-desktop-sandbox-init-probe.exe",
             "chaptera-desktop-sandbox-bootstrap-probe.exe",
             "chaptera-desktop-sandbox-negative-probe.exe",
             "chaptera-desktop-open-worker.exe"
@@ -99,72 +94,6 @@ jobs:
             & $env:CHAPTERA_DUMPBIN /DEPENDENTS $exe
             if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $name" }
           }
-
-      - name: Cross-classify minimal and strict bootstrap
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Continue"
-          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
-          $initProbe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-init-probe.exe"
-          $bootstrapProbe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
-
-          & $hostExe --microsoft-minimal $initProbe
-          $code = $LASTEXITCODE
-          Write-Host "CHAPTERA_SANDBOX_CROSS_RESULT shape=minimal probe=init exit=$code"
-
-          & $hostExe --microsoft-minimal $bootstrapProbe
-          $code = $LASTEXITCODE
-          Write-Host "CHAPTERA_SANDBOX_CROSS_RESULT shape=minimal probe=bootstrap exit=$code"
-
-          & $hostExe --strict-init $initProbe
-          $code = $LASTEXITCODE
-          Write-Host "CHAPTERA_SANDBOX_CROSS_RESULT shape=strict probe=init exit=$code"
-          exit 0
-
-      - name: Classify bootstrap startup policy
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Continue"
-          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
-          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
-          foreach ($policy in @(
-            "lpac-base",
-            "appcontainer-strict",
-            "appcontainer-base",
-            "lpac-no-win32k",
-            "lpac-no-extension",
-            "lpac-no-strict-handle"
-          )) {
-            $env:CHAPTERA_SANDBOX_DIAG_POLICY = $policy
-            & $hostExe $probe
-            $code = $LASTEXITCODE
-            Write-Host "CHAPTERA_SANDBOX_POLICY_RESULT policy=$policy exit=$code"
-          }
-          Remove-Item Env:CHAPTERA_SANDBOX_DIAG_POLICY -ErrorAction SilentlyContinue
-          exit 0
-
-      - name: Classify bootstrap environment and cwd
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Continue"
-          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
-          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
-
-          $cases = @(
-            @{ name = "full-env"; full_env = $true; no_cwd = $false },
-            @{ name = "no-cwd"; full_env = $false; no_cwd = $true },
-            @{ name = "full-env-no-cwd"; full_env = $true; no_cwd = $true }
-          )
-          foreach ($case in $cases) {
-            if ($case.full_env) { $env:CHAPTERA_SANDBOX_DIAG_FULL_ENV = "1" } else { Remove-Item Env:CHAPTERA_SANDBOX_DIAG_FULL_ENV -ErrorAction SilentlyContinue }
-            if ($case.no_cwd) { $env:CHAPTERA_SANDBOX_DIAG_NO_CWD = "1" } else { Remove-Item Env:CHAPTERA_SANDBOX_DIAG_NO_CWD -ErrorAction SilentlyContinue }
-            & $hostExe $probe
-            $code = $LASTEXITCODE
-            Write-Host "CHAPTERA_SANDBOX_ENV_RESULT case=$($case.name) exit=$code"
-          }
-          Remove-Item Env:CHAPTERA_SANDBOX_DIAG_FULL_ENV -ErrorAction SilentlyContinue
-          Remove-Item Env:CHAPTERA_SANDBOX_DIAG_NO_CWD -ErrorAction SilentlyContinue
-          exit 0
 
       - name: Prove strict containment starts minimal Rust bootstrap
         shell: pwsh
@@ -186,8 +115,6 @@ jobs:
           "CHAPTERA_SANDBOX_FORBIDDEN=$secret" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Prove AppContainer LPAC Job and negative capabilities
-        env:
-          CHAPTERA_SANDBOX_DIAG_203: "1"
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -212,23 +139,6 @@ jobs:
               -not $result.child_process_denied) {
             throw "containment receipt is incomplete"
           }
-
-      - name: Dump recent Windows loader diagnostics
-        if: failure()
-        shell: pwsh
-        run: |
-          $since = (Get-Date).AddMinutes(-10)
-          Write-Host "Recent Application/WER events for containment startup failure:"
-          Get-WinEvent -FilterHashtable @{ LogName = "Application"; StartTime = $since } -ErrorAction SilentlyContinue |
-            Where-Object {
-              $_.Message -match "chaptera-desktop-sandbox-negative-probe" -or
-              $_.Message -match "0xc0000142" -or
-              $_.Message -match "C0000142"
-            } |
-            Select-Object TimeCreated, Id, ProviderName, LevelDisplayName, Message |
-            Format-List |
-            Out-String -Width 4096 |
-            Write-Host
 
       - name: Acquire exact Apache POI SampleNewsletter
         shell: pwsh
