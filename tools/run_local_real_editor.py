@@ -44,7 +44,8 @@ FIXTURE_URL = (
     "test-data/publisher/SampleNewsletter.pub"
 )
 FIXTURE_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
-GRAPH_SHA = "f2b17a6af0fc9a619316dbeab7efb41d5c49473109fd5d352272656215e603e2"
+GRAPH_SHA = "c38959cd843af978d743a929c7bb813c3a383400c4ad57ebf30b89d032ec9216"
+GRAPH_BYTES = 217194
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -148,8 +149,14 @@ def build_inputs() -> pathlib.Path:
         )
     if proc.returncode != 0:
         raise RuntimeError("resolved-graph producer failed")
-    if sha256(GRAPH) != GRAPH_SHA:
-        raise RuntimeError("resolved graph identity mismatch")
+    actual_graph_sha = sha256(GRAPH)
+    actual_graph_bytes = GRAPH.stat().st_size
+    if actual_graph_sha != GRAPH_SHA or actual_graph_bytes != GRAPH_BYTES:
+        raise RuntimeError(
+            "resolved graph identity mismatch: "
+            f"actual_sha={actual_graph_sha} expected_sha={GRAPH_SHA} "
+            f"actual_bytes={actual_graph_bytes} expected_bytes={GRAPH_BYTES}"
+        )
     return producer
 
 
