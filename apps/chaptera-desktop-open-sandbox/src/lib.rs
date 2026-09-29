@@ -54,7 +54,6 @@ mod platform {
     ) -> Result<SandboxOutput> {
         bail!("Windows containment launcher is unavailable on this platform")
     }
-
 }
 
 #[cfg(windows)]
