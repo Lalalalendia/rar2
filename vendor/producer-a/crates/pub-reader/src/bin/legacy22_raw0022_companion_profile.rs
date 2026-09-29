@@ -153,21 +153,33 @@ fn main() -> Result<()> {
     );
     let output = PathBuf::from(
         args.next()
-            .context("usage: legacy22_raw0022_companion_profile SOURCE.pub OUTPUT.json")?,
+            .context("usage: legacy22_raw0022_companion_profile SOURCE.pub OUTPUT.json [--raw-legacy22]")?,
     );
+    let raw_legacy22 = match args.next().and_then(|arg| arg.into_string().ok()) {
+        None => false,
+        Some(flag) if flag == "--raw-legacy22" => true,
+        Some(flag) => anyhow::bail!(
+            "unknown argument {flag:?}; usage: legacy22_raw0022_companion_profile SOURCE.pub OUTPUT.json [--raw-legacy22]"
+        ),
+    };
     if args.next().is_some() {
-        anyhow::bail!("legacy22_raw0022_companion_profile accepts exactly SOURCE.pub OUTPUT.json");
+        anyhow::bail!(
+            "usage: legacy22_raw0022_companion_profile SOURCE.pub OUTPUT.json [--raw-legacy22]"
+        );
     }
 
     let bytes = fs::read(&source).with_context(|| format!("read {}", source.display()))?;
     let source_sha256 = sha256_hex(&bytes);
     let digest = source_hash(&bytes);
+    let reader_eligible =
+        build_legacy_0x22_noquill_source_graph(Cursor::new(bytes.as_slice()), digest).is_ok();
 
-    if build_legacy_0x22_noquill_source_graph(Cursor::new(bytes.as_slice()), digest).is_err() {
+    if !reader_eligible && !raw_legacy22 {
         let receipt = json!({
             "schema": "chaptera.legacy22-raw0022-companion-profile.v1",
             "source_sha256": source_sha256,
             "eligible_reader_open": false,
+            "profile_mode": "reader-admitted-noquill",
             "candidate_count": 0,
             "candidates": [],
         });
@@ -261,7 +273,8 @@ fn main() -> Result<()> {
     let receipt = json!({
         "schema": "chaptera.legacy22-raw0022-companion-profile.v1",
         "source_sha256": source_sha256,
-        "eligible_reader_open": true,
+        "eligible_reader_open": reader_eligible,
+        "profile_mode": if raw_legacy22 { "raw-legacy22" } else { "reader-admitted-noquill" },
         "candidate_count": candidates.len(),
         "candidates": candidates,
     });
