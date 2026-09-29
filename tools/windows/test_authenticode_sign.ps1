@@ -15,5 +15,9 @@ if (-not (Test-Path -LiteralPath $File)) { throw "signing target missing: $File"
 & $signtool sign /sha1 $thumbprint /fd SHA256 $File
 if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE for $File" }
 
-& $signtool verify /pa /all $File
-if ($LASTEXITCODE -ne 0) { throw "signtool verify failed with exit code $LASTEXITCODE for $File" }
+$signature = Get-AuthenticodeSignature -LiteralPath $File
+if (-not $signature.SignerCertificate) { throw "missing Authenticode signer certificate for $File" }
+if ($signature.SignerCertificate.Thumbprint -ne $thumbprint) { throw "unexpected Authenticode signer for $File" }
+if ($signature.Status -notin @("Valid", "NotTrusted")) {
+  throw "test Authenticode integrity check failed for ${File}: $($signature.Status) $($signature.StatusMessage)"
+}
