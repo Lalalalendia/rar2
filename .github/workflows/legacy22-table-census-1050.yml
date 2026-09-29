@@ -1,0 +1,105 @@
+name: Legacy22 table census 1050
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/legacy22-table-resolution-census-01
+    paths:
+      - '.github/workflows/legacy22-table-census-1050.yml'
+      - 'vendor/producer-a/crates/pub-reader/src/bin/legacy22_table_resolution_census.rs'
+      - 'vendor/producer-a/crates/pub-contents/**'
+      - 'vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/legacy22-table-census-1050.yml'
+      - 'vendor/producer-a/crates/pub-reader/src/bin/legacy22_table_resolution_census.rs'
+      - 'vendor/producer-a/crates/pub-contents/**'
+      - 'vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: legacy22-table-census-1050-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+
+      - name: Build cache key
+        id: cache-key
+        shell: bash
+        env:
+          MANIFEST_HASH: ${{ hashFiles('vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=reader-1050-release-v1-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Reader build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: rar2-target
+          key: ${{ steps.cache-key.outputs.key }}
+
+      - name: Validate and build table census
+        run: |
+          set -euo pipefail
+          rustfmt --check --edition 2021 vendor/producer-a/crates/pub-reader/src/bin/legacy22_table_resolution_census.rs
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin legacy22_table_resolution_census
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --release --bin legacy22_table_resolution_census
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          assert len(paths) == 1050, len(paths)
+          digest = hashlib.sha256(
+              "".join(path.stem.casefold() + "\n" for path in paths).encode("ascii")
+          ).hexdigest()
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          PY
+
+      - name: Run resolver/layout census
+        run: |
+          set -euo pipefail
+          mkdir -p out/table-census
+          "${CARGO_TARGET_DIR}/release/legacy22_table_resolution_census" \
+            out/pinned1050/materialized/native \
+            out/table-census/legacy22-table-resolution-census.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legacy22-table-census-1050-${{ github.run_id }}
+          path: out/table-census/legacy22-table-resolution-census.json
+          if-no-files-found: error
+          retention-days: 90
