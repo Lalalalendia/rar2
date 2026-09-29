@@ -100,6 +100,55 @@ jobs:
           p="corpus-src/pub-corpus/corpus/native/unclassified/${PERLOST_SHA}.pub"
           cargo run             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --release             --bin perlost-structural-probe             -- "$p" | tee /tmp/perlost-report.json
 
+      - name: Create transient CFB probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p vendor/producer-a/crates/pub-cfb/src/bin
+          cat > vendor/producer-a/crates/pub-cfb/src/bin/perlost-cfb-probe.rs <<'RS'
+          use std::{env, fs, io::Cursor};
+
+          fn main() {
+              let path = env::args().nth(1).expect("fixture path");
+              let bytes = fs::read(path).expect("read fixture");
+              match pub_cfb::inspect_reader(Cursor::new(bytes)) {
+                  Ok(inv) => println!("PUB_CFB_OK entries={}", inv.entries.len()),
+                  Err(err) => println!("PUB_CFB_ERROR={err:#}"),
+              }
+          }
+          RS
+
+      - name: Run CFB comparators
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${PERLOST_SHA}.pub"
+          cargo run \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-cfb \
+            --release \
+            --bin perlost-cfb-probe \
+            -- "$p" | tee /tmp/perlost-cfb.txt
+
+          python - <<'PY' | tee /tmp/perlost-olefile.json
+          import json
+          import olefile
+          from pathlib import Path
+
+          p=Path("corpus-src/pub-corpus/corpus/native/unclassified/d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f.pub")
+          with olefile.OleFileIO(str(p)) as ole:
+              paths=["/"+"/".join(parts) for parts in ole.listdir(streams=True,storages=False)]
+              out={
+                  "stream_count":len(paths),
+                  "paths":sorted(paths),
+                  "parsing_issues":[
+                      {"type":type(exc).__name__,"message":str(exc)}
+                      for exc in getattr(ole,"parsing_issues",[])
+                  ],
+              }
+              print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+
       - name: Guard source-safe report
         shell: bash
         run: |
