@@ -133,8 +133,13 @@ jobs:
               item.get("field_native_target_raw_type") or "none" for item in images
           )
           direct_native_presence = Counter(
-              "0x0021" if item.get("direct_native_object_id") is not None else "none"
+              str(int(item.get("direct_image_data_child_count") or 0))
               for item in images
+          )
+          direct_native_chunk_lengths = Counter(
+              str(item.get("direct_native_chunk_len"))
+              for item in images
+              if item.get("direct_native_chunk_len") is not None
           )
           direct_native_wmf_offsets = Counter(
               ",".join(str(v) for v in item.get("direct_native_wmf_valid_offsets") or []) or "none"
@@ -156,16 +161,44 @@ jobs:
               if (repl := item.get("field_replacement")) and repl.get("payload_sha256")
           ]
 
-          direct_native_len_match = 0
-          for item in images:
-              n = item.get("direct_native_len_after_0x10")
-              if n is None:
-                  continue
-              if (
-                  item.get("direct_native_len_u32_at_0x08") == n
-                  and item.get("direct_native_len_u32_at_0x0c") == n
-              ):
-                  direct_native_len_match += 1
+          direct_native_len_match = sum(
+              item.get("direct_native_len_after_0x08") is not None
+              and item.get("direct_native_len_u32_at_0x04") == item.get("direct_native_len_after_0x08")
+              for item in images
+          )
+          direct_native_wmf_at_0x08 = sum(
+              8 in (item.get("direct_native_wmf_valid_offsets") or [])
+              for item in images
+          )
+          direct_native_wmf_other_only = sum(
+              bool(item.get("direct_native_wmf_valid_offsets"))
+              and 8 not in (item.get("direct_native_wmf_valid_offsets") or [])
+              for item in images
+          )
+          direct_native_wmf_none = sum(
+              not (item.get("direct_native_wmf_valid_offsets") or [])
+              for item in images
+              if int(item.get("direct_image_data_child_count") or 0) == 1
+          )
+
+          no_child = [
+              item for item in images
+              if int(item.get("direct_image_data_child_count") or 0) == 0
+          ]
+          direct_child = [
+              item for item in images
+              if int(item.get("direct_image_data_child_count") or 0) == 1
+          ]
+          no_child_parent_types = Counter(item.get("parent_raw_type") or "none" for item in no_child)
+          no_child_chunk_lengths = Counter(str(item.get("chunk_len")) for item in no_child)
+          no_child_service_words = Counter(str(item.get("service_word")) for item in no_child)
+          no_child_geometry_profiles = Counter(
+              f"{(item.get('geometry') or {}).get('delta_x_sign', 'missing')}/"
+              f"{(item.get('geometry') or {}).get('delta_y_sign', 'missing')}"
+              for item in no_child
+          )
+          no_child_files = {item["source_sha256"] for item in no_child}
+          direct_child_files = {item["source_sha256"] for item in direct_child}
 
           summary = {
               "schema": "chaptera.legacy22-image0002-census.v1",
@@ -190,13 +223,32 @@ jobs:
                   i.get("field_native_ref_at_0x72") not in (None, 0) for i in images
               ),
               "field_native_target_raw_type_counts": dict(field_native_types.most_common()),
-              "direct_native_target_raw_type_counts": dict(direct_native_presence.most_common()),
+              "direct_image_data_child_count_profile": dict(direct_native_presence.most_common()),
+              "direct_native_chunk_length_counts": dict(direct_native_chunk_lengths.most_common()),
               "direct_native_wmf_valid_offset_profile_counts": dict(
                   direct_native_wmf_offsets.most_common()
               ),
-              "direct_native_duplicated_length_matches_payload_after_0x10_count": direct_native_len_match,
+              "direct_native_len_at_0x04_matches_payload_after_0x08_count": direct_native_len_match,
+              "direct_native_wmf_at_0x08_count": direct_native_wmf_at_0x08,
+              "direct_native_wmf_other_offset_only_count": direct_native_wmf_other_only,
+              "direct_native_wmf_none_count": direct_native_wmf_none,
               "direct_native_wmf_payload_reference_count": len(direct_native_payload_hashes),
               "direct_native_wmf_unique_payload_sha256_count": len(set(direct_native_payload_hashes)),
+              "no_direct_image_data_owner_count": len(no_child),
+              "no_direct_image_data_file_count": len(no_child_files),
+              "no_direct_image_data_files_also_with_direct_image_data_count": len(
+                  no_child_files & direct_child_files
+              ),
+              "no_direct_image_data_parent_raw_type_counts": dict(no_child_parent_types.most_common()),
+              "no_direct_image_data_chunk_length_counts": dict(no_child_chunk_lengths.most_common()),
+              "no_direct_image_data_service_word_counts": dict(no_child_service_words.most_common()),
+              "no_direct_image_data_geometry_sign_counts": dict(no_child_geometry_profiles.most_common()),
+              "no_direct_image_data_field_native_ref_nonzero_count": sum(
+                  i.get("field_native_ref_at_0x72") not in (None, 0) for i in no_child
+              ),
+              "no_direct_image_data_field_replacement_ref_nonzero_count": sum(
+                  i.get("field_replacement_ref_at_0x8a") not in (None, 0) for i in no_child
+              ),
               "field_replacement_ref_nonzero_count": sum(
                   i.get("field_replacement_ref_at_0x8a") not in (None, 0) for i in images
               ),
