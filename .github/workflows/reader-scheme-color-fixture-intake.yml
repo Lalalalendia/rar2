@@ -107,6 +107,7 @@ jobs:
           PY
 
       - name: Run canonical paint parity with diagnostic log
+        if: always()
         shell: bash
         run: |
           set -o pipefail
