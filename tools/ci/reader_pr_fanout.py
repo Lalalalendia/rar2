@@ -16,14 +16,13 @@ SCOPES = (
     "editor_windows",
     "visual_oracle",
     "typography_golden",
-    "corpus_truth",
+    "android_core",
     "android",
     "web",
     "local_portable",
     "installer",
     "path_identity",
     "update_accept",
-    "lifecycle_soak",
 )
 
 
@@ -66,20 +65,28 @@ READER_SHARED = (
 )
 
 TIER_A = READER_SHARED + (
-    "apps/chaptera-desktop/src/render_backend.rs",
-    "apps/chaptera-desktop/src/main.rs",
+    "apps/chaptera-desktop/**",
+    "vendor/producer-a/crates/pub-editor/**",
+    "tools/reader_active_content_guard.py",
     "tools/ci/reader_consumer_preflight.py",
     "tools/ci/test_reader_consumer_preflight.py",
     "tools/ci/reader_pr_fanout.py",
     "tools/ci/test_reader_pr_fanout.py",
-    "tools/reader_active_content_guard.py",
-    ".github/workflows/reader-active-content-inert.yml",
     ".github/workflows/reader-pr-ci.yml",
     ".github/workflows/reader-consumer-preflight.yml",
 )
 
-READER_WINDOWS = READER_SHARED + (
-    "apps/chaptera-desktop/**",
+READER_DESKTOP = (
+    "apps/chaptera-desktop/Cargo.toml",
+    "apps/chaptera-desktop/src/main.rs",
+    "apps/chaptera-desktop/src/diagnostic_sweep.rs",
+    "apps/chaptera-desktop/src/image_decode_adapter.rs",
+    "apps/chaptera-desktop/src/product_smoke.rs",
+    "apps/chaptera-desktop/src/reader_product_ui.rs",
+    "apps/chaptera-desktop/src/render_backend.rs",
+)
+
+READER_WINDOWS = READER_SHARED + READER_DESKTOP + (
     "crates/chaptera-update-engine/**",
     "crates/chaptera-update-orchestrator/**",
     "crates/chaptera-update-handoff/**",
@@ -110,6 +117,7 @@ EDITOR_WINDOWS = (
 VISUAL_ORACLE = (
     "crates/pub-presentation-profile/**",
     "vendor/producer-a/crates/pub-reader/**",
+    "vendor/producer-a/crates/pub-layout/**",
     "vendor/producer-a/crates/pub-viewer/**",
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
@@ -130,11 +138,9 @@ TYPOGRAPHY_GOLDEN = (
     ".github/workflows/reader-typography-golden.yml",
 )
 
-CORPUS_TRUTH = (
-    "vendor/producer-a/crates/pub-reader/**",
-    "tools/reader_corpus_manifest_v1.json",
-    "tools/run_reader_corpus_matrix_v1.py",
-    ".github/workflows/reader-corpus-truth-v1.yml",
+ANDROID_CORE = READER_SHARED + (
+    "crates/chaptera-mobile-reader-core/**",
+    ".github/workflows/mobile-reader-android-core-portability.yml",
 )
 
 ANDROID = (
@@ -204,21 +210,14 @@ UPDATE_ACCEPT = (
     ".github/workstream-scopes/chaptera-win-update-accept-01.md",
 )
 
-LIFECYCLE_SOAK = (
-    "tools/chaptera-win-lifecycle-soak.ps1",
-    "crates/chaptera-update-engine/**",
-    "crates/chaptera-update-orchestrator/**",
-    "crates/chaptera-update-trust/**",
-    "installer/windows/chaptera-reader.iss",
-    ".github/workflows/chaptera-win-lifecycle-soak.yml",
-    ".github/workstream-scopes/chaptera-win-lifecycle-soak-01.md",
-)
-
 SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/main.rs",
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/diagnostic_sweep.rs",
-    "apps/chaptera-desktop/src/reader_first_run.rs",
+    "apps/chaptera-desktop/src/image_decode_adapter.rs",
+    "apps/chaptera-desktop/src/product_smoke.rs",
+    "apps/chaptera-desktop/src/reader_product_ui.rs",
+    "apps/chaptera-desktop/src/fallback_font.rs",
 }
 
 
@@ -229,14 +228,13 @@ def classify(paths: list[str]) -> dict[str, bool]:
         "editor_windows": EDITOR_WINDOWS,
         "visual_oracle": VISUAL_ORACLE,
         "typography_golden": TYPOGRAPHY_GOLDEN,
-        "corpus_truth": CORPUS_TRUTH,
+        "android_core": ANDROID_CORE,
         "android": ANDROID,
         "web": WEB,
         "local_portable": LOCAL_PORTABLE,
         "installer": INSTALLER,
         "path_identity": PATH_IDENTITY,
         "update_accept": UPDATE_ACCEPT,
-        "lifecycle_soak": LIFECYCLE_SOAK,
     }
     result = {
         scope: any(matches(path, patterns) for path in paths)
