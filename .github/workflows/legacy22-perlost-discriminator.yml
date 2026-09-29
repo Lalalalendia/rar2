@@ -1,0 +1,408 @@
+name: Legacy22 PERLOST discriminator
+
+on:
+  push:
+    branches:
+      - research/legacy22-perlost-discriminator-final-main
+    paths:
+      - ".github/workflows/legacy22-perlost-discriminator.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+  PERLOST_SHA: d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f
+  OPNHOUS_BAD_SHA: 227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: ${{ env.LALAMU_CORPUS_REF }}
+          path: corpus-src
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install generic CFB comparator
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Verify exact fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${PERLOST_SHA}.pub"
+          test -f "$p"
+          echo "${PERLOST_SHA}  $p" | sha256sum -c -
+
+      - name: Create transient structural probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > vendor/producer-a/crates/pub-viewer/src/bin/perlost-structural-probe.rs <<'RS'
+          use anyhow::{Context, Result};
+          use pub_reader::classify_pub_family;
+          use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
+          use serde_json::json;
+          use sha2::{Digest, Sha256};
+          use std::{env, fs};
+
+          fn sha256_hex(bytes: &[u8]) -> String {
+              Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+          }
+
+          fn main() -> Result<()> {
+              let path = env::args().nth(1).context("fixture path")?;
+              let bytes = fs::read(&path).context("read fixture")?;
+              let family = classify_pub_family(&bytes);
+              let open = match open_pub_geometry(&bytes, viewer_geometry_environment_v0_1()) {
+                  Ok(visual) => json!({
+                      "opened": true,
+                      "viewer_page_count": visual.document.pages.len(),
+                      "scene_node_count": visual.scene.nodes.len(),
+                      "story_count": visual.document.stories.len(),
+                      "diagnostic_codes": visual.document.diagnostics.iter().map(|d| d.code.clone()).collect::<Vec<_>>(),
+                  }),
+                  Err(error) => json!({
+                      "opened": false,
+                      "error_chain": format!("{error:#}"),
+                      "error_signature_sha256": sha256_hex(format!("{error:#}").as_bytes()),
+                  }),
+              };
+              println!("{}", serde_json::to_string_pretty(&json!({
+                  "schema": "chaptera.legacy22-perlost-discriminator.v1",
+                  "source_sha256": sha256_hex(&bytes),
+                  "byte_len": bytes.len(),
+                  "family": family,
+                  "open": open,
+              }))?);
+              Ok(())
+          }
+          RS
+
+      - name: Build and run exact structural probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${PERLOST_SHA}.pub"
+          cargo run             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --release             --bin perlost-structural-probe             -- "$p" | tee /tmp/perlost-report.json
+
+      - name: Create transient CFB probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p vendor/producer-a/crates/pub-cfb/src/bin
+          cat > vendor/producer-a/crates/pub-cfb/src/bin/perlost-cfb-probe.rs <<'RS'
+          use std::{env, fs, io::Cursor};
+
+          fn main() {
+              let path = env::args().nth(1).expect("fixture path");
+              let bytes = fs::read(path).expect("read fixture");
+              match pub_cfb::inspect_reader(Cursor::new(bytes)) {
+                  Ok(inv) => println!("PUB_CFB_OK entries={}", inv.entries.len()),
+                  Err(err) => println!("PUB_CFB_ERROR={err:#}"),
+              }
+          }
+          RS
+
+      - name: Run CFB comparators
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${PERLOST_SHA}.pub"
+          cargo run \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-cfb \
+            --release \
+            --bin perlost-cfb-probe \
+            -- "$p" | tee /tmp/perlost-cfb.txt
+
+          python - <<'PY' | tee /tmp/perlost-olefile.json
+          import json
+          import olefile
+          from pathlib import Path
+
+          p=Path("corpus-src/pub-corpus/corpus/native/unclassified/d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f.pub")
+          with olefile.OleFileIO(str(p)) as ole:
+              paths=["/"+"/".join(parts) for parts in ole.listdir(streams=True,storages=False)]
+              out={
+                  "stream_count":len(paths),
+                  "paths":sorted(paths),
+                  "parsing_issues":[
+                      {"type":type(exc).__name__,"message":str(exc)}
+                      for exc in getattr(ole,"parsing_issues",[])
+                  ],
+              }
+              print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+
+      - name: Separate live CFB namespace from orphan MiniFAT garbage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee /tmp/perlost-minifat-reachability.json
+          import json
+          import olefile
+          from pathlib import Path
+
+          p=Path("corpus-src/pub-corpus/corpus/native/unclassified/d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f.pub")
+          with olefile.OleFileIO(str(p)) as ole:
+              ole.loadminifat()
+              mf=list(ole.minifat)
+              mini_sector_size=int(getattr(ole,"minisectorsize",64))
+              max_regular=0xFFFFFFFA
+              terminal={0xFFFFFFFF,0xFFFFFFFE,0xFFFFFFFD,0xFFFFFFFC}
+              invalid={
+                  i:v for i,v in enumerate(mf)
+                  if v not in terminal and (v > max_regular or v >= len(mf))
+              }
+
+              live_stream_sids=set()
+              logical_stream_read_count=0
+              logical_stream_read_failures=0
+              logical_stream_length_mismatches=0
+              mismatch_top_level_counts={}
+              non_objects_length_mismatch_count=0
+              root_contents_expected_len=None
+              root_contents_actual_len=None
+              for parts in ole.listdir(streams=True,storages=False):
+                  logical_stream_read_count += 1
+                  try:
+                      sid=int(ole._find(parts))
+                      live_stream_sids.add(sid)
+                      expected=int(ole.get_size(parts))
+                      actual=len(ole.openstream(parts).read())
+                      if list(parts) == ["Contents"]:
+                          root_contents_expected_len=expected
+                          root_contents_actual_len=actual
+                      if actual != expected:
+                          logical_stream_length_mismatches += 1
+                          category="objects" if parts and parts[0] == "Objects" else "other"
+                          mismatch_top_level_counts[category]=mismatch_top_level_counts.get(category,0)+1
+                          if category != "objects":
+                              non_objects_length_mismatch_count += 1
+                  except Exception:
+                      logical_stream_read_failures += 1
+
+              def analyze_stream_sids(selected_sids):
+                  required_sectors=set()
+                  transition_errors=[]
+                  tail_anomalies=[]
+                  checked=0
+                  for idx,entry in enumerate(ole.direntries):
+                      if idx not in selected_sids:
+                          continue
+                      if entry is None or entry.entry_type != olefile.STGTY_STREAM:
+                          continue
+                      size=int(entry.size)
+                      if size <= 0 or size >= ole.minisectorcutoff:
+                          continue
+                      checked += 1
+                      needed=(size + mini_sector_size - 1)//mini_sector_size
+                      cur=int(entry.isectStart)
+                      seen=set()
+                      for ordinal in range(needed):
+                          if cur in terminal:
+                              transition_errors.append({
+                                  "direntry":idx,"reason":"premature_terminal",
+                                  "ordinal":ordinal,"needed":needed,"size":size,
+                              })
+                              break
+                          if not (0 <= cur < len(mf)):
+                              transition_errors.append({
+                                  "direntry":idx,"reason":"sector_out_of_range",
+                                  "ordinal":ordinal,"at":cur,"needed":needed,"size":size,
+                              })
+                              break
+                          if cur in seen:
+                              transition_errors.append({
+                                  "direntry":idx,"reason":"cycle_before_declared_len",
+                                  "ordinal":ordinal,"at":cur,"needed":needed,"size":size,
+                              })
+                              break
+                          seen.add(cur)
+                          required_sectors.add(cur)
+                          nxt=int(mf[cur])
+                          if ordinal + 1 < needed:
+                              if nxt in terminal:
+                                  transition_errors.append({
+                                      "direntry":idx,"reason":"terminal_before_declared_len",
+                                      "ordinal":ordinal,"at":cur,"needed":needed,"size":size,
+                                  })
+                                  break
+                              if nxt > max_regular or nxt >= len(mf):
+                                  transition_errors.append({
+                                      "direntry":idx,"reason":"invalid_next_before_declared_len",
+                                      "ordinal":ordinal,"at":cur,"next":nxt,
+                                      "needed":needed,"size":size,
+                                  })
+                                  break
+                              cur=nxt
+                          elif nxt not in terminal:
+                              tail_anomalies.append({
+                                  "direntry":idx,"size":size,"needed":needed,
+                                  "last_required_sector":cur,"tail_next":nxt,
+                                  "tail_next_in_range":0 <= nxt < len(mf),
+                              })
+                  return {
+                      "checked_small_stream_count":checked,
+                      "required_sectors":required_sectors,
+                      "transition_errors":transition_errors,
+                      "tail_anomalies":tail_anomalies,
+                  }
+
+              all_stream_sids={
+                  idx for idx,entry in enumerate(ole.direntries)
+                  if entry is not None and entry.entry_type == olefile.STGTY_STREAM
+              }
+              orphan_stream_sids=all_stream_sids-live_stream_sids
+              live=analyze_stream_sids(live_stream_sids)
+              orphan=analyze_stream_sids(orphan_stream_sids)
+
+              print(json.dumps({
+                  "minifat_entry_count":len(mf),
+                  "mini_sector_size":mini_sector_size,
+                  "invalid_entry_count":len(invalid),
+                  "invalid_entries":invalid,
+                  "live_stream_sid_count":len(live_stream_sids),
+                  "orphan_stream_sid_count":len(orphan_stream_sids),
+                  "live_checked_small_stream_count":live["checked_small_stream_count"],
+                  "live_required_mini_sector_count":len(live["required_sectors"]),
+                  "live_required_transition_error_count":len(live["transition_errors"]),
+                  "live_required_transition_errors":live["transition_errors"],
+                  "live_tail_anomaly_count":len(live["tail_anomalies"]),
+                  "live_tail_anomalies":live["tail_anomalies"],
+                  "orphan_required_transition_error_count":len(orphan["transition_errors"]),
+                  "orphan_required_transition_errors":orphan["transition_errors"],
+                  "orphan_tail_anomaly_count":len(orphan["tail_anomalies"]),
+                  "mini_sector_384_referenced_by_live_stream":384 in live["required_sectors"],
+                  "mini_sector_384_referenced_by_orphan_stream":384 in orphan["required_sectors"],
+                  "logical_stream_read_count":logical_stream_read_count,
+                  "logical_stream_read_failure_count":logical_stream_read_failures,
+                  "logical_stream_length_mismatch_count":logical_stream_length_mismatches,
+                  "mismatch_top_level_counts":mismatch_top_level_counts,
+                  "non_objects_length_mismatch_count":non_objects_length_mismatch_count,
+                  "root_contents_expected_len":root_contents_expected_len,
+                  "root_contents_actual_len":root_contents_actual_len,
+                  "root_contents_matches_declared_len":(
+                      root_contents_expected_len is not None
+                      and root_contents_expected_len == root_contents_actual_len
+                  ),
+              },indent=2,sort_keys=True))
+          PY
+
+      - name: Compare malformed OPNHOUS negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${OPNHOUS_BAD_SHA}.pub"
+          test -f "$p"
+          echo "${OPNHOUS_BAD_SHA}  $p" | sha256sum -c -
+
+          cargo run \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin perlost-structural-probe \
+            -- "$p" > /tmp/opnhous-negative-reader.json
+
+          python - <<'PY' > /tmp/opnhous-negative-cfb.json
+          import json
+          import olefile
+          from pathlib import Path
+
+          p=Path("corpus-src/pub-corpus/corpus/native/unclassified/227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e.pub")
+          out={"olefile_opened":False,"has_root_contents":False,"contents_len":None,"error":None}
+          try:
+              with olefile.OleFileIO(str(p)) as ole:
+                  out["olefile_opened"]=True
+                  out["has_root_contents"]=ole.exists(["Contents"])
+                  if out["has_root_contents"]:
+                      out["contents_len"]=len(ole.openstream(["Contents"]).read())
+                  out["parsing_issue_count"]=len(getattr(ole,"parsing_issues",[]))
+          except Exception as exc:
+              out["error"]=f"{type(exc).__name__}: {exc}"
+          print(json.dumps(out,indent=2,sort_keys=True))
+          PY
+          cat /tmp/opnhous-negative-reader.json
+          cat /tmp/opnhous-negative-cfb.json
+
+      - name: Guard source-safe report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("/tmp/perlost-report.json")
+          d=json.loads(p.read_text())
+          assert d["source_sha256"] == "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f", d
+          assert d["family"]["profile"] == "legacy22_low_text", d["family"]
+          assert d["family"]["route"] == "legacy22_low_text", d["family"]
+          assert "cfb_parse_failed" in d["family"]["reasons"], d["family"]
+          assert d["open"]["opened"] is True, d["open"]
+          assert d["open"]["viewer_page_count"] > 0, d["open"]
+          cfb=Path("/tmp/perlost-cfb.txt").read_text()
+          assert "PUB_CFB_ERROR=" in cfb, cfb
+          ole=json.loads(Path("/tmp/perlost-olefile.json").read_text())
+          reach=json.loads(Path("/tmp/perlost-minifat-reachability.json").read_text())
+          assert "/Contents" in ole["paths"], ole
+          assert reach["invalid_entries"].get("384") == 1431327565, reach
+          assert reach["logical_stream_read_count"] > 0, reach
+          assert reach["logical_stream_read_failure_count"] == 0, reach
+          assert reach["logical_stream_length_mismatch_count"] > 0, reach
+          assert reach["non_objects_length_mismatch_count"] == 0, reach
+          assert reach["mismatch_top_level_counts"].get("objects", 0) == reach["logical_stream_length_mismatch_count"], reach
+          assert reach["root_contents_matches_declared_len"] is True, reach
+          assert reach["root_contents_expected_len"] > 0, reach
+          assert reach["live_required_transition_error_count"] > 0, reach
+          assert reach["mini_sector_384_referenced_by_live_stream"] is True, reach
+          assert reach["orphan_stream_sid_count"] == 0, reach
+          # Report may retain only structural metadata/error text, never source bytes or recovered story text.
+          forbidden=["PERLOST.PUB", "PageWiz/", "recovered_text", "story_text"]
+          raw=p.read_text()
+          for token in forbidden:
+              assert token not in raw, token
+
+          negative_reader=json.loads(Path("/tmp/opnhous-negative-reader.json").read_text())
+          negative_cfb=json.loads(Path("/tmp/opnhous-negative-cfb.json").read_text())
+          assert negative_reader["source_sha256"] == "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e", negative_reader
+          assert negative_reader["family"]["profile"] == "legacy22_low_text", negative_reader["family"]
+          assert negative_reader["family"]["route"] == "legacy22_low_text", negative_reader["family"]
+          assert negative_reader["open"]["opened"] is False, negative_reader
+          print(json.dumps({
+              "reader":d,
+              "pub_cfb":cfb.strip(),
+              "olefile":ole,
+              "minifat_reachability":reach,
+              "opnhous_negative_reader":negative_reader,
+              "opnhous_negative_cfb":negative_cfb,
+          }, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy22-perlost-discriminator-${{ github.run_id }}
+          path: |
+            /tmp/perlost-report.json
+            /tmp/perlost-cfb.txt
+            /tmp/perlost-olefile.json
+            /tmp/perlost-minifat-reachability.json
+            /tmp/opnhous-negative-reader.json
+            /tmp/opnhous-negative-cfb.json
+          if-no-files-found: error
+          retention-days: 30
