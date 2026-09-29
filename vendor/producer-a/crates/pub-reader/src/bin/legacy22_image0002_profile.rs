@@ -586,7 +586,9 @@ fn font_blocker_profile(params: &[u8]) -> Value {
     let facename = params.get(18..50);
     let nul_index = facename.and_then(|name| name.iter().position(|byte| *byte == 0));
     let nonzero_after_nul = match (facename, nul_index) {
-        (Some(name), Some(index)) => name[index.saturating_add(1)..].iter().any(|byte| *byte != 0),
+        (Some(name), Some(index)) => name[index.saturating_add(1)..]
+            .iter()
+            .any(|byte| *byte != 0),
         _ => false,
     };
     json!({
@@ -680,8 +682,7 @@ fn selected_unsupported_blocker_profile(records: &[(u16, &[u8])]) -> Value {
                 let Some(index) = read_u16(params, 0).map(usize::from) else {
                     continue;
                 };
-                let Some((creator, creator_param_len)) =
-                    objects.get(index).and_then(|slot| *slot)
+                let Some((creator, creator_param_len)) = objects.get(index).and_then(|slot| *slot)
                 else {
                     continue;
                 };
