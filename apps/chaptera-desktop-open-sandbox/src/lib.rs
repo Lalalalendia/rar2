@@ -395,6 +395,23 @@ mod platform {
         encode_environment(entries)
     }
 
+    fn minimal_environment_with_localappdata_for_diagnostic(_cwd: &Path) -> Vec<u16> {
+        let entries = [
+            "SystemRoot",
+            "windir",
+            "ComSpec",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+            "PATH",
+            "LOCALAPPDATA",
+        ]
+        .into_iter()
+        .filter_map(|key| std::env::var_os(key).map(|value| (OsString::from(key), value)))
+        .collect::<Vec<_>>();
+        encode_environment(entries)
+    }
+
     fn full_parent_environment_for_diagnostic() -> Vec<u16> {
         encode_environment(std::env::vars_os().collect())
     }
@@ -656,6 +673,41 @@ mod platform {
                 // construction from deeper AppContainer/runner/attribute failure.
                 // Even if this retry launches, kill the Job immediately and fail
                 // the product launch; this can never become a production fallback.
+                let localappdata_environment =
+                    minimal_environment_with_localappdata_for_diagnostic(&cwd);
+                let mut localappdata_command_line =
+                    wide(OsStr::new(&format!("\"{}\"", executable.display())));
+                let mut localappdata_info: PROCESS_INFORMATION = unsafe { zeroed() };
+                let localappdata_ok = unsafe {
+                    CreateProcessW(
+                        executable_w.as_ptr(),
+                        localappdata_command_line.as_mut_ptr(),
+                        null(),
+                        null(),
+                        1,
+                        creation_flags,
+                        localappdata_environment.as_ptr().cast(),
+                        cwd_w.as_ptr(),
+                        &startup.StartupInfo,
+                        &mut localappdata_info,
+                    )
+                };
+                if localappdata_ok != 0 {
+                    let diagnostic_process =
+                        Handle::new(localappdata_info.hProcess, "LOCALAPPDATA diagnostic process handle")?;
+                    let diagnostic_thread =
+                        Handle::new(localappdata_info.hThread, "LOCALAPPDATA diagnostic thread handle")?;
+                    drop(diagnostic_thread);
+                    unsafe {
+                        TerminateJobObject(job.raw(), 203);
+                        WaitForSingleObject(diagnostic_process.raw(), 5_000);
+                    }
+                    bail!(
+                        "CreateProcessW failed closed: Win32 error 203; diagnostic minimal+LOCALAPPDATA environment launched successfully"
+                    );
+                }
+                let localappdata_error = unsafe { GetLastError() };
+
                 let diagnostic_environment = full_parent_environment_for_diagnostic();
                 let mut diagnostic_command_line =
                     wide(OsStr::new(&format!("\"{}\"", executable.display())));
@@ -685,12 +737,12 @@ mod platform {
                         WaitForSingleObject(diagnostic_process.raw(), 5_000);
                     }
                     bail!(
-                        "CreateProcessW failed closed: Win32 error 203; diagnostic full-parent environment launched successfully"
+                        "CreateProcessW failed closed: Win32 error 203; diagnostic minimal+LOCALAPPDATA failed with Win32 error {localappdata_error}; diagnostic full-parent environment launched successfully"
                     );
                 }
                 let diagnostic_error = unsafe { GetLastError() };
                 bail!(
-                    "CreateProcessW failed closed: Win32 error 203; diagnostic full-parent environment also failed: Win32 error {diagnostic_error}"
+                    "CreateProcessW failed closed: Win32 error 203; diagnostic minimal+LOCALAPPDATA failed with Win32 error {localappdata_error}; diagnostic full-parent environment also failed: Win32 error {diagnostic_error}"
                 );
             }
             bail!("CreateProcessW failed closed: Win32 error {first_error}");
