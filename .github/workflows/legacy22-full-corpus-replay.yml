@@ -160,6 +160,10 @@ jobs:
               for item in candidates
           )
 
+          Path("/tmp/raw0022-candidates.json").write_text(
+              json.dumps(candidates, sort_keys=True) + "\n"
+          )
+
           child_lengths = Counter(str(item["child_chunk_len"]) for item in candidates)
           child_service_words = Counter(str(item["child_service_word"]) for item in candidates)
           child_exact = Counter(str(item["child_chunk_sha256"]) for item in candidates)
@@ -281,6 +285,227 @@ jobs:
           }
 
           Path("out/legacy625/raw0022-companion-census.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Select controlled WordArt F0/F8000 fixture pairs
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import re
+          from collections import Counter, defaultdict
+          from pathlib import Path
+
+          import olefile
+
+          WORDART2 = "000212F0-0000-0000-C000-000000000046"
+          candidates = json.loads(Path("/tmp/raw0022-candidates.json").read_text())
+          corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
+          sha_to_path = {path.stem.lower(): path for path in corpus.glob("*.pub")}
+
+          def u32(raw, offset):
+              if offset < 0 or offset + 4 > len(raw):
+                  raise ValueError(f"u32 out of bounds at {offset} / {len(raw)}")
+              return int.from_bytes(raw[offset:offset + 4], "little", signed=False)
+
+          def digest(raw):
+              return hashlib.sha256(raw).hexdigest()[:16]
+
+          def parse_clipboard(raw, offset):
+              marker = u32(raw, offset)
+              offset += 4
+              if marker in (0xFFFFFFFF, 0xFFFFFFFE):
+                  return f"std:{u32(raw, offset)}", offset + 4
+              if marker == 0:
+                  return "none", offset
+              if marker > 0x201 or offset + marker > len(raw):
+                  raise ValueError(f"invalid clipboard marker/length {marker}")
+              return f"registered:{digest(raw[offset:offset + marker].rstrip(bytes([0])))}", offset + marker
+
+          def parse_compobj_clipboard(raw):
+              if len(raw) < 32:
+                  raise ValueError(f"CompObj too short: {len(raw)}")
+              length = u32(raw, 28)
+              offset = 32 + length
+              if length > 4096 or offset > len(raw):
+                  raise ValueError(f"invalid CompObj user type length {length}")
+              value, _ = parse_clipboard(raw, offset)
+              return value
+
+          def parse_olepres_header(raw):
+              clipboard, offset = parse_clipboard(raw, 0)
+              target_device_size = u32(raw, offset)
+              if target_device_size < 4:
+                  raise ValueError(f"invalid target device size {target_device_size}")
+              offset += target_device_size
+              if offset + 28 > len(raw):
+                  raise ValueError("truncated OlePres header")
+              return {
+                  "clipboard": clipboard,
+                  "aspect": u32(raw, offset),
+                  "lindex": u32(raw, offset + 4),
+                  "advf": u32(raw, offset + 8),
+                  "width": u32(raw, offset + 16),
+                  "height": u32(raw, offset + 20),
+                  "data_size": u32(raw, offset + 24),
+              }
+
+          by_sha = defaultdict(list)
+          for item in candidates:
+              by_sha[str(item["source_sha256"]).lower()].append(item)
+
+          rows = []
+          for source_sha, items in sorted(by_sha.items()):
+              source_path = sha_to_path.get(source_sha)
+              if source_path is None:
+                  raise RuntimeError(f"{source_sha}: pinned corpus source missing")
+
+              with olefile.OleFileIO(str(source_path)) as ole:
+                  entries = ole.listdir(streams=True, storages=True)
+                  roots = {}
+                  streams_by_root = defaultdict(list)
+                  for parts in entries:
+                      if len(parts) < 2 or parts[0].casefold() != "objects":
+                          continue
+                      match = re.fullmatch(r"Object\s*(\d+)", parts[1], flags=re.IGNORECASE)
+                      if not match:
+                          continue
+                      number = int(match.group(1))
+                      roots[number] = parts[:2]
+                      if len(parts) > 2:
+                          streams_by_root[number].append(parts)
+
+                  for item in items:
+                      u16 = item.get("child_u16_first64") or {}
+                      v = int(u16["0x0a"])
+                      f = int(u16["0x0e"])
+                      root = roots.get(v)
+                      if root is None:
+                          raise RuntimeError(f"{source_sha}: missing Objects/Object {v}")
+
+                      clsid = str(ole.getclsid(root) or "").upper()
+                      if clsid != WORDART2:
+                          continue
+
+                      compobj_paths = []
+                      olepres_paths = []
+                      for stream_path in streams_by_root.get(v, []):
+                          leaf = stream_path[-1].casefold()
+                          normalized = leaf.lstrip("\x00\x01\x02")
+                          if normalized == "compobj":
+                              compobj_paths.append(stream_path)
+                          if "olepres" in leaf:
+                              olepres_paths.append(stream_path)
+
+                      if len(compobj_paths) > 1:
+                          raise RuntimeError(f"{source_sha}: Object {v} multiple CompObj")
+                      compobj_clipboard = "missing"
+                      compobj_hash = "missing"
+                      if compobj_paths:
+                          raw = ole.openstream(compobj_paths[0]).read(16384)
+                          compobj_hash = digest(raw)
+                          compobj_clipboard = parse_compobj_clipboard(raw)
+
+                      pres = []
+                      for pres_path in sorted(olepres_paths):
+                          raw = ole.openstream(pres_path).read(131072)
+                          p = parse_olepres_header(raw)
+                          pres.append(
+                              (
+                                  p["clipboard"],
+                                  p["aspect"],
+                                  p["lindex"],
+                                  p["advf"],
+                                  p["width"],
+                                  p["height"],
+                                  p["data_size"],
+                              )
+                          )
+                      profile_json = json.dumps(sorted(pres), separators=(",", ":"))
+                      profile_hash = digest(profile_json.encode("utf-8"))
+
+                      rows.append(
+                          {
+                              "source_sha256": source_sha,
+                              "storage_number": v,
+                              "raw_flag": f,
+                              "storage_clsid": clsid,
+                              "presentation_profile_hash": profile_hash,
+                              "compobj_clipboard": compobj_clipboard,
+                              "compobj_hash": compobj_hash,
+                              "olepres_count": len(pres),
+                          }
+                      )
+
+          assert Counter(row["raw_flag"] for row in rows) == Counter({0: 41, 32768: 113})
+
+          exact_groups = defaultdict(lambda: defaultdict(list))
+          profile_groups = defaultdict(lambda: defaultdict(list))
+          for row in rows:
+              exact_key = (
+                  row["storage_clsid"],
+                  row["presentation_profile_hash"],
+                  row["compobj_clipboard"],
+              )
+              profile_key = (
+                  row["storage_clsid"],
+                  row["presentation_profile_hash"],
+              )
+              exact_groups[exact_key][row["raw_flag"]].append(row)
+              profile_groups[profile_key][row["raw_flag"]].append(row)
+
+          def pair_rows(groups):
+              out = []
+              for key, by_flag in sorted(groups.items(), key=lambda item: str(item[0])):
+                  left = sorted(
+                      by_flag.get(0, []),
+                      key=lambda row: (row["source_sha256"], row["storage_number"]),
+                  )
+                  right = sorted(
+                      by_flag.get(32768, []),
+                      key=lambda row: (row["source_sha256"], row["storage_number"]),
+                  )
+                  for a, b in zip(left, right):
+                      out.append(
+                          {
+                              "control": a,
+                              "flagged": b,
+                              "shared_key": list(key),
+                          }
+                      )
+              return out
+
+          exact_pairs = pair_rows(exact_groups)
+          profile_pairs = pair_rows(profile_groups)
+          assert exact_pairs, "no same CLSID+presentation+clipboard F0/F8000 pairs"
+          assert profile_pairs, "no same CLSID+presentation F0/F8000 pairs"
+
+          summary = {
+              "schema": "chaptera.legacy22-wordart-f-pair-selection.v1",
+              "wordart_candidate_count": len(rows),
+              "flag_counts": {
+                  str(k): v for k, v in sorted(Counter(row["raw_flag"] for row in rows).items())
+              },
+              "same_profile_clipboard_pair_count": len(exact_pairs),
+              "same_profile_pair_count": len(profile_pairs),
+              "selected_same_profile_clipboard_pairs": exact_pairs[:12],
+              "selected_same_profile_pairs": profile_pairs[:12],
+              "selection_rule": (
+                  "deterministic source_sha256/storage_number ordering inside identical "
+                  "MS WordArt 2.0 CLSID + OlePres aggregate profile, preferring identical "
+                  "CompObj clipboard class"
+              ),
+              "evidence_boundary": (
+                  "source-safe fixture identities only; no PUB bytes, OLE stream bytes, "
+                  "strings or presentation payload are retained"
+              ),
+          }
+
+          Path("out/legacy625/raw0022-wordart-f-pairs.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n"
           )
           print(json.dumps(summary, indent=2, sort_keys=True))
