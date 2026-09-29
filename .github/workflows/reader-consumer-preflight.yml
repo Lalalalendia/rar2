@@ -3,6 +3,26 @@ name: Reader Consumer Preflight V1
 on:
   workflow_call:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/chaptera-desktop/**"
+      - "crates/chaptera-mobile-reader-core/**"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/crates/pub-core/**"
+      - "vendor/producer-a/crates/pub-cfb/**"
+      - "vendor/producer-a/crates/pub-contents/**"
+      - "vendor/producer-a/crates/pub-escher/**"
+      - "vendor/producer-a/crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-quill/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-layout/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
 
 permissions:
   contents: read
@@ -26,6 +46,13 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
+
+      - name: Restore/save Tier A Cargo build cache
+        id: tier-a-cargo-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/reader-tier-a
+          key: reader-tier-a-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('Cargo.lock', 'vendor/producer-a/Cargo.lock') }}
 
       - name: Test Reader preflight planner
         run: python tools/ci/test_reader_consumer_preflight.py
