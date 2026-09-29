@@ -324,6 +324,7 @@ pub fn build_legacy_0x22_quill_from_streams(
                         image_slot: None,
                         explicit_image_crop: None,
                         explicit_paint: PubExplicitShapePaintSource::default(),
+                        effective_paint: None,
                         story_frame: Some(PubStoryFrameSource {
                             text_id: u32::from(text_id),
                             story_id,
