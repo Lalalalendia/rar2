@@ -66,6 +66,74 @@ jobs:
             working-corpus/pub-corpus/corpus/native/unclassified \
             out/legacy22-codepage/font-signal.json
 
+      - name: Join high-byte font slots to legacy 0x1E font records
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from collections import Counter
+
+          base=Path("out/legacy22-codepage")
+          rows=json.loads((base/"rows.json").read_text())
+          font=json.loads((base/"font-signal.json").read_text())
+          by_sha={r["sha256"]:r for r in rows}
+          labels={
+            "1b88bc290bf3b53f5c7dac055b4d50bf0c2a8ab6da99e99459902fa475807387":"FAX2-pub3",
+            "2f94e4880bd8eddd814f84768a9fac05659f8146cccd26790bdfcee6c9792b61":"FAX2-pub97",
+            "02a2b240864c53159b7ddfa7aaebf9e943777bc0d3b64b819ad72c57796f66d7":"VLINEAR",
+            "08af039a39b05d544ba20f04fec35b73436b241f364c70c694b70b52899c70c":"ELINEAR"
+          }
+          joined=[]
+          resolved_files=0
+          readable_files=0
+          list_counts=Counter()
+          for fr in font["rows"]:
+              sha=fr["sha256"]
+              src=by_sha.get(sha)
+              if not src:
+                  continue
+              lists=[x for x in src.get("font_pointer_lists",[]) if x.get("status")=="ok"]
+              list_counts[str(len(lists))]+=1
+              slots=fr.get("high_byte_font_indexes",[])
+              slot_rows=[]
+              for slot in slots:
+                  candidates=[]
+                  for li in lists:
+                      recs=li.get("records",[])
+                      if 0 <= slot < len(recs):
+                          candidates.append({"object_id":li.get("object_id"),"record":recs[slot]})
+                  slot_rows.append({"font_index":slot,"candidates":candidates})
+              any_resolved=any(x["candidates"] for x in slot_rows)
+              any_readable=any(
+                  c["record"].get("ascii_candidates") or c["record"].get("utf16le_candidates")
+                  for x in slot_rows for c in x["candidates"]
+              )
+              resolved_files += int(any_resolved)
+              readable_files += int(any_readable)
+              joined.append({
+                  "sha256":sha,
+                  "label":labels.get(sha),
+                  "high_byte_count":fr["high_byte_count"],
+                  "font_indexes":slots,
+                  "font_pointer_error":src.get("font_pointer_error"),
+                  "font_list_count":len(lists),
+                  "slot_rows":slot_rows
+              })
+          receipt={
+              "schema":"chaptera.legacy22-high-byte-font-record-join.v1",
+              "high_byte_file_count":len(joined),
+              "files_with_resolved_font_record_ordinal":resolved_files,
+              "files_with_readable_string_candidate_in_used_font_record":readable_files,
+              "font_list_count_distribution":dict(sorted(list_counts.items())),
+              "labelled_examples":[x for x in joined if x.get("label")],
+              "rows":joined,
+              "evidence_boundary":"ordinal join only; readable strings are candidate font metadata, not yet semantic charset authority"
+          }
+          (base/"font-join.json").write_text(json.dumps(receipt,indent=2)+"\n")
+          print(json.dumps({k:v for k,v in receipt.items() if k != "rows"},indent=2))
+          PY
+
       - uses: actions/upload-artifact@v4
         with:
           name: legacy22-codepage-authority-${{ github.run_id }}
