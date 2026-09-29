@@ -10,6 +10,7 @@ on:
       - 'vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-failure-stage-census.rs'
       - 'vendor/producer-a/crates/pub-viewer/**'
       - 'vendor/producer-a/crates/pub-reader/**'
+      - 'vendor/producer-a/crates/pub-quill/**'
 
 permissions:
   contents: read
