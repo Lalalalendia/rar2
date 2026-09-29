@@ -1156,12 +1156,19 @@ mod tests {
             .unwrap();
         assert_eq!(reader_scene.status(), StatusCode::OK);
         let reader_scene = json_body(reader_scene).await;
-        assert_eq!(reader_scene["protocol_version"], crate::reader_scene_v1::READER_SCENE_V1);
+        assert_eq!(
+            reader_scene["protocol_version"],
+            crate::reader_scene_v1::READER_SCENE_V1
+        );
         assert_eq!(reader_scene["source_hash"], source_sha256);
         assert_eq!(reader_scene["revision_id"], baseline.service_revision_id);
         assert_eq!(reader_scene["scene_authority"], "server_viewer_projection");
-        let reader_pages = reader_scene["pages"].as_array().expect("Reader pages array");
-        let reader_nodes = reader_scene["nodes"].as_array().expect("Reader nodes array");
+        let reader_pages = reader_scene["pages"]
+            .as_array()
+            .expect("Reader pages array");
+        let reader_nodes = reader_scene["nodes"]
+            .as_array()
+            .expect("Reader nodes array");
         assert!(!reader_pages.is_empty());
         assert!(!reader_nodes.is_empty());
         assert!(reader_nodes.iter().all(|node| {
