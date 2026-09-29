@@ -1,6 +1,6 @@
 use crate::{
     PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
-    PubNodePayload, PubSourceGraph, PubTableSource, PubTableStoryOwnershipSource,
+    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource, PubTableStoryOwnershipSource,
 };
 use anyhow::{Result, bail};
 use pub_model::{Node, NodeId, ResolvedGraph, StoryId, validate_source_graph_registries};
@@ -17,6 +17,8 @@ pub struct PubResolvedNodePayload {
     pub officeart_shape_type: Option<u16>,
     pub officeart_spid: Option<u32>,
     pub image_slot: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_ole: Option<PubLegacyOleSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit_image_crop: Option<PubExplicitImageCropSource>,
     pub explicit_paint: PubExplicitShapePaintSource,
@@ -121,6 +123,7 @@ fn resolve_node_payload(
         officeart_shape_type: payload.officeart_shape_type,
         officeart_spid: payload.officeart_spid,
         image_slot: payload.image_slot,
+        legacy_ole: payload.legacy_ole.clone(),
         explicit_image_crop: payload.explicit_image_crop.clone(),
         explicit_paint: payload.explicit_paint.clone(),
         effective_paint: payload.effective_paint.clone(),
@@ -145,11 +148,16 @@ mod tests {
             right_raw: Some(0),
             ambiguous: false,
         };
+        let legacy_ole = PubLegacyOleSource {
+            storage_number: 73,
+            raw_flag: 0x8000,
+        };
         let payload = PubNodePayload {
             contents_seq_num: 315,
             officeart_shape_type: Some(75),
             officeart_spid: Some(315),
             image_slot: Some(1),
+            legacy_ole: Some(legacy_ole.clone()),
             explicit_image_crop: Some(source_crop.clone()),
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
@@ -162,6 +170,7 @@ mod tests {
         let resolved = resolve_node_payload(node_id, &payload, &mut diagnostics);
 
         assert_eq!(resolved.image_slot, Some(1));
+        assert_eq!(resolved.legacy_ole, Some(legacy_ole));
         assert_eq!(resolved.explicit_image_crop, Some(source_crop));
         assert!(diagnostics.is_empty());
     }
