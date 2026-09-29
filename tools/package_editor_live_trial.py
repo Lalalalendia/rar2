@@ -24,6 +24,12 @@ README_CONTRACT = "chaptera.editor-live-trial-readme.v1"
 AGENT_CATALOG_SCHEMA = "chaptera.agent-control.catalog.v1"
 AGENT_PROTOCOL_VERSION = "chaptera.agent-control.v1"
 AGENT_EXECUTABLE = "chaptera-editor.exe"
+RUNTIME_RECEIPT_SCHEMA = "chaptera.desktop-open-runtime-stage.v1"
+RUNTIME_ENTRIES = (
+    "chaptera-desktop-open-worker.exe",
+    "chaptera-desktop-open-sandbox-host.exe",
+    "chaptera-desktop-open-runtime.json",
+)
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 
 
@@ -43,10 +49,56 @@ def _zip_entry(name: str, *, executable: bool = False) -> zipfile.ZipInfo:
     return info
 
 
+def _load_runtime(runtime_dir: pathlib.Path) -> dict[str, bytes]:
+    files = {name: runtime_dir / name for name in RUNTIME_ENTRIES}
+    for name, path in files.items():
+        if not path.is_file():
+            raise RuntimeError(f"desktop-open runtime entry is missing: {name}")
+
+    worker = files["chaptera-desktop-open-worker.exe"].read_bytes()
+    host = files["chaptera-desktop-open-sandbox-host.exe"].read_bytes()
+    for name, payload in (
+        ("chaptera-desktop-open-worker.exe", worker),
+        ("chaptera-desktop-open-sandbox-host.exe", host),
+    ):
+        if len(payload) < 2 or payload[:2] != b"MZ":
+            raise RuntimeError(f"desktop-open runtime executable is not PE: {name}")
+
+    receipt_bytes = files["chaptera-desktop-open-runtime.json"].read_bytes()
+    try:
+        receipt = json.loads(receipt_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("desktop-open runtime receipt must be valid UTF-8 JSON") from exc
+    if receipt.get("schema_version") != RUNTIME_RECEIPT_SCHEMA:
+        raise RuntimeError("desktop-open runtime receipt schema mismatch")
+
+    expected = {
+        "worker": ("chaptera-desktop-open-worker.exe", worker),
+        "sandbox_host": ("chaptera-desktop-open-sandbox-host.exe", host),
+    }
+    for key, (file_name, payload) in expected.items():
+        record = receipt.get(key)
+        if not isinstance(record, dict):
+            raise RuntimeError(f"desktop-open runtime receipt missing {key}")
+        if record.get("file_name") != file_name:
+            raise RuntimeError(f"desktop-open runtime receipt filename mismatch for {key}")
+        if record.get("sha256") != hashlib.sha256(payload).hexdigest():
+            raise RuntimeError(f"desktop-open runtime receipt hash mismatch for {key}")
+        if record.get("byte_len") != len(payload):
+            raise RuntimeError(f"desktop-open runtime receipt size mismatch for {key}")
+
+    return {
+        "chaptera-desktop-open-worker.exe": worker,
+        "chaptera-desktop-open-sandbox-host.exe": host,
+        "chaptera-desktop-open-runtime.json": receipt_bytes,
+    }
+
+
 def package_editor(
     editor_exe: pathlib.Path,
     output_zip: pathlib.Path,
     *,
+    runtime_dir: pathlib.Path,
     binary_entry: str = "Chaptera-Editor.exe",
     readme: pathlib.Path = DEFAULT_README,
     readme_entry: str = "TRIAL-README.md",
@@ -97,6 +149,8 @@ def package_editor(
     if laws.get("source_pub_immutable") is not True:
         raise RuntimeError("Agent V1 catalog must require immutable source PUB")
 
+    runtime = _load_runtime(runtime_dir)
+
     if not third_party_notices.is_file():
         raise RuntimeError(f"third-party notices do not exist: {third_party_notices}")
     third_party_notices_bytes = third_party_notices.read_bytes()
@@ -129,14 +183,14 @@ def package_editor(
         for entry in (binary_entry, readme_entry, agent_catalog_entry, third_party_notices_entry)
     ):
         raise RuntimeError("portable package must not contain a PUB entry")
-    if len(
-        {
-            binary_entry.casefold(),
-            readme_entry.casefold(),
-            agent_catalog_entry.casefold(),
-            third_party_notices_entry.casefold(),
-        }
-    ) != 4:
+    package_entries = {
+        binary_entry.casefold(),
+        readme_entry.casefold(),
+        agent_catalog_entry.casefold(),
+        third_party_notices_entry.casefold(),
+        *(name.casefold() for name in RUNTIME_ENTRIES),
+    }
+    if len(package_entries) != 4 + len(RUNTIME_ENTRIES):
         raise RuntimeError("portable package entry names must be distinct")
 
     output_zip.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +202,8 @@ def package_editor(
         archive.writestr(_zip_entry(readme_entry), readme_bytes)
         archive.writestr(_zip_entry(agent_catalog_entry), agent_catalog_bytes)
         archive.writestr(_zip_entry(third_party_notices_entry), third_party_notices_bytes)
+        for name in RUNTIME_ENTRIES:
+            archive.writestr(_zip_entry(name, executable=name.endswith(".exe")), runtime[name])
 
     binary_sha = hashlib.sha256(binary).hexdigest()
     agent_catalog_sha = hashlib.sha256(agent_catalog_bytes).hexdigest()
@@ -166,6 +222,13 @@ def package_editor(
         "third_party_notices_entry": third_party_notices_entry,
         "third_party_notices_sha256": third_party_notices_sha,
         "third_party_notices_size": len(third_party_notices_bytes),
+        "runtime_entries": {
+            name: {
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "byte_len": len(payload),
+            }
+            for name, payload in runtime.items()
+        },
         "binary_sha256": binary_sha,
         "zip_sha256": zip_sha,
         "binary_size": len(binary),
@@ -177,6 +240,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--editor-exe", required=True, type=pathlib.Path)
     parser.add_argument("--output-zip", required=True, type=pathlib.Path)
+    parser.add_argument("--runtime-dir", required=True, type=pathlib.Path)
     parser.add_argument("--binary-entry", default="Chaptera-Editor.exe")
     parser.add_argument("--readme", type=pathlib.Path, default=DEFAULT_README)
     parser.add_argument("--readme-entry", default="TRIAL-README.md")
@@ -190,6 +254,7 @@ def main() -> int:
     result = package_editor(
         args.editor_exe,
         args.output_zip,
+        runtime_dir=args.runtime_dir,
         binary_entry=args.binary_entry,
         readme=args.readme,
         readme_entry=args.readme_entry,
