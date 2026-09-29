@@ -237,8 +237,12 @@ pub fn paint_document_node_foreground(
         None => "shared_layout_not_requested".to_owned(),
     });
 
-    let (layout_job, usage) =
-        layout_document_text(fragment, scene_scale, text_clip_rect.width().max(1.0_f32));
+    let (layout_job, usage) = layout_document_text(
+        fragment,
+        scene_scale,
+        text_clip_rect.width().max(1.0_f32),
+        fragment.backend_font_resource_id.as_deref(),
+    );
     let executed_font_sizes_px = layout_job
         .sections
         .iter()
@@ -429,8 +433,17 @@ fn layout_document_text(
     fragment: &RenderTextFragmentV1,
     scene_scale: f32,
     wrap_width_px: f32,
+    backend_font_resource_id: Option<&str>,
 ) -> (egui::text::LayoutJob, TextLayoutUsage) {
-    let fallback = crate::fallback_font::font_id_for_scene_scale(scene_scale);
+    let fallback = backend_font_resource_id
+        .filter(|resource_id| !resource_id.is_empty())
+        .map(|resource_id| {
+            egui::FontId::new(
+                crate::fallback_font::screen_font_size(scene_scale),
+                egui::FontFamily::Name(resource_id.into()),
+            )
+        })
+        .unwrap_or_else(|| crate::fallback_font::font_id_for_scene_scale(scene_scale));
     let fallback_job = || {
         (
             egui::text::LayoutJob::simple(
@@ -494,11 +507,11 @@ fn layout_document_text(
         let Some(text) = scalar_slice(&fragment.text, start, end) else {
             return fallback_job();
         };
-        append_text_section(
-            &mut job,
-            text,
-            egui::FontId::new(size, crate::fallback_font::family()),
-        );
+        let family = backend_font_resource_id
+            .filter(|resource_id| !resource_id.is_empty())
+            .map(|resource_id| egui::FontFamily::Name(resource_id.into()))
+            .unwrap_or_else(crate::fallback_font::family);
+        append_text_section(&mut job, text, egui::FontId::new(size, family));
         cursor = end;
     }
 
@@ -697,7 +710,7 @@ mod tests {
         .expect("render text fragment");
 
         let scene_scale = 1.0 / 12_700.0;
-        let (job, usage) = layout_document_text(&fragment, scene_scale, 400.0);
+        let (job, usage) = layout_document_text(&fragment, scene_scale, 400.0, None);
         assert_eq!(job.text, "ABCDEF");
         assert_eq!(job.sections.len(), 3);
         let sizes = job
@@ -736,7 +749,7 @@ mod tests {
             ]
         }))
         .expect("render text fragment");
-        let (job, usage) = layout_document_text(&fragment, 1.0 / 12_700.0, 400.0);
+        let (job, usage) = layout_document_text(&fragment, 1.0 / 12_700.0, 400.0, None);
         assert_eq!(job.sections.len(), 1);
         assert_eq!(usage.source_typography_sections, 0);
         assert_eq!(usage.fallback_sections, 1);
