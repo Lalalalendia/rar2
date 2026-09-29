@@ -47,12 +47,22 @@ jobs:
           toolchain: "1.94.1"
           components: rustfmt, clippy
 
+      - name: Build Tier A Cargo cache key
+        id: tier-a-cache-key
+        shell: bash
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'apps/chaptera-desktop/Cargo.toml', 'crates/chaptera-mobile-reader-core/Cargo.toml', 'crates/chaptera-viewer-render-plan/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_HASH"
+          echo "key=reader-tier-a-v2-${RUNNER_OS}-rust-1.94.1-${MANIFEST_HASH}" >> "$GITHUB_OUTPUT"
+
       - name: Restore/save Tier A Cargo build cache
         id: tier-a-cargo-cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/reader-tier-a
-          key: reader-tier-a-v2-${{ runner.os }}-rust-1.94.1-${{ hashFiles('Cargo.toml', 'apps/chaptera-desktop/Cargo.toml', 'crates/chaptera-mobile-reader-core/Cargo.toml', 'crates/chaptera-viewer-render-plan/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/**/Cargo.toml') }}
+          key: ${{ steps.tier-a-cache-key.outputs.key }}
 
       - name: Test Reader preflight planner
         run: python tools/ci/test_reader_consumer_preflight.py
