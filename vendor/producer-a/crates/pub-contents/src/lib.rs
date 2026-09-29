@@ -21,6 +21,7 @@ mod legacy22_table;
 mod legacy22_table_object;
 mod legacy22_text_info;
 mod margins;
+mod palette;
 mod reference;
 mod story_catalog;
 mod trailer;
@@ -107,6 +108,10 @@ pub use legacy22_text_info::{
 pub use margins::{
     MARGINS_PAGE_EXTENT_ID, MARGINS_PAGE_HEIGHT_ID, MARGINS_PAGE_WIDTH_ID, MarginsPageExtent,
     MarginsPageExtentReadError, parse_confirmed_margins_page_extent,
+};
+pub use palette::{
+    COLOR_SCHEME_COUNT_ID, COLOR_SCHEME_ENTRIES_ID, COLOR_SCHEME_NAME_ID, MatureColorScheme,
+    MatureColorSchemeReadError, MatureColorSchemeSlot, parse_confirmed_mature_color_scheme,
 };
 pub use reference::{
     CHUNK_REFERENCE_OFFSET_ID, CHUNK_REFERENCE_PARENT_SEQ_NUM_ID, CHUNK_REFERENCE_RAW_TYPE_ID,
