@@ -583,21 +583,18 @@ fn wmf_records<'a>(wmf: &'a [u8]) -> Option<Vec<(u16, &'a [u8])>> {
 }
 
 fn font_blocker_profile(params: &[u8]) -> Value {
-    let facename = params.get(18..50);
-    let nul_index = facename.and_then(|name| name.iter().position(|byte| *byte == 0));
-    let nonzero_after_nul = match (facename, nul_index) {
-        (Some(name), Some(index)) => name[index.saturating_add(1)..]
-            .iter()
-            .any(|byte| *byte != 0),
-        _ => false,
-    };
+    let facename_32 = params.get(18..50);
+    let facename_tail = params.get(18..).unwrap_or(&[]);
+    let nul_index = facename_tail.iter().position(|byte| *byte == 0);
+    let nonzero_after_nul = nul_index
+        .is_some_and(|index| facename_tail[index.saturating_add(1)..].iter().any(|byte| *byte != 0));
     json!({
         "kind": "createfontindirect",
         "param_len": params.len(),
-        "height_sign": sign_i16(read_i16(params, 0)),
-        "width_sign": sign_i16(read_i16(params, 2)),
-        "escapement_sign": sign_i16(read_i16(params, 4)),
-        "orientation_sign": sign_i16(read_i16(params, 6)),
+        "height": read_i16(params, 0),
+        "width": read_i16(params, 2),
+        "escapement": read_i16(params, 4),
+        "orientation": read_i16(params, 6),
         "weight": read_u16(params, 8),
         "italic": params.get(10).copied(),
         "underline": params.get(11).copied(),
@@ -607,7 +604,8 @@ fn font_blocker_profile(params: &[u8]) -> Value {
         "clip_precision": params.get(15).copied(),
         "quality": params.get(16).copied(),
         "pitch_and_family": params.get(17).copied(),
-        "facename_32_present": facename.is_some(),
+        "facename_tail_len": facename_tail.len(),
+        "facename_32_present": facename_32.is_some(),
         "facename_nul_index": nul_index,
         "facename_nonzero_after_nul": nonzero_after_nul,
     })
@@ -622,12 +620,18 @@ fn stretchdib_blocker_profile(params: &[u8]) -> Value {
         "param_len": params.len(),
         "raster_operation": read_u32(params, 0).map(|value| format!("0x{value:08x}")),
         "color_usage": read_u16(params, 4),
+        "src_height": read_i16(params, 6),
+        "src_width": read_i16(params, 8),
         "src_height_sign": sign_i16(read_i16(params, 6)),
         "src_width_sign": sign_i16(read_i16(params, 8)),
+        "dest_height": read_i16(params, 14),
+        "dest_width": read_i16(params, 16),
         "dest_height_sign": sign_i16(read_i16(params, 14)),
         "dest_width_sign": sign_i16(read_i16(params, 16)),
         "dib_len": dib.len(),
         "dib_header_size": header_size,
+        "dib_width": read_i32(dib, 4),
+        "dib_height": read_i32(dib, 8),
         "dib_width_sign": sign_i32(read_i32(dib, 4)),
         "dib_height_sign": sign_i32(read_i32(dib, 8)),
         "dib_planes": read_u16(dib, 12),
