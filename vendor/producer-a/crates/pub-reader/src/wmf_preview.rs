@@ -86,7 +86,8 @@ struct Brush {
 enum GdiObject {
     Pen(Pen),
     Brush(Brush),
-    Unsupported,
+    UnsupportedPatternBrush,
+    UnsupportedRegion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -936,8 +937,11 @@ pub fn rasterize_wmf_preview(
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
             }
-            META_DIBCREATEPATTERNBRUSH | META_CREATEREGION => {
-                allocate_object(&mut objects, GdiObject::Unsupported)?;
+            META_DIBCREATEPATTERNBRUSH => {
+                allocate_object(&mut objects, GdiObject::UnsupportedPatternBrush)?;
+            }
+            META_CREATEREGION => {
+                allocate_object(&mut objects, GdiObject::UnsupportedRegion)?;
             }
             META_DELETEOBJECT => {
                 let index = usize::from(
@@ -959,8 +963,11 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
-                    GdiObject::Unsupported => {
-                        bail!("WMF selects an unsupported graphics object");
+                    GdiObject::UnsupportedPatternBrush => {
+                        bail!("WMF selects an unsupported pattern brush graphics object");
+                    }
+                    GdiObject::UnsupportedRegion => {
+                        bail!("WMF selects an unsupported region graphics object");
                     }
                 }
             }
