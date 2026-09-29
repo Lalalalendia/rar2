@@ -142,17 +142,6 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
         commands.extend(
             [
                 {
-                    "id": "vendor-check",
-                    "argv": [
-                        "cargo",
-                        "check",
-                        "--manifest-path",
-                        "vendor/producer-a/Cargo.toml",
-                        *flags,
-                        "--all-targets",
-                    ],
-                },
-                {
                     "id": "vendor-clippy",
                     "argv": [
                         "cargo",
@@ -200,18 +189,6 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
     if render_plan:
         commands.extend(
             [
-                {
-                    "id": "render-plan-check",
-                    "argv": [
-                        "cargo",
-                        "check",
-                        "--manifest-path",
-                        "crates/chaptera-viewer-render-plan/Cargo.toml",
-                        "--all-targets",
-                        "--features",
-                        "projected-scene-instances",
-                    ],
-                },
                 {
                     "id": "render-plan-clippy",
                     "argv": [
