@@ -90,6 +90,14 @@ def classify(paths: list[str], *, force_all: bool = False) -> dict[str, bool]:
         }
 
     shared_vendor = _prefix(paths, VENDOR_SHARED_PREFIXES)
+    reader_runtime_vendor = _prefix(
+        paths,
+        (
+            "vendor/producer-a/crates/pub-reader/",
+            "vendor/producer-a/crates/pub-layout/",
+            "vendor/producer-a/crates/pub-viewer/",
+        ),
+    )
     render_plan = _prefix(paths, ("crates/chaptera-viewer-render-plan/",))
     desktop_reader = _exact(paths, DESKTOP_READER_EXACT)
     mobile = _prefix(paths, MOBILE_PREFIXES)
@@ -111,8 +119,7 @@ def classify(paths: list[str], *, force_all: bool = False) -> dict[str, bool]:
     )
 
     reader_windows = (
-        shared_vendor
-        or render_plan
+        render_plan
         or desktop_reader
         or _prefix(
             paths,
@@ -201,7 +208,7 @@ def classify(paths: list[str], *, force_all: bool = False) -> dict[str, bool]:
     )
 
     android_core = (
-        shared_vendor
+        reader_runtime_vendor
         or render_plan
         or _prefix(paths, ("crates/chaptera-mobile-reader-core/",))
         or _exact(paths, {".github/workflows/mobile-reader-android-core-portability.yml"})
