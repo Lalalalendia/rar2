@@ -57,6 +57,14 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertTrue(plan["desktop_reader_integration"])
         self.assertFalse(plan["desktop_reader_clippy"])
         self.assertTrue(plan["mobile_reader_integration"])
+        reader_check = next(command for command in plan["commands"] if command["id"] == "desktop-reader-check")
+        editor_check = next(command for command in plan["commands"] if command["id"] == "desktop-editor-check")
+        self.assertIn("--bin", reader_check["argv"])
+        self.assertIn("chaptera-editor", reader_check["argv"])
+        self.assertNotIn("--all-targets", reader_check["argv"])
+        self.assertIn("--bin", editor_check["argv"])
+        self.assertIn("chaptera-editor", editor_check["argv"])
+        self.assertNotIn("--all-targets", editor_check["argv"])
         self.assertNotIn("vendor-check", ids)
         self.assertIn("vendor-clippy", ids)
         vendor_clippy = next(command for command in plan["commands"] if command["id"] == "vendor-clippy")
@@ -88,8 +96,27 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("desktop-reader-check", ids)
         self.assertIn("desktop-editor-check", ids)
         self.assertIn("desktop-reader-clippy", ids)
+        reader_check = next(command for command in plan["commands"] if command["id"] == "desktop-reader-check")
+        editor_check = next(command for command in plan["commands"] if command["id"] == "desktop-editor-check")
+        self.assertIn("--all-targets", reader_check["argv"])
+        self.assertNotIn("--bin", reader_check["argv"])
+        self.assertIn("--all-targets", editor_check["argv"])
+        self.assertNotIn("--bin", editor_check["argv"])
         self.assertTrue(plan["desktop_reader_integration"])
         self.assertTrue(plan["desktop_reader_clippy"])
+
+    def test_root_workspace_change_keeps_desktop_all_targets(self) -> None:
+        plan = MODULE.build_plan(
+            ["Cargo.toml"],
+            "BASE",
+            "HEAD",
+        )
+        reader_check = next(command for command in plan["commands"] if command["id"] == "desktop-reader-check")
+        editor_check = next(command for command in plan["commands"] if command["id"] == "desktop-editor-check")
+        self.assertIn("--all-targets", reader_check["argv"])
+        self.assertIn("--all-targets", editor_check["argv"])
+        self.assertNotIn("--bin", reader_check["argv"])
+        self.assertNotIn("--bin", editor_check["argv"])
 
     def test_rustfmt_delta_parses_added_and_deletion_only_hunks(self) -> None:
         diff = """@@ -10,2 +10,3 @@
