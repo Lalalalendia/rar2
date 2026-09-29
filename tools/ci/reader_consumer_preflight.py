@@ -37,16 +37,31 @@ def changed_paths(base: str, head: str) -> list[str]:
 def edition_for(path: str) -> str:
     p = Path(path)
     manifests: list[Path] = []
+    workspace_manifest = Path("Cargo.toml")
     if path.startswith("vendor/producer-a/crates/"):
         manifests.append(p.parents[1] / "Cargo.toml")
+        workspace_manifest = Path("vendor/producer-a/Cargo.toml")
     elif path.startswith("crates/chaptera-viewer-render-plan/"):
         manifests.append(Path("crates/chaptera-viewer-render-plan/Cargo.toml"))
     elif path.startswith("apps/chaptera-desktop/"):
         manifests.append(Path("apps/chaptera-desktop/Cargo.toml"))
+
     for manifest in manifests:
-        if manifest.exists():
-            with manifest.open("rb") as fh:
-                return str(tomllib.load(fh).get("package", {}).get("edition", "2021"))
+        if not manifest.exists():
+            continue
+        with manifest.open("rb") as fh:
+            package = tomllib.load(fh).get("package", {})
+        edition = package.get("edition", "2021")
+        if isinstance(edition, str):
+            return edition
+        if isinstance(edition, dict) and edition.get("workspace") is True:
+            with workspace_manifest.open("rb") as fh:
+                workspace = tomllib.load(fh)
+            inherited = workspace.get("workspace", {}).get("package", {}).get("edition")
+            if isinstance(inherited, str):
+                return inherited
+            raise ValueError(f"workspace package edition is not a string in {workspace_manifest}")
+        raise ValueError(f"unsupported package edition in {manifest}: {edition!r}")
     return "2021"
 
 
