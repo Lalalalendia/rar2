@@ -8,7 +8,7 @@ use pub_core::StreamPath;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::Cursor,
     path::{Path, PathBuf},
@@ -68,6 +68,7 @@ struct WitnessRow {
     btec_descriptor_lengths: Vec<u32>,
     fdpp_descriptor_lengths: Vec<u32>,
     fdpc_descriptor_lengths: Vec<u32>,
+    descriptor_topology: BTreeMap<String, Vec<u32>>,
     btep_candidates: Vec<BtePlcCandidate>,
     btec_candidates: Vec<BtePlcCandidate>,
 }
@@ -366,6 +367,28 @@ fn descriptor_lengths(descriptors: &[&Descriptor]) -> Vec<u32> {
     descriptors.iter().map(|descriptor| descriptor.data_length).collect()
 }
 
+fn descriptor_topology(descriptors: &[Descriptor]) -> BTreeMap<String, Vec<u32>> {
+    let mut out = BTreeMap::<String, Vec<u32>>::new();
+    for descriptor in descriptors {
+        let name = descriptor
+            .name
+            .iter()
+            .map(|byte| {
+                if byte.is_ascii_graphic() || *byte == b' ' {
+                    char::from(*byte)
+                } else {
+                    '.'
+                }
+            })
+            .collect::<String>();
+        out.entry(name).or_default().push(descriptor.data_length);
+    }
+    for lengths in out.values_mut() {
+        lengths.sort_unstable();
+    }
+    out
+}
+
 fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let contents = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM)
         .context("read Contents stream")?;
@@ -418,6 +441,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         btec_descriptor_lengths: descriptor_lengths(&btec),
         fdpp_descriptor_lengths: descriptor_lengths(&fdpp),
         fdpc_descriptor_lengths: descriptor_lengths(&fdpc),
+        descriptor_topology: descriptor_topology(&descriptors),
         btep_candidates,
         btec_candidates,
     })
