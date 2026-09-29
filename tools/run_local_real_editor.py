@@ -148,8 +148,11 @@ def build_inputs() -> pathlib.Path:
         )
     if proc.returncode != 0:
         raise RuntimeError("resolved-graph producer failed")
-    if sha256(GRAPH) != GRAPH_SHA:
-        raise RuntimeError("resolved graph identity mismatch")
+    actual_graph_sha = sha256(GRAPH)
+    if actual_graph_sha != GRAPH_SHA:
+        raise RuntimeError(
+            f"resolved graph identity mismatch: actual={actual_graph_sha} expected={GRAPH_SHA}"
+        )
     return producer
 
 
