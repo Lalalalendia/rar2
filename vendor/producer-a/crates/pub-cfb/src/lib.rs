@@ -831,7 +831,7 @@ mod tests {
 
         let error = recover_root_regular_stream_reader(Cursor::new(bytes), "/Small")
             .expect_err("small root stream must not use recovery path");
-        assert!(error.to_string().contains("requires MiniFAT"));
+        assert!(format!("{error:#}").contains("requires MiniFAT"));
     }
 
     #[test]
