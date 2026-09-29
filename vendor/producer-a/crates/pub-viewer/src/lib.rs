@@ -1136,11 +1136,12 @@ fn open_legacy_0x22_noquill_bundle(
             .map(map_scene_diagnostic),
     );
 
+    let images = viewer_legacy_ole_preview_images(bytes, &resolved.graph, &mut document);
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Legacy no-Quill text and text-box geometry are recovered only where grounded. Exact source typography, non-ASCII codepages, images, effects, groups and unsupported legacy object kinds remain explicit fidelity gaps."
+            message: "Legacy no-Quill text and grounded geometry are recovered. Inert cached OLE previews are painted only when a bounded WMF presentation is unambiguous; exact source typography, non-ASCII codepages, ordinary legacy images, effects, groups and unsupported object kinds remain explicit fidelity gaps."
                 .to_owned(),
         });
     }
@@ -1157,7 +1158,7 @@ fn open_legacy_0x22_noquill_bundle(
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
-        images: Vec::new(),
+        images,
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -1257,11 +1258,12 @@ fn open_legacy_0x22_quill_bundle(
             .map(map_scene_diagnostic),
     );
 
+    let images = viewer_legacy_ole_preview_images(bytes, &resolved.graph, &mut document);
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Legacy object positions and sizes are resolved for the admitted old-0x22 text-box profile. Unsupported legacy object kinds, exact source typography, images, effects, groups and version-sensitive transforms are not claimed by this bounded Reader path."
+            message: "Legacy object geometry is resolved for the admitted old-0x22 profile. Inert cached OLE previews are painted only when a bounded WMF presentation is unambiguous; unsupported object kinds, exact source typography, ordinary legacy images, effects, groups and version-sensitive transforms remain fidelity gaps."
                 .to_owned(),
         });
     }
@@ -1278,7 +1280,7 @@ fn open_legacy_0x22_quill_bundle(
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
-        images: Vec::new(),
+        images,
     };
     Ok(ViewerOpenBundle {
         geometry,
