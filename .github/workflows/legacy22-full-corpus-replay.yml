@@ -85,7 +85,7 @@ jobs:
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
           assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
-          assert reader["opened_by_family"].get("0x22") == 223, reader["opened_by_family"]
+          assert reader["opened_by_family"].get("0x22") == 226, reader["opened_by_family"]
 
           legacy_open = [
               row for row in rows
@@ -103,10 +103,10 @@ jobs:
               for row in legacy_open
           )
 
-          assert len(legacy_with_scene) == 192, len(legacy_with_scene)
-          assert legacy_scene_nodes == 1373, legacy_scene_nodes
-          assert legacy_story_frames == 966, legacy_story_frames
-          assert legacy_text_fragments == 953, legacy_text_fragments
+          assert len(legacy_with_scene) == 195, len(legacy_with_scene)
+          assert legacy_scene_nodes == 1837, legacy_scene_nodes
+          assert legacy_story_frames == 1430, legacy_story_frames
+          assert legacy_text_fragments == 1383, legacy_text_fragments
           assert unresolved_encoding_files == 58, unresolved_encoding_files
 
           receipt = {
