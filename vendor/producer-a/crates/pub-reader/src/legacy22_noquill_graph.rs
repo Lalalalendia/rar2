@@ -11,9 +11,9 @@ use pub_contents::{
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
-    Affine2D, AuthorityClass, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader, NodeId, NodeKind,
-    Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D, SourceDescriptor, SourceRole,
-    Story, StoryId,
+    Affine2D, AuthorityClass, CanonicalId, Document, DocumentId, LengthEmu, Node, NodeHeader,
+    NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
+    SourceDescriptor, SourceRole, Story, StoryId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -326,9 +326,7 @@ fn materialize_legacy_noquill_child(
 
     let is_text_shape = child_entry.chunk_type == LEGACY_TEXT_SHAPE_TYPE;
     let is_group = child_entry.chunk_type == LEGACY_GROUP_TYPE;
-    if !is_text_shape
-        && !is_group
-        && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type)
+    if !is_text_shape && !is_group && !is_legacy_simple_geometry_shape_type(child_entry.chunk_type)
     {
         diagnostics.push(PubBridgeDiagnostic::LegacyObjectNotMaterialized {
             object_id: u32::from(child_object_id),
@@ -779,9 +777,9 @@ mod tests {
 
         for chunk_type in [
             LEGACY_TEXT_SHAPE_TYPE,
-            0x0002, // image
-            0x0008, // Quill-era text shape
-            0x000a, // table
+            0x0002,            // image
+            0x0008,            // Quill-era text shape
+            0x000a,            // table
             LEGACY_GROUP_TYPE, // group is admitted separately from simple geometry
             LEGACY_PAGE_TYPE,
             LEGACY_DOCUMENT_TYPE,
@@ -789,7 +787,6 @@ mod tests {
             assert!(!is_legacy_simple_geometry_shape_type(chunk_type));
         }
     }
-
 
     #[test]
     fn group_admission_is_separate_and_bounded() {
