@@ -588,6 +588,23 @@ jobs:
           assert existing_text_fragments == 1383, existing_text_fragments
           assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files
 
+          legacy_with_scene = [
+              row for row in legacy_open if int(row.get("scene_node_count") or 0) > 0
+          ]
+          legacy_scene_nodes = sum(
+              int(row.get("scene_node_count") or 0) for row in legacy_open
+          )
+          legacy_story_frames = sum(
+              int(row.get("story_frame_count") or 0) for row in legacy_open
+          )
+          legacy_text_fragments = sum(
+              int(row.get("text_fragment_count") or 0) for row in legacy_open
+          )
+          unresolved_encoding_files = sum(
+              "viewer.text.legacy_encoding_unresolved" in (row.get("diagnostic_codes") or [])
+              for row in legacy_open
+          )
+
           receipt = {
               "corpus_file_count": summary["corpus_file_count"],
               "opened_count": reader["opened_count"],
