@@ -408,8 +408,10 @@ pub fn parse_bounded_typography(
         .iter()
         .filter(|range| !range.script_fonts.is_empty())
         .flat_map(|range| {
-            range.story_intersections.iter().map(|intersection| {
-                QuillScriptFontMapObservation {
+            range
+                .story_intersections
+                .iter()
+                .map(|intersection| QuillScriptFontMapObservation {
                     story_index: intersection.story_index,
                     story_syid: intersection.story_syid,
                     story_start_utf16: intersection.story_start_utf16,
@@ -418,8 +420,7 @@ pub fn parse_bounded_typography(
                     fdpc_style_ordinal: range.fdpc_style_ordinal,
                     fdpc_style_source: range.fdpc_style_source.clone(),
                     entries: range.script_fonts.clone(),
-                }
-            })
+                })
         })
         .collect::<Vec<_>>();
 
