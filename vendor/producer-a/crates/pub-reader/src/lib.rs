@@ -3596,3 +3596,6 @@ mod tests {
         assert_ne!(node.into_canonical(), story.into_canonical());
     }
 }
+
+// CI-READER-TIER-A-COMPILE-DEDUP-01 negative control: intentional type error.
+const CI_TIER_A_NEGATIVE_CONTROL: u8 = "must fail";
