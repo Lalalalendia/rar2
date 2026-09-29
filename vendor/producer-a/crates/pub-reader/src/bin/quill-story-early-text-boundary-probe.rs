@@ -44,6 +44,31 @@ struct DescriptorMetadataProfile {
 }
 
 #[derive(Debug, Serialize)]
+struct McldScalarCandidate {
+    width_bits: u8,
+    relative_offset: usize,
+    sum_equals_text_utf16_units: bool,
+    sum_equals_text_bytes: bool,
+    monotonic_non_decreasing: bool,
+    last_equals_text_utf16_units: bool,
+    last_equals_text_bytes: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct McldProfile {
+    record_count: u32,
+    record_id_count: u32,
+    record_count_matches_grounded_story_count: bool,
+    record_id_count_matches_grounded_story_count: bool,
+    layout_key_count: usize,
+    all_story_entries_have_layout_key: bool,
+    layout_key_set_matches_record_ids: bool,
+    record_body_lengths: Vec<usize>,
+    story_order_record_lengths: Vec<usize>,
+    scalar_candidates: Vec<McldScalarCandidate>,
+}
+
+#[derive(Debug, Serialize)]
 struct BtePlcCandidate {
     carrier_index: usize,
     prefix_offset: usize,
@@ -135,6 +160,7 @@ struct WitnessRow {
     syid_descriptor_metadata: DescriptorMetadataProfile,
     strs_descriptor_metadata: DescriptorMetadataProfile,
     text_descriptor_metadata: DescriptorMetadataProfile,
+    mcld_profile: McldProfile,
     syid_strs_text_opt_a_all_equal: bool,
     syid_strs_text_bit_type_all_equal: bool,
     story_catalog_entries_with_unsupported_tail: usize,
@@ -637,6 +663,210 @@ fn story_catalog_fixed8_pair_profiles(
     out
 }
 
+fn checked_range<'a>(bytes: &'a [u8], start: usize, len: usize, label: &str) -> Result<&'a [u8]> {
+    let end = start.checked_add(len).with_context(|| format!("{label} range overflow"))?;
+    bytes
+        .get(start..end)
+        .with_context(|| format!("{label} range outside payload"))
+}
+
+fn parse_mcld_record_spans(payload: &[u8]) -> Result<(u32, u32, Vec<u32>, Vec<(usize, usize)>)> {
+    let record_count = u32_at(payload, 0).context("MCLD record_count truncated")?;
+    let record_id_count = u32_at(payload, 4).context("MCLD record_id_count truncated")?;
+    if record_count != record_id_count {
+        bail!("MCLD record_count/record_id_count mismatch");
+    }
+
+    let record_id_count_usize =
+        usize::try_from(record_id_count).context("MCLD record_id_count too large")?;
+    let ids_bytes = record_id_count_usize
+        .checked_mul(4)
+        .context("MCLD record id table overflow")?;
+    checked_range(payload, 8, ids_bytes, "MCLD record id table")?;
+
+    let mut record_ids = Vec::with_capacity(record_id_count_usize);
+    for index in 0..record_id_count_usize {
+        record_ids.push(
+            u32_at(payload, 8 + index * 4).context("MCLD record id truncated")?,
+        );
+    }
+    if record_ids.iter().copied().collect::<BTreeSet<_>>().len() != record_ids.len() {
+        bail!("MCLD duplicate record id");
+    }
+
+    let mut cursor = 8usize
+        .checked_add(ids_bytes)
+        .context("MCLD record start overflow")?;
+    let mut spans = Vec::with_capacity(record_id_count_usize);
+    for _ in 0..record_id_count_usize {
+        let record_start = cursor;
+        let header_size = usize::try_from(
+            u32_at(payload, cursor).context("MCLD record header size truncated")?,
+        )
+        .context("MCLD record header size too large")?;
+        if header_size < 4 {
+            bail!("MCLD record header size below minimum");
+        }
+        checked_range(payload, cursor, header_size, "MCLD record header")?;
+        cursor = cursor
+            .checked_add(header_size)
+            .context("MCLD record header end overflow")?;
+
+        let child_count =
+            usize::try_from(u32_at(payload, cursor).context("MCLD child_count truncated")?)
+                .context("MCLD child_count too large")?;
+        cursor = cursor.checked_add(4).context("MCLD child_count end overflow")?;
+        for _ in 0..child_count {
+            let child_size = usize::try_from(
+                u32_at(payload, cursor).context("MCLD child size truncated")?,
+            )
+            .context("MCLD child size too large")?;
+            if child_size < 4 {
+                bail!("MCLD child size below minimum");
+            }
+            checked_range(payload, cursor, child_size, "MCLD child")?;
+            cursor = cursor
+                .checked_add(child_size)
+                .context("MCLD child end overflow")?;
+        }
+        spans.push((record_start, cursor));
+    }
+
+    if cursor != payload.len() {
+        bail!("MCLD trailing bytes after bounded record walk");
+    }
+
+    Ok((record_count, record_id_count, record_ids, spans))
+}
+
+fn mcld_scalar_candidates(
+    records: &[&[u8]],
+    text_utf16_units: u64,
+    text_bytes: u64,
+) -> Vec<McldScalarCandidate> {
+    let Some(min_len) = records.iter().map(|record| record.len()).min() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+
+    for (width_bits, width) in [(16u8, 2usize), (32u8, 4usize)] {
+        if min_len < width {
+            continue;
+        }
+        for relative_offset in 0..=min_len - width {
+            let values = records
+                .iter()
+                .map(|record| {
+                    if width == 2 {
+                        u16_at(record, relative_offset).map(u64::from)
+                    } else {
+                        u32_at(record, relative_offset).map(u64::from)
+                    }
+                })
+                .collect::<Option<Vec<_>>>();
+            let Some(values) = values else {
+                continue;
+            };
+
+            let sum = values
+                .iter()
+                .try_fold(0u64, |acc, value| acc.checked_add(*value));
+            let monotonic_non_decreasing = values.windows(2).all(|pair| pair[0] <= pair[1]);
+            let last = values.last().copied();
+            let sum_equals_text_utf16_units = sum == Some(text_utf16_units);
+            let sum_equals_text_bytes = sum == Some(text_bytes);
+            let last_equals_text_utf16_units =
+                monotonic_non_decreasing && last == Some(text_utf16_units);
+            let last_equals_text_bytes =
+                monotonic_non_decreasing && last == Some(text_bytes);
+
+            if sum_equals_text_utf16_units
+                || sum_equals_text_bytes
+                || last_equals_text_utf16_units
+                || last_equals_text_bytes
+            {
+                out.push(McldScalarCandidate {
+                    width_bits,
+                    relative_offset,
+                    sum_equals_text_utf16_units,
+                    sum_equals_text_bytes,
+                    monotonic_non_decreasing,
+                    last_equals_text_utf16_units,
+                    last_equals_text_bytes,
+                });
+            }
+        }
+    }
+
+    out
+}
+
+fn profile_mcld(
+    quill: &[u8],
+    descriptor: &Descriptor,
+    story_catalog: &MatureStoryCatalog,
+    text_utf16_units: u64,
+    text_bytes: u64,
+) -> Result<McldProfile> {
+    let payload = descriptor_range(quill, descriptor)?;
+    let (record_count, record_id_count, record_ids, spans) =
+        parse_mcld_record_spans(payload)?;
+
+    let layout_keys = story_catalog
+        .entries
+        .iter()
+        .filter_map(|entry| entry.layout_key)
+        .collect::<Vec<_>>();
+    let all_story_entries_have_layout_key = layout_keys.len() == story_catalog.entries.len();
+    let layout_key_set = layout_keys.iter().copied().collect::<BTreeSet<_>>();
+    let record_id_set = record_ids.iter().copied().collect::<BTreeSet<_>>();
+    let layout_key_set_matches_record_ids =
+        all_story_entries_have_layout_key && layout_key_set == record_id_set;
+
+    let record_body_lengths = spans
+        .iter()
+        .map(|(start, end)| end.saturating_sub(*start))
+        .collect::<Vec<_>>();
+
+    let mut story_order_records = Vec::new();
+    let mut story_order_record_lengths = Vec::new();
+    if layout_key_set_matches_record_ids {
+        for layout_key in &layout_keys {
+            let index = record_ids
+                .iter()
+                .position(|record_id| record_id == layout_key)
+                .context("MCLD layout key set matched but record id lookup failed")?;
+            let (start, end) = spans[index];
+            let record = payload
+                .get(start..end)
+                .context("MCLD story-order record range outside payload")?;
+            story_order_record_lengths.push(record.len());
+            story_order_records.push(record);
+        }
+    }
+
+    let scalar_candidates = if layout_key_set_matches_record_ids {
+        mcld_scalar_candidates(&story_order_records, text_utf16_units, text_bytes)
+    } else {
+        Vec::new()
+    };
+
+    Ok(McldProfile {
+        record_count,
+        record_id_count,
+        record_count_matches_grounded_story_count:
+            record_count == story_catalog.declared_count,
+        record_id_count_matches_grounded_story_count:
+            record_id_count == story_catalog.declared_count,
+        layout_key_count: layout_keys.len(),
+        all_story_entries_have_layout_key,
+        layout_key_set_matches_record_ids,
+        record_body_lengths,
+        story_order_record_lengths,
+        scalar_candidates,
+    })
+}
+
 fn format_ranges(descriptors: &[&Descriptor]) -> Vec<(u64, u64)> {
     descriptors
         .iter()
@@ -887,6 +1117,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let syid = unique_descriptor(&descriptors, *b"SYID")?;
     let strs = unique_descriptor(&descriptors, *b"STRS")?;
     let text = unique_descriptor(&descriptors, *b"TEXT")?;
+    let mcld = unique_descriptor(&descriptors, *b"MCLD")?;
     let btep = descriptors_named(&descriptors, *b"BTEP");
     let btec = descriptors_named(&descriptors, *b"BTEC");
     let fdpp = descriptors_named(&descriptors, *b"FDPP");
@@ -921,6 +1152,8 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         story_catalog_scalar_pair_profiles(&story_catalog, text_utf16_units, text_bytes);
     let story_catalog_fixed8_pair_profiles =
         story_catalog_fixed8_pair_profiles(&story_catalog, text_utf16_units, text_bytes);
+    let mcld_profile =
+        profile_mcld(&quill, mcld, &story_catalog, text_utf16_units, text_bytes)?;
     let story_catalog_entries_with_unsupported_tail = story_catalog
         .entries
         .iter()
@@ -946,6 +1179,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         syid_descriptor_metadata,
         strs_descriptor_metadata,
         text_descriptor_metadata,
+        mcld_profile,
         syid_strs_text_opt_a_all_equal:
             syid.opt_a == strs.opt_a && strs.opt_a == text.opt_a,
         syid_strs_text_bit_type_all_equal:
@@ -1021,7 +1255,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v5",
+        "schema": "chaptera.quill-story-early-text-boundary.v6",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
