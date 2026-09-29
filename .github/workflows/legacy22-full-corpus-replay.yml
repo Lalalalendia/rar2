@@ -420,9 +420,6 @@ jobs:
                                   p["aspect"],
                                   p["lindex"],
                                   p["advf"],
-                                  p["width"],
-                                  p["height"],
-                                  p["data_size"],
                               )
                           )
                       profile_json = json.dumps(sorted(pres), separators=(",", ":"))
