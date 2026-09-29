@@ -18,8 +18,18 @@ from k2c_tela_applier import (
 class MockTela:
     def __init__(self):
         self.pages = {
-            5049: TelaPageSnapshot(5049, 364, "2026-09-29 12:54:13"),
-            5027: TelaPageSnapshot(5027, 364, "2026-09-29 12:27:19"),
+            5049: TelaPageSnapshot(
+                5049,
+                364,
+                "2026-09-29 12:54:13",
+                ("Probe > Live acceptance target",),
+            ),
+            5027: TelaPageSnapshot(
+                5027,
+                364,
+                "2026-09-29 12:27:19",
+                ("Purpose > Registry",),
+            ),
         }
         self.calls = []
         self.applied = set()
@@ -36,7 +46,10 @@ class MockTela:
         if not replay:
             self.applied.add(idempotency_key)
             self.pages[page_id] = TelaPageSnapshot(
-                page_id, before.space_id, before.updated_at + "+patched"
+                page_id,
+                before.space_id,
+                before.updated_at + "+patched",
+                before.section_paths,
             )
         return TelaPatchOutcome(
             page_id=page_id,
@@ -117,14 +130,24 @@ class K2CTelaApplierTests(unittest.TestCase):
 
     def test_wrong_space_fails_before_write(self):
         t = MockTela()
-        t.pages[5049] = TelaPageSnapshot(5049, 999, "2026-09-29 12:54:13")
+        t.pages[5049] = TelaPageSnapshot(
+            5049,
+            999,
+            "2026-09-29 12:54:13",
+            ("Probe > Live acceptance target",),
+        )
         with self.assertRaisesRegex(PreconditionError, "space"):
             apply_manifest(manifest(op()), t, allowed_space_id=364, apply=True)
         self.assertFalse(any(c[0] == "patch_page" for c in t.calls))
 
     def test_stale_cursor_fails_before_write(self):
         t = MockTela()
-        t.pages[5049] = TelaPageSnapshot(5049, 364, "new")
+        t.pages[5049] = TelaPageSnapshot(
+            5049,
+            364,
+            "new",
+            ("Probe > Live acceptance target",),
+        )
         with self.assertRaisesRegex(PreconditionError, "stale"):
             apply_manifest(manifest(op()), t, allowed_space_id=364, apply=True)
         self.assertFalse(any(c[0] == "patch_page" for c in t.calls))
