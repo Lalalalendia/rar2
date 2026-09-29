@@ -765,6 +765,7 @@ pub fn open_legacy_0x22_noquill_geometry(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images: Vec::new(),
@@ -874,6 +875,7 @@ pub fn open_legacy_0x22_quill_geometry(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images: Vec::new(),
