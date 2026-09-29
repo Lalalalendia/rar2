@@ -18,7 +18,21 @@ pub fn font_id_for_scene_scale(scene_scale: f32) -> egui::FontId {
     egui::FontId::new(screen_font_size(scene_scale), family())
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct AdditionalFont<'a> {
+    pub resource_id: &'a str,
+    pub bytes: &'a [u8],
+    pub face_index: u32,
+}
+
 pub fn install(ctx: &egui::Context) -> Result<(), String> {
+    install_with_additional(ctx, &[])
+}
+
+pub fn install_with_additional(
+    ctx: &egui::Context,
+    additional: &[AdditionalFont<'_>],
+) -> Result<(), String> {
     resource::validate()?;
 
     let mut fonts = egui::FontDefinitions::default();
@@ -28,6 +42,21 @@ pub fn install(ctx: &egui::Context) -> Result<(), String> {
         Arc::new(egui::FontData::from_static(resource::bytes())),
     );
     fonts.families.insert(family(), vec![key]);
+
+    for font in additional {
+        if font.resource_id.is_empty() || font.bytes.is_empty() {
+            continue;
+        }
+        let key = font.resource_id.to_owned();
+        let mut data = egui::FontData::from_owned(font.bytes.to_vec());
+        data.index = font.face_index;
+        fonts.font_data.insert(key.clone(), Arc::new(data));
+        fonts.families.insert(
+            egui::FontFamily::Name(font.resource_id.into()),
+            vec![key],
+        );
+    }
+
     ctx.set_fonts(fonts);
     Ok(())
 }
