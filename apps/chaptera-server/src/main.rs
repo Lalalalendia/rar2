@@ -249,14 +249,18 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             busy_timeout,
                         )
                         .await?;
+                        let guest_scan_config = config.source_validation.materialize();
                         let guest_scanner =
-                            ProductionSourceSecurityScanner::new(config.source_validation.materialize())?;
+                            ProductionSourceSecurityScanner::new(guest_scan_config.clone())?;
+                        let guest_scene_worker =
+                            IsolatedGuestSceneProducer::new(guest_scan_config)?;
                         let guest_state = GuestReaderHttpState::new(
                             guest_rate,
                             guest_admission,
                             guest_sessions,
                             blob_store.service().clone(),
                             guest_scanner,
+                            guest_scene_worker,
                             GuestReaderHttpConfig {
                                 session_ttl: Duration::from_secs(
                                     guest_config.session_ttl_seconds,
