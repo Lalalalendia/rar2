@@ -89,6 +89,28 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "dumpbin failed for $name" }
           }
 
+      - name: Classify bootstrap startup policy
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $hostExe = Join-Path $env:CHAPTERA_SANDBOX_HOST "release\chaptera-desktop-sandbox-bootstrap-host.exe"
+          $probe = Join-Path $env:CHAPTERA_SANDBOX_STAGE "chaptera-desktop-sandbox-bootstrap-probe.exe"
+          foreach ($policy in @(
+            "lpac-base",
+            "appcontainer-strict",
+            "appcontainer-base",
+            "lpac-no-win32k",
+            "lpac-no-extension",
+            "lpac-no-strict-handle"
+          )) {
+            $env:CHAPTERA_SANDBOX_DIAG_POLICY = $policy
+            & $hostExe $probe
+            $code = $LASTEXITCODE
+            Write-Host "CHAPTERA_SANDBOX_POLICY_RESULT policy=$policy exit=$code"
+          }
+          Remove-Item Env:CHAPTERA_SANDBOX_DIAG_POLICY -ErrorAction SilentlyContinue
+          exit 0
+
       - name: Prove strict containment starts minimal Rust bootstrap
         shell: pwsh
         run: |
