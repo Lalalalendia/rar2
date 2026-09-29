@@ -1,0 +1,77 @@
+name: Legacy22 codepage authority profile
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/legacy22-codepage-authority-20260929
+    paths:
+      - "tools/research/legacy22_codepage_signal_profile.py"
+      - ".github/workflows/legacy22-codepage-authority-profile.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: legacy22-codepage-authority-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout rar2
+        uses: actions/checkout@v4
+
+      - name: Checkout strict working corpus
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: main
+          path: working-corpus
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CFB dependency
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Profile persisted codepage signals
+        run: |
+          set -euo pipefail
+          rm -rf out/legacy22-codepage
+          python tools/research/legacy22_codepage_signal_profile.py \
+            --corpus working-corpus/pub-corpus/corpus/native/unclassified \
+            --out out/legacy22-codepage
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path("out/legacy22-codepage/summary.json").read_text())
+          assert s["legacy22_noquill_file_count"] >= 200, s
+          assert s["non_ascii_text_file_count"] >= 50, s
+          assert s["profile_error_count"] == 0, s
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy22-codepage-authority-${{ github.run_id }}
+          path: out/legacy22-codepage/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish metadata-only receipt
+        run: |
+          set -euo pipefail
+          rm -rf evidence/legacy22-codepage-authority
+          mkdir -p evidence/legacy22-codepage-authority
+          cp out/legacy22-codepage/*.json evidence/legacy22-codepage-authority/
+          git config user.name "rar2-research-bot"
+          git config user.email "rar2-research-bot@users.noreply.github.com"
+          git add evidence/legacy22-codepage-authority
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "research: publish legacy22 codepage signal receipt"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
