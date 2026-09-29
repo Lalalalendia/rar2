@@ -149,7 +149,7 @@ fn recover_root_regular_stream_from_bytes(
     source: &[u8],
     stream_name: &str,
 ) -> Result<RecoveredRootRegularStream> {
-    if source.len() < 512 || source.get(..8) != Some(&RECOVERY_CFB_SIGNATURE) {
+    if source.len() < 512 || source.get(..8) != Some(RECOVERY_CFB_SIGNATURE.as_slice()) {
         anyhow::bail!("not a CFB container");
     }
 
@@ -390,7 +390,7 @@ fn recovery_require_regular_sector(
         sector,
         RECOVERY_FREE_SECTOR | RECOVERY_END_OF_CHAIN | RECOVERY_FAT_SECTOR | RECOVERY_DIFAT_SECTOR
     ) || sector > RECOVERY_MAX_REGULAR_SECTOR
-        || usize::try_from(sector).map_or(true, |value| value >= num_sectors)
+        || usize::try_from(sector).ok().is_none_or(|value| value >= num_sectors)
     {
         anyhow::bail!("{label} references invalid sector {sector}");
     }
