@@ -203,6 +203,576 @@ jobs:
           u16_summary = summarize(u16_values)
           u32_summary = summarize(u32_values)
 
+          # Hosted/offline causal join for LEGACY22-RAW0022-CAUSAL-01.
+          # Reuse stream-path receipts already produced by deep_profile instead of
+          # reparsing the same CFB files. Compare OleData.V (+0x0A) against exact
+          # /Objects/Object N roots and correlate F (+0x0E) with matched-root topology.
+          import re
+          import olefile
+
+          fingerprints = json.loads(
+              Path("out/legacy625/fingerprints.json").read_text()
+          )
+          fingerprints_by_sha = {
+              str(row.get("sha256") or "").lower(): row
+              for row in fingerprints
+              if row.get("sha256")
+          }
+          sha_to_path = {path.stem.lower(): path for path in paths}
+
+          cfb_join = {
+              "candidate_count": len(candidates),
+              "candidate_file_count": len(affected),
+              "files_with_objects_storage": 0,
+              "files_with_object_substorage": 0,
+              "files_with_olepres": 0,
+              "v_in_object_storage_number": 0,
+              "v_plus_1_in_object_storage_number": 0,
+              "v_minus_1_in_object_storage_number": 0,
+              "v_in_olepres_suffix": 0,
+              "v_in_any_numeric_cfb_component": 0,
+              "v_matched_root_has_olepres": 0,
+              "v_matched_root_has_ole10native": 0,
+              "v_matched_root_has_ole_stream": 0,
+              "v_matched_root_has_compobj": 0,
+              "v_matched_root_has_contents": 0,
+              "v_matched_root_ole_header_present": 0,
+              "v_matched_root_ole_header_missing": 0,
+              "files_v_set_equals_object_root_set": 0,
+              "files_v_set_subset_object_root_set": 0,
+              "files_object_root_set_subset_v_set": 0,
+              "files_v_set_disjoint_object_root_set": 0,
+          }
+          object_storage_counts = Counter()
+          olepres_counts = Counter()
+          v_values = Counter()
+          matched_root_signatures = Counter()
+          matched_root_signature_by_f = Counter()
+          direct_match_by_f = Counter()
+          direct_match_by_revision = Counter()
+          f_by_revision = Counter()
+          candidate_file_revisions = Counter()
+          candidate_instance_revisions = Counter()
+          ole_stream_version_counts = Counter()
+          ole_stream_flags_counts = Counter()
+          ole_stream_update_option_counts = Counter()
+          f_by_ole_stream_presence = Counter()
+          f_by_ole_stream_flags = Counter()
+          f_by_ole_stream_update_option = Counter()
+          f_by_ole_stream_flags_update = Counter()
+          storage_clsid_by_f = Counter()
+          olepres_count_by_f = Counter()
+          olepres_aspect_by_f = Counter()
+          olepres_advf_by_f = Counter()
+          olepres_format_by_f = Counter()
+          olepres_header_status_by_f = Counter()
+          topology_by_sha = {}
+          logical_groups = defaultdict(list)
+
+          candidate_by_sha = defaultdict(list)
+          for item in candidates:
+              candidate_by_sha[item["source_sha256"].lower()].append(item)
+
+          for row in affected:
+              source_sha = row["source_sha256"].lower()
+              fingerprint = fingerprints_by_sha.get(source_sha)
+              if fingerprint is None:
+                  raise RuntimeError(
+                      f"{source_sha}: candidate source missing from deep_profile fingerprints"
+                  )
+
+              revision = str(fingerprint.get("contents_serialization_revision"))
+              candidate_file_revisions[revision] += 1
+              logical_identity = str(
+                  fingerprint.get("content_topology_fingerprint_sha256") or ""
+              )
+              if not logical_identity:
+                  raise RuntimeError(f"{source_sha}: missing logical stream-set identity")
+              logical_groups[logical_identity].append(source_sha)
+
+              object_features = defaultdict(set)
+              ole_stream_parts_by_object = {}
+              object_numbers = set()
+              olepres_numbers = set()
+              any_numbers = set()
+              has_objects = False
+              stream_paths = [
+                  str(stream.get("path") or "")
+                  for stream in (fingerprint.get("streams") or [])
+                  if isinstance(stream, dict)
+              ]
+
+              for stream_path in stream_paths:
+                  parts = [part for part in stream_path.strip("/").split("/") if part]
+                  if parts and parts[0].casefold() == "objects":
+                      has_objects = True
+                  if len(parts) >= 2 and parts[0].casefold() == "objects":
+                      object_match = re.fullmatch(
+                          r"Object\s*(\d+)", parts[1], flags=re.IGNORECASE
+                      )
+                      if object_match:
+                          object_number = int(object_match.group(1))
+                          object_numbers.add(object_number)
+                          for component in parts[2:]:
+                              folded = component.casefold()
+                              if "olepres" in folded:
+                                  object_features[object_number].add("olepres")
+                              if "ole10native" in folded:
+                                  object_features[object_number].add("ole10native")
+                              normalized = folded.lstrip("\x00\x01\x02")
+                              if normalized == "ole":
+                                  object_features[object_number].add("ole")
+                                  previous = ole_stream_parts_by_object.get(object_number)
+                                  if previous is not None and previous != parts:
+                                      raise RuntimeError(
+                                          f"{source_sha}: multiple distinct \\x01Ole streams "
+                                          f"under Object {object_number}"
+                                      )
+                                  ole_stream_parts_by_object[object_number] = parts
+                              if "compobj" in folded:
+                                  object_features[object_number].add("compobj")
+                              if normalized == "contents":
+                                  object_features[object_number].add("contents")
+
+                  for component in parts:
+                      olepres_match = re.search(
+                          r"OlePres(\d+)", component, flags=re.IGNORECASE
+                      )
+                      if olepres_match:
+                          olepres_numbers.add(int(olepres_match.group(1)))
+                      for numeric in re.finditer(r"\d+", component):
+                          any_numbers.add(int(numeric.group(0)))
+
+              ole_headers = {}
+              if ole_stream_parts_by_object:
+                  source_path = sha_to_path.get(source_sha)
+                  if source_path is None:
+                      raise RuntimeError(
+                          f"{source_sha}: candidate source is missing from pinned corpus paths"
+                      )
+                  try:
+                      with olefile.OleFileIO(str(source_path)) as ole:
+                          for object_number, parts in sorted(
+                              ole_stream_parts_by_object.items()
+                          ):
+                              raw_header = ole.openstream(parts).read(12)
+                              if len(raw_header) < 12:
+                                  raise RuntimeError(
+                                      f"Object {object_number} \\x01Ole stream is shorter than "
+                                      f"the 12-byte standard header: {len(raw_header)}"
+                                  )
+                              ole_headers[object_number] = {
+                                  "version": int.from_bytes(
+                                      raw_header[0:4], "little", signed=False
+                                  ),
+                                  "flags": int.from_bytes(
+                                      raw_header[4:8], "little", signed=False
+                                  ),
+                                  "update_option": int.from_bytes(
+                                      raw_header[8:12], "little", signed=False
+                                  ),
+                              }
+                  except Exception as exc:
+                      raise RuntimeError(
+                          f"{source_sha}: failed to read bounded \\x01Ole headers: {exc}"
+                      ) from exc
+
+              topology_by_sha[source_sha] = {
+                  "object_numbers": object_numbers,
+                  "olepres_numbers": olepres_numbers,
+                  "any_numbers": any_numbers,
+                  "object_features": object_features,
+                  "ole_headers": ole_headers,
+                  "revision": revision,
+              }
+
+              if has_objects:
+                  cfb_join["files_with_objects_storage"] += 1
+              if object_numbers:
+                  cfb_join["files_with_object_substorage"] += 1
+              if olepres_numbers:
+                  cfb_join["files_with_olepres"] += 1
+              object_storage_counts[str(len(object_numbers))] += 1
+              olepres_counts[str(len(olepres_numbers))] += 1
+
+              file_v_values = {
+                  int((item.get("child_u16_first64") or {})["0x0a"])
+                  for item in candidate_by_sha[source_sha]
+                  if "0x0a" in (item.get("child_u16_first64") or {})
+              }
+              if file_v_values == object_numbers:
+                  cfb_join["files_v_set_equals_object_root_set"] += 1
+              if file_v_values.issubset(object_numbers):
+                  cfb_join["files_v_set_subset_object_root_set"] += 1
+              if object_numbers.issubset(file_v_values):
+                  cfb_join["files_object_root_set_subset_v_set"] += 1
+              if file_v_values.isdisjoint(object_numbers):
+                  cfb_join["files_v_set_disjoint_object_root_set"] += 1
+
+          for item in candidates:
+              source_sha = item["source_sha256"].lower()
+              topology = topology_by_sha[source_sha]
+              raw_v = (item.get("child_u16_first64") or {}).get("0x0a")
+              raw_f = (item.get("child_u16_first64") or {}).get("0x0e")
+              if raw_v is None or raw_f is None:
+                  raise RuntimeError(
+                      f"{source_sha}: missing complete OleData V/F scalar profile"
+                  )
+
+              v = int(raw_v)
+              f = int(raw_f)
+              revision = topology["revision"]
+              object_numbers = topology["object_numbers"]
+              olepres_numbers = topology["olepres_numbers"]
+              any_numbers = topology["any_numbers"]
+              object_features = topology["object_features"]
+              ole_headers = topology["ole_headers"]
+
+              v_values[str(v)] += 1
+              candidate_instance_revisions[revision] += 1
+              f_by_revision[(revision, str(f))] += 1
+
+              direct = v in object_numbers
+              direct_match_by_f[(str(f), str(direct).lower())] += 1
+              direct_match_by_revision[(revision, str(direct).lower())] += 1
+              if direct:
+                  cfb_join["v_in_object_storage_number"] += 1
+                  features = object_features.get(v, set())
+                  signature = "|".join(sorted(features)) or "none"
+                  matched_root_signatures[signature] += 1
+                  matched_root_signature_by_f[(str(f), signature)] += 1
+                  if "olepres" in features:
+                      cfb_join["v_matched_root_has_olepres"] += 1
+                  if "ole10native" in features:
+                      cfb_join["v_matched_root_has_ole10native"] += 1
+                  if "ole" in features:
+                      cfb_join["v_matched_root_has_ole_stream"] += 1
+                  if "compobj" in features:
+                      cfb_join["v_matched_root_has_compobj"] += 1
+                  if "contents" in features:
+                      cfb_join["v_matched_root_has_contents"] += 1
+
+                  ole_header = ole_headers.get(v)
+                  if ole_header is None:
+                      cfb_join["v_matched_root_ole_header_missing"] += 1
+                      f_by_ole_stream_presence[(str(f), "missing")] += 1
+                  else:
+                      cfb_join["v_matched_root_ole_header_present"] += 1
+                      f_by_ole_stream_presence[(str(f), "present")] += 1
+                      version = str(ole_header["version"])
+                      flags = str(ole_header["flags"])
+                      update_option = str(ole_header["update_option"])
+                      ole_stream_version_counts[version] += 1
+                      ole_stream_flags_counts[flags] += 1
+                      ole_stream_update_option_counts[update_option] += 1
+                      f_by_ole_stream_flags[(str(f), flags)] += 1
+                      f_by_ole_stream_update_option[
+                          (str(f), update_option)
+                      ] += 1
+                      f_by_ole_stream_flags_update[
+                          (str(f), flags, update_option)
+                      ] += 1
+
+              if v + 1 in object_numbers:
+                  cfb_join["v_plus_1_in_object_storage_number"] += 1
+              if v > 0 and v - 1 in object_numbers:
+                  cfb_join["v_minus_1_in_object_storage_number"] += 1
+              if v in olepres_numbers:
+                  cfb_join["v_in_olepres_suffix"] += 1
+              if v in any_numbers:
+                  cfb_join["v_in_any_numeric_cfb_component"] += 1
+
+          # Third bounded discriminator: exact Object V storage class plus
+          # standard OlePres presentation header fields. Read metadata only; never
+          # instantiate the OLE server or retain presentation/native payload bytes.
+          olepres_header_parse_count = 0
+          for source_sha, file_candidates in candidate_by_sha.items():
+              fingerprint = fingerprints_by_sha[source_sha]
+              source_path = sha_to_path.get(source_sha)
+              if source_path is None:
+                  raise RuntimeError(
+                      f"{source_sha}: source path missing for OlePres discriminator"
+                  )
+
+              olepres_parts_by_object = defaultdict(list)
+              storage_parts_by_object = {}
+              for stream in fingerprint.get("streams") or []:
+                  if not isinstance(stream, dict):
+                      continue
+                  stream_path = str(stream.get("path") or "")
+                  parts = [
+                      part for part in stream_path.strip("/").split("/") if part
+                  ]
+                  if len(parts) < 3 or parts[0].casefold() != "objects":
+                      continue
+                  object_match = re.fullmatch(
+                      r"Object\s*(\d+)", parts[1], flags=re.IGNORECASE
+                  )
+                  if object_match is None:
+                      continue
+                  object_number = int(object_match.group(1))
+                  observed_storage_parts = parts[:2]
+                  previous_storage_parts = storage_parts_by_object.get(object_number)
+                  if (
+                      previous_storage_parts is not None
+                      and previous_storage_parts != observed_storage_parts
+                  ):
+                      raise RuntimeError(
+                          f"{source_sha}: ambiguous Object storage path for {object_number}"
+                      )
+                  storage_parts_by_object[object_number] = observed_storage_parts
+                  if any(
+                      re.search(r"OlePres\d+", component, flags=re.IGNORECASE)
+                      for component in parts[2:]
+                  ):
+                      olepres_parts_by_object[object_number].append(parts)
+
+              with olefile.OleFileIO(str(source_path)) as ole:
+                  for item in file_candidates:
+                      raw_v = (item.get("child_u16_first64") or {}).get("0x0a")
+                      raw_f = (item.get("child_u16_first64") or {}).get("0x0e")
+                      if raw_v is None or raw_f is None:
+                          raise RuntimeError(
+                              f"{source_sha}: missing V/F for OlePres discriminator"
+                          )
+                      v = int(raw_v)
+                      f_value = int(raw_f)
+                      storage_parts = storage_parts_by_object.get(v)
+                      if storage_parts is None:
+                          raise RuntimeError(
+                              f"{source_sha}: exact Object {v} storage path missing "
+                              "from fingerprint receipts"
+                          )
+                      try:
+                          storage_clsid = str(ole.getclsid(storage_parts)).lower()
+                      except Exception as exc:
+                          raise RuntimeError(
+                              f"{source_sha}: failed to read CLSID for Object {v}: {exc}"
+                          ) from exc
+                      storage_clsid_by_f[(str(f_value), storage_clsid)] += 1
+
+                      presentation_paths = sorted(
+                          olepres_parts_by_object.get(v, []),
+                          key=lambda parts: tuple(parts),
+                      )
+                      olepres_count_by_f[
+                          (str(f_value), str(len(presentation_paths)))
+                      ] += 1
+                      if not presentation_paths:
+                          olepres_header_status_by_f[
+                              (str(f_value), "missing")
+                          ] += 1
+                          continue
+
+                      for parts in presentation_paths:
+                          try:
+                              size = int(ole.get_size(parts))
+                              with ole.openstream(parts) as handle:
+                                  first8 = handle.read(8)
+                                  if len(first8) < 4:
+                                      raise ValueError("truncated clipboard-format field")
+                                  marker_value = int.from_bytes(
+                                      first8[0:4], "little", signed=False
+                                  )
+                                  if marker_value == 0:
+                                      format_end = 4
+                                      format_key = "none"
+                                  elif marker_value in {0xFFFFFFFF, 0xFFFFFFFE}:
+                                      if len(first8) < 8:
+                                          raise ValueError(
+                                              "truncated standard clipboard-format id"
+                                          )
+                                      format_id = int.from_bytes(
+                                          first8[4:8], "little", signed=False
+                                      )
+                                      format_end = 8
+                                      format_key = f"standard:{format_id}"
+                                  else:
+                                      if marker_value > 0x190:
+                                          raise ValueError(
+                                              f"clipboard-format length {marker_value} "
+                                              "exceeds MS-OLEDS bound"
+                                          )
+                                      format_end = 4 + marker_value
+                                      format_key = f"registered-len:{marker_value}"
+
+                                  if format_end + 4 > size:
+                                      raise ValueError(
+                                          "truncated TargetDeviceSize field"
+                                      )
+                                  handle.seek(format_end)
+                                  target_size_raw = handle.read(4)
+                                  if len(target_size_raw) != 4:
+                                      raise ValueError(
+                                          "truncated TargetDeviceSize read"
+                                      )
+                                  target_size = int.from_bytes(
+                                      target_size_raw, "little", signed=False
+                                  )
+                                  if target_size < 4:
+                                      raise ValueError(
+                                          f"invalid TargetDeviceSize {target_size}"
+                                      )
+                                  aspect_offset = format_end + target_size
+                                  if aspect_offset + 16 > size:
+                                      raise ValueError(
+                                          "truncated OlePres rendering header"
+                                      )
+                                  handle.seek(aspect_offset)
+                                  render_header = handle.read(16)
+                                  if len(render_header) != 16:
+                                      raise ValueError(
+                                          "short OlePres rendering header read"
+                                      )
+                                  aspect = int.from_bytes(
+                                      render_header[0:4], "little", signed=False
+                                  )
+                                  lindex = int.from_bytes(
+                                      render_header[4:8], "little", signed=False
+                                  )
+                                  advf = int.from_bytes(
+                                      render_header[8:12], "little", signed=False
+                                  )
+                                  reserved = int.from_bytes(
+                                      render_header[12:16], "little", signed=False
+                                  )
+                                  if reserved != 0:
+                                      raise ValueError(
+                                          f"unexpected OlePres Reserved1={reserved}"
+                                      )
+                          except Exception as exc:
+                              olepres_header_status_by_f[
+                                  (str(f_value), "invalid")
+                              ] += 1
+                              continue
+
+                          olepres_header_parse_count += 1
+                          olepres_header_status_by_f[
+                              (str(f_value), "parsed")
+                          ] += 1
+                          olepres_aspect_by_f[
+                              (str(f_value), str(aspect))
+                          ] += 1
+                          olepres_advf_by_f[
+                              (str(f_value), str(advf))
+                          ] += 1
+                          olepres_format_by_f[
+                              (str(f_value), format_key)
+                          ] += 1
+
+          cfb_join["olepres_header_parse_count"] = olepres_header_parse_count
+          cfb_join["storage_clsid_by_f_counts"] = {
+              f"{f_value}:{clsid}": count
+              for (f_value, clsid), count in sorted(storage_clsid_by_f.items())
+          }
+          cfb_join["olepres_count_by_f_counts"] = {
+              f"{f_value}:{count_key}": count
+              for (f_value, count_key), count
+              in sorted(olepres_count_by_f.items())
+          }
+          cfb_join["olepres_header_status_by_f_counts"] = {
+              f"{f_value}:{status}": count
+              for (f_value, status), count
+              in sorted(olepres_header_status_by_f.items())
+          }
+          cfb_join["olepres_aspect_by_f_counts"] = {
+              f"{f_value}:{aspect}": count
+              for (f_value, aspect), count in sorted(olepres_aspect_by_f.items())
+          }
+          cfb_join["olepres_advf_by_f_counts"] = {
+              f"{f_value}:{advf}": count
+              for (f_value, advf), count in sorted(olepres_advf_by_f.items())
+          }
+          cfb_join["olepres_format_by_f_counts"] = {
+              f"{f_value}:{format_key}": count
+              for (f_value, format_key), count
+              in sorted(olepres_format_by_f.items())
+          }
+
+          cfb_join["object_storage_count_distribution"] = dict(
+              sorted(object_storage_counts.items(), key=lambda item: int(item[0]))
+          )
+          cfb_join["olepres_count_distribution"] = dict(
+              sorted(olepres_counts.items(), key=lambda item: int(item[0]))
+          )
+          cfb_join["v_distinct_count"] = len(v_values)
+          cfb_join["v_top_values"] = [
+              {"value": value, "count": count}
+              for value, count in v_values.most_common(20)
+          ]
+          cfb_join["matched_object_root_signature_counts"] = dict(
+              matched_root_signatures.most_common()
+          )
+          cfb_join["matched_object_root_signature_by_f_counts"] = {
+              f"{f}:{signature}": count
+              for (f, signature), count in sorted(
+                  matched_root_signature_by_f.items()
+              )
+          }
+          cfb_join["direct_v_match_by_f_counts"] = {
+              f"{f}:{matched}": count
+              for (f, matched), count in sorted(direct_match_by_f.items())
+          }
+          cfb_join["candidate_file_contents_revision_counts"] = dict(
+              sorted(candidate_file_revisions.items())
+          )
+          cfb_join["candidate_instance_contents_revision_counts"] = dict(
+              sorted(candidate_instance_revisions.items())
+          )
+          cfb_join["direct_v_match_by_revision_counts"] = {
+              f"{revision}:{matched}": count
+              for (revision, matched), count
+              in sorted(direct_match_by_revision.items())
+          }
+          cfb_join["f_by_revision_counts"] = {
+              f"{revision}:{f}": count
+              for (revision, f), count in sorted(f_by_revision.items())
+          }
+          cfb_join["ole_stream_version_counts"] = dict(
+              sorted(
+                  ole_stream_version_counts.items(),
+                  key=lambda item: int(item[0]),
+              )
+          )
+          cfb_join["ole_stream_flags_counts"] = dict(
+              sorted(
+                  ole_stream_flags_counts.items(),
+                  key=lambda item: int(item[0]),
+              )
+          )
+          cfb_join["ole_stream_update_option_counts"] = dict(
+              sorted(
+                  ole_stream_update_option_counts.items(),
+                  key=lambda item: int(item[0]),
+              )
+          )
+          cfb_join["f_by_ole_stream_presence_counts"] = {
+              f"{f}:{presence}": count
+              for (f, presence), count in sorted(f_by_ole_stream_presence.items())
+          }
+          cfb_join["f_by_ole_stream_flags_counts"] = {
+              f"{f}:{flags}": count
+              for (f, flags), count in sorted(f_by_ole_stream_flags.items())
+          }
+          cfb_join["f_by_ole_stream_update_option_counts"] = {
+              f"{f}:{update}": count
+              for (f, update), count
+              in sorted(f_by_ole_stream_update_option.items())
+          }
+          cfb_join["f_by_ole_stream_flags_update_counts"] = {
+              f"{f}:{flags}:{update}": count
+              for (f, flags, update), count
+              in sorted(f_by_ole_stream_flags_update.items())
+          }
+          cfb_join["candidate_file_logical_identity_count"] = len(logical_groups)
+          cfb_join["candidate_file_duplicate_logical_group_count"] = sum(
+              len(group) > 1 for group in logical_groups.values()
+          )
+          cfb_join["candidate_file_largest_logical_duplicate_group_size"] = max(
+              (len(group) for group in logical_groups.values()),
+              default=0,
+          )
+
           summary = {
               "schema": "chaptera.legacy22-raw0022-companion-census.v1",
               "corpus_file_count": len(paths),
@@ -254,6 +824,7 @@ jobs:
                   if profile["observed_count"] == len(candidates)
                   and profile["distinct_count"] <= 8
               ],
+              "cfb_oledata_identity_join": cfb_join,
               "child_u32_low_cardinality_offsets": [
                   offset
                   for offset, profile in u32_summary.items()
