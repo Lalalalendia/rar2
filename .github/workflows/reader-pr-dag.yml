@@ -35,6 +35,8 @@ on:
       - ".github/workflows/mobile-reader-android-render.yml"
       - ".github/workflows/chaptera-local-portable-windows.yml"
       - ".github/workflows/web-acceptance-real-chromium.yml"
+      - ".github/workflows/chaptera-reader-installer.yml"
+      - ".github/workflows/chaptera-win-update-accept.yml"
   workflow_dispatch:
     inputs:
       force_all:
@@ -65,6 +67,8 @@ jobs:
       android_render: ${{ steps.classify.outputs.android_render }}
       portable: ${{ steps.classify.outputs.portable }}
       web_chromium: ${{ steps.classify.outputs.web_chromium }}
+      installer: ${{ steps.classify.outputs.installer }}
+      updater: ${{ steps.classify.outputs.updater }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -194,3 +198,13 @@ jobs:
     needs: [classify, tier-a]
     if: needs.classify.outputs.web_chromium == 'true'
     uses: ./.github/workflows/web-acceptance-real-chromium.yml
+
+  installer:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.installer == 'true'
+    uses: ./.github/workflows/chaptera-reader-installer.yml
+
+  updater:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.updater == 'true'
+    uses: ./.github/workflows/chaptera-win-update-accept.yml
