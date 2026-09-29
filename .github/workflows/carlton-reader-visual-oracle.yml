@@ -77,6 +77,15 @@ jobs:
       - name: Check shared render plan
         run: cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml
 
+      - name: Run Publisher-backed PAGE role acceptance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:RUNNER_TEMP "reader-page-role"
+          python tools/reader_page_role_observation.py --out $out
+          if ($LASTEXITCODE -ne 0) { throw "Reader PAGE role acceptance failed" }
+          "CHAPTERA_PAGE_ROLE_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Render pinned Publisher-reference typography customer page 1
         if: inputs.run_typography_golden
         run: cargo test -p chaptera-desktop --features reader-only golden_sample_newsletter_reference_customer_page_1_uses_shared_typography_render_plan -- --ignored --nocapture
@@ -242,6 +251,15 @@ jobs:
           }, indent=2, sort_keys=True))
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw "baseline visual receipt failed" }
+
+      - name: Upload sanitized PAGE role receipt
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: reader-page-role-observation
+          path: ${{ env.CHAPTERA_PAGE_ROLE_OUT }}
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload combined SampleNewsletter typography receipt
         if: inputs.run_typography_golden && success()
