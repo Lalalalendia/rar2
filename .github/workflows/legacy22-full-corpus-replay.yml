@@ -298,7 +298,8 @@ jobs:
               variable_value_by_child_service.setdefault(str(child_service), Counter())[str(variable)] += 1
               variable_value_by_parent_service.setdefault(str(parent_service), Counter())[str(variable)] += 1
 
-              if variable == int(item.get("matching_page_child_position") or -1):
+              page_position = item.get("matching_page_child_position")
+              if page_position is not None and variable == int(page_position):
                   variable_equals_page_position += 1
               if variable == int(item["object_id"]):
                   variable_equals_parent_object_id += 1
