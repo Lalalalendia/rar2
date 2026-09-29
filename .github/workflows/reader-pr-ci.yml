@@ -104,6 +104,7 @@ jobs:
     outputs:
       tier_a: ${{ steps.scope.outputs.tier_a }}
       reader_windows: ${{ steps.scope.outputs.reader_windows }}
+      reader_windows_full: ${{ steps.scope.outputs.reader_windows_full }}
       editor_windows: ${{ steps.scope.outputs.editor_windows }}
       visual_oracle: ${{ steps.scope.outputs.visual_oracle }}
       typography_golden: ${{ steps.scope.outputs.typography_golden }}
@@ -167,6 +168,8 @@ jobs:
     needs: [classify, tier-a]
     if: ${{ always() && needs.classify.outputs.reader_windows == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-reader-windows.yml
+    with:
+      full_product: ${{ needs.classify.outputs.reader_windows_full == 'true' }}
 
   editor-windows:
     name: Editor Windows product
