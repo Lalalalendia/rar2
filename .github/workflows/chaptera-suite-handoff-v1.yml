@@ -5,7 +5,8 @@ on:
     paths:
       - "Cargo.toml"
       - "crates/chaptera-suite-handoff/**"
-      - "apps/chaptera-desktop/**"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-rescue/**"
       - "packages/product/desktop-suite/v1/handoff*.json"
       - "tools/validate_chaptera_suite_handoff.py"
