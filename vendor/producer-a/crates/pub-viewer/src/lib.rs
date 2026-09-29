@@ -40,6 +40,8 @@ use pub_presentation_profile::{
     carlton_admitted_carrier_page_seq_nums_v1, reference_fixture_profile_known_v1,
     select_carlton_customer_page_seq_nums_v1, select_reference_fixture_customer_page_seq_nums_v1,
 };
+#[cfg(test)]
+use pub_reader::LegacyOleCachedPresentation;
 #[cfg(feature = "cmo-slot-compose")]
 use pub_reader::build_mature_0x2c_cmo_projection_bridge_v1;
 pub use pub_reader::{
@@ -51,11 +53,10 @@ pub use pub_reader::{
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
-    LegacyOleCachedPresentationSelection,
-    PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
-    PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild, WmfPreviewRgba,
-    analyze_mature_0x2c_page_roles, build_failure_envelope,
+    LegacyOleCachedPresentationSelection, PubAssetExportDiagnostic, PubBridgeDiagnostic,
+    PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
+    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
+    PubSourceGraphBuild, WmfPreviewRgba, analyze_mature_0x2c_page_roles, build_failure_envelope,
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     derive_pub_page_id, materialize_bounded_simple_table_cells, rasterize_wmf_preview,
@@ -66,8 +67,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
-#[cfg(test)]
-use pub_reader::LegacyOleCachedPresentation;
 
 pub const VIEWER_DOCUMENT_SCHEMA_V0_1: &str = "0.1";
 pub const VIEWER_GEOMETRY_SCHEMA_V0_1: &str = "0.1";
@@ -3129,12 +3128,9 @@ mod tests {
         assert_eq!(repeated.bytes, image.bytes);
 
         let same_wmf_other_ordinal = minimal_legacy_ole_cached_presentation(2);
-        let equivalent_id = legacy_ole_preview_resource_id(
-            &source_hash,
-            73,
-            &same_wmf_other_ordinal.data,
-        )
-        .expect("equivalent presentation identity");
+        let equivalent_id =
+            legacy_ole_preview_resource_id(&source_hash, 73, &same_wmf_other_ordinal.data)
+                .expect("equivalent presentation identity");
         assert_eq!(equivalent_id, image.resource_id);
 
         let other_payload_id = legacy_ole_preview_resource_id(&source_hash, 73, b"different-wmf")
@@ -3165,11 +3161,9 @@ mod tests {
             )
             .is_some()
         );
-        assert!(
-            equivalent_diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "viewer.legacy_ole.preview_equivalent_duplicates"
-            })
-        );
+        assert!(equivalent_diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "viewer.legacy_ole.preview_equivalent_duplicates"
+        }));
 
         let mut distinct = minimal_legacy_ole_cached_presentation(2);
         distinct.width += 1;
