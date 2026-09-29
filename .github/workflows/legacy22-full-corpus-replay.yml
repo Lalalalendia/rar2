@@ -72,6 +72,61 @@ jobs:
             --out out/legacy625 \
             --workers 4
 
+      - name: Summarize source-free legacy residuals
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from collections import defaultdict
+          from pathlib import Path
+
+          rows = json.loads(Path("out/legacy625/reader-records.json").read_text())
+          counts = defaultdict(lambda: {"object_count": 0, "file_count": 0})
+
+          for row in rows:
+              if row.get("opened") is not True or row.get("contents_family") != "0x22":
+                  continue
+              seen = set()
+              for item in row.get("legacy_object_residuals") or []:
+                  key = (item.get("raw_type_hex"), item.get("reason"))
+                  counts[key]["object_count"] += int(item.get("count") or 0)
+                  seen.add(key)
+              for key in seen:
+                  counts[key]["file_count"] += 1
+
+          entries = [
+              {
+                  "raw_type_hex": raw_type_hex,
+                  "reason": reason,
+                  **value,
+              }
+              for (raw_type_hex, reason), value in sorted(
+                  counts.items(),
+                  key=lambda item: (
+                      -item[1]["object_count"],
+                      -item[1]["file_count"],
+                      str(item[0][0]),
+                      str(item[0][1]),
+                  ),
+              )
+          ]
+          payload = {
+              "schema": "chaptera.legacy22-residual-census.v2",
+              "entries": entries,
+              "total_residual_objects": sum(item["object_count"] for item in entries),
+              "files_with_residuals": sum(
+                  1 for row in rows
+                  if row.get("opened") is True
+                  and row.get("contents_family") == "0x22"
+                  and bool(row.get("legacy_object_residuals"))
+              ),
+          }
+          Path("out/legacy625/legacy-residual-census.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+
       - name: Guard legacy22 product depth
         run: |
           set -euo pipefail
