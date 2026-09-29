@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{Context, Result, anyhow, bail};
-use chaptera_desktop_open_sandbox::{DEFAULT_WALL_TIMEOUT, launch_contained};
+use chaptera_desktop_open_sandbox::{
+    DEFAULT_WALL_TIMEOUT, launch_contained, launch_minimal_appcontainer_probe_for_diagnostic,
+};
 use std::path::PathBuf;
 
 const MARKER: &[u8] = b"CHAPTERA_SANDBOX_BOOTSTRAP_OK\n";
@@ -16,7 +18,22 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = std::env::args_os();
     let _program = args.next();
-    let probe = PathBuf::from(args.next().ok_or_else(|| anyhow!("missing probe path"))?);
+    let first = args.next().ok_or_else(|| anyhow!("missing probe path"))?;
+    if first == "--microsoft-minimal" {
+        let probe = PathBuf::from(args.next().ok_or_else(|| anyhow!("missing probe path"))?);
+        if args.next().is_some() {
+            bail!("unexpected arguments");
+        }
+        let exit_code =
+            launch_minimal_appcontainer_probe_for_diagnostic(&probe, DEFAULT_WALL_TIMEOUT)
+                .context("launch Microsoft-minimal AppContainer probe")?;
+        if exit_code != 0 {
+            bail!("Microsoft-minimal AppContainer probe exited with {exit_code}");
+        }
+        return Ok(());
+    }
+
+    let probe = PathBuf::from(first);
     if args.next().is_some() {
         bail!("unexpected arguments");
     }
