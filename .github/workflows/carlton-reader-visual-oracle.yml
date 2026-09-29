@@ -20,12 +20,32 @@ jobs:
   visual-oracle:
     runs-on: windows-latest
     timeout-minutes: 40
+    env:
+      CARGO_TARGET_DIR: target/reader-fidelity-win
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+
+      - name: Build Windows fidelity Cargo cache key
+        id: fidelity-cache-key
+        shell: pwsh
+        env:
+          MANIFEST_HASH: ${{ hashFiles('Cargo.toml', 'apps/chaptera-desktop/Cargo.toml', 'crates/chaptera-viewer-render-plan/Cargo.toml', 'vendor/producer-a/Cargo.toml', 'vendor/producer-a/crates/**/Cargo.toml') }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MANIFEST_HASH)) {
+            throw "Reader fidelity Cargo manifest hash is empty"
+          }
+          "key=reader-fidelity-win-v1-${env:RUNNER_OS}-rust-1.94.1-$env:MANIFEST_HASH" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore/save Windows fidelity Cargo build cache
+        id: fidelity-cargo-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/reader-fidelity-win
+          key: ${{ steps.fidelity-cache-key.outputs.key }}
 
       - name: Acquire pinned SampleNewsletter for combined receipts
         if: inputs.run_typography_golden || inputs.run_windows_shared_core_smoke
@@ -65,10 +85,10 @@ jobs:
           $out = "target/reader-windows-shared-core-smoke"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-          $built = "target/debug/chaptera-editor.exe"
+          $built = "target/reader-fidelity-win/debug/chaptera-editor.exe"
           $exe = Join-Path $out "chaptera-reader.exe"
           if (-not (Test-Path $built)) {
-            throw "reader-only Windows build did not produce target/debug/chaptera-editor.exe"
+            throw "reader-only Windows build did not produce target/reader-fidelity-win/debug/chaptera-editor.exe"
           }
           Copy-Item $built $exe -Force
 
