@@ -5,7 +5,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/mobile-reader-android-core-portability.yml"
-      - "vendor/producer-a/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-layout/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
       - "crates/chaptera-viewer-render-plan/**"
       - "crates/chaptera-mobile-reader-core/**"
 
