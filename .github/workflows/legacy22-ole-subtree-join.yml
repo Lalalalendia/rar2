@@ -1,0 +1,349 @@
+name: Legacy22 OLE subtree cross-family join
+
+on:
+  push:
+    branches:
+      - "research/legacy22-ole-subtree-join-01"
+    paths:
+      - ".github/workflows/legacy22-ole-subtree-join.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout pinned 625 corpus
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: ${{ env.LALAMU_CORPUS_REF }}
+          path: corpus-src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Install bounded CFB parser
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Build legacy OleData profiler
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin legacy22_raw0022_companion_profile
+
+      - name: Join persisted OLE subtrees across 0x22 and 0x2c
+        run: |
+          set -euo pipefail
+          mkdir -p out/ole-subtree
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import tempfile
+          from collections import defaultdict
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          from pathlib import Path
+
+          import olefile
+
+          corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
+          paths = sorted(corpus.glob("*.pub"))
+          assert len(paths) == 625, len(paths)
+
+          profiler = (
+              Path(os.environ["CARGO_TARGET_DIR"])
+              / "release"
+              / "legacy22_raw0022_companion_profile"
+          )
+
+          MAGIC22 = bytes.fromhex("e8ac2200")
+          MAGIC2C = bytes.fromhex("e8ac2c00")
+
+          def file_sha(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          def normalized_component(value):
+              return value.casefold().lstrip("\x00\x01\x02")
+
+          def object_roots(ole):
+              roots = {}
+              for entry in ole.listdir(streams=False, storages=True):
+                  if len(entry) != 2 or entry[0].casefold() != "objects":
+                      continue
+                  m = re.fullmatch(r"Object\s*(\d+)", entry[1], flags=re.IGNORECASE)
+                  if m:
+                      roots[int(m.group(1))] = entry
+              return roots
+
+          def object_fingerprints(ole, n, root):
+              rows = []
+              for entry in ole.listdir(streams=True, storages=False):
+                  if len(entry) < 3 or entry[:2] != root:
+                      continue
+                  rel_parts = entry[2:]
+                  rel = "/".join(rel_parts)
+                  raw = ole.openstream(entry).read()
+                  rows.append({
+                      "rel": rel,
+                      "norm": "/".join(normalized_component(x) for x in rel_parts),
+                      "sha": hashlib.sha256(raw).hexdigest(),
+                      "len": len(raw),
+                  })
+              rows.sort(key=lambda x: (x["norm"], x["sha"], x["len"]))
+              clsid = str(ole.getclsid(root) or "").strip("{}").lower()
+
+              def fp(selected, tier):
+                  if not selected:
+                      return None
+                  h = hashlib.sha256()
+                  h.update(f"tier={tier}\nclsid={clsid}\n".encode())
+                  for item in selected:
+                      h.update(
+                          f'{item["norm"]}\t{item["len"]}\t{item["sha"]}\n'.encode()
+                      )
+                  return {
+                      "sha256": h.hexdigest(),
+                      "stream_count": len(selected),
+                      "byte_count": sum(x["len"] for x in selected),
+                  }
+
+              full = fp(rows, "full")
+              no_pres_rows = [
+                  x for x in rows
+                  if not normalized_component(x["rel"].split("/")[-1]).startswith("olepres")
+                  and normalized_component(x["rel"].split("/")[-1]) != "ole"
+              ]
+              payload_rows = [
+                  x for x in no_pres_rows
+                  if "compobj" not in normalized_component(x["rel"].split("/")[-1])
+              ]
+              return {
+                  "object_number": n,
+                  "storage_clsid": clsid,
+                  "full": full,
+                  "no_presentation": fp(no_pres_rows, "no_presentation"),
+                  "payload_only": fp(payload_rows, "payload_only"),
+              }
+
+          family_by_path = {}
+          object_profiles = {}
+          for path in paths:
+              sha = file_sha(path)
+              with olefile.OleFileIO(str(path)) as ole:
+                  contents = ole.openstream("Contents").read(4)
+                  family = "0x22" if contents == MAGIC22 else "0x2c" if contents == MAGIC2C else "other"
+                  family_by_path[path] = (sha, family)
+                  roots = object_roots(ole)
+                  if roots:
+                      object_profiles[sha] = {
+                          "family": family,
+                          "objects": {
+                              n: object_fingerprints(ole, n, root)
+                              for n, root in sorted(roots.items())
+                          },
+                      }
+
+          legacy_paths = [
+              path for path, (_, family) in family_by_path.items()
+              if family == "0x22"
+          ]
+
+          def profile_legacy(path, td):
+              sha, _ = family_by_path[path]
+              target = td / f"{sha}.json"
+              cp = subprocess.run(
+                  [str(profiler), str(path), str(target)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=45,
+                  check=False,
+              )
+              if cp.returncode != 0:
+                  raise RuntimeError(
+                      f"{sha}: profiler rc={cp.returncode}: {cp.stderr[-1200:]}"
+                  )
+              return json.loads(target.read_text())
+
+          legacy_candidates = []
+          with tempfile.TemporaryDirectory(prefix="ole-subtree-prof-") as raw_td:
+              td = Path(raw_td)
+              with ThreadPoolExecutor(max_workers=8) as pool:
+                  futures = {
+                      pool.submit(profile_legacy, path, td): path
+                      for path in legacy_paths
+                  }
+                  for future in as_completed(futures):
+                      row = future.result()
+                      if not row.get("eligible_reader_open"):
+                          continue
+                      for item in row.get("candidates") or []:
+                          scalars = item.get("child_u16_first64") or {}
+                          if "0x0a" not in scalars or "0x0e" not in scalars:
+                              continue
+                          legacy_candidates.append({
+                              "source_sha256": row["source_sha256"].lower(),
+                              "v": int(scalars["0x0a"]),
+                              "f": int(scalars["0x0e"]),
+                          })
+
+          assert len(legacy_candidates) == 305, len(legacy_candidates)
+
+          legacy_objects = []
+          for item in legacy_candidates:
+              profile = object_profiles.get(item["source_sha256"])
+              if profile is None or profile["family"] != "0x22":
+                  raise RuntimeError(
+                      f'{item["source_sha256"]}: missing legacy Objects topology'
+                  )
+              obj = profile["objects"].get(item["v"])
+              if obj is None:
+                  raise RuntimeError(
+                      f'{item["source_sha256"]}: missing Object {item["v"]}'
+                  )
+              legacy_objects.append({**item, "object": obj})
+
+          mature_objects = []
+          for sha, profile in object_profiles.items():
+              if profile["family"] != "0x2c":
+                  continue
+              for n, obj in profile["objects"].items():
+                  mature_objects.append({
+                      "source_sha256": sha,
+                      "object_number": n,
+                      "object": obj,
+                  })
+
+          tiers = ("full", "no_presentation", "payload_only")
+          mature_index = {tier: defaultdict(list) for tier in tiers}
+          for item in mature_objects:
+              for tier in tiers:
+                  fp = item["object"].get(tier)
+                  if fp and fp["byte_count"] > 0:
+                      mature_index[tier][fp["sha256"]].append(item)
+
+          matches = []
+          matched_pairs = set()
+          tier_counts = defaultdict(int)
+          for legacy in legacy_objects:
+              for tier in tiers:
+                  fp = legacy["object"].get(tier)
+                  if not fp or fp["byte_count"] <= 0:
+                      continue
+                  for mature in mature_index[tier].get(fp["sha256"], []):
+                      pair_key = (
+                          legacy["source_sha256"],
+                          legacy["v"],
+                          mature["source_sha256"],
+                          mature["object_number"],
+                      )
+                      if pair_key in matched_pairs:
+                          continue
+                      matched_pairs.add(pair_key)
+                      tier_counts[tier] += 1
+                      matches.append({
+                          "tier": tier,
+                          "legacy_source_sha256": legacy["source_sha256"],
+                          "legacy_object_number": legacy["v"],
+                          "legacy_raw_f": legacy["f"],
+                          "mature_source_sha256": mature["source_sha256"],
+                          "mature_object_number": mature["object_number"],
+                          "storage_clsid": legacy["object"]["storage_clsid"],
+                          "fingerprint_sha256": fp["sha256"],
+                          "stream_count": fp["stream_count"],
+                          "byte_count": fp["byte_count"],
+                      })
+                      break
+
+          matches.sort(key=lambda x: (
+              {"full": 0, "no_presentation": 1, "payload_only": 2}[x["tier"]],
+              x["legacy_source_sha256"],
+              x["legacy_object_number"],
+              x["mature_source_sha256"],
+              x["mature_object_number"],
+          ))
+
+          source_pairs = sorted({
+              (x["legacy_source_sha256"], x["mature_source_sha256"])
+              for x in matches
+          })
+
+          receipt = {
+              "schema": "chaptera.legacy22-ole-subtree-cross-family-join.v1",
+              "corpus_ref": "f78cc6f455f4dc222868f9cc035511a6ca7a91ea",
+              "corpus_file_count": len(paths),
+              "legacy_candidate_count": len(legacy_objects),
+              "legacy_candidate_file_count": len({
+                  x["source_sha256"] for x in legacy_objects
+              }),
+              "mature_object_count": len(mature_objects),
+              "mature_object_file_count": len({
+                  x["source_sha256"] for x in mature_objects
+              }),
+              "matched_object_pair_count": len(matches),
+              "matched_source_pair_count": len(source_pairs),
+              "match_tier_counts": dict(sorted(tier_counts.items())),
+              "source_pairs": [
+                  {
+                      "legacy_source_sha256": a,
+                      "mature_source_sha256": b,
+                  }
+                  for a, b in source_pairs[:100]
+              ],
+              "object_matches": matches[:100],
+              "truncated_object_matches": max(0, len(matches) - 100),
+              "evidence_boundary": (
+                  "source-safe exact CFB substorage fingerprints only; "
+                  "full includes persisted presentation; no_presentation excludes Ole/OlePres; "
+                  "payload_only also excludes CompObj. Exact byte identity is a pair candidate, "
+                  "not by itself proof of whole-document SaveAs lineage."
+              ),
+          }
+          Path("out/ole-subtree/receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish source-safe join to issue 163
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Corpus-wide OLE subtree join — run ${{ github.run_id }}, head ${{ github.sha }}"
+            echo
+            echo '~~~json'
+            cat out/ole-subtree/receipt.json
+            echo '~~~'
+          } >/tmp/receipt.md
+          gh issue comment 163 --repo Lalalalendia/rar2 --body-file /tmp/receipt.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legacy22-ole-subtree-join-${{ github.run_id }}
+          path: out/ole-subtree/**
+          if-no-files-found: error
+          retention-days: 30
