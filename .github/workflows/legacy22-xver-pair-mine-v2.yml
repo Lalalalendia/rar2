@@ -1,0 +1,208 @@
+name: Legacy22 cross-version pair mine v2
+
+on:
+  push:
+    branches:
+      - "research/legacy22-xver-pair-mine-02"
+    paths:
+      - ".github/workflows/legacy22-xver-pair-mine-v2.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/legacy22_raw0022_companion_profile.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  APACHE_POI_REF: 93b6a820f4aaefd7b062615f843799947872cb24
+
+jobs:
+  pair-mine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout pinned Apache POI fixtures
+        uses: actions/checkout@v4
+        with:
+          repository: apache/poi
+          ref: ${{ env.APACHE_POI_REF }}
+          path: apache-poi
+          sparse-checkout: |
+            test-data/publisher/Sample98.pub
+            test-data/publisher/Sample2000.pub
+            test-data/publisher/Sample.pub
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Install bounded CFB parser
+        run: python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Build profiler
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin legacy22_raw0022_companion_profile
+
+      - name: Profile same-document legacy targets
+        run: |
+          set -euo pipefail
+          mkdir -p out/xver-pair
+          BIN="${CARGO_TARGET_DIR}/release/legacy22_raw0022_companion_profile"
+          "$BIN" apache-poi/test-data/publisher/Sample98.pub out/xver-pair/Sample98.raw0022.json --raw-legacy22
+          "$BIN" apache-poi/test-data/publisher/Sample2000.pub out/xver-pair/Sample2000.raw0022.json --raw-legacy22
+
+      - name: Build source-safe same-document receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import re
+          from collections import Counter
+          from pathlib import Path
+          import olefile
+
+          root = Path("apache-poi/test-data/publisher")
+          out = Path("out/xver-pair")
+
+          def sha256(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          def cfb_profile(path):
+              object_roots = set()
+              object_features = {}
+              with olefile.OleFileIO(str(path)) as ole:
+                  entries = ole.listdir(streams=True, storages=True)
+                  for entry in entries:
+                      if len(entry) < 2 or entry[0].casefold() != "objects":
+                          continue
+                      m = re.fullmatch(r"Object\s*(\d+)", entry[1], flags=re.IGNORECASE)
+                      if not m:
+                          continue
+                      n = int(m.group(1))
+                      object_roots.add(n)
+                      features = object_features.setdefault(n, set())
+                      for component in entry[2:]:
+                          folded = component.casefold()
+                          normalized = folded.lstrip("\x00\x01\x02")
+                          if "olepres" in folded:
+                              features.add("olepres")
+                          if "ole10native" in folded:
+                              features.add("ole10native")
+                          if "compobj" in folded:
+                              features.add("compobj")
+                          if normalized == "ole":
+                              features.add("ole")
+                          if normalized == "contents":
+                              features.add("contents")
+                  contents = ole.openstream("Contents").read(32)
+                  escher_len = 0
+                  try:
+                      escher_len = len(ole.openstream(["Escher", "EscherStm"]).read())
+                  except Exception:
+                      pass
+              return {
+                  "sha256": sha256(path),
+                  "size": path.stat().st_size,
+                  "contents_magic_hex": contents[:4].hex(),
+                  "contents_revision_u16": (
+                      int.from_bytes(contents[12:14], "little")
+                      if len(contents) >= 14 else None
+                  ),
+                  "object_roots": sorted(object_roots),
+                  "object_features": {
+                      str(n): sorted(v) for n, v in sorted(object_features.items())
+                  },
+                  "escher_stm_len": escher_len,
+              }
+
+          legacy = {}
+          legacy_v_union = set()
+          for name in ("Sample98", "Sample2000"):
+              row = json.loads((out / f"{name}.raw0022.json").read_text())
+              candidates = row.get("candidates") or []
+              v_values = []
+              f_counts = Counter()
+              for item in candidates:
+                  scalars = item.get("child_u16_first64") or {}
+                  if "0x0a" in scalars:
+                      v_values.append(int(scalars["0x0a"]))
+                  if "0x0e" in scalars:
+                      f_counts[str(int(scalars["0x0e"]))] += 1
+              v_values = sorted(set(v_values))
+              legacy_v_union.update(v_values)
+              legacy[name] = {
+                  "source_sha256": row.get("source_sha256"),
+                  "profile_mode": row.get("profile_mode"),
+                  "eligible_reader_open": row.get("eligible_reader_open"),
+                  "candidate_count": int(row.get("candidate_count") or 0),
+                  "v_values": v_values,
+                  "f_counts": dict(sorted(f_counts.items(), key=lambda kv: int(kv[0]))),
+              }
+
+          fixtures = {
+              "Sample98": cfb_profile(root / "Sample98.pub"),
+              "Sample2000": cfb_profile(root / "Sample2000.pub"),
+              "Sample": cfb_profile(root / "Sample.pub"),
+          }
+          mature_roots = set(fixtures["Sample"]["object_roots"])
+          receipt = {
+              "schema": "chaptera.legacy22-xver-pair-mine.v2",
+              "apache_poi_ref": "93b6a820f4aaefd7b062615f843799947872cb24",
+              "fixtures": fixtures,
+              "legacy_raw0022": legacy,
+              "legacy_v_union": sorted(legacy_v_union),
+              "mature_object_roots": sorted(mature_roots),
+              "legacy_v_intersection_mature_object_roots": sorted(
+                  legacy_v_union & mature_roots
+              ),
+              "legacy_v_only": sorted(legacy_v_union - mature_roots),
+              "mature_object_root_only": sorted(mature_roots - legacy_v_union),
+              "applicable_legacy_ole_found": any(
+                  item["candidate_count"] > 0 for item in legacy.values()
+              ),
+              "evidence_boundary": (
+                  "aggregate same-document public SaveAs topology; no OLE activation, "
+                  "native payload, moniker, path, or source bytes retained"
+              ),
+          }
+          (out / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish receipt to issue 163
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Hosted same-document receipt — run ${{ github.run_id }}, head ${{ github.sha }}"
+            echo
+            echo '~~~json'
+            cat out/xver-pair/receipt.json
+            echo '~~~'
+          } >/tmp/receipt.md
+          gh issue comment 163 --repo Lalalalendia/rar2 --body-file /tmp/receipt.md
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: legacy22-xver-pair-v2-${{ github.run_id }}
+          path: out/xver-pair/**
+          if-no-files-found: error
+          retention-days: 30
