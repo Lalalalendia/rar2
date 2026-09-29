@@ -6,7 +6,7 @@ use pub_reader::{
     probe_mature_0x2c_quill_story_error_kind, probe_mature_0x2c_quill_story_failure_evidence,
     probe_mature_0x2c_quill_story_failure_stage, probe_mature_0x2c_source_graph_failure_stage,
     probe_mature_0x2c_story_catalog_error_kind,
-    resolve_pub_source_graph, PubReaderRoute,
+    resolve_pub_source_graph, PubReaderRoute, QuillStoryFailureEvidence,
 };
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -40,7 +40,7 @@ struct FailureStageRow {
     stage: String,
     opened: bool,
     open_error_signature_sha256: Option<String>,
-    quill_failure_evidence: Option<pub_quill::QuillStoryFailureEvidence>,
+    quill_failure_evidence: Option<QuillStoryFailureEvidence>,
 }
 
 fn diagnose(bytes: &[u8]) -> FailureStageRow {
