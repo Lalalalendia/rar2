@@ -22,6 +22,7 @@ mod ole_presentation;
 mod resolve;
 mod structural_base;
 mod table_bridge;
+mod wmf_preview;
 mod wmf;
 
 pub use asset_export::{
@@ -68,6 +69,7 @@ pub use legacy22_noquill_graph::{
     build_legacy_0x22_noquill_from_contents, build_legacy_0x22_noquill_source_graph,
 };
 pub use ole_presentation::{
+pub use wmf_preview::{WmfPreviewRgba, rasterize_wmf_preview};
     LegacyOleCachedPresentation, LegacyOleCachedPresentationDiagnostic,
     LegacyOleCachedPresentationScan, OlePresentation, parse_cf_metafilepict_ole_presentation,
     read_legacy_ole_cached_presentations, scan_legacy_ole_cached_presentations,
