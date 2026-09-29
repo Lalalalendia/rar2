@@ -544,11 +544,11 @@ jobs:
 
           assert companion["candidate_count"] == 305, companion["candidate_count"]
           assert len(legacy_with_scene) == 217, len(legacy_with_scene)
-          # #160 admits the 305 authoritative PAGE OLE candidates. #93 then
-          # admits bounded non-degenerate raw0x0004 LINE endpoint geometry,
-          # raising the pinned-625 scene baseline from 2268 to 2556 without
-          # changing open/fail, Story, text, or encoding counts.
-          assert legacy_scene_nodes == 2556, legacy_scene_nodes
+          # Productized legacy geometry has advanced the pinned-625 scene
+          # baseline to 2583. Exact run 36615462549 proves the surrounding
+          # legacy-owned open, Story, text, encoding and OLE-candidate counts
+          # remain unchanged, so keep those guards independently pinned below.
+          assert legacy_scene_nodes == 2583, legacy_scene_nodes
           assert legacy_story_frames == 1430, legacy_story_frames
           assert legacy_text_fragments == 1383, legacy_text_fragments
           assert unresolved_encoding_files == 58, unresolved_encoding_files
