@@ -2,7 +2,12 @@
 
 from profile_olepres_wmf import (
     CF_METAFILEPICT,
+    META_CREATEREGION,
+    META_DELETEOBJECT,
+    META_SELECTCLIPREGION,
+    META_SELECTOBJECT,
     ParseError,
+    audit_wmf_object_lifecycle,
     parse_ole_presentation,
     parse_wmf,
 )
@@ -19,6 +24,28 @@ def minimal_wmf() -> bytes:
     raw += (0).to_bytes(2, "little")
     raw += (3).to_bytes(4, "little")
     raw += (0).to_bytes(2, "little")
+    return bytes(raw)
+
+
+def record(function: int, params: bytes = b"") -> bytes:
+    assert len(params) % 2 == 0
+    words = 3 + len(params) // 2
+    return words.to_bytes(4, "little") + function.to_bytes(2, "little") + params
+
+
+def lifecycle_wmf(records: list[bytes], object_count: int = 1) -> bytes:
+    body = b"".join(records) + record(0)
+    max_record_words = max(len(item) // 2 for item in records + [record(0)])
+    total_words = (18 + len(body)) // 2
+    raw = bytearray()
+    raw += (1).to_bytes(2, "little")
+    raw += (9).to_bytes(2, "little")
+    raw += (0x0300).to_bytes(2, "little")
+    raw += total_words.to_bytes(4, "little")
+    raw += object_count.to_bytes(2, "little")
+    raw += max_record_words.to_bytes(4, "little")
+    raw += (0).to_bytes(2, "little")
+    raw += body
     return bytes(raw)
 
 
@@ -81,6 +108,32 @@ def main() -> int:
         assert str(exc) == "eof_missing"
     else:
         raise AssertionError("missing EOF must fail closed")
+
+    fresh_region = lifecycle_wmf(
+        [
+            record(META_CREATEREGION),
+            record(META_SELECTOBJECT, (0).to_bytes(2, "little")),
+        ]
+    )
+    audit = audit_wmf_object_lifecycle(fresh_region)
+    assert audit["region_selectobject_fresh_slot_count"] == 1
+    assert audit["region_selectobject_reused_slot_count"] == 0
+    assert audit["selectclipregion_region_count"] == 0
+
+    reused_region = lifecycle_wmf(
+        [
+            record(META_CREATEREGION),
+            record(META_DELETEOBJECT, (0).to_bytes(2, "little")),
+            record(META_CREATEREGION),
+            record(META_SELECTOBJECT, (0).to_bytes(2, "little")),
+            record(META_SELECTCLIPREGION, (0).to_bytes(2, "little")),
+        ]
+    )
+    audit = audit_wmf_object_lifecycle(reused_region)
+    assert audit["region_selectobject_fresh_slot_count"] == 0
+    assert audit["region_selectobject_reused_slot_count"] == 1
+    assert audit["selectclipregion_region_count"] == 1
+    assert audit["selectclipregion_nonregion_count"] == 0
 
     return 0
 
