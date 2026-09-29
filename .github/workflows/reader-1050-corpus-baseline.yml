@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - corpus/reader-1050-baseline
+      - reader/1050-failure-stage
     paths:
       - '.github/workflows/reader-1050-corpus-baseline.yml'
       - 'tools/corpus/pub_container_extract.py'
@@ -126,6 +127,14 @@ jobs:
         with:
           path: rar2-target
           key: ${{ steps.reader-1050-cache-key.outputs.key }}
+
+      - name: Validate Reader failure taxonomy
+        run: |
+          set -euo pipefail
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --bin corpus-reader-receipt
 
       - name: Build source-free Reader receipt producer
         run: |
