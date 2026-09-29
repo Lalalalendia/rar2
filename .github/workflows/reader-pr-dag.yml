@@ -1,0 +1,196 @@
+name: Reader PR DAG V1
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/chaptera-desktop/**"
+      - "apps/chaptera-mobile-android/**"
+      - "apps/chaptera-server/**"
+      - "apps/web/**"
+      - "crates/chaptera-mobile-reader-core/**"
+      - "crates/chaptera-mobile-reader-jni/**"
+      - "crates/chaptera-scene-instance/**"
+      - "crates/chaptera-update-*/**"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "crates/pub-presentation-profile/**"
+      - "deploy/config/**"
+      - "installer/windows/**"
+      - "packages/product/**"
+      - "packages/protocol/editor-agent-control/**"
+      - "packages/protocol/revision/v1/**"
+      - "services/editor-api/**"
+      - "tools/**"
+      - "vendor/producer-a/**"
+      - ".github/workflows/reader-pr-dag.yml"
+      - ".github/workflows/reader-consumer-preflight.yml"
+      - ".github/workflows/chaptera-reader-windows.yml"
+      - ".github/workflows/chaptera-desktop-windows.yml"
+      - ".github/workflows/carlton-reader-visual-oracle.yml"
+      - ".github/workflows/reader-typography-golden.yml"
+      - ".github/workflows/mobile-reader-android-core-portability.yml"
+      - ".github/workflows/mobile-reader-android-local-open.yml"
+      - ".github/workflows/mobile-reader-android-render.yml"
+      - ".github/workflows/chaptera-local-portable-windows.yml"
+      - ".github/workflows/web-acceptance-real-chromium.yml"
+  workflow_dispatch:
+    inputs:
+      force_all:
+        description: "Run the full selective fanout explicitly"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: reader-pr-dag-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    name: Classify changed Reader/product surfaces
+    runs-on: ubuntu-latest
+    outputs:
+      tier_a_required: ${{ steps.classify.outputs.tier_a_required }}
+      reader_windows: ${{ steps.classify.outputs.reader_windows }}
+      desktop_windows: ${{ steps.classify.outputs.desktop_windows }}
+      visual_oracle: ${{ steps.classify.outputs.visual_oracle }}
+      typography: ${{ steps.classify.outputs.typography }}
+      android_core: ${{ steps.classify.outputs.android_core }}
+      android_local_open: ${{ steps.classify.outputs.android_local_open }}
+      android_render: ${{ steps.classify.outputs.android_render }}
+      portable: ${{ steps.classify.outputs.portable }}
+      web_chromium: ${{ steps.classify.outputs.web_chromium }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test fanout classifier
+        run: python tools/ci/test_reader_pr_classifier.py
+
+      - id: classify
+        name: Classify exact changed paths
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORCE_ALL: ${{ inputs.force_all || false }}
+        run: |
+          set -euo pipefail
+          base="$BASE_SHA"
+          if [[ -z "$base" ]]; then
+            base="$(git rev-parse "$HEAD_SHA^")"
+          fi
+          extra=()
+          if [[ "$FORCE_ALL" == "true" ]]; then
+            extra+=(--force-all)
+          fi
+          python tools/ci/reader_pr_classifier.py             --base "$base"             --head "$HEAD_SHA"             --receipt target/reader-pr-dag/classifier.json             --github-output "$GITHUB_OUTPUT"             "${extra[@]}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-pr-classifier-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/reader-pr-dag/classifier.json
+          if-no-files-found: error
+
+  tier-a:
+    name: Reader consumer Tier A
+    needs: classify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.classify.outputs.tier_a_required == 'true'
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Test Reader preflight planner
+        if: needs.classify.outputs.tier_a_required == 'true'
+        run: python tools/ci/test_reader_consumer_preflight.py
+
+      - name: Run exact-head Reader seam preflight
+        if: needs.classify.outputs.tier_a_required == 'true'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BASE_SHA"
+          if [[ -z "$base" ]]; then
+            base="$(git rev-parse "$HEAD_SHA^")"
+          fi
+          python tools/ci/reader_consumer_preflight.py             --base "$base"             --head "$HEAD_SHA"             --receipt target/reader-consumer-preflight/receipt.json
+
+      - name: Record Tier A no-op
+        if: needs.classify.outputs.tier_a_required != 'true'
+        run: |
+          mkdir -p target/reader-consumer-preflight
+          printf '%s\n' '{"schema":"chaptera.reader-consumer-preflight.v1","status":"not-required"}' > target/reader-consumer-preflight/receipt.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-consumer-preflight-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/reader-consumer-preflight/receipt.json
+          if-no-files-found: error
+
+  reader-windows:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.reader_windows == 'true'
+    uses: ./.github/workflows/chaptera-reader-windows.yml
+
+  desktop-windows:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.desktop_windows == 'true'
+    uses: ./.github/workflows/chaptera-desktop-windows.yml
+
+  visual-oracle:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.visual_oracle == 'true'
+    uses: ./.github/workflows/carlton-reader-visual-oracle.yml
+
+  typography:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.typography == 'true'
+    uses: ./.github/workflows/reader-typography-golden.yml
+
+  android-core:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.android_core == 'true'
+    uses: ./.github/workflows/mobile-reader-android-core-portability.yml
+
+  android-local-open:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.android_local_open == 'true'
+    uses: ./.github/workflows/mobile-reader-android-local-open.yml
+
+  android-render:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.android_render == 'true'
+    uses: ./.github/workflows/mobile-reader-android-render.yml
+
+  portable:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.portable == 'true'
+    uses: ./.github/workflows/chaptera-local-portable-windows.yml
+
+  web-chromium:
+    needs: [classify, tier-a]
+    if: needs.classify.outputs.web_chromium == 'true'
+    uses: ./.github/workflows/web-acceptance-real-chromium.yml
