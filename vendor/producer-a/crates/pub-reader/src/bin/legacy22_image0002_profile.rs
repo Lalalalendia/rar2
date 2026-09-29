@@ -586,8 +586,11 @@ fn font_blocker_profile(params: &[u8]) -> Value {
     let facename_32 = params.get(18..50);
     let facename_tail = params.get(18..).unwrap_or(&[]);
     let nul_index = facename_tail.iter().position(|byte| *byte == 0);
-    let nonzero_after_nul = nul_index
-        .is_some_and(|index| facename_tail[index.saturating_add(1)..].iter().any(|byte| *byte != 0));
+    let nonzero_after_nul = nul_index.is_some_and(|index| {
+        facename_tail[index.saturating_add(1)..]
+            .iter()
+            .any(|byte| *byte != 0)
+    });
     json!({
         "kind": "createfontindirect",
         "param_len": params.len(),
