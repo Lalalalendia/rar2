@@ -29,30 +29,19 @@ struct Descriptor {
 }
 
 #[derive(Debug, Serialize)]
-struct PlcCandidate {
+struct BtePlcCandidate {
     prefix_offset: usize,
-    grounded_story_count: u32,
-    header_count: u32,
+    count: u32,
     data_size: u32,
     nonzero_flag_count: usize,
-    position_increment_count: usize,
-    zero_story_increment_count: usize,
-    first_n_increment_sum_utf16: u64,
-    all_increment_sum_utf16: u64,
-    trailing_increment_utf16: u32,
-    text_utf16_units: u64,
-    first_n_sum_matches_text: bool,
-    all_sum_matches_text: bool,
-    all_story_ends_within_text: bool,
-    terminal_story_end_matches_text: bool,
-    structured_record_count: usize,
-    structured_records_consume_tail_exactly: bool,
-    structured_record_size_sha256: String,
-    story_increment_sha256: String,
-    story_end_count: usize,
-    story_ends_in_btep: Option<usize>,
-    story_ends_in_btec: Option<usize>,
-    story_ends_in_both: Option<usize>,
+    position_count: usize,
+    positions_monotonic: bool,
+    positions_inside_text_count: usize,
+    text_start_present: bool,
+    text_end_present: bool,
+    count_covers_story_count: bool,
+    target_count: usize,
+    targets_inside_format_chunk_count: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,46 +50,29 @@ struct WitnessRow {
     byte_len: usize,
     contents_serialization_revision: u16,
     grounded_story_count: u32,
-    contents_syid_order_matches: bool,
+
     syid_descriptor_length: u32,
     syid_length_matches_grounded_count: bool,
+    syid_chunk_all_ff: bool,
+
     strs_descriptor_length: u32,
     strs_length_matches_observed_22_plus_8n: bool,
+    strs_chunk_all_ff: bool,
+    strs_direct_generic_plc_candidate_count: usize,
+
     text_descriptor_length: u32,
     text_utf16_units: u64,
-    btep_plc_valid: bool,
-    btec_plc_valid: bool,
-    candidate_count: usize,
-    accepted_candidate_count: usize,
-    candidates: Vec<PlcCandidate>,
+
+    btep_descriptor_length: Option<u32>,
+    btec_descriptor_length: Option<u32>,
+    fdpp_descriptor_length: Option<u32>,
+    fdpc_descriptor_length: Option<u32>,
+    btep_candidates: Vec<BtePlcCandidate>,
+    btec_candidates: Vec<BtePlcCandidate>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn hash_u32s(values: &[u32]) -> String {
-    let mut hasher = Sha256::new();
-    for value in values {
-        hasher.update(value.to_le_bytes());
-    }
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-fn hash_u16s(values: &[u16]) -> String {
-    let mut hasher = Sha256::new();
-    for value in values {
-        hasher.update(value.to_le_bytes());
-    }
-    hasher
-        .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
@@ -123,6 +95,12 @@ fn descriptor_range<'a>(bytes: &'a [u8], descriptor: &Descriptor) -> Result<&'a 
     bytes
         .get(start..end)
         .with_context(|| format!("descriptor {:?} range outside Quill", descriptor.name))
+}
+
+fn descriptor_all_ff(bytes: &[u8], descriptor: &Descriptor) -> Result<bool> {
+    Ok(descriptor_range(bytes, descriptor)?
+        .iter()
+        .all(|byte| *byte == 0xff))
 }
 
 fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
@@ -200,62 +178,7 @@ fn optional_unique_descriptor<'a>(
     Ok(first)
 }
 
-fn parse_bte_positions(
-    quill: &[u8],
-    descriptor: Option<&Descriptor>,
-    text_start: u32,
-) -> Result<Option<BTreeSet<u32>>> {
-    let Some(descriptor) = descriptor else {
-        return Ok(None);
-    };
-    let payload = descriptor_range(quill, descriptor)?;
-    if payload.len() < 16 {
-        return Ok(None);
-    }
-
-    // BTEP/BTEC are only an independent research cross-check here. Early
-    // Publisher variants may use a different local BTE framing, so a payload
-    // that does not satisfy the already-confirmed ordinary BTE PLC grammar
-    // must make the cross-check unavailable rather than abort the STRS probe.
-    let Some(raw_count) = u32_at(payload, 0) else {
-        return Ok(None);
-    };
-    let Ok(count) = usize::try_from(raw_count) else {
-        return Ok(None);
-    };
-    let Some(raw_data_size) = u32_at(payload, 4) else {
-        return Ok(None);
-    };
-    let Ok(data_size) = usize::try_from(raw_data_size) else {
-        return Ok(None);
-    };
-    let Some(expected) = count
-        .checked_add(1)
-        .and_then(|value| value.checked_mul(4))
-        .and_then(|position_bytes| 12usize.checked_add(position_bytes))
-        .and_then(|base| {
-            count
-                .checked_mul(data_size)
-                .and_then(|data_bytes| base.checked_add(data_bytes))
-        })
-    else {
-        return Ok(None);
-    };
-    if expected != payload.len() || data_size != 4 {
-        return Ok(None);
-    }
-
-    let mut positions = BTreeSet::new();
-    for index in 0..=count {
-        let Some(raw) = u32_at(payload, 12 + index * 4) else {
-            return Ok(None);
-        };
-        positions.insert(if raw == 0 { text_start } else { raw });
-    }
-    Ok(Some(positions))
-}
-
-fn grounded_contents_story_ids(contents: &[u8]) -> Result<(u16, Vec<u32>)> {
+fn grounded_contents_story_count(contents: &[u8]) -> Result<(u16, u32)> {
     let stream = StreamPath(CONTENTS_STREAM.into());
     let header =
         parse_0x2c_header(stream.clone(), contents).context("parse mature Contents header")?;
@@ -293,186 +216,151 @@ fn grounded_contents_story_ids(contents: &[u8]) -> Result<(u16, Vec<u32>)> {
     .context("parse Story catalog chunk")?;
     let catalog = parse_confirmed_mature_story_catalog(contents, &chunk)
         .context("parse grounded Story catalog")?;
-    let ids = catalog.entries.iter().map(|entry| entry.text_id).collect();
-    Ok((header.preamble.serialization_revision, ids))
+    Ok((
+        header.preamble.serialization_revision,
+        catalog.declared_count,
+    ))
 }
 
-fn parse_grounded_syid_ids(
+fn scan_direct_generic_plc_count(payload: &[u8], grounded_count: u32) -> usize {
+    let max_prefix = payload.len().saturating_sub(12).min(32);
+    (0..=max_prefix)
+        .filter(|prefix| u32_at(payload, *prefix) == Some(grounded_count))
+        .count()
+}
+
+fn scan_bte_plc_candidates(
     quill: &[u8],
-    descriptor: &Descriptor,
-    grounded_count: usize,
-) -> Result<Vec<u32>> {
+    descriptor: Option<&Descriptor>,
+    format_descriptor: Option<&Descriptor>,
+    text_descriptor: &Descriptor,
+    grounded_story_count: u32,
+) -> Result<Vec<BtePlcCandidate>> {
+    let Some(descriptor) = descriptor else {
+        return Ok(Vec::new());
+    };
     let payload = descriptor_range(quill, descriptor)?;
-    let expected = 8usize
-        .checked_add(
-            grounded_count
-                .checked_mul(4)
-                .context("grounded SYID size overflow")?,
-        )
-        .context("grounded SYID total overflow")?;
-    if payload.len() != expected {
-        bail!(
-            "SYID descriptor length {} does not match grounded count {}",
-            payload.len(),
-            grounded_count
-        );
-    }
-    let mut ids = Vec::with_capacity(grounded_count);
-    for index in 0..grounded_count {
-        ids.push(u32_at(payload, 8 + index * 4).context("grounded SYID id truncated")?);
-    }
-    Ok(ids)
-}
-
-fn structured_record_sizes_exact(
-    payload: &[u8],
-    start: usize,
-    count: usize,
-) -> (Vec<u16>, bool) {
-    let mut pos = start;
-    let mut sizes = Vec::with_capacity(count);
-    for _ in 0..count {
-        let Some(size) = u16_at(payload, pos) else {
-            return (sizes, false);
-        };
-        let size_usize = usize::from(size);
-        if size_usize < 2 {
-            return (sizes, false);
-        }
-        let Some(end) = pos.checked_add(size_usize) else {
-            return (sizes, false);
-        };
-        if end > payload.len() {
-            return (sizes, false);
-        }
-        sizes.push(size);
-        pos = end;
-    }
-    (sizes, pos == payload.len())
-}
-
-fn scan_strs_plc_candidates(
-    strs: &[u8],
-    grounded_count: usize,
-    text_start: u32,
-    text_length: u32,
-    btep: Option<&BTreeSet<u32>>,
-    btec: Option<&BTreeSet<u32>>,
-) -> Result<Vec<PlcCandidate>> {
-    let grounded_u32 = u32::try_from(grounded_count).context("grounded story count too large")?;
-    let text_units = u64::from(text_length) / 2;
-    if text_length % 2 != 0 {
-        bail!("TEXT descriptor length is odd");
+    if payload.len() < 20 {
+        return Ok(Vec::new());
     }
 
-    let mut candidates = Vec::new();
-    let max_prefix = strs.len().saturating_sub(12).min(32);
+    let text_start = u64::from(text_descriptor.data_offset);
+    let text_end = text_start
+        .checked_add(u64::from(text_descriptor.data_length))
+        .context("TEXT range overflow")?;
+
+    let format_range = format_descriptor.map(|descriptor| {
+        let start = u64::from(descriptor.data_offset);
+        let end = start.saturating_add(u64::from(descriptor.data_length));
+        (start, end)
+    });
+
+    let mut out = Vec::new();
+    let max_prefix = payload.len().saturating_sub(20).min(64);
     for prefix in 0..=max_prefix {
-        let Some(header_count) = u32_at(strs, prefix) else {
+        let Some(raw_count) = u32_at(payload, prefix) else {
             continue;
         };
-        if header_count != grounded_u32 {
+        let Ok(count) = usize::try_from(raw_count) else {
+            continue;
+        };
+        if count == 0 || count > 4096 {
             continue;
         }
-        let Some(data_size) = u32_at(strs, prefix + 4) else {
+
+        let Some(raw_data_size) = u32_at(payload, prefix + 4) else {
             continue;
         };
-        let Some(flags) = strs.get(prefix + 8..prefix + 12) else {
+        if raw_data_size != 4 {
+            continue;
+        }
+        let data_size = 4usize;
+        let Some(flags) = payload.get(prefix + 8..prefix + 12) else {
             continue;
         };
 
-        let positions_start = prefix + 12;
-        let Some(position_bytes) = grounded_count
+        let Some(position_bytes) = count
             .checked_add(1)
             .and_then(|value| value.checked_mul(4))
         else {
             continue;
         };
-        let Some(positions_end) = positions_start.checked_add(position_bytes) else {
+        let Some(target_bytes) = count.checked_mul(data_size) else {
             continue;
         };
-        if positions_end > strs.len() {
+        let Some(expected_end) = prefix
+            .checked_add(12)
+            .and_then(|value| value.checked_add(position_bytes))
+            .and_then(|value| value.checked_add(target_bytes))
+        else {
+            continue;
+        };
+        if expected_end != payload.len() {
             continue;
         }
 
-        let mut increments = Vec::with_capacity(grounded_count + 1);
-        for index in 0..=grounded_count {
-            let Some(value) = u32_at(strs, positions_start + index * 4) else {
-                increments.clear();
+        let positions_start = prefix + 12;
+        let targets_start = positions_start + position_bytes;
+
+        let mut positions = Vec::with_capacity(count + 1);
+        for index in 0..=count {
+            let Some(raw) = u32_at(payload, positions_start + index * 4) else {
+                positions.clear();
                 break;
             };
-            increments.push(value);
+            let mapped = if raw == 0 {
+                text_start
+            } else {
+                u64::from(raw)
+            };
+            positions.push(mapped);
         }
-        if increments.len() != grounded_count + 1 {
+        if positions.len() != count + 1 {
             continue;
         }
 
-        let first_n_sum = increments[..grounded_count]
+        let positions_monotonic = positions.windows(2).all(|pair| pair[0] <= pair[1]);
+        let positions_inside_text_count = positions
             .iter()
-            .fold(0u64, |sum, value| sum.saturating_add(u64::from(*value)));
-        let all_sum = increments
-            .iter()
-            .fold(0u64, |sum, value| sum.saturating_add(u64::from(*value)));
-        let trailing_increment = increments[grounded_count];
-        let zero_story_increment_count =
-            increments[..grounded_count].iter().filter(|value| **value == 0).count();
+            .filter(|value| **value >= text_start && **value <= text_end)
+            .count();
 
-        let mut cumulative_units = 0u64;
-        let mut story_ends = Vec::with_capacity(grounded_count);
-        let mut all_story_ends_within_text = true;
-        for increment in &increments[..grounded_count] {
-            cumulative_units = cumulative_units.saturating_add(u64::from(*increment));
-            let byte_delta = cumulative_units.saturating_mul(2);
-            if byte_delta > u64::from(text_length) {
-                all_story_ends_within_text = false;
-            }
-            let absolute = u64::from(text_start).saturating_add(byte_delta);
-            story_ends.push(u32::try_from(absolute).unwrap_or(u32::MAX));
+        let mut targets = Vec::with_capacity(count);
+        for index in 0..count {
+            let Some(raw) = u32_at(payload, targets_start + index * 4) else {
+                targets.clear();
+                break;
+            };
+            targets.push(u64::from(raw));
+        }
+        if targets.len() != count {
+            continue;
         }
 
-        let (record_sizes, records_exact) =
-            structured_record_sizes_exact(strs, positions_end, grounded_count);
+        let targets_inside_format_chunk_count = format_range.map(|(start, end)| {
+            targets
+                .iter()
+                .filter(|value| **value >= start && **value < end)
+                .count()
+        });
 
-        let in_btep = btep.map(|set| story_ends.iter().filter(|end| set.contains(*end)).count());
-        let in_btec = btec.map(|set| story_ends.iter().filter(|end| set.contains(*end)).count());
-        let in_both = match (btep, btec) {
-            (Some(left), Some(right)) => Some(
-                story_ends
-                    .iter()
-                    .filter(|end| left.contains(*end) && right.contains(*end))
-                    .count(),
-            ),
-            _ => None,
-        };
-
-        candidates.push(PlcCandidate {
+        out.push(BtePlcCandidate {
             prefix_offset: prefix,
-            grounded_story_count: grounded_u32,
-            header_count,
-            data_size,
+            count: raw_count,
+            data_size: raw_data_size,
             nonzero_flag_count: flags.iter().filter(|byte| **byte != 0).count(),
-            position_increment_count: increments.len(),
-            zero_story_increment_count,
-            first_n_increment_sum_utf16: first_n_sum,
-            all_increment_sum_utf16: all_sum,
-            trailing_increment_utf16: trailing_increment,
-            text_utf16_units: text_units,
-            first_n_sum_matches_text: first_n_sum == text_units,
-            all_sum_matches_text: all_sum == text_units,
-            all_story_ends_within_text,
-            terminal_story_end_matches_text: first_n_sum == text_units,
-            structured_record_count: record_sizes.len(),
-            structured_records_consume_tail_exactly: records_exact,
-            structured_record_size_sha256: hash_u16s(&record_sizes),
-            story_increment_sha256: hash_u32s(&increments[..grounded_count]),
-            story_end_count: story_ends.len(),
-            story_ends_in_btep: in_btep,
-            story_ends_in_btec: in_btec,
-            story_ends_in_both: in_both,
+            position_count: positions.len(),
+            positions_monotonic,
+            positions_inside_text_count,
+            text_start_present: positions.contains(&text_start),
+            text_end_present: positions.contains(&text_end),
+            count_covers_story_count: raw_count >= grounded_story_count,
+            target_count: targets.len(),
+            targets_inside_format_chunk_count,
         });
     }
 
-    Ok(candidates)
+    Ok(out)
 }
 
 fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
@@ -481,9 +369,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let quill = pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM)
         .context("read Quill stream")?;
 
-    let (revision, contents_ids) = grounded_contents_story_ids(&contents)?;
-    let grounded_count = contents_ids.len();
-    let grounded_u32 = u32::try_from(grounded_count).context("grounded count too large")?;
+    let (revision, grounded_story_count) = grounded_contents_story_count(&contents)?;
 
     let descriptors = parse_descriptor_directory(&quill)?;
     let syid = unique_descriptor(&descriptors, *b"SYID")?;
@@ -491,53 +377,46 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let text = unique_descriptor(&descriptors, *b"TEXT")?;
     let btep = optional_unique_descriptor(&descriptors, *b"BTEP")?;
     let btec = optional_unique_descriptor(&descriptors, *b"BTEC")?;
+    let fdpp = optional_unique_descriptor(&descriptors, *b"FDPP")?;
+    let fdpc = optional_unique_descriptor(&descriptors, *b"FDPC")?;
 
-    descriptor_range(&quill, syid)?;
+    let syid_payload = descriptor_range(&quill, syid)?;
     let strs_payload = descriptor_range(&quill, strs)?;
     descriptor_range(&quill, text)?;
 
-    let syid_ids = parse_grounded_syid_ids(&quill, syid, grounded_count)?;
-    let contents_syid_order_matches = contents_ids == syid_ids;
+    let expected_syid_len = 8u64 + 4u64 * u64::from(grounded_story_count);
+    let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_story_count);
 
-    let expected_syid_len = 8u64 + 4u64 * u64::from(grounded_u32);
-    let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_u32);
-
-    let btep_positions = parse_bte_positions(&quill, btep, text.data_offset)?;
-    let btec_positions = parse_bte_positions(&quill, btec, text.data_offset)?;
-    let candidates = scan_strs_plc_candidates(
-        strs_payload,
-        grounded_count,
-        text.data_offset,
-        text.data_length,
-        btep_positions.as_ref(),
-        btec_positions.as_ref(),
-    )?;
-    let accepted_candidate_count = candidates
-        .iter()
-        .filter(|candidate| {
-            candidate.first_n_sum_matches_text
-                && candidate.all_story_ends_within_text
-                && candidate.structured_records_consume_tail_exactly
-        })
-        .count();
+    let btep_candidates =
+        scan_bte_plc_candidates(&quill, btep, fdpp, text, grounded_story_count)?;
+    let btec_candidates =
+        scan_bte_plc_candidates(&quill, btec, fdpc, text, grounded_story_count)?;
 
     Ok(WitnessRow {
         source_sha256: sha256_hex(bytes),
         byte_len: bytes.len(),
         contents_serialization_revision: revision,
-        grounded_story_count: grounded_u32,
-        contents_syid_order_matches,
+        grounded_story_count,
+
         syid_descriptor_length: syid.data_length,
         syid_length_matches_grounded_count: u64::from(syid.data_length) == expected_syid_len,
+        syid_chunk_all_ff: syid_payload.iter().all(|byte| *byte == 0xff),
+
         strs_descriptor_length: strs.data_length,
         strs_length_matches_observed_22_plus_8n: u64::from(strs.data_length) == expected_strs_len,
+        strs_chunk_all_ff: strs_payload.iter().all(|byte| *byte == 0xff),
+        strs_direct_generic_plc_candidate_count:
+            scan_direct_generic_plc_count(strs_payload, grounded_story_count),
+
         text_descriptor_length: text.data_length,
         text_utf16_units: u64::from(text.data_length) / 2,
-        btep_plc_valid: btep_positions.is_some(),
-        btec_plc_valid: btec_positions.is_some(),
-        candidate_count: candidates.len(),
-        accepted_candidate_count,
-        candidates,
+
+        btep_descriptor_length: btep.map(|value| value.data_length),
+        btec_descriptor_length: btec.map(|value| value.data_length),
+        fdpp_descriptor_length: fdpp.map(|value| value.data_length),
+        fdpc_descriptor_length: fdpc.map(|value| value.data_length),
+        btep_candidates,
+        btec_candidates,
     })
 }
 
@@ -582,10 +461,10 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v1",
+        "schema": "chaptera.quill-story-early-text-boundary.v2",
         "witness_count": rows.len(),
         "rows": rows,
-        "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths, booleans and hashes only; no filenames, paths, document text, Story IDs, raw payload bytes or parser error text",
+        "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
     });
 
     if let Some(parent) = output.parent() {
