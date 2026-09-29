@@ -13,8 +13,11 @@ mod assets;
 mod cmo_bridge;
 mod failure_envelope;
 mod failure_intake;
+mod family_classifier;
 mod guide_bridge;
 mod intake_protocol;
+mod legacy22_graph;
+mod legacy22_noquill_graph;
 mod resolve;
 mod structural_base;
 mod table_bridge;
@@ -31,9 +34,7 @@ pub use assets::{
     PubImageResourceDiagnostic, build_pub_asset_manifest, build_pub_image_resource_catalog,
 };
 #[cfg(feature = "cmo-authority-bridge")]
-pub use cmo_bridge::{
-    PubCmoProjectionBridgeV1, build_mature_0x2c_cmo_projection_bridge_v1,
-};
+pub use cmo_bridge::{PubCmoProjectionBridgeV1, build_mature_0x2c_cmo_projection_bridge_v1};
 pub use failure_envelope::{
     CHAPTERA_FAILURE_ENVELOPE_SCHEMA_V1, CHAPTERA_READER_BUILD_ID, FailureArchitecture,
     FailureCoarseLocale, FailureCode, FailureContainerFamily, FailureEnvelope,
@@ -43,6 +44,10 @@ pub use failure_envelope::{
 pub use failure_intake::{
     FailureIntakeClass, FailureIntakeClassification, FailureIntakeConfidence, FailureIntakeReason,
     classify_failure_candidate,
+};
+pub use family_classifier::{
+    PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
+    PubReaderRoute, classify_pub_family,
 };
 pub use guide_bridge::{
     PubGroundedGuideBuild, PubGuideObservation, PubGuideProjectionDiagnostic,
@@ -54,14 +59,20 @@ pub use intake_protocol::{
     IntakeDedupeDisposition, IntakeProtocolError, IntakeReceipt, build_intake_capability_request,
     exact_file_intake_eligible, validate_intake_capability_request, validate_intake_receipt,
 };
+pub use legacy22_graph::{
+    build_legacy_0x22_quill_from_streams, build_legacy_0x22_quill_source_graph, legacy22_object_key,
+};
+pub use legacy22_noquill_graph::{
+    build_legacy_0x22_noquill_from_contents, build_legacy_0x22_noquill_source_graph,
+};
 use pub_contents::{
-    BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32,
-    CONTENTS_RAW_TYPE_STORY_CATALOG, Contents0x2cChunk, Contents0x2cChunkReference,
-    DOCUMENT_PAGE_LIST_ID, RawContentsBlock, RawContentsBlockBody, parse_0x2c_header,
-    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    BLOCK_TYPE_FIXED_8, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32, CONTENTS_RAW_TYPE_STORY_CATALOG,
+    Contents0x2cChunk, Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, RawContentsBlock,
+    RawContentsBlockBody, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
     parse_confirmed_controlling_page_list, parse_confirmed_document_page_list,
-    parse_confirmed_margins_page_extent,
-    parse_confirmed_mature_story_catalog, parse_confirmed_oid_identity_payload,
+    parse_confirmed_margins_page_extent, parse_confirmed_mature_story_catalog,
+    parse_confirmed_oid_identity_payload,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
@@ -78,8 +89,8 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillTypographyValueSource, parse_bounded_mcld,
-    parse_bounded_typography, parse_confirmed_story_catalog,
+    QuillMcldReadError, QuillTypographyValueSource, parse_bounded_mcld, parse_bounded_typography,
+    parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -135,8 +146,7 @@ const ROLE_STORY: &str = "cdm.story";
 
 pub type PubSourceGraph = SourceGraph<PubNodePayload, (), (), (), String>;
 
-pub const PUB_PAGE_ROLE_OBSERVATION_SCHEMA_V1: &str =
-    "chaptera.pub-page-role-observation.v1";
+pub const PUB_PAGE_ROLE_OBSERVATION_SCHEMA_V1: &str = "chaptera.pub-page-role-observation.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubPageRoleObservationReceipt {
@@ -413,6 +423,12 @@ pub enum PubBridgeDiagnostic {
         seq_num: u32,
         text_id: u32,
     },
+    LegacyObjectNotMaterialized {
+        object_id: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_type: Option<u16>,
+        reason: String,
+    },
     McldRecordCountMismatch {
         record_count: u32,
         record_id_count: u32,
@@ -577,10 +593,7 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
                 }
                 (0x0d, BLOCK_TYPE_REFERENCE_U32) => {
                     if applied_master_seq_num.is_some() {
-                        bail!(
-                            "PAGE {} repeats OplPd.OhpdMaster field0x0D",
-                            entry.handle
-                        );
+                        bail!("PAGE {} repeats OplPd.OhpdMaster field0x0D", entry.handle);
                     }
                     let RawContentsBlockBody::U32 { value, .. } = &field.body else {
                         bail!("PAGE {} field0x0D has inconsistent body", entry.handle);
@@ -628,7 +641,6 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             child_raw_type_counts,
         });
     }
-
 
     let mut controlling = references
         .values()
@@ -1962,7 +1974,9 @@ pub fn build_mature_0x2c_from_streams(
                 let syid = run.story_syid.0;
                 let Some(story_id) = story_by_syid.get(&syid).copied() else {
                     diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
-                        reason: format!("effective typography references missing Story SYID {syid}"),
+                        reason: format!(
+                            "effective typography references missing Story SYID {syid}"
+                        ),
                     });
                     continue;
                 };
@@ -1972,9 +1986,11 @@ pub fn build_mature_0x2c_from_streams(
                     });
                     continue;
                 };
-                let Some((story_scalar_start, story_scalar_end)) =
-                    utf16_range_to_scalar_range(&story.text, run.story_start_utf16, run.story_end_utf16)
-                else {
+                let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                    &story.text,
+                    run.story_start_utf16,
+                    run.story_end_utf16,
+                ) else {
                     diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
                         reason: format!(
                             "effective typography range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
@@ -1993,7 +2009,8 @@ pub fn build_mature_0x2c_from_streams(
                     source_font_name: run.font_name,
                     text_size_emu: run.text_size_emu,
                     font_inherited: run.font_source == QuillTypographyValueSource::InheritedStsh1,
-                    size_inherited: run.text_size_source == QuillTypographyValueSource::InheritedStsh1,
+                    size_inherited: run.text_size_source
+                        == QuillTypographyValueSource::InheritedStsh1,
                 });
             }
         } else {
@@ -2011,9 +2028,11 @@ pub fn build_mature_0x2c_from_streams(
                     });
                     continue;
                 };
-                let Some((story_scalar_start, story_scalar_end)) =
-                    utf16_range_to_scalar_range(&story.text, run.story_start_utf16, run.story_end_utf16)
-                else {
+                let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                    &story.text,
+                    run.story_start_utf16,
+                    run.story_end_utf16,
+                ) else {
                     diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
                         reason: format!(
                             "explicit typography range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
@@ -2338,10 +2357,7 @@ fn derive_effective_page_projection(
             .collect::<Vec<_>>();
         if page_list_fields.len() > 1 {
             diagnostics.push(PubBridgeDiagnostic::ScenarioPageOrderUnavailable {
-                reason: format!(
-                    "duplicate_controlling_page_list:seq={}",
-                    reference.seq_num
-                ),
+                reason: format!("duplicate_controlling_page_list:seq={}", reference.seq_num),
                 raw_page_count: raw_page_ids.len(),
             });
             return (
@@ -2376,10 +2392,7 @@ fn derive_effective_page_projection(
             .collect::<Vec<_>>();
         if pgids.is_empty() {
             diagnostics.push(PubBridgeDiagnostic::ScenarioPageOrderUnavailable {
-                reason: format!(
-                    "controlling_page_list_empty:seq={}",
-                    reference.seq_num
-                ),
+                reason: format!("controlling_page_list_empty:seq={}", reference.seq_num),
                 raw_page_count: raw_page_ids.len(),
             });
             return (
@@ -2437,11 +2450,7 @@ fn derive_effective_page_projection(
         };
 
     (
-        build_effective_page_projection(
-            raw_page_ids,
-            observed_scenario_page_ids,
-            pgid_lists.len(),
-        ),
+        build_effective_page_projection(raw_page_ids, observed_scenario_page_ids, pgid_lists.len()),
         diagnostics,
     )
 }
@@ -2475,7 +2484,11 @@ fn resolve_scenario_page_ids_from_evidence(
     if consensus.is_empty() {
         return Err("controlling_scenario_page_projection_empty".to_owned());
     }
-    if pgid_lists.iter().skip(1).any(|candidate| candidate != consensus) {
+    if pgid_lists
+        .iter()
+        .skip(1)
+        .any(|candidate| candidate != consensus)
+    {
         return Err("controlling_page_lists_disagree".to_owned());
     }
 
@@ -2483,10 +2496,7 @@ fn resolve_scenario_page_ids_from_evidence(
     let mut seen = BTreeSet::new();
     for pgid in consensus {
         let Some(matches) = pages_by_oid.get(pgid) else {
-            return Err(format!(
-                "pgid_has_no_page:{:08x}:{:08x}",
-                pgid.0, pgid.1
-            ));
+            return Err(format!("pgid_has_no_page:{:08x}:{:08x}", pgid.0, pgid.1));
         };
         if matches.len() != 1 {
             return Err(format!(
@@ -2754,9 +2764,7 @@ const FILL_FILLED_BIT: u32 = 1 << 27;
 const LINE_USE_LINE_BIT: u32 = 1 << 12;
 const LINE_LINE_BIT: u32 = 1 << 28;
 
-fn has_explicit_officeart_paint_observation(
-    shape: &pub_escher::SpContainerObservation,
-) -> bool {
+fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
     shape
         .fopts
         .iter()
@@ -3345,10 +3353,7 @@ mod tests {
         let p0 = test_page_id(1);
         let p1 = test_page_id(2);
         let p2 = test_page_id(3);
-        let pgids = vec![
-            vec![(1, 0), (1, 1), (1, 2)],
-            vec![(1, 0), (1, 1), (1, 2)],
-        ];
+        let pgids = vec![vec![(1, 0), (1, 1), (1, 2)], vec![(1, 0), (1, 1), (1, 2)]];
         let pages_by_oid = BTreeMap::from([
             ((1, 0), vec![p0]),
             ((1, 1), vec![p1]),
@@ -3367,11 +3372,8 @@ mod tests {
         let p0 = test_page_id(1);
         let p1 = test_page_id(2);
         let newly_created_visible_page = test_page_id(3);
-        let effective = build_effective_page_projection(
-            &[p0, p1, newly_created_visible_page],
-            vec![p0, p1],
-            2,
-        );
+        let effective =
+            build_effective_page_projection(&[p0, p1, newly_created_visible_page], vec![p0, p1], 2);
 
         assert_eq!(
             effective.authority,
@@ -3402,10 +3404,7 @@ mod tests {
     #[test]
     fn scenario_page_observation_rejects_ambiguous_page_oid() {
         let pgids = vec![vec![(1, 0)]];
-        let pages_by_oid = BTreeMap::from([(
-            (1, 0),
-            vec![test_page_id(1), test_page_id(2)],
-        )]);
+        let pages_by_oid = BTreeMap::from([((1, 0), vec![test_page_id(1), test_page_id(2)])]);
 
         assert!(
             resolve_scenario_page_ids_from_evidence(&pgids, &pages_by_oid)
