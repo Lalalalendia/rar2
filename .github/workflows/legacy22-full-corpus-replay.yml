@@ -303,6 +303,7 @@ jobs:
           import olefile
 
           WORDART2 = "000212F0-0000-0000-C000-000000000046"
+          PERLOST_SHA = "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f"
           candidates = json.loads(Path("/tmp/raw0022-candidates.json").read_text())
           corpus = Path("corpus-src/pub-corpus/corpus/native/unclassified")
           sha_to_path = {path.stem.lower(): path for path in corpus.glob("*.pub")}
@@ -438,11 +439,17 @@ jobs:
                           }
                       )
 
-          assert Counter(row["raw_flag"] for row in rows) == Counter({0: 41, 32768: 113})
+          recovery_only_rows = [
+              row for row in rows if row["source_sha256"] == PERLOST_SHA
+          ]
+          pair_selection_rows = [
+              row for row in rows if row["source_sha256"] != PERLOST_SHA
+          ]
+          assert Counter(row["raw_flag"] for row in pair_selection_rows) == Counter({0: 41, 32768: 113})
 
           exact_groups = defaultdict(lambda: defaultdict(list))
           profile_groups = defaultdict(lambda: defaultdict(list))
-          for row in rows:
+          for row in pair_selection_rows:
               exact_key = (
                   row["storage_clsid"],
                   row["presentation_profile_hash"],
@@ -483,6 +490,9 @@ jobs:
           summary = {
               "schema": "chaptera.legacy22-wordart-f-pair-selection.v1",
               "wordart_candidate_count": len(rows),
+              "pair_selection_candidate_count": len(pair_selection_rows),
+              "recovery_only_candidate_count": len(recovery_only_rows),
+              "recovery_only_source_sha256": PERLOST_SHA,
               "flag_counts": {
                   str(k): v for k, v in sorted(Counter(row["raw_flag"] for row in rows).items())
               },
@@ -497,7 +507,8 @@ jobs:
               ),
               "evidence_boundary": (
                   "source-safe fixture identities only; no PUB bytes, OLE stream bytes, "
-                  "strings or presentation payload are retained"
+                  "strings or presentation payload are retained; PERLOST recovery-only "
+                  "Objects are observed but excluded from F semantic pair authority"
               ),
           }
 
