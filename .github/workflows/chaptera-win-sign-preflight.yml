@@ -103,6 +103,10 @@ jobs:
           $sourceDir = (Resolve-Path "stage/chaptera-reader").Path
           $outputDir = (Resolve-Path "dist").Path
           $signScript = (Resolve-Path "tools/windows/test_authenticode_sign.ps1").Path
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($signScript, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -ne 0) { throw "signing helper has PowerShell parse errors: $($parseErrors -join '; ')" }
           $signCommand = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `$q$signScript`$q `$f"
           & $env:ISCC_PATH "/DMyAppVersion=$env:CHAPTERA_VERSION" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" "/DChapteraTestSigning=1" "-schapteratest=$signCommand" "installer/windows/chaptera-reader.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with code $LASTEXITCODE" }
@@ -192,7 +196,7 @@ jobs:
         run: |
           $thumbprint = $env:CHAPTERA_TEST_SIGN_THUMBPRINT
           if (-not $thumbprint) { exit 0 }
-          foreach ($store in @("Cert:\CurrentUser\My","Cert:\CurrentUser\Root","Cert:\CurrentUser\TrustedPublisher")) {
+          foreach ($store in @("Cert:\CurrentUser\My","Cert:\CurrentUser\TrustedPeople")) {
             Get-ChildItem -Path $store -ErrorAction SilentlyContinue |
               Where-Object { $_.Thumbprint -eq $thumbprint } |
               Remove-Item -Force -ErrorAction SilentlyContinue
