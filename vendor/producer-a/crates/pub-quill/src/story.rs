@@ -232,6 +232,218 @@ impl QuillStoryFailureStage {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QuillStoryFailureEvidence {
+    DescriptorArray {
+        declared_count: u16,
+        required_descriptor_bytes: u64,
+        available_descriptor_bytes: u64,
+        deficit_bytes: u64,
+    },
+    SyidIdArray {
+        declared_count: u32,
+        descriptor_length: u32,
+        required_chunk_length: u64,
+        deficit_bytes: u64,
+        available_to_next_boundary: u64,
+        next_boundary_is_descriptor: bool,
+        required_fits_before_next_boundary: bool,
+        strs_declared_count: Option<u32>,
+        strs_count_matches: Option<bool>,
+    },
+    StrsServiceSpanOutOfBounds {
+        declared_count: u32,
+        service_span: u32,
+        descriptor_length: u32,
+        minimum_lengths_offset: u64,
+        overrun_bytes: u64,
+        available_to_next_boundary: u64,
+        next_boundary_is_descriptor: bool,
+        syid_declared_count: u32,
+        story_count_matches: bool,
+    },
+}
+
+fn descriptor_u32_at(
+    bytes: &[u8],
+    descriptor: &QuillChunkDescriptor,
+    relative: usize,
+) -> Option<u32> {
+    let start = usize::try_from(descriptor.data_offset.value)
+        .ok()?
+        .checked_add(relative)?;
+    let raw = bytes.get(start..start.checked_add(4)?)?;
+    Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
+}
+
+fn next_descriptor_boundary(
+    bytes: &[u8],
+    descriptors: &[&QuillChunkDescriptor],
+    start: u32,
+) -> (u64, bool) {
+    if let Some(next) = descriptors
+        .iter()
+        .map(|descriptor| descriptor.data_offset.value)
+        .filter(|offset| *offset > start)
+        .min()
+    {
+        return (u64::from(next - start), true);
+    }
+
+    let start = usize::try_from(start).unwrap_or(bytes.len());
+    (bytes.len().saturating_sub(start) as u64, false)
+}
+
+fn probe_descriptor_array_evidence(bytes: &[u8]) -> Option<QuillStoryFailureEvidence> {
+    let mut current = QUILL_DESCRIPTOR_LIST_ROOT_OFFSET;
+    let mut seen = BTreeSet::new();
+
+    while current != QUILL_DESCRIPTOR_LIST_END {
+        let start = usize::try_from(current).ok()?;
+        if start >= bytes.len() || !seen.insert(current) {
+            return None;
+        }
+
+        let available = &bytes[start..];
+        if available.len() < 8 {
+            return None;
+        }
+        let count = u16::from_le_bytes([available[2], available[3]]);
+        let required = u64::from(count) * QUILL_DESCRIPTOR_SIZE as u64;
+        let present = (available.len() - 8) as u64;
+        if present < required {
+            return Some(QuillStoryFailureEvidence::DescriptorArray {
+                declared_count: count,
+                required_descriptor_bytes: required,
+                available_descriptor_bytes: present,
+                deficit_bytes: required - present,
+            });
+        }
+
+        current = u32::from_le_bytes([available[4], available[5], available[6], available[7]]);
+    }
+
+    None
+}
+
+fn probe_syid_id_array_evidence(
+    bytes: &[u8],
+    descriptors: &[&QuillChunkDescriptor],
+    syid_descriptor: &QuillChunkDescriptor,
+    strs_descriptor: &QuillChunkDescriptor,
+) -> Option<QuillStoryFailureEvidence> {
+    let (start, len) = chunk_range(bytes, syid_descriptor).ok()?;
+    if len < 8 {
+        return None;
+    }
+    let chunk = bytes.get(start..start.checked_add(len)?)?;
+    let count = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+    let required_chunk_length = 8_u64.checked_add(u64::from(count).checked_mul(4)?)?;
+    let descriptor_length = u64::from(syid_descriptor.data_length.value);
+    if required_chunk_length <= descriptor_length {
+        return None;
+    }
+
+    let (available_to_next_boundary, next_boundary_is_descriptor) =
+        next_descriptor_boundary(bytes, descriptors, syid_descriptor.data_offset.value);
+    let strs_declared_count = descriptor_u32_at(bytes, strs_descriptor, 0);
+
+    Some(QuillStoryFailureEvidence::SyidIdArray {
+        declared_count: count,
+        descriptor_length: syid_descriptor.data_length.value,
+        required_chunk_length,
+        deficit_bytes: required_chunk_length - descriptor_length,
+        available_to_next_boundary,
+        next_boundary_is_descriptor,
+        required_fits_before_next_boundary: required_chunk_length <= available_to_next_boundary,
+        strs_declared_count,
+        strs_count_matches: strs_declared_count.map(|value| value == count),
+    })
+}
+
+fn probe_strs_service_span_evidence(
+    bytes: &[u8],
+    descriptors: &[&QuillChunkDescriptor],
+    syid: &QuillSyidChunk,
+    strs_descriptor: &QuillChunkDescriptor,
+    service_span: u32,
+) -> Option<QuillStoryFailureEvidence> {
+    let declared_count = descriptor_u32_at(bytes, strs_descriptor, 0)?;
+    let minimum_lengths_offset = 4_u64.checked_add(u64::from(service_span))?;
+    let descriptor_length = u64::from(strs_descriptor.data_length.value);
+    if minimum_lengths_offset <= descriptor_length {
+        return None;
+    }
+    let (available_to_next_boundary, next_boundary_is_descriptor) =
+        next_descriptor_boundary(bytes, descriptors, strs_descriptor.data_offset.value);
+
+    Some(QuillStoryFailureEvidence::StrsServiceSpanOutOfBounds {
+        declared_count,
+        service_span,
+        descriptor_length: strs_descriptor.data_length.value,
+        minimum_lengths_offset,
+        overrun_bytes: minimum_lengths_offset - descriptor_length,
+        available_to_next_boundary,
+        next_boundary_is_descriptor,
+        syid_declared_count: syid.count.value,
+        story_count_matches: syid.count.value == declared_count,
+    })
+}
+
+/// Returns source-safe structural evidence for the first supported Quill
+/// story-catalog failure class. The receipt intentionally contains only counts,
+/// lengths and relative boundary distances; it never retains text, story IDs,
+/// raw bytes, filenames, source paths or absolute stream offsets.
+pub fn probe_confirmed_story_catalog_failure_evidence(
+    stream: StreamPath,
+    bytes: &[u8],
+) -> Option<QuillStoryFailureEvidence> {
+    let descriptor_nodes = match parse_descriptor_nodes(stream.clone(), bytes) {
+        Ok(value) => value,
+        Err(QuillStoryReadError::TooShort { .. }) => {
+            return probe_descriptor_array_evidence(bytes);
+        }
+        Err(_) => return None,
+    };
+    let descriptors = descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .collect::<Vec<_>>();
+    let syid_descriptor = required_descriptor(&descriptors, SYID).ok()?;
+    let strs_descriptor = required_descriptor(&descriptors, STRS).ok()?;
+
+    let syid = match parse_syid(stream.clone(), bytes, syid_descriptor) {
+        Ok(value) => value,
+        Err(QuillStoryReadError::TooShort { .. })
+            if probe_syid_too_short_stage(bytes, syid_descriptor)
+                == QuillStoryFailureStage::SyidIdArray =>
+        {
+            return probe_syid_id_array_evidence(
+                bytes,
+                &descriptors,
+                syid_descriptor,
+                strs_descriptor,
+            );
+        }
+        Err(_) => return None,
+    };
+
+    match parse_strs(stream, bytes, strs_descriptor) {
+        Err(QuillStoryReadError::StrsServiceSpanOutOfBounds { service_span, .. }) => {
+            probe_strs_service_span_evidence(
+                bytes,
+                &descriptors,
+                &syid,
+                strs_descriptor,
+                service_span,
+            )
+        }
+        _ => None,
+    }
+}
+
 fn probe_descriptor_list_too_short_stage(bytes: &[u8]) -> QuillStoryFailureStage {
     let mut current = QUILL_DESCRIPTOR_LIST_ROOT_OFFSET;
     let mut seen = BTreeSet::new();
