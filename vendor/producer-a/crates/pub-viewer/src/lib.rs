@@ -219,6 +219,12 @@ pub struct ViewerGeometryDocument {
     pub images: Vec<ViewerEmbeddedImage>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerOpenBundle {
+    pub geometry: ViewerGeometryDocument,
+    pub resolved_graph: PubResolvedGraph,
+}
+
 impl ViewerGeometryDocument {
     /// Reprojects Viewer Story text and bounded frame fragments from the current
     /// resolved graph without reparsing the immutable source PUB.
@@ -723,11 +729,25 @@ pub fn open_pub_geometry(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerGeometryDocument> {
+    Ok(open_pub_bundle(bytes, environment)?.geometry)
+}
+
+/// Opens one Publisher source through the same family router as the Viewer and
+/// returns both the product geometry projection and the canonical resolved graph.
+///
+/// This is the in-process seam for the future isolated parser worker: callers
+/// can serialize the source-neutral resolved graph without reparsing the source
+/// bytes or duplicating Publisher-family dispatch. Embedded image byte transport
+/// remains a separate bounded IPC concern.
+pub fn open_pub_bundle(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+) -> Result<ViewerOpenBundle> {
     let classification = classify_pub_family(bytes);
     match classification.route {
-        PubReaderRoute::Mature2c => open_mature_0x2c_geometry(bytes, environment),
-        PubReaderRoute::Legacy22Quill => open_legacy_0x22_quill_geometry(bytes, environment),
-        PubReaderRoute::Legacy22LowText => open_legacy_0x22_noquill_geometry(bytes, environment),
+        PubReaderRoute::Mature2c => open_mature_0x2c_bundle(bytes, environment),
+        PubReaderRoute::Legacy22Quill => open_legacy_0x22_quill_bundle(bytes, environment),
+        PubReaderRoute::Legacy22LowText => open_legacy_0x22_noquill_bundle(bytes, environment),
         PubReaderRoute::Unsupported => Err(anyhow!(
             "unsupported PUB family/profile: family={:?}, profile={}, route={}",
             classification.family,
@@ -746,6 +766,13 @@ pub fn open_legacy_0x22_noquill_geometry(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerGeometryDocument> {
+    Ok(open_legacy_0x22_noquill_bundle(bytes, environment)?.geometry)
+}
+
+fn open_legacy_0x22_noquill_bundle(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+) -> Result<ViewerOpenBundle> {
     let source_hash = sha256_digest(bytes)?;
     let source = build_legacy_0x22_noquill_source_graph(Cursor::new(bytes), source_hash)
         .context("build legacy-0x22 no-Quill PUB source graph for Viewer")?;
@@ -832,7 +859,7 @@ pub fn open_legacy_0x22_noquill_geometry(
     }
     normalize_diagnostics(&mut document.diagnostics);
 
-    Ok(ViewerGeometryDocument {
+    let geometry = ViewerGeometryDocument {
         schema_version: VIEWER_GEOMETRY_SCHEMA_V0_1.to_owned(),
         document,
         scene,
@@ -844,6 +871,10 @@ pub fn open_legacy_0x22_noquill_geometry(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images: Vec::new(),
+    };
+    Ok(ViewerOpenBundle {
+        geometry,
+        resolved_graph: resolved.graph,
     })
 }
 
@@ -856,6 +887,13 @@ pub fn open_legacy_0x22_quill_geometry(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerGeometryDocument> {
+    Ok(open_legacy_0x22_quill_bundle(bytes, environment)?.geometry)
+}
+
+fn open_legacy_0x22_quill_bundle(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+) -> Result<ViewerOpenBundle> {
     let source_hash = sha256_digest(bytes)?;
     let source = build_legacy_0x22_quill_source_graph(Cursor::new(bytes), source_hash)
         .context("build legacy-0x22+Quill PUB source graph for Viewer")?;
@@ -942,7 +980,7 @@ pub fn open_legacy_0x22_quill_geometry(
     }
     normalize_diagnostics(&mut document.diagnostics);
 
-    Ok(ViewerGeometryDocument {
+    let geometry = ViewerGeometryDocument {
         schema_version: VIEWER_GEOMETRY_SCHEMA_V0_1.to_owned(),
         document,
         scene,
@@ -954,6 +992,10 @@ pub fn open_legacy_0x22_quill_geometry(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images: Vec::new(),
+    };
+    Ok(ViewerOpenBundle {
+        geometry,
+        resolved_graph: resolved.graph,
     })
 }
 
@@ -967,6 +1009,13 @@ pub fn open_mature_0x2c_geometry(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerGeometryDocument> {
+    Ok(open_mature_0x2c_bundle(bytes, environment)?.geometry)
+}
+
+fn open_mature_0x2c_bundle(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+) -> Result<ViewerOpenBundle> {
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
     let mut document = viewer_document_from_pipeline(bytes.len(), &pipeline)?;
     let effective_page_ids = document
@@ -1151,7 +1200,7 @@ pub fn open_mature_0x2c_geometry(
     }
     normalize_diagnostics(&mut document.diagnostics);
 
-    Ok(ViewerGeometryDocument {
+    let geometry = ViewerGeometryDocument {
         schema_version: VIEWER_GEOMETRY_SCHEMA_V0_1.to_owned(),
         document,
         scene,
@@ -1163,6 +1212,10 @@ pub fn open_mature_0x2c_geometry(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances,
         images,
+    };
+    Ok(ViewerOpenBundle {
+        geometry,
+        resolved_graph: pipeline.resolved.graph,
     })
 }
 
@@ -2755,6 +2808,7 @@ mod tests {
                 }),
                 table_story: None,
                 table: None,
+                legacy_ole: None,
             },
         };
 
@@ -3511,8 +3565,14 @@ mod legacy22_noquill_exact_product_tests {
             "0c74bed1b862f4603a77567f817ad22bf1f7c42eb5afbee0c907732953534b5c"
         );
 
-        let visual = open_pub_geometry(&before, viewer_geometry_environment_v0_1())
-            .expect("Publisher97 no-Quill fixture must open through product boundary");
+        let bundle = open_pub_bundle(&before, viewer_geometry_environment_v0_1())
+            .expect("Publisher97 no-Quill fixture must open through product bundle boundary");
+        assert_eq!(
+            bundle.resolved_graph.source.source_hash.to_string(),
+            sha256_digest(&before).unwrap().to_string(),
+            "bundle resolved graph must preserve exact source identity"
+        );
+        let visual = &bundle.geometry;
 
         assert_eq!(
             visual.document.source.format_version.as_deref(),
