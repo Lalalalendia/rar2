@@ -103,6 +103,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           import subprocess
           import tempfile
           from collections import Counter
@@ -270,6 +271,31 @@ jobs:
           ]
           assert not missing_fingerprints, missing_fingerprints
 
+          def cfb_object_suffix_sets(sha):
+              object_suffixes = set()
+              ole_pres_suffixes = set()
+              for stream in fingerprints_by_sha[sha].get("streams") or []:
+                  path = str(stream.get("path") or "")
+                  object_match = re.match(
+                      r"^/Objects/Object\s+(\d+)(?:/|$)",
+                      path,
+                      flags=re.I,
+                  )
+                  if object_match:
+                      object_suffixes.add(int(object_match.group(1)))
+                  ole_pres_match = re.search(
+                      r"olepres(\d+)$",
+                      path,
+                      flags=re.I,
+                  )
+                  if ole_pres_match:
+                      ole_pres_suffixes.add(int(ole_pres_match.group(1)))
+              return object_suffixes, ole_pres_suffixes
+
+          cfb_suffixes_by_sha = {
+              sha: cfb_object_suffix_sets(sha) for sha in candidate_file_shas
+          }
+
           logical_groups = {}
           for sha in candidate_file_shas:
               row = fingerprints_by_sha[sha]
@@ -362,6 +388,13 @@ jobs:
           variable_equals_page_parent_id = 0
           variable_value_by_child_service = {}
           variable_value_by_parent_service = {}
+          variable_in_object_storage_suffix = 0
+          variable_plus1_in_object_storage_suffix = 0
+          variable_minus1_in_object_storage_suffix = 0
+          variable_in_ole_pres_suffix = 0
+          object_storage_match_by_child_service_flag = Counter()
+          ole_pres_match_by_child_service_flag = Counter()
+          candidate_values_by_sha = {}
 
           for item in candidates:
               child = item.get("child_0x0022") or {}
@@ -387,6 +420,54 @@ jobs:
                   variable_equals_child_object_id += 1
               if variable == int(item["parent_id"]):
                   variable_equals_page_parent_id += 1
+
+              sha = item["source_sha256"]
+              object_suffixes, ole_pres_suffixes = cfb_suffixes_by_sha[sha]
+              object_match = variable in object_suffixes
+              ole_pres_match = variable in ole_pres_suffixes
+              variable_in_object_storage_suffix += int(object_match)
+              variable_plus1_in_object_storage_suffix += int(
+                  variable + 1 in object_suffixes
+              )
+              variable_minus1_in_object_storage_suffix += int(
+                  variable > 0 and variable - 1 in object_suffixes
+              )
+              variable_in_ole_pres_suffix += int(ole_pres_match)
+              object_storage_match_by_child_service_flag[
+                  (child_service, flag, object_match)
+              ] += 1
+              ole_pres_match_by_child_service_flag[
+                  (child_service, flag, ole_pres_match)
+              ] += 1
+              candidate_values_by_sha.setdefault(sha, []).append(variable)
+
+          candidate_file_object_storage_count_pairs = Counter()
+          candidate_file_ole_pres_count_pairs = Counter()
+          candidate_files_with_object_storage = 0
+          candidate_files_with_ole_pres = 0
+          candidate_file_variable_set_equals_object_suffix_set = 0
+          candidate_file_variable_plus1_set_equals_object_suffix_set = 0
+          candidate_file_variable_minus1_set_equals_object_suffix_set = 0
+          for sha, values in candidate_values_by_sha.items():
+              object_suffixes, ole_pres_suffixes = cfb_suffixes_by_sha[sha]
+              candidate_file_object_storage_count_pairs[
+                  (len(values), len(object_suffixes))
+              ] += 1
+              candidate_file_ole_pres_count_pairs[
+                  (len(values), len(ole_pres_suffixes))
+              ] += 1
+              candidate_files_with_object_storage += int(bool(object_suffixes))
+              candidate_files_with_ole_pres += int(bool(ole_pres_suffixes))
+              value_set = set(values)
+              candidate_file_variable_set_equals_object_suffix_set += int(
+                  value_set == object_suffixes
+              )
+              candidate_file_variable_plus1_set_equals_object_suffix_set += int(
+                  {value + 1 for value in value_set} == object_suffixes
+              )
+              candidate_file_variable_minus1_set_equals_object_suffix_set += int(
+                  {value - 1 for value in value_set if value > 0} == object_suffixes
+              )
 
           geometry_present = sum(
               bool((item.get("geometry") or {}).get("carrier_present"))
@@ -590,6 +671,46 @@ jobs:
                   for service_word, values
                   in sorted(variable_value_by_parent_service.items())
               },
+              "child_0x0022_u16_0a_cfb_alias_checks": {
+                  "equals_object_storage_suffix_count":
+                      variable_in_object_storage_suffix,
+                  "plus1_equals_object_storage_suffix_count":
+                      variable_plus1_in_object_storage_suffix,
+                  "minus1_equals_object_storage_suffix_count":
+                      variable_minus1_in_object_storage_suffix,
+                  "equals_ole_pres_suffix_count":
+                      variable_in_ole_pres_suffix,
+              },
+              "child_0x0022_cfb_object_storage_match_by_service_flag": {
+                  f"{service_word}:0x{flag:04x}:{'match' if matched else 'miss'}": count
+                  for (service_word, flag, matched), count
+                  in sorted(object_storage_match_by_child_service_flag.items())
+              },
+              "child_0x0022_cfb_ole_pres_match_by_service_flag": {
+                  f"{service_word}:0x{flag:04x}:{'match' if matched else 'miss'}": count
+                  for (service_word, flag, matched), count
+                  in sorted(ole_pres_match_by_child_service_flag.items())
+              },
+              "candidate_file_with_object_storage_count":
+                  candidate_files_with_object_storage,
+              "candidate_file_with_ole_pres_count":
+                  candidate_files_with_ole_pres,
+              "candidate_file_ole_candidate_object_storage_count_pairs": {
+                  f"{candidate_count}:{storage_count}": count
+                  for (candidate_count, storage_count), count
+                  in sorted(candidate_file_object_storage_count_pairs.items())
+              },
+              "candidate_file_ole_candidate_ole_pres_count_pairs": {
+                  f"{candidate_count}:{ole_pres_count}": count
+                  for (candidate_count, ole_pres_count), count
+                  in sorted(candidate_file_ole_pres_count_pairs.items())
+              },
+              "candidate_file_u16_0a_set_equals_object_storage_suffix_set_count":
+                  candidate_file_variable_set_equals_object_suffix_set,
+              "candidate_file_u16_0a_plus1_set_equals_object_storage_suffix_set_count":
+                  candidate_file_variable_plus1_set_equals_object_suffix_set,
+              "candidate_file_u16_0a_minus1_set_equals_object_storage_suffix_set_count":
+                  candidate_file_variable_minus1_set_equals_object_suffix_set,
               "parent_child_exact_pair_cluster_count": len(parent_child_pairs),
               "parent_child_exact_pair_singleton_count": sum(
                   count == 1 for count in parent_child_pairs.values()
