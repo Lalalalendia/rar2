@@ -522,7 +522,8 @@ jobs:
           reader = summary["reader"]
 
           assert summary["corpus_file_count"] == 625, summary["corpus_file_count"]
-          assert reader["opened_by_family"].get("0x2c") == 379, reader["opened_by_family"]
+          # This workflow owns legacy-0x22 depth only. Mature 0x2C acceptance
+          # is governed by the exact 1,050 baseline and may advance independently.
           assert reader["opened_by_family"].get("0x22") == 226, reader["opened_by_family"]
 
           legacy_open = [
