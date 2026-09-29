@@ -10,3 +10,5 @@ serde.workspace=true
 
 [dev-dependencies]
 pub-cfb={path="../pub-cfb"}
+
+# CI selective-fanout post-merge control; measurement only, do not merge.
