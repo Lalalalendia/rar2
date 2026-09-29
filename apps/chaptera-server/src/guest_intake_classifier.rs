@@ -287,12 +287,9 @@ mod tests {
     fn malformed_cfb_signature_is_damaged_and_authorizable() {
         let mut bytes = CFB_MAGIC.to_vec();
         bytes.extend_from_slice(&[0_u8; 32]);
-        let evidence = guest_failure_intake_evidence(
-            &bytes,
-            "unsupported",
-            Some("reader_scene_open_failed"),
-        )
-        .expect("server evidence");
+        let evidence =
+            guest_failure_intake_evidence(&bytes, "unsupported", Some("reader_scene_open_failed"))
+                .expect("server evidence");
         assert_eq!(evidence.classification.class, FailureClassV1::PubDamaged);
         evidence
             .validate_and_authorize(&consent())
