@@ -4,7 +4,17 @@ on:
   pull_request:
     paths:
       - ".github/workflows/web-scene-producer-a-ci-probe.yml"
-      - "vendor/producer-a/**"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-layout/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/producer/**"
+      - "tools/build_viewer_geometry_receipt.py"
+      - "tools/run_local_viewer_geometry_cli.py"
+      - "tools/validate_viewer_geometry_receipt.py"
+      - "tools/validate_web_acceptance_preflight.py"
+      - "apps/web/acceptance/viewer-geometry-receipt.schema.json"
   workflow_dispatch:
 
 concurrency:
@@ -12,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   producer-a:
@@ -91,19 +101,16 @@ jobs:
           }, indent=2, sort_keys=True))
           PY
 
-      - name: Pin validated real Viewer receipt on the PR branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Guard committed Viewer receipt without mutating the PR branch
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apps/web/acceptance/receipts/viewer-geometry.real.json
-          if git diff --cached --quiet; then
-            echo "validated receipt already pinned"
+          if git diff --quiet -- apps/web/acceptance/receipts/viewer-geometry.real.json; then
+            echo "validated Viewer receipt matches the committed receipt"
           else
-            git commit -m "test: pin real SampleNewsletter Viewer receipt"
-            git push origin HEAD:${{ github.head_ref }}
+            echo "validated Viewer receipt drifted; inspect the uploaded evidence and update it explicitly in a dedicated commit"
+            git diff -- apps/web/acceptance/receipts/viewer-geometry.real.json
+            exit 1
           fi
 
       - name: Upload Producer A evidence
