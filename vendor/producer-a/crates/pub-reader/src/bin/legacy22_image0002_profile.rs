@@ -176,6 +176,44 @@ fn wmf_payload_offsets(chunk: &[u8]) -> Vec<usize> {
         .collect()
 }
 
+fn wmf_validation_error_class(message: &str) -> &'static str {
+    if message.contains("truncated placeable WMF header") {
+        "truncated_placeable_header"
+    } else if message.contains("Reserved field must be zero") {
+        "placeable_reserved_nonzero"
+    } else if message.contains("placeable WMF checksum mismatch") {
+        "placeable_checksum_mismatch"
+    } else if message.contains("truncated WMF META_HEADER") {
+        "truncated_meta_header"
+    } else if message.contains("unsupported WMF metafile type") {
+        "unsupported_metafile_type"
+    } else if message.contains("invalid WMF HeaderSize") {
+        "invalid_header_size"
+    } else if message.contains("unsupported WMF version") {
+        "unsupported_version"
+    } else if message.contains("declared size is smaller than META_HEADER") {
+        "declared_size_too_small"
+    } else if message.contains("WMF declared size mismatch") {
+        "declared_size_mismatch"
+    } else if message.contains("WMF MaxRecord is smaller than a record header") {
+        "max_record_too_small"
+    } else if message.contains("truncated WMF record size") {
+        "truncated_record_size"
+    } else if message.contains("invalid WMF record size") {
+        "invalid_record_size"
+    } else if message.contains("WMF record exceeds META_HEADER MaxRecord") {
+        "record_exceeds_max_record"
+    } else if message.contains("WMF record exceeds declared metafile size") {
+        "record_exceeds_declared_size"
+    } else if message.contains("WMF META_EOF is not the final record") {
+        "eof_not_final"
+    } else if message.contains("WMF META_EOF record is missing") {
+        "eof_missing"
+    } else {
+        "other"
+    }
+}
+
 fn wmf_declared_profile(chunk: &[u8]) -> Value {
     let Some(declared_u32) = read_u32(chunk, 0x04) else {
         return json!({
@@ -183,6 +221,7 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
             "declared_fits_chunk": false,
             "exact_chunk_end": false,
             "wmf_valid": false,
+            "validation_error_class": "missing_length",
         });
     };
     let Ok(declared_len) = usize::try_from(declared_u32) else {
@@ -210,7 +249,14 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
             "wmf_valid": false,
         });
     };
-    let wmf_valid = validate_wmf_metafile(payload).is_ok();
+    let validation = validate_wmf_metafile(payload);
+    let (wmf_valid, validation_error_class) = match &validation {
+        Ok(_) => (true, None),
+        Err(error) => (
+            false,
+            Some(wmf_validation_error_class(&error.to_string())),
+        ),
+    };
     json!({
         "length_present": true,
         "declared_len": declared_len,
@@ -218,6 +264,7 @@ fn wmf_declared_profile(chunk: &[u8]) -> Value {
         "exact_chunk_end": end == chunk.len(),
         "trailing_len": chunk.len() - end,
         "wmf_valid": wmf_valid,
+        "validation_error_class": validation_error_class,
         "payload_sha256": wmf_valid.then(|| sha256_hex(payload)),
     })
 }
