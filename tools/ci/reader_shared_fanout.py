@@ -13,6 +13,8 @@ SCOPES = (
     "typography",
     "corpus",
     "android_render",
+    "android_local",
+    "local_portable",
     "web_acceptance",
 )
 
@@ -65,11 +67,32 @@ def classify(paths: list[str]) -> dict[str, bool]:
     out["typography"] = any(_matches(x, desktop_exact, typography_prefixes) for x in p)
 
     out["android_render"] = any(
-        x.startswith("crates/chaptera-viewer-render-plan/") for x in p
+        x.startswith("crates/chaptera-viewer-render-plan/")
+        or x == ".github/workflows/mobile-reader-android-render.yml"
+        for x in p
     )
+    out["android_local"] = any(
+        x == ".github/workflows/mobile-reader-android-local-open.yml" for x in p
+    )
+    out["local_portable"] = any(
+        x == ".github/workflows/chaptera-local-portable-windows.yml" for x in p
+    )
+
+    if ".github/workflows/chaptera-reader-windows.yml" in p:
+        out["reader_windows"] = True
+    if ".github/workflows/chaptera-desktop-windows.yml" in p:
+        out["editor_windows"] = True
+    if ".github/workflows/carlton-reader-visual-oracle.yml" in p:
+        out["visual_oracle"] = True
+    if ".github/workflows/reader-typography-golden.yml" in p:
+        out["typography"] = True
+    if ".github/workflows/reader-corpus-truth-v1.yml" in p:
+        out["corpus"] = True
+
     out["web_acceptance"] = any(
         x.startswith("vendor/producer-a/crates/pub-reader/")
         or x.startswith("vendor/producer-a/crates/pub-viewer/")
+        or x == ".github/workflows/web-acceptance-real-chromium.yml"
         for x in p
     )
     return out
