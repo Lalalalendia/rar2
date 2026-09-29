@@ -60,6 +60,7 @@ use pub_reader::{
     build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     derive_pub_page_id, materialize_bounded_simple_table_cells, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs,
     resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
@@ -753,18 +754,18 @@ pub struct ViewerDiagnostic {
     pub message: String,
 }
 
-fn encode_legacy_ole_preview_png(preview: &WmfPreviewRgba) -> Result<Vec<u8>> {
+fn encode_wmf_preview_png(preview: &WmfPreviewRgba) -> Result<Vec<u8>> {
     let pixel_count = u64::from(preview.width)
         .checked_mul(u64::from(preview.height))
-        .ok_or_else(|| anyhow!("legacy OLE preview pixel count overflow"))?;
+        .ok_or_else(|| anyhow!("WMF preview pixel count overflow"))?;
     let expected_len = usize::try_from(
         pixel_count
             .checked_mul(4)
-            .ok_or_else(|| anyhow!("legacy OLE preview RGBA byte count overflow"))?,
+            .ok_or_else(|| anyhow!("WMF preview RGBA byte count overflow"))?,
     )
-    .map_err(|_| anyhow!("legacy OLE preview RGBA byte count does not fit address space"))?;
+    .map_err(|_| anyhow!("WMF preview RGBA byte count does not fit address space"))?;
     if preview.width == 0 || preview.height == 0 || preview.rgba.len() != expected_len {
-        return Err(anyhow!("legacy OLE preview RGBA buffer is inconsistent"));
+        return Err(anyhow!("WMF preview RGBA buffer is inconsistent"));
     }
 
     let mut encoded = Vec::new();
@@ -774,14 +775,14 @@ fn encode_legacy_ole_preview_png(preview: &WmfPreviewRgba) -> Result<Vec<u8>> {
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder
             .write_header()
-            .context("write legacy OLE preview PNG header")?;
+            .context("write WMF preview PNG header")?;
         writer
             .write_image_data(&preview.rgba)
-            .context("write legacy OLE preview PNG samples")?;
-        writer.finish().context("finalize legacy OLE preview PNG")?;
+            .context("write WMF preview PNG samples")?;
+        writer.finish().context("finalize WMF preview PNG")?;
     }
     if encoded.len() > MAX_LEGACY_OLE_PREVIEW_PNG_BYTES {
-        return Err(anyhow!("legacy OLE preview PNG exceeds bounded size"));
+        return Err(anyhow!("WMF preview PNG exceeds bounded size"));
     }
     Ok(encoded)
 }
@@ -890,7 +891,7 @@ fn viewer_legacy_ole_preview_image_from_scan(
             return None;
         }
     };
-    let png = match encode_legacy_ole_preview_png(&preview) {
+    let png = match encode_wmf_preview_png(&preview) {
         Ok(png) => png,
         Err(_) => {
             diagnostics.push(ViewerDiagnostic {
@@ -928,6 +929,188 @@ fn viewer_legacy_ole_preview_image_from_scan(
         placements: Vec::new(),
         bytes: png,
     })
+}
+
+fn legacy_image_preview_resource_id(
+    source_hash: &Sha256Digest,
+    image_object_id: u16,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let digest = Sha256::digest(wmf_bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
+        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    let source_object_key = format!(
+        "legacy-image-preview/object-{image_object_id}/wmf-sha256-{wmf_sha256}/{}",
+        LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &source_object_key,
+        semantic_role: "viewer.legacy-image-preview-v1",
+    })
+    .map_err(|error| anyhow!("derive legacy IMAGE preview resource identity: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+fn legacy_image_raster_hints(
+    width_emu: i64,
+    height_emu: i64,
+) -> Option<(u32, u32)> {
+    let width = u64::try_from(width_emu).ok()?;
+    let height = u64::try_from(height_emu).ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let max_dimension = width.max(height);
+    let limit = u64::from(u32::MAX);
+    let divisor = if max_dimension <= limit {
+        1
+    } else {
+        max_dimension
+            .checked_add(limit - 1)?
+            .checked_div(limit)?
+    };
+    let width = u32::try_from((width / divisor).max(1)).ok()?;
+    let height = u32::try_from((height / divisor).max(1)).ok()?;
+    Some((width, height))
+}
+
+fn viewer_legacy_image_preview_images(
+    bytes: &[u8],
+    source_hash: &Sha256Digest,
+    graph: &PubResolvedGraph,
+    scene: &BoundedResolvedScene,
+    diagnostics: &mut Vec<ViewerDiagnostic>,
+) -> Vec<ViewerEmbeddedImage> {
+    let renderable_node_ids = scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let mut nodes = Vec::new();
+    let mut object_ids = Vec::new();
+
+    for node in graph.nodes.values() {
+        if node.kind != NodeKind::ImageFrame || !renderable_node_ids.contains(&node.header.id) {
+            continue;
+        }
+        let Ok(image_object_id) = u16::try_from(node.payload.contents_seq_num) else {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_image.identity_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "A grounded legacy IMAGE frame has an object identity outside the old-0x22 range."
+                        .to_owned(),
+            });
+            continue;
+        };
+        object_ids.push(image_object_id);
+        nodes.push((image_object_id, node));
+    }
+
+    if object_ids.is_empty() {
+        return Vec::new();
+    }
+    object_ids.sort_unstable();
+    object_ids.dedup();
+
+    let wmfs = match read_legacy_0x22_image_wmfs(Cursor::new(bytes), &object_ids) {
+        Ok(wmfs) => wmfs,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_image.native_wmf_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "Grounded legacy IMAGE frames could not be re-materialized from their direct bounded native WMF payloads."
+                        .to_owned(),
+            });
+            return Vec::new();
+        }
+    };
+
+    let mut images = Vec::new();
+    for (image_object_id, node) in nodes {
+        let Some(wmf) = wmfs.get(&image_object_id) else {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_image.native_wmf_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "A grounded legacy IMAGE frame has no re-materialized bounded native WMF payload."
+                        .to_owned(),
+            });
+            continue;
+        };
+        let Some((width_hint, height_hint)) = legacy_image_raster_hints(
+            node.header.bounds.width.get(),
+            node.header.bounds.height.get(),
+        ) else {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.legacy_image.bounds_unsupported".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "A grounded legacy IMAGE frame has bounds outside the bounded preview raster profile."
+                        .to_owned(),
+            });
+            continue;
+        };
+        let preview = match rasterize_wmf_preview(wmf, width_hint, height_hint) {
+            Ok(preview) => preview,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_image.preview_raster_unsupported".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A grounded legacy IMAGE has a structurally valid native WMF outside the bounded Viewer raster profile."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let png = match encode_wmf_preview_png(&preview) {
+            Ok(png) => png,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_image.preview_encode_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded legacy IMAGE preview could not be encoded as a Viewer image resource."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let resource_id = match legacy_image_preview_resource_id(
+            source_hash,
+            image_object_id,
+            wmf,
+        ) {
+            Ok(resource_id) => resource_id,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.legacy_image.preview_identity_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded legacy IMAGE preview could not receive a deterministic Viewer resource identity."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        images.push(ViewerEmbeddedImage {
+            resource_id,
+            mime: "image/png".to_owned(),
+            node_ids: vec![node.header.id],
+            placements: Vec::new(),
+            bytes: png,
+        });
+    }
+
+    images
 }
 
 fn viewer_legacy_ole_cached_preview_images(
@@ -1194,19 +1377,26 @@ fn open_legacy_0x22_noquill_bundle(
     );
 
     let preview_source_hash = document.source.source_hash;
-    let images = viewer_legacy_ole_cached_preview_images(
+    let mut images = viewer_legacy_ole_cached_preview_images(
         bytes,
         &preview_source_hash,
         &resolved.graph,
         &scene,
         &mut document.diagnostics,
     );
+    images.extend(viewer_legacy_image_preview_images(
+        bytes,
+        &preview_source_hash,
+        &resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    ));
 
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Legacy no-Quill text and text-box geometry are recovered only where grounded. Exact source typography, non-ASCII codepages, ordinary legacy image classes, effects, groups and unsupported legacy object kinds remain explicit fidelity gaps; cached OLE previews are shown only when one persisted presentation validates."
+            message: "Legacy no-Quill text, grounded positive-bounds native-WMF IMAGE frames, and text-box geometry are recovered where evidence-backed. Exact source typography, non-ASCII codepages, signed/reversed legacy image placement, image containers without native data, effects and unsupported legacy object kinds remain explicit fidelity gaps; cached OLE previews are shown only when one persisted presentation validates."
                 .to_owned(),
         });
     }
