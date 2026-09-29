@@ -1,6 +1,7 @@
 use crate::{
     PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
-    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource, PubTableStoryOwnershipSource,
+    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource,
+    PubTableStoryOwnershipSource,
 };
 use anyhow::{Result, bail};
 use pub_model::{Node, NodeId, ResolvedGraph, StoryId, validate_source_graph_registries};
@@ -148,12 +149,16 @@ mod tests {
             right_raw: Some(0),
             ambiguous: false,
         };
+        let legacy_ole = PubLegacyOleSource {
+            storage_number: 73,
+            raw_flag: 0x8000,
+        };
         let payload = PubNodePayload {
             contents_seq_num: 315,
             officeart_shape_type: Some(75),
             officeart_spid: Some(315),
             image_slot: Some(1),
-            legacy_ole: None,
+            legacy_ole: Some(legacy_ole.clone()),
             explicit_image_crop: Some(source_crop.clone()),
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
@@ -166,35 +171,8 @@ mod tests {
         let resolved = resolve_node_payload(node_id, &payload, &mut diagnostics);
 
         assert_eq!(resolved.image_slot, Some(1));
-        assert_eq!(resolved.explicit_image_crop, Some(source_crop));
-        assert!(diagnostics.is_empty());
-    }
-
-    #[test]
-    fn resolver_preserves_bounded_legacy_ole_metadata() {
-        let node_id = NodeId::from_canonical(CanonicalId::from_bytes([0x2b; 16]));
-        let legacy_ole = PubLegacyOleSource {
-            storage_number: 17,
-            raw_flag: 0x8000,
-        };
-        let payload = PubNodePayload {
-            contents_seq_num: 42,
-            officeart_shape_type: None,
-            officeart_spid: None,
-            image_slot: None,
-            legacy_ole: Some(legacy_ole.clone()),
-            explicit_image_crop: None,
-            explicit_paint: PubExplicitShapePaintSource::default(),
-            effective_paint: None,
-            story_frame: None,
-            table_story: None,
-            table: None,
-        };
-
-        let mut diagnostics = Vec::new();
-        let resolved = resolve_node_payload(node_id, &payload, &mut diagnostics);
-
         assert_eq!(resolved.legacy_ole, Some(legacy_ole));
+        assert_eq!(resolved.explicit_image_crop, Some(source_crop));
         assert!(diagnostics.is_empty());
     }
 }
