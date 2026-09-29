@@ -1,0 +1,121 @@
+name: Legacy22 PERLOST discriminator
+
+on:
+  push:
+    branches:
+      - research/legacy22-perlost-discriminator-20260929
+    paths:
+      - ".github/workflows/legacy22-perlost-discriminator.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  LALAMU_CORPUS_REF: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+  PERLOST_SHA: d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: ${{ env.LALAMU_CORPUS_REF }}
+          path: corpus-src
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Verify exact fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${PERLOST_SHA}.pub"
+          test -f "$p"
+          echo "${PERLOST_SHA}  $p" | sha256sum -c -
+
+      - name: Create transient structural probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > vendor/producer-a/crates/pub-viewer/src/bin/perlost-structural-probe.rs <<'RS'
+          use anyhow::{Context, Result};
+          use pub_reader::classify_pub_family;
+          use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
+          use serde_json::json;
+          use sha2::{Digest, Sha256};
+          use std::{env, fs};
+
+          fn sha256_hex(bytes: &[u8]) -> String {
+              Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+          }
+
+          fn main() -> Result<()> {
+              let path = env::args().nth(1).context("fixture path")?;
+              let bytes = fs::read(&path).context("read fixture")?;
+              let family = classify_pub_family(&bytes);
+              let open = match open_pub_geometry(&bytes, viewer_geometry_environment_v0_1()) {
+                  Ok(visual) => json!({
+                      "opened": true,
+                      "viewer_page_count": visual.document.pages.len(),
+                      "scene_node_count": visual.scene.nodes.len(),
+                      "story_count": visual.document.stories.len(),
+                      "diagnostic_codes": visual.document.diagnostics.iter().map(|d| d.code.clone()).collect::<Vec<_>>(),
+                  }),
+                  Err(error) => json!({
+                      "opened": false,
+                      "error_chain": format!("{error:#}"),
+                      "error_signature_sha256": sha256_hex(format!("{error:#}").as_bytes()),
+                  }),
+              };
+              println!("{}", serde_json::to_string_pretty(&json!({
+                  "schema": "chaptera.legacy22-perlost-discriminator.v1",
+                  "source_sha256": sha256_hex(&bytes),
+                  "byte_len": bytes.len(),
+                  "family": family,
+                  "open": open,
+              }))?);
+              Ok(())
+          }
+          RS
+
+      - name: Build and run exact structural probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          p="corpus-src/pub-corpus/corpus/native/unclassified/${PERLOST_SHA}.pub"
+          cargo run             --manifest-path vendor/producer-a/Cargo.toml             -p pub-viewer             --release             --bin perlost-structural-probe             -- "$p" | tee /tmp/perlost-report.json
+
+      - name: Guard source-safe report
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("/tmp/perlost-report.json")
+          d=json.loads(p.read_text())
+          assert d["source_sha256"] == "d72a4c79a378f93299be53220d7809a433235f74103adcffc714748068007e6f", d
+          assert d["family"]["family"] == "family0x22", d["family"]
+          assert d["family"]["route"] == "legacy_0x22_low_text", d["family"]
+          # Report may retain only structural metadata/error text, never source bytes or recovered story text.
+          forbidden=["PERLOST.PUB", "PageWiz/", "recovered_text", "story_text"]
+          raw=p.read_text()
+          for token in forbidden:
+              assert token not in raw, token
+          print(json.dumps(d, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legacy22-perlost-discriminator-${{ github.run_id }}
+          path: /tmp/perlost-report.json
+          if-no-files-found: error
+          retention-days: 30
