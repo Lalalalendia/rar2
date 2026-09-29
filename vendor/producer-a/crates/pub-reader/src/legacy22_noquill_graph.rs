@@ -54,7 +54,6 @@ struct LegacyImageWmfProfile {
     normalized_bytes: Vec<u8>,
 }
 
-
 pub fn read_legacy_0x22_image_wmfs<R: Read + Seek>(
     mut reader: R,
     image_object_ids: &[u16],
