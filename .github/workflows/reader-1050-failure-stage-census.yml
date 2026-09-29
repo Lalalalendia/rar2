@@ -1,16 +1,10 @@
 name: Reader 1050 failure stage census
 
+# Full-corpus census is an explicit research/acceptance gate, not edit-loop feedback.
+# Feature-branch iteration uses compile/selective/witness checks and dispatches this
+# workflow only when the census question is ready to be measured.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - reader/failure-stage-census-1050
-    paths:
-      - '.github/workflows/reader-1050-failure-stage-census.yml'
-      - 'vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-failure-stage-census.rs'
-      - 'vendor/producer-a/crates/pub-viewer/**'
-      - 'vendor/producer-a/crates/pub-reader/**'
-      - 'vendor/producer-a/crates/pub-quill/**'
 
 permissions:
   contents: read
