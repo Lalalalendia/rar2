@@ -584,10 +584,10 @@ jobs:
           assert len(perlost_candidates) == 2, len(perlost_candidates)
           assert len(legacy_existing) == 226, len(legacy_existing)
           assert len(existing_with_scene) == 224, len(existing_with_scene)
-          # Exact pinned-625 GROUP receipt from run 36626143347:
-          # 7 previously empty legacy scenes become reachable and scene nodes rise by 117;
+          # Exact pinned-625 GROUP receipt from run 36626143347 established 2700 nodes.
+          # The grounded legacy IMAGE slice adds exactly 4 ImageFrame scene nodes on this corpus;
           # Story/text, encoding and OLE-candidate depth remain unchanged.
-          assert existing_scene_nodes == 2700, existing_scene_nodes
+          assert existing_scene_nodes == 2704, existing_scene_nodes
           assert existing_story_frames == 1430, existing_story_frames
           assert existing_text_fragments == 1383, existing_text_fragments
           assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files
