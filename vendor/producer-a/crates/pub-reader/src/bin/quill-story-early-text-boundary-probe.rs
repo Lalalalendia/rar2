@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use pub_contents::{
     CONTENTS_RAW_TYPE_STORY_CATALOG, parse_0x2c_header, parse_confirmed_0x2c_chunk,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
-    parse_confirmed_mature_story_catalog,
+    parse_confirmed_mature_story_catalog, MatureStoryCatalog, RawContentsBlockBody,
 };
 use pub_core::StreamPath;
 use serde::Serialize;
@@ -61,11 +61,28 @@ struct BteCarrierProfile {
 }
 
 #[derive(Debug, Serialize)]
+struct StoryCatalogScalarFieldProfile {
+    field_id: u16,
+    present_entry_count: usize,
+    scalar_entry_count: usize,
+    duplicate_entry_count: usize,
+    wire_types: Vec<u8>,
+    all_entries_present_once_scalar: bool,
+    sum_equals_text_utf16_units: bool,
+    sum_equals_text_bytes: bool,
+    monotonic_non_decreasing: bool,
+    last_equals_text_utf16_units: bool,
+    last_equals_text_bytes: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct WitnessRow {
     source_sha256: String,
     byte_len: usize,
     contents_serialization_revision: u16,
     grounded_story_count: u32,
+    story_catalog_entries_with_unsupported_tail: usize,
+    story_catalog_scalar_profiles: Vec<StoryCatalogScalarFieldProfile>,
 
     syid_descriptor_length: u32,
     syid_length_matches_grounded_count: bool,
@@ -196,7 +213,7 @@ fn scan_direct_generic_plc_count(payload: &[u8], grounded_count: u32) -> usize {
         .count()
 }
 
-fn grounded_contents_story_count(contents: &[u8]) -> Result<(u16, u32)> {
+fn grounded_contents_story_catalog(contents: &[u8]) -> Result<(u16, MatureStoryCatalog)> {
     let stream = StreamPath(CONTENTS_STREAM.into());
     let header =
         parse_0x2c_header(stream.clone(), contents).context("parse mature Contents header")?;
@@ -234,10 +251,92 @@ fn grounded_contents_story_count(contents: &[u8]) -> Result<(u16, u32)> {
     .context("parse Story catalog chunk")?;
     let catalog = parse_confirmed_mature_story_catalog(contents, &chunk)
         .context("parse grounded Story catalog")?;
-    Ok((
-        header.preamble.serialization_revision,
-        catalog.declared_count,
-    ))
+    Ok((header.preamble.serialization_revision, catalog))
+}
+
+fn story_catalog_scalar_profiles(
+    catalog: &MatureStoryCatalog,
+    text_utf16_units: u64,
+    text_bytes: u64,
+) -> Vec<StoryCatalogScalarFieldProfile> {
+    let mut field_ids = BTreeSet::new();
+    for entry in &catalog.entries {
+        for field in &entry.fields {
+            field_ids.insert(field.id);
+        }
+    }
+
+    field_ids
+        .into_iter()
+        .map(|field_id| {
+            let mut present_entry_count = 0usize;
+            let mut scalar_entry_count = 0usize;
+            let mut duplicate_entry_count = 0usize;
+            let mut wire_types = BTreeSet::new();
+            let mut values = Vec::new();
+
+            for entry in &catalog.entries {
+                let matches = entry
+                    .fields
+                    .iter()
+                    .filter(|field| field.id == field_id)
+                    .collect::<Vec<_>>();
+                if !matches.is_empty() {
+                    present_entry_count += 1;
+                }
+                if matches.len() > 1 {
+                    duplicate_entry_count += 1;
+                }
+                for field in &matches {
+                    wire_types.insert(field.block_type);
+                }
+                if matches.len() == 1 {
+                    let value = match &matches[0].body {
+                        RawContentsBlockBody::U16 { value, .. } => Some(u64::from(*value)),
+                        RawContentsBlockBody::U32 { value, .. } => Some(u64::from(*value)),
+                        _ => None,
+                    };
+                    if let Some(value) = value {
+                        scalar_entry_count += 1;
+                        values.push(value);
+                    }
+                }
+            }
+
+            let all_entries_present_once_scalar =
+                present_entry_count == catalog.entries.len()
+                    && scalar_entry_count == catalog.entries.len()
+                    && duplicate_entry_count == 0;
+            let sum = if all_entries_present_once_scalar {
+                values
+                    .iter()
+                    .try_fold(0u64, |acc, value| acc.checked_add(*value))
+            } else {
+                None
+            };
+            let monotonic_non_decreasing = all_entries_present_once_scalar
+                && values.windows(2).all(|pair| pair[0] <= pair[1]);
+            let last = if all_entries_present_once_scalar {
+                values.last().copied()
+            } else {
+                None
+            };
+
+            StoryCatalogScalarFieldProfile {
+                field_id,
+                present_entry_count,
+                scalar_entry_count,
+                duplicate_entry_count,
+                wire_types: wire_types.into_iter().collect(),
+                all_entries_present_once_scalar,
+                sum_equals_text_utf16_units: sum == Some(text_utf16_units),
+                sum_equals_text_bytes: sum == Some(text_bytes),
+                monotonic_non_decreasing,
+                last_equals_text_utf16_units: last == Some(text_utf16_units),
+                last_equals_text_bytes: last == Some(text_bytes),
+            }
+        })
+        .collect()
 }
 
 fn format_ranges(descriptors: &[&Descriptor]) -> Vec<(u64, u64)> {
@@ -483,7 +582,8 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     let quill = pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM)
         .context("read Quill stream")?;
 
-    let (revision, grounded_story_count) = grounded_contents_story_count(&contents)?;
+    let (revision, story_catalog) = grounded_contents_story_catalog(&contents)?;
+    let grounded_story_count = story_catalog.declared_count;
 
     let descriptors = parse_descriptor_directory(&quill)?;
     let syid = unique_descriptor(&descriptors, *b"SYID")?;
@@ -500,6 +600,15 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
 
     let expected_syid_len = 8u64 + 4u64 * u64::from(grounded_story_count);
     let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_story_count);
+    let text_bytes = u64::from(text.data_length);
+    let text_utf16_units = text_bytes / 2;
+    let story_catalog_scalar_profiles =
+        story_catalog_scalar_profiles(&story_catalog, text_utf16_units, text_bytes);
+    let story_catalog_entries_with_unsupported_tail = story_catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.unsupported_tail.is_some())
+        .count();
 
     let btep_profiles = profile_bte_carriers(&quill, &btep)?;
     let btec_profiles = profile_bte_carriers(&quill, &btec)?;
@@ -513,6 +622,8 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         byte_len: bytes.len(),
         contents_serialization_revision: revision,
         grounded_story_count,
+        story_catalog_entries_with_unsupported_tail,
+        story_catalog_scalar_profiles,
 
         syid_descriptor_length: syid.data_length,
         syid_length_matches_grounded_count: u64::from(syid.data_length) == expected_syid_len,
@@ -525,7 +636,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
             scan_direct_generic_plc_count(strs_payload, grounded_story_count),
 
         text_descriptor_length: text.data_length,
-        text_utf16_units: u64::from(text.data_length) / 2,
+        text_utf16_units,
 
         btep_descriptor_lengths: descriptor_lengths(&btep),
         btec_descriptor_lengths: descriptor_lengths(&btec),
