@@ -2,6 +2,8 @@ use pub_core::{RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+// CI selective-fanout control; no runtime behavior.
+
 mod block;
 mod cells;
 mod chunk;
