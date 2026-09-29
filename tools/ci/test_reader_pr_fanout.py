@@ -111,6 +111,21 @@ def main():
         editor_windows=False,
     )
     assert_scope(
+        ["vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs"],
+        tier_a=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        typography_golden=False,
+        android_core=False,
+        android=False,
+        web=False,
+        local_portable=False,
+        installer=False,
+        path_identity=False,
+        update_accept=False,
+    )
+    assert_scope(
         ["docs/notes.md"],
         tier_a=False,
         reader_windows=False,
