@@ -268,7 +268,10 @@ fn sample_table_cell_officeart_geometry_join_probe() {
     assert!(!tables.is_empty(), "Sample.pub exposes at least one bounded simple table");
     let receipt = serde_json::json!({
         "schema": "chaptera.pub-table-cell-officeart-join-probe.v1",
-        "source_sha256": format!("{:x}", Sha256::digest(&bytes)),
+        "source_sha256": Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
         "table_count": tables.len(),
         "tables": tables
     });
