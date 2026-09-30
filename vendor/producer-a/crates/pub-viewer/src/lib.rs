@@ -35,10 +35,15 @@ use pub_paint_bridge::{
     PubPaintSourceProvenanceV1, PubPaintSourceRoleV1, project_effective_source_paint_to_viewer_v1,
     project_explicit_source_paint_to_viewer_v1,
 };
+#[cfg(test)]
+use pub_presentation_profile::STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1;
 use pub_presentation_profile::{
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
-    carlton_admitted_carrier_page_seq_nums_v1, reference_fixture_profile_known_v1,
-    select_carlton_customer_page_seq_nums_v1, select_reference_fixture_customer_page_seq_nums_v1,
+    STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
+    StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
+    reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
+    select_reference_fixture_customer_page_seq_nums_v1,
+    select_standard_print_service_tail_customer_page_seq_nums_v1,
 };
 #[cfg(test)]
 use pub_reader::LegacyOleCachedPresentation;
@@ -2058,6 +2063,54 @@ fn select_viewer_pages(
                 customer_page_count: selection.customer_page_seq_nums.len(),
             },
         };
+    }
+
+    if carlton_admitted_carrier_page_seq_nums_v1(&source_sha256).is_none() {
+        let page_roles = match analyze_mature_0x2c_page_roles(Cursor::new(bytes)) {
+            Ok(receipt) => receipt,
+            Err(_) => return generic(),
+        };
+        let input = StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: page_roles.document_page_list_entry_count,
+            confirmed_page_count: page_roles.confirmed_page_count,
+            special_entry_count: page_roles.special_entry_count,
+            scenario_evidence_list_count: source.effective_pages.scenario_evidence_list_count,
+            observed_scenario_page_count: source.effective_pages.observed_scenario_page_ids.len(),
+            pages: page_roles
+                .pages
+                .into_iter()
+                .map(|page| StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: page.document_ordinal,
+                    contents_seq_num: page.contents_seq_num,
+                    oid_dword0: page.oid_dword0,
+                    oid_dword1: page.oid_dword1,
+                    applied_master_seq_num: page.applied_master_seq_num,
+                })
+                .collect(),
+        };
+        if let Some(selection) = select_standard_print_service_tail_customer_page_seq_nums_v1(input)
+        {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+        return generic();
     }
 
     let Some(carrier_page_seq_nums) = carlton_admitted_carrier_page_seq_nums_v1(&source_sha256)
@@ -4715,6 +4768,62 @@ mod legacy22_exact_product_tests {
         exact_fixture(
             "CHAPTERA_SAMPLE2000_PUB",
             "40701ca47b26d04771cdd58467764e9ab39d3da69b59fbc529afd16d263d2f86",
+        );
+    }
+}
+
+#[cfg(test)]
+mod standard_print_service_tail_exact_product_tests {
+    use super::*;
+    use std::{fs, path::PathBuf};
+
+    fn exact_standard_print_fixture(env_name: &str, expected_sha256: &str, expected_pages: usize) {
+        let path = std::env::var_os(env_name)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| panic!("{env_name} is required"));
+        let before = fs::read(&path).expect("read exact standard-print fixture");
+        assert_eq!(sha256_digest(&before).unwrap().to_string(), expected_sha256);
+
+        let document = open_mature_0x2c(&before).expect("exact standard-print fixture must open");
+        assert_eq!(document.pages.len(), expected_pages);
+        assert!(
+            document.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "viewer.page_projection.family_profile_applied"
+                    && diagnostic
+                        .message
+                        .contains(STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1)
+            }),
+            "bounded standard-print family profile must be explicit"
+        );
+        assert!(
+            !document
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "viewer.page_projection.roles_unresolved"),
+            "admitted profile must replace generic roles_unresolved"
+        );
+
+        let after = fs::read(&path).expect("re-read exact standard-print fixture");
+        assert_eq!(after, before, "Viewer page projection mutated source PUB");
+    }
+
+    #[test]
+    #[ignore = "requires exact Virginia Devinettes public fixture"]
+    fn exact_virginia_devinettes_standard_print_page_projection() {
+        exact_standard_print_fixture(
+            "CHAPTERA_VIRGINIA_DEVINETTES_PUB",
+            "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e",
+            6,
+        );
+    }
+
+    #[test]
+    #[ignore = "requires exact Virginia Remplacante public fixture"]
+    fn exact_virginia_remplacante_standard_print_page_projection() {
+        exact_standard_print_fixture(
+            "CHAPTERA_VIRGINIA_REMPLACANTE_PUB",
+            "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506",
+            25,
         );
     }
 }

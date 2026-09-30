@@ -106,6 +106,112 @@ pub struct CarltonPresentationManifestV1 {
     pub invariants: CarltonPresentationInvariantsV1,
 }
 
+pub const STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1: &str =
+    "chaptera.standard-print-service-tail-profile-input.v1";
+pub const STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/standard-print-service-tail/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandardPrintServiceTailPageEvidenceV1 {
+    pub document_ordinal: usize,
+    pub contents_seq_num: u32,
+    pub oid_dword0: Option<u32>,
+    pub oid_dword1: Option<u32>,
+    pub applied_master_seq_num: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandardPrintServiceTailProfileInputV1 {
+    pub schema_version: String,
+    pub document_page_list_entry_count: usize,
+    pub confirmed_page_count: usize,
+    pub special_entry_count: usize,
+    pub scenario_evidence_list_count: usize,
+    pub observed_scenario_page_count: usize,
+    pub pages: Vec<StandardPrintServiceTailPageEvidenceV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandardPrintServiceTailSelectionV1 {
+    pub profile_id: String,
+    pub raw_page_count: usize,
+    pub customer_page_seq_nums: Vec<u32>,
+    pub master_page_seq_num: u32,
+    pub service_page_seq_nums: Vec<u32>,
+}
+
+/// Admits the bounded mature-0x2C print-family profile proven by independent
+/// Virginia, Kroy and rendered-sheet controls.
+///
+/// This is deliberately a presentation-family selector rather than generic PAGE
+/// semantics. Any structural drift returns `None`, allowing the Viewer to keep
+/// its generic no-loss PAGE projection.
+pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
+    mut input: StandardPrintServiceTailProfileInputV1,
+) -> Option<StandardPrintServiceTailSelectionV1> {
+    if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
+        || input.special_entry_count != 0
+        || input.scenario_evidence_list_count != 0
+        || input.observed_scenario_page_count != 0
+        || input.document_page_list_entry_count != input.confirmed_page_count
+        || input.confirmed_page_count != input.pages.len()
+        || input.pages.len() < 6
+    {
+        return None;
+    }
+
+    input.pages.sort_by_key(|page| page.document_ordinal);
+    let mut ordinals = BTreeSet::new();
+    let mut seq_nums = BTreeSet::new();
+    for (expected_ordinal, page) in input.pages.iter().enumerate() {
+        if page.document_ordinal != expected_ordinal
+            || !ordinals.insert(page.document_ordinal)
+            || !seq_nums.insert(page.contents_seq_num)
+        {
+            return None;
+        }
+    }
+
+    let oid_is_zero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        page.oid_dword0 == Some(0) && page.oid_dword1 == Some(0)
+    };
+    let oid_is_nonzero = |page: &StandardPrintServiceTailPageEvidenceV1| matches!((page.oid_dword0, page.oid_dword1), (Some(d0), Some(d1)) if d0 != 0 || d1 != 0);
+
+    let master = input.pages.first()?;
+    if !oid_is_zero(master) || master.applied_master_seq_num.is_some() {
+        return None;
+    }
+    let master_seq = master.contents_seq_num;
+
+    let split = input.pages.len().checked_sub(4)?;
+    let customer_pages = input.pages.get(1..split)?;
+    let service_pages = input.pages.get(split..)?;
+    if customer_pages.is_empty()
+        || !customer_pages
+            .iter()
+            .all(|page| oid_is_nonzero(page) && page.applied_master_seq_num == Some(master_seq))
+        || !service_pages
+            .iter()
+            .all(|page| oid_is_zero(page) && page.applied_master_seq_num == Some(master_seq))
+    {
+        return None;
+    }
+
+    Some(StandardPrintServiceTailSelectionV1 {
+        profile_id: STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1.to_owned(),
+        raw_page_count: input.pages.len(),
+        customer_page_seq_nums: customer_pages
+            .iter()
+            .map(|page| page.contents_seq_num)
+            .collect(),
+        master_page_seq_num: master_seq,
+        service_page_seq_nums: service_pages
+            .iter()
+            .map(|page| page.contents_seq_num)
+            .collect(),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReferenceFixturePresentationSelectionV1 {
     pub profile_id: String,
@@ -611,6 +717,169 @@ mod tests {
                 .collect(),
             carrier_page_seq_nums: vec![279],
         }
+    }
+
+    fn standard_print_input(customer_seq_nums: &[u32]) -> StandardPrintServiceTailProfileInputV1 {
+        let mut pages = vec![StandardPrintServiceTailPageEvidenceV1 {
+            document_ordinal: 0,
+            contents_seq_num: 263,
+            oid_dword0: Some(0),
+            oid_dword1: Some(0),
+            applied_master_seq_num: None,
+        }];
+        pages.extend(
+            customer_seq_nums
+                .iter()
+                .enumerate()
+                .map(|(index, seq_num)| StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: index + 1,
+                    contents_seq_num: *seq_num,
+                    oid_dword0: Some(if index == 0 { 1 } else { 2 }),
+                    oid_dword1: Some(index as u32),
+                    applied_master_seq_num: Some(263),
+                }),
+        );
+        for (offset, seq_num) in [269_u32, 272, 275, 279].into_iter().enumerate() {
+            pages.push(StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: customer_seq_nums.len() + 1 + offset,
+                contents_seq_num: seq_num,
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(263),
+            });
+        }
+        StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: pages.len(),
+            confirmed_page_count: pages.len(),
+            special_entry_count: 0,
+            scenario_evidence_list_count: 0,
+            observed_scenario_page_count: 0,
+            pages,
+        }
+    }
+
+    #[test]
+    fn standard_print_profile_selects_virginia_style_customer_middle() {
+        let input = standard_print_input(&[266, 301, 312, 323, 336, 339]);
+        let selection =
+            select_standard_print_service_tail_customer_page_seq_nums_v1(input).unwrap();
+        assert_eq!(
+            selection.customer_page_seq_nums,
+            vec![266, 301, 312, 323, 336, 339]
+        );
+        assert_eq!(selection.master_page_seq_num, 263);
+        assert_eq!(selection.service_page_seq_nums, vec![269, 272, 275, 279]);
+    }
+
+    #[test]
+    fn standard_print_profile_accepts_kroy_style_five_page_control() {
+        let selection =
+            select_standard_print_service_tail_customer_page_seq_nums_v1(standard_print_input(&[
+                341, 266, 297, 301, 311,
+            ]))
+            .unwrap();
+        assert_eq!(selection.customer_page_seq_nums.len(), 5);
+        assert_eq!(selection.raw_page_count, 10);
+    }
+
+    #[test]
+    fn standard_print_profile_does_not_require_customer_page_content() {
+        let selection =
+            select_standard_print_service_tail_customer_page_seq_nums_v1(standard_print_input(&[
+                266,
+            ]))
+            .unwrap();
+        assert_eq!(selection.customer_page_seq_nums, vec![266]);
+    }
+
+    #[test]
+    fn industrial_style_nonzero_master_and_three_service_tail_is_not_admitted() {
+        let pages = vec![
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 0,
+                contents_seq_num: 263,
+                oid_dword0: Some(2),
+                oid_dword1: Some(2),
+                applied_master_seq_num: None,
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 1,
+                contents_seq_num: 266,
+                oid_dword0: Some(1),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(263),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 2,
+                contents_seq_num: 343,
+                oid_dword0: Some(1),
+                oid_dword1: Some(1),
+                applied_master_seq_num: Some(263),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 3,
+                contents_seq_num: 269,
+                oid_dword0: Some(2),
+                oid_dword1: Some(1),
+                applied_master_seq_num: Some(263),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 4,
+                contents_seq_num: 272,
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(263),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 5,
+                contents_seq_num: 275,
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(263),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 6,
+                contents_seq_num: 279,
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(263),
+            },
+        ];
+        let input = StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: pages.len(),
+            confirmed_page_count: pages.len(),
+            special_entry_count: 0,
+            scenario_evidence_list_count: 0,
+            observed_scenario_page_count: 0,
+            pages,
+        };
+        assert!(select_standard_print_service_tail_customer_page_seq_nums_v1(input).is_none());
+    }
+
+    #[test]
+    fn standard_print_profile_fails_open_when_scenario_evidence_exists() {
+        let mut input = standard_print_input(&[266]);
+        input.scenario_evidence_list_count = 1;
+        input.observed_scenario_page_count = 1;
+        assert!(select_standard_print_service_tail_customer_page_seq_nums_v1(input).is_none());
+    }
+
+    #[test]
+    fn standard_print_profile_fails_open_on_unresolved_nonempty_scenario_evidence() {
+        let mut input = standard_print_input(&[266]);
+        input.scenario_evidence_list_count = 1;
+        input.observed_scenario_page_count = 0;
+        assert!(select_standard_print_service_tail_customer_page_seq_nums_v1(input).is_none());
+    }
+
+    #[test]
+    fn standard_print_profile_fails_open_on_non_page_list_entry() {
+        let mut input = standard_print_input(&[266]);
+        input.document_page_list_entry_count += 1;
+        input.special_entry_count = 1;
+        assert!(select_standard_print_service_tail_customer_page_seq_nums_v1(input).is_none());
     }
 
     #[test]
