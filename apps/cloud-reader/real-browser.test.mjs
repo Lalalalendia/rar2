@@ -107,6 +107,23 @@ try {
     await page.waitForFunction(() => document.querySelectorAll("#pages svg.page").length > 0);
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.locator("#pages svg.page").count(), fixture.pages);
+    const expectedNodeOrderByPage = [...scene.pages]
+      .sort((left, right) => left.order - right.order)
+      .map((pageModel) => ({
+        page_id: pageModel.page_id,
+        node_ids: scene.nodes
+          .filter((node) => node.page_id === pageModel.page_id)
+          .map((node) => node.node_id)
+      }));
+    const paintedNodeOrderByPage = await page.locator("#pages svg.page").evaluateAll((pages) => pages.map((svg) => ({
+      page_id: svg.dataset.pageId,
+      node_ids: [...svg.querySelectorAll(":scope > g[data-node-id]")].map((node) => node.dataset.nodeId)
+    })));
+    assert.deepEqual(
+      paintedNodeOrderByPage,
+      expectedNodeOrderByPage,
+      "browser must preserve server scene node order within each page"
+    );
     const expectedLines = scene.nodes.flatMap((node) => node.text_layout?.disposition === "shared_resolved"
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
@@ -134,8 +151,30 @@ try {
       screenshots.push({ page: i + 1, filename, sha256: sha256(png) });
     }
     const nonempty = painted.filter((line) => line.text.trim());
+    const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
+    if (scene.stacking_fidelity === "unknown") {
+      assert.ok(
+        fidelityReasons.includes("stacking_order_unavailable"),
+        "unknown stacking must stay explicit in Scene fidelity reasons"
+      );
+    }
+    const diagnosticCodes = [...new Set((scene.diagnostics ?? []).map((diagnostic) =>
+      diagnostic.severity + ":" + diagnostic.code
+    ))].sort();
+    const nodeKindCounts = {};
+    const textLayoutDispositionCounts = {};
+    for (const node of scene.nodes) {
+      nodeKindCounts[node.kind] = (nodeKindCounts[node.kind] ?? 0) + 1;
+      const disposition = node.text_layout?.disposition ?? "none";
+      textLayoutDispositionCounts[disposition] = (textLayoutDispositionCounts[disposition] ?? 0) + 1;
+    }
+    const descriptorOnlyResourceCount = (scene.resources ?? [])
+      .filter((resource) => resource.availability !== "inline_data_url").length;
     results.push({ fixture: fixture.name, source_sha256: fixture.sha256, source_byte_len: fixture.bytes,
-      classification: receipt.classification, fidelity: scene.fidelity, pages: fixture.pages, nodes: scene.nodes.length,
+      classification: receipt.classification, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
+      fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixture.pages, nodes: scene.nodes.length,
+      node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
+      descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
       shared_line_height_px: { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) },
       worker_receipt_sha256: sha256(receiptBytes), filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
