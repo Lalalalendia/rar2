@@ -333,6 +333,7 @@ pub struct PubLegacyOleSource {
 pub struct PubNodePayload {
     pub contents_seq_num: u32,
     pub officeart_shape_type: Option<u16>,
+    pub officeart_adjust_value: PubOfficeArtAdjustValueSource,
     pub officeart_spid: Option<u32>,
     /// Exact one-based OfficeArt BStore identity from non-complex fBid pib.
     pub image_slot: Option<u32>,
@@ -358,6 +359,14 @@ pub struct PubNodePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubOfficeArtAdjustValueSource {
+    Absent,
+    Scalar(u32),
+    Unsupported,
+}
+
 pub struct PubExplicitImageCropSource {
     pub top_raw: Option<u32>,
     pub bottom_raw: Option<u32>,
@@ -2775,6 +2784,7 @@ pub fn build_mature_0x2c_from_streams(
                 payload: PubNodePayload {
                     contents_seq_num: seq_num,
                     officeart_shape_type: shape.fsp.as_ref().map(|fsp| fsp.shape_type),
+                    officeart_adjust_value: bounded_officeart_adjust_value(shape),
                     officeart_spid: shape.fsp.as_ref().map(|fsp| fsp.spid),
                     image_slot,
                     legacy_ole: None,
@@ -3354,6 +3364,7 @@ fn source_page_paint_orders_v1(
         .collect()
 }
 
+const OFFICE_ART_ADJUST_VALUE: u16 = 0x0147;
 const OFFICE_ART_FILL_TYPE: u16 = 0x0180;
 const OFFICE_ART_FILL_COLOR: u16 = 0x0181;
 const OFFICE_ART_FILL_BOOLEANS: u16 = 0x01BF;
@@ -3702,6 +3713,36 @@ fn unique_explicit_officeart_scalar(
         values.iter().next().copied()
     } else {
         None
+    }
+}
+
+fn bounded_officeart_adjust_value(
+    shape: &pub_escher::SpContainerObservation,
+) -> PubOfficeArtAdjustValueSource {
+    let properties = shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICE_ART_ADJUST_VALUE)
+        .collect::<Vec<_>>();
+
+    if properties.is_empty() {
+        return PubOfficeArtAdjustValueSource::Absent;
+    }
+    if properties
+        .iter()
+        .any(|property| property.f_bid() || property.f_complex())
+    {
+        return PubOfficeArtAdjustValueSource::Unsupported;
+    }
+
+    let values = properties
+        .iter()
+        .map(|property| property.op)
+        .collect::<BTreeSet<_>>();
+    match values.as_slice() {
+        [value] => PubOfficeArtAdjustValueSource::Scalar(*value),
+        _ => PubOfficeArtAdjustValueSource::Unsupported,
     }
 }
 
