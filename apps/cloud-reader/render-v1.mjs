@@ -239,6 +239,7 @@ function appendText(group, defs, node, fonts, index) {
       y: (line.y - plan.bounds.y) / EMU_PER_CSS_PX,
       "font-family": installed.family,
       "font-size": plan.font_size_emu / EMU_PER_CSS_PX,
+      "text-rendering": "geometricPrecision",
       "dominant-baseline": "text-before-edge",
       "data-text-authority": "server-shared-resolved",
       "data-text-line-index": line.line_index,
