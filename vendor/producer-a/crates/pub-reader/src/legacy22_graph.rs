@@ -354,6 +354,7 @@ pub fn build_legacy_0x22_quill_from_streams(
     Ok(PubSourceGraphBuild {
         graph,
         effective_pages,
+        source_page_paint_orders: Vec::new(),
         diagnostics,
         typography_runs: Vec::new(),
         script_font_maps: Vec::new(),

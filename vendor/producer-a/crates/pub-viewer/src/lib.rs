@@ -56,12 +56,12 @@ use pub_reader::{
     LegacyOleCachedPresentationSelection, PubAssetExportDiagnostic, PubBridgeDiagnostic,
     PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, WmfPreviewRgba, analyze_mature_0x2c_page_roles, build_failure_envelope,
-    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
-    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    derive_pub_page_id, materialize_bounded_simple_table_cells, rasterize_wmf_preview,
-    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
-    select_unambiguous_legacy_ole_cached_presentation,
+    PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
+    build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
+    rasterize_wmf_preview, read_legacy_0x22_image_wmfs, resolve_pub_source_graph,
+    scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -228,10 +228,20 @@ pub struct ViewerGeometryDocument {
     pub images: Vec<ViewerEmbeddedImage>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerPagePaintOrderV1 {
+    pub page_id: PageId,
+    /// Canonical source-backed node identities in back-to-front paint order.
+    pub node_ids: Vec<NodeId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewerOpenBundle {
     pub geometry: ViewerGeometryDocument,
     pub resolved_graph: PubResolvedGraph,
+    /// Bounded source-backed page stacking authority. Missing pages remain
+    /// explicitly unknown to consumers.
+    pub source_page_paint_orders: Vec<ViewerPagePaintOrderV1>,
 }
 
 impl ViewerGeometryDocument {
@@ -1164,6 +1174,15 @@ fn viewer_legacy_ole_cached_preview_images(
     images
 }
 
+fn viewer_page_paint_order_from_source(
+    source: &PubSourcePagePaintOrderV1,
+) -> ViewerPagePaintOrderV1 {
+    ViewerPagePaintOrderV1 {
+        page_id: source.page_id,
+        node_ids: source.node_ids.clone(),
+    }
+}
+
 struct Mature0x2cPipeline {
     source_hash: Sha256Digest,
     source: PubSourceGraphBuild,
@@ -1412,6 +1431,7 @@ fn open_legacy_0x22_noquill_bundle(
     Ok(ViewerOpenBundle {
         geometry,
         resolved_graph: resolved.graph,
+        source_page_paint_orders: Vec::new(),
     })
 }
 
@@ -1543,6 +1563,7 @@ fn open_legacy_0x22_quill_bundle(
     Ok(ViewerOpenBundle {
         geometry,
         resolved_graph: resolved.graph,
+        source_page_paint_orders: Vec::new(),
     })
 }
 
@@ -1848,9 +1869,19 @@ fn open_mature_0x2c_bundle(
         projected_instances,
         images,
     };
+    let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
+    let source_page_paint_orders = pipeline
+        .source
+        .source_page_paint_orders
+        .iter()
+        .filter(|order| selected_pages.contains(&order.page_id))
+        .map(viewer_page_paint_order_from_source)
+        .collect::<Vec<_>>();
+
     Ok(ViewerOpenBundle {
         geometry,
         resolved_graph: pipeline.resolved.graph,
+        source_page_paint_orders,
     })
 }
 
