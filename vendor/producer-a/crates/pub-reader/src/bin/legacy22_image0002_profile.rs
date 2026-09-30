@@ -1324,8 +1324,7 @@ fn stretchdib_context_profile(records: &[(u16, &[u8])]) -> Value {
                 | META_STRETCHDIB_FUNCTION
         ) {
             bump_function(&mut following_drawing_counts, *function);
-            first_following_canvas_mutation
-                .get_or_insert_with(|| format!("0x{function:04x}"));
+            first_following_canvas_mutation.get_or_insert_with(|| format!("0x{function:04x}"));
         }
         if *function == META_STRETCHDIB_FUNCTION {
             let rop = read_u32(following_params, 0)
