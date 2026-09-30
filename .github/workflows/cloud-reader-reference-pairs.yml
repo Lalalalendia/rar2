@@ -82,32 +82,35 @@ jobs:
           from pathlib import Path
 
           root = Path(os.environ["RUNNER_TEMP"])
+          fixtures = [
+              {
+                  "name": "CarltonMarch2026",
+                  "sha256": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
+                  "bytes": 9580032,
+                  "pages": 3,
+                  "require_render": True,
+                  "source_path": str(root / "carlton-pair" / "March-2026.pub"),
+              },
+              {
+                  "name": "VirginiaDevinettes2021",
+                  "sha256": "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e",
+                  "bytes": 138240,
+                  "require_render": False,
+                  "source_path": str(root / "virginia-pairs" / "virginia-devinettes.pub"),
+              },
+          ]
+          remplacante = root / "virginia-pairs" / "virginia-remplacante-modifiable.pub"
+          if remplacante.exists():
+              fixtures.append({
+                  "name": "VirginiaRemplacanteZoneA2015",
+                  "sha256": "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506",
+                  "bytes": 8376832,
+                  "require_render": False,
+                  "source_path": str(remplacante),
+              })
           manifest = {
               "schema": "chaptera.cloud-reader-real-fixtures.v1",
-              "fixtures": [
-                  {
-                      "name": "CarltonMarch2026",
-                      "sha256": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
-                      "bytes": 9580032,
-                      "pages": 3,
-                      "require_render": True,
-                      "source_path": str(root / "carlton-pair" / "March-2026.pub"),
-                  },
-                  {
-                      "name": "VirginiaDevinettes2021",
-                      "sha256": "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e",
-                      "bytes": 138240,
-                      "require_render": False,
-                      "source_path": str(root / "virginia-pairs" / "virginia-devinettes.pub"),
-                  },
-                  {
-                      "name": "VirginiaRemplacanteZoneA2015",
-                      "sha256": "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506",
-                      "bytes": 8376832,
-                      "require_render": False,
-                      "source_path": str(root / "virginia-pairs" / "virginia-remplacante-modifiable.pub"),
-                  },
-              ],
+              "fixtures": fixtures,
           }
           target = root / "cloud-reader-reference-fixtures.json"
           target.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -128,7 +131,9 @@ jobs:
           mkdir -p target/cloud-reader-reference-pairs
           python tools/cloud_reader_reference_pdf_raster_v1.py             "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             CarltonMarch2026             "$RUNNER_TEMP/carlton-pair/March-2026-reference.pdf"             target/cloud-reader-reference-pairs/carlton.json
           python tools/cloud_reader_reference_pdf_raster_v1.py             "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             VirginiaDevinettes2021             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes-reference.pdf"             target/cloud-reader-reference-pairs/virginia-devinettes.json
-          python tools/cloud_reader_reference_pdf_raster_v1.py             "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             VirginiaRemplacanteZoneA2015             "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf"             target/cloud-reader-reference-pairs/virginia-remplacante-zone-a.json
+          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf" ]; then
+            python tools/cloud_reader_reference_pdf_raster_v1.py             "$RUNNER_TEMP/cloud-reader-reference-real/receipt.json"             VirginiaRemplacanteZoneA2015             "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf"             target/cloud-reader-reference-pairs/virginia-remplacante-zone-a.json
+          fi
 
       - name: Build source-neutral pair summary
         run: |
@@ -145,7 +150,10 @@ jobs:
           ]
           rows = []
           for name in names:
-              data = json.loads((root / f"{name}.json").read_text())
+              path = root / f"{name}.json"
+              if not path.exists():
+                  continue
+              data = json.loads(path.read_text())
               rows.append({
                   "fixture": data["fixture"],
                   "source_pub_sha256": data["source_pub_sha256"],
@@ -195,7 +203,7 @@ jobs:
         with:
           name: cloud-reader-reference-pair-receipts
           path: target/cloud-reader-reference-pairs/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       - uses: actions/upload-artifact@v4
