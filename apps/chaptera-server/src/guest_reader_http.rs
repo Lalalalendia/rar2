@@ -978,6 +978,7 @@ impl SqliteGuestReaderSessionStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn finish_opened(
         &self,
         session_id: &str,
