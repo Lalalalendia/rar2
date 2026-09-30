@@ -2556,6 +2556,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "A Quill layout-metrics table uses a structure outside the bounded MCLD profile; core document content remains available.",
         ),
+        FdppExactStoryFallback { .. } => (
+            "viewer.text.fdpp_exact_story_fallback",
+            ViewerDiagnosticSeverity::Info,
+            "Story text was recovered from exact persisted Contents identity, FDPP boundaries, and TEXT bytes because the ordinary Quill Story service plane is sentinel-filled.",
+        ),
         EquivalentMarginsPageExtents { .. } => (
             "viewer.page_extent.equivalent_source_records",
             ViewerDiagnosticSeverity::Info,

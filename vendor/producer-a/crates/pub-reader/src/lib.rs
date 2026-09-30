@@ -100,9 +100,9 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillScriptFontEntryDisposition, QuillStoryReadError,
-    QuillTypographyValueSource, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    QuillGroundedStoryIdentity, QuillMcldReadError, QuillScriptFontEntryDisposition,
+    QuillStoryReadError, QuillTypographyValueSource, parse_bounded_fdpp_exact_story_catalog,
+    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -570,6 +570,9 @@ pub enum PubBridgeDiagnostic {
     McldRecordCountMismatch {
         record_count: u32,
         record_id_count: u32,
+    },
+    FdppExactStoryFallback {
+        story_count: usize,
     },
     EquivalentMarginsPageExtents {
         count: usize,
@@ -1911,10 +1914,10 @@ pub fn build_mature_0x2c_from_streams(
     )?;
     let story_catalog_chunk =
         chunk_for_reference(contents_stream.clone(), contents, story_catalog_reference)?;
-    let (story_layout_keys, physical_empty_story_catalog): (BTreeMap<_, _>, bool) =
+    let (story_layout_keys, grounded_story_catalog, physical_empty_story_catalog) =
         match parse_confirmed_mature_story_catalog(contents, &story_catalog_chunk) {
-            Ok(story_catalog) => (
-                story_catalog
+            Ok(story_catalog) => {
+                let story_layout_keys = story_catalog
                     .entries
                     .iter()
                     .filter_map(|entry| {
@@ -1923,9 +1926,9 @@ pub fn build_mature_0x2c_from_streams(
                             (entry.layout_key?, entry.layout_key_source.as_ref()?.clone()),
                         ))
                     })
-                    .collect(),
-                false,
-            ),
+                    .collect::<BTreeMap<_, _>>();
+                (story_layout_keys, Some(story_catalog), false)
+            }
             Err(StoryCatalogReadError::MissingDeclaredCount) => {
                 let _physical_empty = parse_bounded_empty_mature_story_catalog_variant(
                     contents,
@@ -1952,7 +1955,7 @@ pub fn build_mature_0x2c_from_streams(
                         referenced_story_ids
                     );
                 }
-                (BTreeMap::new(), true)
+                (BTreeMap::new(), None, true)
             }
             Err(error) => return Err(error).context("parse mature Story catalog 0x65"),
         };
@@ -2067,6 +2070,7 @@ pub fn build_mature_0x2c_from_streams(
     graph.pages = pages;
 
     let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
+    let mut fdpp_story_catalog = None;
     let quill_catalog = match parse_confirmed_story_catalog(quill_stream.clone(), quill) {
         Ok(catalog) => Some(catalog),
         Err(QuillStoryReadError::MissingRequiredChunk { name })
@@ -2077,7 +2081,33 @@ pub fn build_mature_0x2c_from_streams(
             });
             None
         }
-        Err(error) => return Err(error).context("parse grounded Quill story catalog"),
+        Err(ordinary_error) => {
+            let Some(story_catalog) = grounded_story_catalog.as_ref() else {
+                return Err(ordinary_error).context("parse grounded Quill story catalog");
+            };
+            let identities = story_catalog
+                .entries
+                .iter()
+                .map(|entry| QuillGroundedStoryIdentity {
+                    syid: pub_core::QuillSyid(entry.text_id),
+                    source: entry.text_id_source.clone(),
+                })
+                .collect::<Vec<_>>();
+            match parse_bounded_fdpp_exact_story_catalog(quill_stream.clone(), quill, &identities)
+                .context("parse bounded exact-FDPP Story fallback")?
+            {
+                Some(catalog) => {
+                    diagnostics.push(PubBridgeDiagnostic::FdppExactStoryFallback {
+                        story_count: catalog.stories.len(),
+                    });
+                    fdpp_story_catalog = Some(catalog);
+                    None
+                }
+                None => {
+                    return Err(ordinary_error).context("parse grounded Quill story catalog");
+                }
+            }
+        }
     };
     let typography_catalog = if let Some(quill_catalog) = quill_catalog.as_ref() {
         match parse_bounded_typography(quill, quill_catalog) {
@@ -2143,6 +2173,60 @@ pub fn build_mature_0x2c_from_streams(
                     &story_slice.syid_source,
                     Some(object_key.clone()),
                     Some("SYID".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &story_slice.text_source,
+                    Some(object_key),
+                    Some("TEXT".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ];
+
+            graph.stories.insert(
+                story_id,
+                Story {
+                    id: story_id,
+                    text,
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs,
+                },
+            );
+            story_by_syid.insert(syid, story_id);
+        }
+    }
+
+    if let Some(fdpp_catalog) = fdpp_story_catalog.as_ref() {
+        for story_slice in &fdpp_catalog.stories {
+            let syid = story_slice.syid.0;
+            let story_id = derive_pub_story_id(&source_hash, syid)?;
+            let object_key = quill_story_object_key(syid);
+            let text = decode_utf16le_strict(&story_slice.utf16le)
+                .with_context(|| format!("decode FDPP-bounded Story {syid} as strict UTF-16LE"))?;
+
+            let source_refs = vec![
+                source_ref(
+                    &graph.source,
+                    &story_slice.identity_source,
+                    Some(object_key.clone()),
+                    Some("Contents/0x65/textId".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &story_slice.boundary_source,
+                    Some(object_key.clone()),
+                    Some("FDPP/storyEnd".into()),
                     SourceRole::Relation,
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
