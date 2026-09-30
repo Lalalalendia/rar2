@@ -255,7 +255,12 @@ async function openFile(file) {
       if (!opened.scene) throw new Error("scene_protocol_mismatch");
       if (!await render(opened.scene, operation)) return;
     }
-    if (isCurrent(operation)) message(classificationMessage(opened.classification), !["supported", "partial"].includes(opened.classification));
+    if (isCurrent(operation)) {
+      message(
+        classificationMessage(opened.classification, opened.failure_classification?.class ?? null),
+        !["supported", "partial"].includes(opened.classification)
+      );
+    }
   } catch (error) {
     if (isCurrent(operation)) message(errorMessage(error), true);
   } finally {
