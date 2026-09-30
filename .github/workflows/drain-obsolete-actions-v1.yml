@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - ".github/workflows/drain-obsolete-actions-v1.yml"
+      - "tools/ci/obsolete_actions_recovery.py"
+      - "tools/ci/test_obsolete_actions_recovery.py"
   workflow_dispatch:
 
 permissions:
@@ -20,52 +22,25 @@ concurrency:
 jobs:
   drain:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Cancel obsolete pull-request head runs
-        shell: bash
+      - uses: actions/checkout@v5
+
+      - name: Prove force-cancel admission boundary
+        run: python3 tools/ci/test_obsolete_actions_recovery.py
+
+      - name: Drain obsolete pull-request head runs
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
-          set -euo pipefail
+          python3 tools/ci/obsolete_actions_recovery.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --receipt "$RUNNER_TEMP/ci-actions-prequeue-recovery.json"
 
-          preserve_file="$(mktemp)"
-          runs_file="$(mktemp)"
-          trap 'rm -f "$preserve_file" "$runs_file"' EXIT
-
-          gh api --paginate --method GET "repos/$GH_REPO/pulls" \
-            -f state=open -f per_page=100 \
-            --jq '.[].head.sha' \
-            | sort -u >"$preserve_file"
-
-          echo "Preserving current heads of all open PRs:"
-          cat "$preserve_file" || true
-
-          : >"$runs_file"
-          for status in queued in_progress; do
-            gh api --paginate --method GET "repos/$GH_REPO/actions/runs" \
-              -f status="$status" -f event=pull_request -f per_page=100 \
-              --jq '.workflow_runs[] | [.id, (.head_branch // ""), .head_sha, .name] | @tsv' \
-              >>"$runs_file"
-          done
-
-          cancelled=0
-          preserved=0
-          while IFS=$'\t' read -r id head_branch head_sha name; do
-            [[ -n "$id" ]] || continue
-            if grep -Fxq "$head_sha" "$preserve_file"; then
-              echo "KEEP   $id  $head_branch  ${head_sha:0:12}  $name"
-              preserved=$((preserved + 1))
-              continue
-            fi
-
-            echo "CANCEL $id  $head_branch  ${head_sha:0:12}  $name"
-            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/cancel" >/dev/null; then
-              cancelled=$((cancelled + 1))
-            else
-              echo "::warning::Could not cancel run $id; it may have completed concurrently."
-            fi
-          done <"$runs_file"
-
-          echo "Cancelled obsolete PR-head runs: $cancelled"
-          echo "Preserved current-head runs: $preserved"
+      - name: Publish recovery receipt in run summary
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/ci-actions-prequeue-recovery.json" ]]; then
+            echo '## CI Actions pre-queue recovery receipt' >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/ci-actions-prequeue-recovery.json" >> "$GITHUB_STEP_SUMMARY"
+          fi
