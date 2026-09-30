@@ -111,6 +111,7 @@ fn synthetic_graph(source_hash_text: &str) -> Result<PubResolvedGraph> {
         payload: PubResolvedNodePayload {
             contents_seq_num: 1,
             officeart_shape_type: Some(202),
+            officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
             officeart_spid: Some(1),
             image_slot: None,
             legacy_ole: None,

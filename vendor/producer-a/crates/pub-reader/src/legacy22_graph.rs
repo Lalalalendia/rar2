@@ -320,6 +320,7 @@ pub fn build_legacy_0x22_quill_from_streams(
                     payload: PubNodePayload {
                         contents_seq_num: u32::from(child_object_id),
                         officeart_shape_type: None,
+                        officeart_adjust_value: crate::PubOfficeArtAdjustValueSource::Unsupported,
                         officeart_spid: None,
                         image_slot: None,
                         legacy_ole: None,

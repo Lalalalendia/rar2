@@ -1,7 +1,7 @@
 use crate::{
     PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
-    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource,
-    PubTableStoryOwnershipSource,
+    PubLegacyOleSource, PubNodePayload, PubOfficeArtAdjustValueSource, PubSourceGraph,
+    PubTableSource, PubTableStoryOwnershipSource,
 };
 use anyhow::{Result, bail};
 use pub_model::{Node, NodeId, ResolvedGraph, StoryId, validate_source_graph_registries};
@@ -16,6 +16,11 @@ pub type PubResolvedGraph = ResolvedGraph<PubResolvedNodePayload, (), (), (), St
 pub struct PubResolvedNodePayload {
     pub contents_seq_num: u32,
     pub officeart_shape_type: Option<u16>,
+    #[serde(
+        default,
+        skip_serializing_if = "PubOfficeArtAdjustValueSource::is_unsupported"
+    )]
+    pub officeart_adjust_value: PubOfficeArtAdjustValueSource,
     pub officeart_spid: Option<u32>,
     pub image_slot: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +127,7 @@ fn resolve_node_payload(
     PubResolvedNodePayload {
         contents_seq_num: payload.contents_seq_num,
         officeart_shape_type: payload.officeart_shape_type,
+        officeart_adjust_value: payload.officeart_adjust_value.clone(),
         officeart_spid: payload.officeart_spid,
         image_slot: payload.image_slot,
         legacy_ole: payload.legacy_ole.clone(),
@@ -156,6 +162,7 @@ mod tests {
         let payload = PubNodePayload {
             contents_seq_num: 315,
             officeart_shape_type: Some(75),
+            officeart_adjust_value: PubOfficeArtAdjustValueSource::Absent,
             officeart_spid: Some(315),
             image_slot: Some(1),
             legacy_ole: Some(legacy_ole.clone()),

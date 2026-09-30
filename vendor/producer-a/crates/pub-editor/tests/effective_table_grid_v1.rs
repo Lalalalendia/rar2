@@ -67,6 +67,7 @@ fn graph() -> PubResolvedGraph {
                 }),
                 utf16_start: 0,
                 utf16_end: 1,
+                bounds: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -80,6 +81,7 @@ fn graph() -> PubResolvedGraph {
                 }),
                 utf16_start: 1,
                 utf16_end: 4,
+                bounds: None,
                 source_refs: Vec::new(),
             },
         ],
@@ -143,6 +145,7 @@ fn graph() -> PubResolvedGraph {
                 payload: PubResolvedNodePayload {
                     contents_seq_num: 123,
                     officeart_shape_type: None,
+                    officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
                     officeart_spid: None,
                     image_slot: None,
                     legacy_ole: None,
