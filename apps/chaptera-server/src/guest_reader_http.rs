@@ -2060,6 +2060,128 @@ mod tests {
         let _ = fs::remove_file(path);
     }
 
+    #[tokio::test]
+    async fn research_capability_is_one_shot_and_submission_records_stay_independent() {
+        let path = migrated_path("research-capability").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let first_token =
+            token_hash(b"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+        let second_token =
+            token_hash(b"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+        let evidence = br#"{"protocol_version":"chaptera.failure-classifier.v1","class":"PUB_DAMAGED","confidence":"high","reason_flags":["cfb_parse_failed"]}"#;
+        let session_id = "guest:0123456789abcdef0123456789abcdef";
+
+        store
+            .insert_research_submission(
+                "submission:11111111111111111111111111111111",
+                session_id,
+                &first_token,
+                "chaptera-intake-consent-v1",
+                evidence,
+                "reader_scene_open_failed",
+                1_000,
+                2_000,
+            )
+            .await
+            .unwrap();
+        let claimed = store
+            .claim_research_submission(session_id, &first_token, 1_100)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.submission_id,
+            "submission:11111111111111111111111111111111"
+        );
+        assert!(
+            store
+                .claim_research_submission(session_id, &first_token, 1_101)
+                .await
+                .is_err()
+        );
+        store
+            .finish_research_submission(
+                &claimed.submission_id,
+                "binding:1111111111111111",
+                &"a".repeat(64),
+                "new_exact_bytes",
+                1_200,
+            )
+            .await
+            .unwrap();
+
+        store
+            .insert_research_submission(
+                "submission:22222222222222222222222222222222",
+                session_id,
+                &second_token,
+                "chaptera-intake-consent-v1",
+                evidence,
+                "reader_scene_open_failed",
+                1_300,
+                2_300,
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .claim_research_submission(session_id, &second_token, 1_400)
+                .await
+                .is_ok()
+        );
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM reader_research_submissions WHERE session_id=?",
+        )
+        .bind(session_id.as_bytes())
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 2);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn expired_unconsumed_research_capability_is_removed() {
+        let path = migrated_path("research-expiry").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let token =
+            token_hash(b"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        store
+            .insert_research_submission(
+                "submission:33333333333333333333333333333333",
+                "guest:0123456789abcdef0123456789abcdef",
+                &token,
+                "chaptera-intake-consent-v1",
+                br#"{"protocol_version":"chaptera.failure-classifier.v1"}"#,
+                "reader_scene_open_failed",
+                1_000,
+                1_100,
+            )
+            .await
+            .unwrap();
+        store
+            .cleanup_expired_research_capabilities(1_100)
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM reader_research_submissions WHERE submission_id=?",
+        )
+        .bind(b"submission:33333333333333333333333333333333".as_slice())
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn token_compare_is_constant_shape_and_distinguishes_values() {
         let a = token_hash(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
