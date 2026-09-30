@@ -48,12 +48,14 @@ PAIRS = [
             "artifact": "virginia-remplacante-modifiable.pub",
             "size": 8_376_832,
             "sha256": "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506",
+            "expected_drive_id": "0B6lkYRCQasWaVVhWVzVUUU5fZVE",
         },
         "pdf": {
             "anchor": "PDF Zone A",
             "artifact": "virginia-remplacante-zone-a-reference.pdf",
             "size": 6_086_212,
             "sha256": "df885f7288974bfaff9ec3c15416c0e98c5a4977c96618eba1572707937669f3",
+            "expected_drive_id": "0B6lkYRCQasWaTGlRak1OOXl4ZGs",
         },
     },
 ]
@@ -150,6 +152,13 @@ def candidate_urls(link: str) -> list[str]:
     ]
 
 
+def pinned_drive_link(spec: dict) -> str:
+    drive_id = spec.get("expected_drive_id")
+    if not drive_id:
+        raise RuntimeError(f"{spec['artifact']}: no pinned Drive identity")
+    return f"https://drive.google.com/file/d/{drive_id}/view"
+
+
 def acquire_exact(
     session: requests.Session,
     link: str,
@@ -238,14 +247,36 @@ def main(argv: list[str]) -> None:
 
     receipt_pairs = []
     for pair in PAIRS:
+        source_page_revalidated = True
+        source_page_error_class = None
+        locator_basis = "live_first_party_anchor"
         try:
-            selected_source, final_url, raw = source_html(
-                session,
-                [pair["source_page"], *pair.get("source_fallbacks", [])],
-            )
-            entries = anchors(raw, final_url)
-            pub_link = exact_anchor_link(entries, pair["pub"]["anchor"])
-            pdf_link = exact_anchor_link(entries, pair["pdf"]["anchor"])
+            try:
+                selected_source, final_url, raw = source_html(
+                    session,
+                    [pair["source_page"], *pair.get("source_fallbacks", [])],
+                )
+                entries = anchors(raw, final_url)
+                pub_link = exact_anchor_link(entries, pair["pub"]["anchor"])
+                pdf_link = exact_anchor_link(entries, pair["pdf"]["anchor"])
+            except RuntimeError as source_error:
+                # The Drive identities below were pinned from an earlier successful
+                # fetch of these exact first-party Blogspot anchors. A transient
+                # source-page 429 must not force re-discovery or weaken byte identity.
+                if not (
+                    pair["pub"].get("expected_drive_id")
+                    and pair["pdf"].get("expected_drive_id")
+                    and str(source_error).startswith("source pages unavailable:")
+                ):
+                    raise
+                selected_source = pair["source_page"]
+                final_url = None
+                pub_link = pinned_drive_link(pair["pub"])
+                pdf_link = pinned_drive_link(pair["pdf"])
+                source_page_revalidated = False
+                source_page_error_class = type(source_error).__name__
+                locator_basis = "pinned_first_party_anchor_drive_id"
+
             pub = acquire_exact(session, pub_link, pair["pub"], output_dir)
             pdf = acquire_exact(session, pdf_link, pair["pdf"], output_dir)
         except Exception as error:
@@ -273,6 +304,9 @@ def main(argv: list[str]) -> None:
                 "source_page": pair["source_page"],
                 "selected_source_page": selected_source,
                 "resolved_source_page": final_url,
+                "source_page_revalidated": source_page_revalidated,
+                "source_page_error_class": source_page_error_class,
+                "locator_basis": locator_basis,
                 "pair_class": "exact_source_pair",
                 "status": "acquired",
                 "pub": pub,
