@@ -236,7 +236,10 @@ fn main() -> Result<()> {
                 }
                 _ => {
                     counts.roundrect_adjust_value_unsupported_shapes += 1;
-                    bump(&mut histograms.roundrect_adjust_value_form, "duplicate_or_mixed");
+                    bump(
+                        &mut histograms.roundrect_adjust_value_form,
+                        "duplicate_or_mixed",
+                    );
                 }
             }
         }
