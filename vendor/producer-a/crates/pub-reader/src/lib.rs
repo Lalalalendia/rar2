@@ -2658,6 +2658,7 @@ pub fn build_mature_0x2c_from_streams(
                     story_by_syid: &story_by_syid,
                     story_layout_keys: &story_layout_keys,
                     mcld: mcld.as_ref(),
+                    table_bounds: &bounds,
                 };
                 (
                     table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
