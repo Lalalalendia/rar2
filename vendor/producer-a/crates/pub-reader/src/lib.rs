@@ -119,7 +119,7 @@ pub use structural_base::{
 pub use table_bridge::{
     PubMaterializedTableCell, PubTableCellCoordinates, PubTableCellSource,
     PubTableLayoutMetricsSource, PubTableSource, PubTableStoryOwnershipSource, PubTableTextError,
-    RAW_TYPE_TABLE, materialize_bounded_simple_table_cells,
+    RAW_TYPE_TABLE, materialize_bounded_simple_table_cells, materialize_bounded_table_cells,
 };
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
 pub use wmf_preview::{
@@ -2677,6 +2677,7 @@ pub fn build_mature_0x2c_from_streams(
                     story_by_syid: &story_by_syid,
                     story_layout_keys: &story_layout_keys,
                     mcld: mcld.as_ref(),
+                    table_bounds: &bounds,
                 };
                 (
                     table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
