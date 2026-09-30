@@ -45,6 +45,20 @@ const scene = {
         lines: [{ line_index: 0, text: "Server line A", measured_width_emu: emu(120), line_height_emu: emu(20) },
           { line_index: 1, text: "Server line B", measured_width_emu: emu(120), line_height_emu: emu(20) }]
       }
+    },
+    { node_id: "mixed-resolved", page_id: "p", kind: "text", bounds: rectangle(350, 130, 220, 90),
+      text: "BIG smalltail", text_layout: {
+        disposition: "shared_resolved", font_resource_id: fontId, font_size_emu: emu(16), line_height_emu: emu(20),
+        lines: [
+          { line_index: 0, text: "BIG small", measured_width_emu: emu(96), line_height_emu: emu(30), spans: [
+            { scalar_start: 0, scalar_end: 3, text: "BIG", x_offset_emu: 0, measured_width_emu: emu(48), font_size_emu: emu(24) },
+            { scalar_start: 3, scalar_end: 9, text: " small", x_offset_emu: emu(48), measured_width_emu: emu(48), font_size_emu: emu(12) }
+          ] },
+          { line_index: 1, text: "tail", measured_width_emu: emu(36), line_height_emu: emu(18), spans: [
+            { scalar_start: 9, scalar_end: 13, text: "tail", x_offset_emu: 0, measured_width_emu: emu(36), font_size_emu: emu(14) }
+          ] }
+        ]
+      }
     }
   ], stories: [], resources: [], fonts: [{ resource_id: fontId, expected_sha256: fontSha,
     availability: "inline_data_url", inline_data_url: "data:font/ttf;base64," + fontBytes.toString("base64") }]
@@ -93,7 +107,7 @@ try {
     assert.equal(measurement.inside_frame, true);
     assert.equal(measurement.authority, "browser-preview-only");
   }
-  const shared = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
+  const shared = await page.locator('[data-node-id="resolved"] [data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
     const bounds = line.getBoundingClientRect();
     return { text: line.textContent, font_size_px: parseFloat(getComputedStyle(line).fontSize),
       font_family: getComputedStyle(line).fontFamily, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
@@ -107,6 +121,23 @@ try {
     assert.ok(Math.abs(line.x - 375) < 0.1, "canonical x plus node transform must be preserved");
   }
   assert.ok(Math.abs(shared[1].y - shared[0].y - 20) < 0.1, "server line-height, not browser reflow, places lines");
+
+  const mixed = await page.locator('[data-node-id="mixed-resolved"] [data-text-authority="server-shared-resolved"]').evaluateAll((lines) =>
+    lines.map((line) => ({
+      y: line.getBoundingClientRect().y,
+      spans: [...line.querySelectorAll("tspan")].map((span) => ({
+        text: span.textContent,
+        x: span.getBoundingClientRect().x,
+        font_size_px: parseFloat(getComputedStyle(span).fontSize)
+      }))
+    })));
+  assert.equal(mixed.length, 2);
+  assert.deepEqual(mixed[0].spans.map((span) => [span.text, span.font_size_px]), [["BIG", 24], [" small", 12]]);
+  assert.deepEqual(mixed[1].spans.map((span) => [span.text, span.font_size_px]), [["tail", 14]]);
+  assert.ok(Math.abs(mixed[0].spans[1].x - mixed[0].spans[0].x - 48) < 0.1,
+    "resolved span x offset, not browser inline flow, places mixed-size runs");
+  assert.ok(Math.abs(mixed[1].y - mixed[0].y - 30) < 0.1,
+    "resolved per-line height, not disposition-wide fallback height, places mixed-size lines");
   const clip = await page.locator('[data-node-id="resolved"] g[clip-path]').evaluate((element) => {
     const id = element.getAttribute("clip-path").slice(5, -1);
     const bounds = document.getElementById(id).firstElementChild;
