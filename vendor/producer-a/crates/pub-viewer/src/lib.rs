@@ -64,7 +64,7 @@ use pub_reader::{
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
+    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_table_cells,
     rasterize_wmf_preview, read_legacy_0x22_image_wmfs, resolve_pub_source_graph,
     scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
 };
@@ -459,9 +459,27 @@ pub struct ViewerTable {
 pub struct ViewerTableCell {
     pub id: TableCellId,
     pub address: TableCellAddress,
+    #[serde(
+        default = "default_table_span",
+        skip_serializing_if = "table_span_is_one"
+    )]
+    pub row_span: u32,
+    #[serde(
+        default = "default_table_span",
+        skip_serializing_if = "table_span_is_one"
+    )]
+    pub column_span: u32,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
+}
+
+fn default_table_span() -> u32 {
+    1
+}
+
+fn table_span_is_one(value: &u32) -> bool {
+    *value == 1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,6 +495,22 @@ pub struct ViewerNodePaint {
 pub struct ViewerSolidLine {
     pub rgb: [u8; 3],
     pub width_emu: i64,
+}
+
+/// A semantic TABLE is not an ordinary Shape paint surface.
+///
+/// The generic OfficeArt owner fill is preserved upstream as source evidence,
+/// but it is not authority for TABLE cell/background paint. Keep the line for
+/// now; dedicated per-cell fill/border semantics remain owned by the TABLE
+/// paint path.
+fn fence_semantic_table_container_fill(
+    is_semantic_table: bool,
+    mut paint: ViewerNodePaint,
+) -> ViewerNodePaint {
+    if is_semantic_table {
+        paint.solid_fill_rgb = None;
+    }
+    paint
 }
 
 fn bridge_effective_authority(
@@ -542,13 +576,18 @@ fn viewer_node_paint_from_canonical_bridge(
             },
         };
         return Ok(
-            project_effective_source_paint_to_viewer_v1(&source).map(|paint| ViewerNodePaint {
-                node_id: node.header.id,
-                solid_fill_rgb: paint.solid_fill_rgb,
-                solid_line: paint.solid_line.map(|line| ViewerSolidLine {
-                    rgb: line.rgb,
-                    width_emu: line.width_emu,
-                }),
+            project_effective_source_paint_to_viewer_v1(&source).map(|paint| {
+                fence_semantic_table_container_fill(
+                    node.payload.table.is_some(),
+                    ViewerNodePaint {
+                        node_id: node.header.id,
+                        solid_fill_rgb: paint.solid_fill_rgb,
+                        solid_line: paint.solid_line.map(|line| ViewerSolidLine {
+                            rgb: line.rgb,
+                            width_emu: line.width_emu,
+                        }),
+                    },
+                )
             }),
         );
     }
@@ -595,13 +634,18 @@ fn viewer_node_paint_from_canonical_bridge(
     let projected = project_explicit_source_paint_to_viewer_v1(&source, provenance)
         .map_err(|error| anyhow!("canonical paint bridge rejected Viewer node paint: {error:?}"))?;
 
-    Ok(projected.map(|paint| ViewerNodePaint {
-        node_id: node.header.id,
-        solid_fill_rgb: paint.solid_fill_rgb,
-        solid_line: paint.solid_line.map(|line| ViewerSolidLine {
-            rgb: line.rgb,
-            width_emu: line.width_emu,
-        }),
+    Ok(projected.map(|paint| {
+        fence_semantic_table_container_fill(
+            node.payload.table.is_some(),
+            ViewerNodePaint {
+                node_id: node.header.id,
+                solid_fill_rgb: paint.solid_fill_rgb,
+                solid_line: paint.solid_line.map(|line| ViewerSolidLine {
+                    rgb: line.rgb,
+                    width_emu: line.width_emu,
+                }),
+            },
+        )
     }))
 }
 
@@ -2447,11 +2491,17 @@ fn viewer_tables_from_resolved(
 ) -> (Vec<ViewerTable>, Vec<ViewerDiagnostic>) {
     let mut tables = Vec::new();
     let mut diagnostics = Vec::new();
+    let visible_node_ids = projection
+        .node_geometry
+        .iter()
+        .map(|geometry| geometry.origin)
+        .collect::<BTreeSet<_>>();
 
-    for projected in &projection.tables {
-        let Some(node) = graph.nodes.get(&projected.origin) else {
+    for node in graph.nodes.values() {
+        let node_id = node.header.id;
+        if !visible_node_ids.contains(&node_id) {
             continue;
-        };
+        }
         let Some(source) = node.payload.table.as_ref() else {
             continue;
         };
@@ -2462,46 +2512,59 @@ fn viewer_tables_from_resolved(
             continue;
         };
 
-        let materialized = match materialize_bounded_simple_table_cells(source, story) {
+        let materialized = match materialize_bounded_table_cells(source, story) {
             Ok(cells) => cells,
             Err(error) => {
                 diagnostics.push(ViewerDiagnostic {
                     code: "viewer.table.cell_text_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
                     message: format!(
-                        "Bounded table cell text could not be materialized safely ({error:?})."
+                        "Bounded table cells could not be materialized safely ({error:?})."
                     ),
                 });
                 continue;
             }
         };
 
-        let resolved_bounds = source.layout_metrics.as_ref().and_then(|metrics| {
-            let mut table_projection = projection.clone();
-            table_projection
-                .tables
-                .retain(|table| table.origin == projected.origin);
-            table_projection
-                .node_geometry
-                .retain(|geometry| geometry.origin == projected.origin);
-            table_projection.diagnostics.clear();
+        let needs_fallback_geometry = materialized.iter().any(|cell| cell.bounds.is_none());
+        let projected = projection
+            .tables
+            .iter()
+            .find(|table| table.origin == node_id);
+        let resolved_bounds = if needs_fallback_geometry {
+            source
+                .layout_metrics
+                .as_ref()
+                .zip(projected)
+                .and_then(|(metrics, projected)| {
+                    let mut table_projection = projection.clone();
+                    table_projection
+                        .tables
+                        .retain(|table| table.origin == projected.origin);
+                    table_projection
+                        .node_geometry
+                        .retain(|geometry| geometry.origin == projected.origin);
+                    table_projection.diagnostics.clear();
 
-            resolve_bounded_uniform_table_cells(
-                &table_projection,
-                &[BoundedUniformTableMetrics {
-                    table_origin: projected.origin,
-                    cell_width: metrics.cell_width,
-                    row_pitch: metrics.row_pitch,
-                }],
-            )
-            .ok()
-        });
+                    resolve_bounded_uniform_table_cells(
+                        &table_projection,
+                        &[BoundedUniformTableMetrics {
+                            table_origin: projected.origin,
+                            cell_width: metrics.cell_width,
+                            row_pitch: metrics.row_pitch,
+                        }],
+                    )
+                    .ok()
+                })
+        } else {
+            None
+        };
 
-        if source.layout_metrics.is_some() && resolved_bounds.is_none() {
+        if needs_fallback_geometry && source.layout_metrics.is_some() && resolved_bounds.is_none() {
             diagnostics.push(ViewerDiagnostic {
                 code: "viewer.table.cell_geometry_unavailable".to_owned(),
                 severity: ViewerDiagnosticSeverity::FidelityWarning,
-                message: "Exact table metrics were recovered, but the bounded cell-geometry resolver rejected this table; semantic cells remain available.".to_owned(),
+                message: "Exact table track geometry was unavailable and the bounded fallback cell-geometry resolver rejected this table; semantic cells remain available.".to_owned(),
             });
         }
 
@@ -2510,6 +2573,8 @@ fn viewer_tables_from_resolved(
             .map(|cell| ViewerTableCell {
                 id: cell.id,
                 address: cell.address,
+                row_span: cell.row_span,
+                column_span: cell.column_span,
                 text: cell.text,
                 bounds: cell.bounds.or_else(|| {
                     resolved_bounds.as_ref().and_then(|resolved| {
@@ -2524,14 +2589,15 @@ fn viewer_tables_from_resolved(
             .collect();
 
         tables.push(ViewerTable {
-            node_id: projected.origin,
+            node_id,
             story_id,
-            rows: projected.rows,
-            columns: projected.columns,
+            rows: source.rows,
+            columns: source.columns,
             cells,
         });
     }
 
+    tables.sort_by_key(|table| table.node_id);
     (tables, diagnostics)
 }
 
@@ -3286,6 +3352,35 @@ mod tests {
 
     fn id(byte: u8) -> CanonicalId {
         CanonicalId::from_bytes([byte; 16])
+    }
+
+    #[test]
+    fn semantic_table_fences_generic_owner_fill_but_preserves_line() {
+        let line = ViewerSolidLine {
+            rgb: [1, 2, 3],
+            width_emu: 42,
+        };
+        let table_paint = fence_semantic_table_container_fill(
+            true,
+            ViewerNodePaint {
+                node_id: NodeId::from_canonical(id(90)),
+                solid_fill_rgb: Some([91, 155, 213]),
+                solid_line: Some(line.clone()),
+            },
+        );
+        assert_eq!(table_paint.solid_fill_rgb, None);
+        assert_eq!(table_paint.solid_line, Some(line.clone()));
+
+        let shape_paint = fence_semantic_table_container_fill(
+            false,
+            ViewerNodePaint {
+                node_id: NodeId::from_canonical(id(91)),
+                solid_fill_rgb: Some([91, 155, 213]),
+                solid_line: Some(line.clone()),
+            },
+        );
+        assert_eq!(shape_paint.solid_fill_rgb, Some([91, 155, 213]));
+        assert_eq!(shape_paint.solid_line, Some(line));
     }
 
     fn resolved_graph_fixture() -> PubResolvedGraph {

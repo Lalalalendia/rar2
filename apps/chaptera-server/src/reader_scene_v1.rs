@@ -116,9 +116,17 @@ pub struct ReaderTableCellV1 {
     pub cell_id: String,
     pub row: u32,
     pub column: u32,
+    #[serde(skip_serializing_if = "table_span_is_one")]
+    pub row_span: u32,
+    #[serde(skip_serializing_if = "table_span_is_one")]
+    pub column_span: u32,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<ReaderRectV1>,
+}
+
+fn table_span_is_one(value: &u32) -> bool {
+    *value == 1
 }
 
 #[derive(Debug, Serialize)]
@@ -376,6 +384,8 @@ pub fn from_viewer_geometry(
                 cell_id: serialized_string(&cell.id, "table cell id")?,
                 row: cell.address.row,
                 column: cell.address.column,
+                row_span: cell.row_span,
+                column_span: cell.column_span,
                 text: cell.text.clone(),
                 bounds,
             });
@@ -920,14 +930,36 @@ mod tests {
             &bundle.geometry,
             &bundle.source_page_paint_orders,
         ) {
-            Ok(scene) => println!(
-                "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} reasons={:?}",
-                scene.fidelity.state,
-                scene.stacking_fidelity,
-                scene.pages.len(),
-                scene.nodes.len(),
-                scene.fidelity.reasons
-            ),
+            Ok(scene) => {
+                let tables = scene
+                    .nodes
+                    .iter()
+                    .filter_map(|node| node.table.as_ref())
+                    .collect::<Vec<_>>();
+                let table_cells = tables.iter().map(|table| table.cells.len()).sum::<usize>();
+                let spanning_cells = tables
+                    .iter()
+                    .flat_map(|table| &table.cells)
+                    .filter(|cell| cell.row_span > 1 || cell.column_span > 1)
+                    .count();
+                let bounded_table_cells = tables
+                    .iter()
+                    .flat_map(|table| &table.cells)
+                    .filter(|cell| cell.bounds.is_some())
+                    .count();
+                println!(
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} reasons={:?}",
+                    scene.fidelity.state,
+                    scene.stacking_fidelity,
+                    scene.pages.len(),
+                    scene.nodes.len(),
+                    tables.len(),
+                    table_cells,
+                    spanning_cells,
+                    bounded_table_cells,
+                    scene.fidelity.reasons
+                );
+            }
             Err(error) => println!("CLOUD_READER_SCENE_PROJECTION_PROBE projection_error={error}"),
         }
     }
