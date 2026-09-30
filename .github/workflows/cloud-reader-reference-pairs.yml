@@ -84,6 +84,12 @@ jobs:
           CHAPTERA_READER_SCENE_PROBE_SHA256: bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3
         run: cargo test -p chaptera-server real_reference_scene_projection_probe -- --ignored --nocapture
 
+      - name: Census exact Carlton page-3 scene residual
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/carlton-pair/March-2026.pub
+          CHAPTERA_READER_SCENE_PROBE_SHA256: bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3
+        run: cargo test -p chaptera-server real_reference_carlton_page3_residual_census_probe -- --ignored --nocapture
+
       - name: Diagnose exact Devinettes text-layout fallback reasons
         env:
           CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
