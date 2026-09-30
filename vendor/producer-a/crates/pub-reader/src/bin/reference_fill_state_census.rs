@@ -430,24 +430,35 @@ fn main() -> Result<()> {
         }
 
         let effective_fill = node.payload.effective_paint.as_ref().map(|paint| &paint.fill);
-        for (map, value) in [
-            (
+        match effective_fill.and_then(|fill| fill.solid.as_ref()) {
+            Some(value) => bump(
                 &mut histograms.table_effective_fill_solid_authority,
-                effective_fill.and_then(|fill| fill.solid.as_ref()),
+                paint_authority_bucket(value.authority),
             ),
-            (
+            None => bump(
+                &mut histograms.table_effective_fill_solid_authority,
+                "absent",
+            ),
+        }
+        match effective_fill.and_then(|fill| fill.color_rgb.as_ref()) {
+            Some(value) => bump(
                 &mut histograms.table_effective_fill_color_authority,
-                effective_fill.and_then(|fill| fill.color_rgb.as_ref()),
+                paint_authority_bucket(value.authority),
             ),
-            (
+            None => bump(
+                &mut histograms.table_effective_fill_color_authority,
+                "absent",
+            ),
+        }
+        match effective_fill.and_then(|fill| fill.visible.as_ref()) {
+            Some(value) => bump(
                 &mut histograms.table_effective_fill_visible_authority,
-                effective_fill.and_then(|fill| fill.visible.as_ref()),
+                paint_authority_bucket(value.authority),
             ),
-        ] {
-            match value {
-                Some(value) => bump(map, paint_authority_bucket(value.authority)),
-                None => bump(map, "absent"),
-            }
+            None => bump(
+                &mut histograms.table_effective_fill_visible_authority,
+                "absent",
+            ),
         }
     }
 
