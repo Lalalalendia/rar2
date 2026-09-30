@@ -934,6 +934,177 @@ mod tests {
 
     #[test]
     #[ignore = "requires an explicitly pinned external PUB path"]
+    fn real_reference_carlton_page3_residual_census_probe() {
+        let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
+            .expect("CHAPTERA_READER_SCENE_PROBE_PUB must name an exact pinned PUB");
+        let expected_sha256 = env::var("CHAPTERA_READER_SCENE_PROBE_SHA256")
+            .expect("CHAPTERA_READER_SCENE_PROBE_SHA256 must pin source identity");
+        let bytes = fs::read(&path).expect("probe source must be readable");
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(
+            actual_sha256, expected_sha256,
+            "probe source identity drift"
+        );
+
+        let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
+            .expect("shared Viewer bundle must open the probe source");
+        let scene = from_viewer_geometry(
+            "probe:document".to_owned(),
+            actual_sha256,
+            "probe:source".to_owned(),
+            &bundle.geometry,
+            &bundle.source_page_paint_orders,
+        )
+        .expect("exact Carlton Reader Scene projection must succeed");
+        let page = scene
+            .pages
+            .iter()
+            .find(|page| page.order == 2)
+            .expect("Carlton reference must expose page 3");
+        let page_area = i128::from(page.width_emu) * i128::from(page.height_emu);
+        assert!(page_area > 0);
+
+        let mut kind_counts = BTreeMap::<&str, usize>::new();
+        let mut feature_counts = BTreeMap::<&str, usize>::new();
+        let mut feature_area_permille = BTreeMap::<&str, i128>::new();
+        let mut table_nodes = 0_usize;
+        let mut table_cells = 0_usize;
+        let mut table_cells_with_bounds = 0_usize;
+        let mut shared_text_nodes = 0_usize;
+        let mut shared_nonempty_lines = 0_usize;
+        let mut descriptor_only_resources = 0_usize;
+        let mut inline_resources = 0_usize;
+        let mut dominant_fill_area = -1_i128;
+        let mut dominant_fill_ties = 0_usize;
+        let mut dominant_fill_kind = "none";
+        let mut dominant_fill_has_table = false;
+        let mut dominant_fill_has_resource = false;
+        let mut dominant_fill_has_text = false;
+
+        let resource_availability = scene
+            .resources
+            .iter()
+            .map(|resource| (resource.resource_id.as_str(), resource.availability))
+            .collect::<HashMap<_, _>>();
+
+        let add_feature = |name: &'static str,
+                           area: i128,
+                           counts: &mut BTreeMap<&'static str, usize>,
+                           areas: &mut BTreeMap<&'static str, i128>| {
+            *counts.entry(name).or_default() += 1;
+            *areas.entry(name).or_default() += area * 1000 / page_area;
+        };
+
+        for node in scene.nodes.iter().filter(|node| node.page_id == page.page_id) {
+            *kind_counts.entry(node.kind).or_default() += 1;
+            let area = i128::from(node.bounds.width) * i128::from(node.bounds.height);
+            if area <= 0 {
+                continue;
+            }
+            let has_fill = node.paint.as_ref().is_some_and(|paint| paint.fill_rgb.is_some());
+            let has_line = node.paint.as_ref().is_some_and(|paint| paint.line.is_some());
+            let has_resource = node.resource_id.is_some();
+            let has_table = node.table.is_some();
+            let has_text = node.text.as_ref().is_some_and(|text| !text.is_empty());
+
+            if has_fill {
+                add_feature("fill", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_line {
+                add_feature("line", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_resource {
+                add_feature("resource", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_table {
+                add_feature("table", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_text {
+                add_feature("text", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_fill && has_table {
+                add_feature("fill+table", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_fill && has_resource {
+                add_feature("fill+resource", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_fill && has_text {
+                add_feature("fill+text", area, &mut feature_counts, &mut feature_area_permille);
+            }
+            if has_resource && has_text {
+                add_feature("resource+text", area, &mut feature_counts, &mut feature_area_permille);
+            }
+
+            if has_fill {
+                if area > dominant_fill_area {
+                    dominant_fill_area = area;
+                    dominant_fill_ties = 1;
+                    dominant_fill_kind = node.kind;
+                    dominant_fill_has_table = has_table;
+                    dominant_fill_has_resource = has_resource;
+                    dominant_fill_has_text = has_text;
+                } else if area == dominant_fill_area {
+                    dominant_fill_ties += 1;
+                }
+            }
+
+            if let Some(table) = node.table.as_ref() {
+                table_nodes += 1;
+                table_cells += table.cells.len();
+                table_cells_with_bounds += table
+                    .cells
+                    .iter()
+                    .filter(|cell| cell.bounds.is_some())
+                    .count();
+            }
+
+            if let Some(layout) = node.text_layout.as_ref() {
+                if layout.disposition == "shared_resolved" {
+                    shared_text_nodes += 1;
+                    shared_nonempty_lines += layout
+                        .lines
+                        .iter()
+                        .filter(|line| !line.text.is_empty())
+                        .count();
+                }
+            }
+
+            if let Some(resource_id) = node.resource_id.as_deref() {
+                match resource_availability.get(resource_id).copied() {
+                    Some("inline_data_url") => inline_resources += 1,
+                    Some("descriptor_only") => descriptor_only_resources += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        let dominant_fill_permille = if dominant_fill_area > 0 {
+            dominant_fill_area * 1000 / page_area
+        } else {
+            0
+        };
+
+        println!(
+            "CLOUD_READER_CARLTON_P3_RESIDUAL_CENSUS page_nodes={} kinds={kind_counts:?} feature_counts={feature_counts:?} feature_area_permille={feature_area_permille:?} table_nodes={} table_cells={} table_cells_with_bounds={} shared_text_nodes={} shared_nonempty_lines={} inline_resources={} descriptor_only_resources={} dominant_fill_permille={} dominant_fill_ties={} dominant_fill_kind={} dominant_fill_has_table={} dominant_fill_has_resource={} dominant_fill_has_text={}",
+            scene.nodes.iter().filter(|node| node.page_id == page.page_id).count(),
+            table_nodes,
+            table_cells,
+            table_cells_with_bounds,
+            shared_text_nodes,
+            shared_nonempty_lines,
+            inline_resources,
+            descriptor_only_resources,
+            dominant_fill_permille,
+            dominant_fill_ties,
+            dominant_fill_kind,
+            dominant_fill_has_table,
+            dominant_fill_has_resource,
+            dominant_fill_has_text,
+        );
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly pinned external PUB path"]
     fn real_reference_text_layout_fallback_census_probe() {
         let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
             .expect("CHAPTERA_READER_SCENE_PROBE_PUB must name an exact pinned PUB");
