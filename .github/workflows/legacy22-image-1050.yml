@@ -9,6 +9,7 @@ on:
       - 'vendor/producer-a/crates/pub-reader/src/bin/legacy22_image0002_profile.rs'
       - 'vendor/producer-a/crates/pub-reader/src/legacy22_noquill_graph.rs'
       - 'vendor/producer-a/crates/pub-reader/src/wmf.rs'
+      - 'vendor/producer-a/crates/pub-reader/src/wmf_preview.rs'
       - 'vendor/producer-a/crates/pub-contents/**'
   workflow_dispatch:
 
