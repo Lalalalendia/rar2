@@ -33,14 +33,13 @@ fn main() -> Result<()> {
     let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
 
     if mode == "--reject" {
-        match build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash) {
-            Ok(build) => {
-                let counts = fallback_counts(&build);
-                if !counts.is_empty() {
-                    bail!("FDPP exact fallback unexpectedly admitted this witness: {counts:?}");
-                }
+        if let Ok(build) =
+            build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
+        {
+            let counts = fallback_counts(&build);
+            if !counts.is_empty() {
+                bail!("FDPP exact fallback unexpectedly admitted this witness: {counts:?}");
             }
-            Err(_) => {}
         }
         println!("fdpp_exact_story_rejection=pass");
         return Ok(());
