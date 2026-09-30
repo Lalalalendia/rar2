@@ -66,8 +66,8 @@ use pub_reader::{
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
     materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph,
-    scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
+    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -460,9 +460,15 @@ pub struct ViewerTable {
 pub struct ViewerTableCell {
     pub id: TableCellId,
     pub address: TableCellAddress,
-    #[serde(default = "default_table_span", skip_serializing_if = "table_span_is_one")]
+    #[serde(
+        default = "default_table_span",
+        skip_serializing_if = "table_span_is_one"
+    )]
     pub row_span: u32,
-    #[serde(default = "default_table_span", skip_serializing_if = "table_span_is_one")]
+    #[serde(
+        default = "default_table_span",
+        skip_serializing_if = "table_span_is_one"
+    )]
     pub column_span: u32,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2488,7 +2494,10 @@ fn viewer_tables_from_resolved(
         };
 
         let needs_fallback_geometry = materialized.iter().any(|cell| cell.bounds.is_none());
-        let projected = projection.tables.iter().find(|table| table.origin == node_id);
+        let projected = projection
+            .tables
+            .iter()
+            .find(|table| table.origin == node_id);
         let resolved_bounds = if needs_fallback_geometry {
             source
                 .layout_metrics
@@ -2518,10 +2527,7 @@ fn viewer_tables_from_resolved(
             None
         };
 
-        if needs_fallback_geometry
-            && source.layout_metrics.is_some()
-            && resolved_bounds.is_none()
-        {
+        if needs_fallback_geometry && source.layout_metrics.is_some() && resolved_bounds.is_none() {
             diagnostics.push(ViewerDiagnostic {
                 code: "viewer.table.cell_geometry_unavailable".to_owned(),
                 severity: ViewerDiagnosticSeverity::FidelityWarning,
