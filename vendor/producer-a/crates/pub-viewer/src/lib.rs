@@ -2461,110 +2461,9 @@ fn viewer_tables_from_resolved(
     let mut tables = Vec::new();
     let mut diagnostics = Vec::new();
 
-    for projected in &projection.tables {
-        let Some(node) = graph.nodes.get(&projected.origin) else {
-            continue;
-        };
-        let Some(source) = node.payload.table.as_ref() else {
-            continue;
-        };
-        let Some(story_id) = source.story_id else {
-            continue;
-        };
-        let Some(story) = graph.stories.get(&story_id) else {
-            continue;
-        };
-
-        let materialized = match materialize_bounded_simple_table_cells(source, story) {
-            Ok(cells) => cells,
-            Err(error) => {
-                diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.table.cell_text_unavailable".to_owned(),
-                    severity: ViewerDiagnosticSeverity::FidelityWarning,
-                    message: format!(
-                        "Bounded table cell text could not be materialized safely ({error:?})."
-                    ),
-                });
-                continue;
-            }
-        };
-
-        let resolved_bounds = source.layout_metrics.as_ref().and_then(|metrics| {
-            let mut table_projection = projection.clone();
-            table_projection
-                .tables
-                .retain(|table| table.origin == projected.origin);
-            table_projection
-                .node_geometry
-                .retain(|geometry| geometry.origin == projected.origin);
-            table_projection.diagnostics.clear();
-
-            resolve_bounded_uniform_table_cells(
-                &table_projection,
-                &[BoundedUniformTableMetrics {
-                    table_origin: projected.origin,
-                    cell_width: metrics.cell_width,
-                    row_pitch: metrics.row_pitch,
-                }],
-            )
-            .ok()
-        });
-
-        if source.layout_metrics.is_some() && resolved_bounds.is_none() {
-            diagnostics.push(ViewerDiagnostic {
-                code: "viewer.table.cell_geometry_unavailable".to_owned(),
-                severity: ViewerDiagnosticSeverity::FidelityWarning,
-                message: "Exact table metrics were recovered, but the bounded cell-geometry resolver rejected this table; semantic cells remain available.".to_owned(),
-            });
-        }
-
-        let cells = materialized
-            .into_iter()
-            .map(|cell| ViewerTableCell {
-                id: cell.id,
-                address: cell.address,
-                row_span: cell.coordinates.end_row - cell.coordinates.start_row + 1,
-                column_span: cell.coordinates.end_column - cell.coordinates.start_column + 1,
-                text: cell.text,
-                bounds: cell.bounds.or_else(|| {
-                    resolved_bounds.as_ref().and_then(|resolved| {
-                        resolved
-                            .cells
-                            .iter()
-                            .find(|candidate| candidate.origin == cell.id)
-                            .map(|candidate| candidate.bounds)
-                    })
-                }),
-            })
-            .collect();
-
-        tables.push(ViewerTable {
-            node_id: projected.origin,
-            story_id,
-            rows: projected.rows,
-            columns: projected.columns,
-            cells,
-        });
-    }
-
-    let projected_table_ids = projection
-        .tables
-        .iter()
-        .map(|table| table.origin)
-        .collect::<BTreeSet<_>>();
     for node in graph.nodes.values() {
         let node_id = node.header.id;
         let Some(source) = node.payload.table.as_ref() else {
-            continue;
-        };
-        if source.simple_table.is_some() || projected_table_ids.contains(&node_id) {
-            continue;
-        }
-        let Some(owner) = projection
-            .node_geometry
-            .iter()
-            .find(|geometry| geometry.origin == node_id)
-        else {
             continue;
         };
         let Some(story_id) = source.story_id else {
@@ -2578,69 +2477,55 @@ fn viewer_tables_from_resolved(
             Ok(cells) => cells,
             Err(error) => {
                 diagnostics.push(ViewerDiagnostic {
-                    code: "viewer.table.spanning_cells_unavailable".to_owned(),
+                    code: "viewer.table.cell_text_unavailable".to_owned(),
                     severity: ViewerDiagnosticSeverity::FidelityWarning,
                     message: format!(
-                        "Spanning table cells could not be materialized safely ({error:?})."
+                        "Bounded table cells could not be materialized safely ({error:?})."
                     ),
                 });
                 continue;
             }
         };
 
-        let resolved_bounds = source.layout_metrics.as_ref().and_then(|metrics| {
-            let cell_width = metrics.cell_width.get();
-            let row_pitch = metrics.row_pitch.get();
-            if cell_width <= 0 || row_pitch <= 0 {
-                return None;
-            }
-            let required_width = cell_width.checked_mul(i64::from(source.columns))?;
-            let required_height = row_pitch.checked_mul(i64::from(source.rows))?;
-            if required_width > owner.bounds.width.get()
-                || required_height > owner.bounds.height.get()
-            {
-                return None;
-            }
+        let needs_fallback_geometry = materialized.iter().any(|cell| cell.bounds.is_none());
+        let projected = projection.tables.iter().find(|table| table.origin == node_id);
+        let resolved_bounds = if needs_fallback_geometry {
+            source
+                .layout_metrics
+                .as_ref()
+                .zip(projected)
+                .and_then(|(metrics, projected)| {
+                    let mut table_projection = projection.clone();
+                    table_projection
+                        .tables
+                        .retain(|table| table.origin == projected.origin);
+                    table_projection
+                        .node_geometry
+                        .retain(|geometry| geometry.origin == projected.origin);
+                    table_projection.diagnostics.clear();
 
-            materialized
-                .iter()
-                .map(|cell| {
-                    let row_span = cell
-                        .coordinates
-                        .end_row
-                        .checked_sub(cell.coordinates.start_row)?
-                        .checked_add(1)?;
-                    let column_span = cell
-                        .coordinates
-                        .end_column
-                        .checked_sub(cell.coordinates.start_column)?
-                        .checked_add(1)?;
-                    let x_offset =
-                        cell_width.checked_mul(i64::from(cell.coordinates.start_column))?;
-                    let y_offset =
-                        row_pitch.checked_mul(i64::from(cell.coordinates.start_row))?;
-                    let width = cell_width.checked_mul(i64::from(column_span))?;
-                    let height = row_pitch.checked_mul(i64::from(row_span))?;
-                    let x = owner.bounds.x.get().checked_add(x_offset)?;
-                    let y = owner.bounds.y.get().checked_add(y_offset)?;
-                    Some((
-                        cell.id,
-                        RectEmu::new(
-                            LengthEmu::new(x),
-                            LengthEmu::new(y),
-                            LengthEmu::new(width),
-                            LengthEmu::new(height),
-                        ),
-                    ))
+                    resolve_bounded_uniform_table_cells(
+                        &table_projection,
+                        &[BoundedUniformTableMetrics {
+                            table_origin: projected.origin,
+                            cell_width: metrics.cell_width,
+                            row_pitch: metrics.row_pitch,
+                        }],
+                    )
+                    .ok()
                 })
-                .collect::<Option<BTreeMap<_, _>>>()
-        });
+        } else {
+            None
+        };
 
-        if source.layout_metrics.is_some() && resolved_bounds.is_none() {
+        if needs_fallback_geometry
+            && source.layout_metrics.is_some()
+            && resolved_bounds.is_none()
+        {
             diagnostics.push(ViewerDiagnostic {
                 code: "viewer.table.cell_geometry_unavailable".to_owned(),
                 severity: ViewerDiagnosticSeverity::FidelityWarning,
-                message: "Exact table metrics were recovered, but spanning-cell geometry could not be resolved safely; semantic cells remain available.".to_owned(),
+                message: "Exact table track geometry was unavailable and the bounded fallback cell-geometry resolver rejected this table; semantic cells remain available.".to_owned(),
             });
         }
 
@@ -2649,13 +2534,17 @@ fn viewer_tables_from_resolved(
             .map(|cell| ViewerTableCell {
                 id: cell.id,
                 address: cell.address,
-                row_span: cell.coordinates.end_row - cell.coordinates.start_row + 1,
-                column_span: cell.coordinates.end_column - cell.coordinates.start_column + 1,
+                row_span: cell.row_span,
+                column_span: cell.column_span,
                 text: cell.text,
                 bounds: cell.bounds.or_else(|| {
-                    resolved_bounds
-                        .as_ref()
-                        .and_then(|resolved| resolved.get(&cell.id).copied())
+                    resolved_bounds.as_ref().and_then(|resolved| {
+                        resolved
+                            .cells
+                            .iter()
+                            .find(|candidate| candidate.origin == cell.id)
+                            .map(|candidate| candidate.bounds)
+                    })
                 }),
             })
             .collect();
