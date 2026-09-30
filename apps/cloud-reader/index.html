@@ -1,256 +1,62 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <title>Open a PUB file — Chaptera</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color-scheme:light}
-*{box-sizing:border-box}
-body{margin:0;background:#f5f6f8;color:#17202a}
-header{padding:24px 28px;background:#fff;border-bottom:1px solid #dfe3e8}
-h1{margin:0;font-size:24px}p{line-height:1.5}
-main{max-width:1180px;margin:0 auto;padding:24px}
-.card{background:#fff;border:1px solid #dfe3e8;border-radius:12px;padding:18px;margin-bottom:18px}
-.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-input,button{font:inherit;padding:9px 11px;border-radius:8px;border:1px solid #c7ced8;background:#fff}
-button{cursor:pointer;background:#1f5eff;color:#fff;border-color:#1f5eff}
-button:disabled{opacity:.55;cursor:not-allowed}
-#status{font-size:13px;color:#5d6876}.error{color:#b3261e!important}.ok{color:#137333!important}
-#pages{display:flex;flex-direction:column;gap:24px;align-items:center}
-.page{display:block;background:#fff;box-shadow:0 2px 14px rgba(0,0,0,.14);overflow:hidden}
-.meta{font-size:13px;color:#5d6876;display:flex;gap:14px;flex-wrap:wrap}
-.notice{font-size:13px;color:#46515f}
-.drop{border:2px dashed #aeb8c6;border-radius:10px;padding:22px;text-align:center;background:#fafbfc}
-.drop.drag{border-color:#1f5eff;background:#f2f6ff}
-.small{font-size:12px;color:#6a7482}
-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
-</style>
-<header>
-  <h1>Open a Publisher (.PUB) file online</h1>
-  <p>Chaptera Cloud Reader is a read-only surface. Viewing and research contribution are separate actions.</p>
-</header>
+<link rel="stylesheet" href="./reader.css">
+</head>
+<body>
+<a class="skip" href="#reader">Skip to the reader</a>
+<header><a class="brand" href="./">Chaptera <span>Cloud Reader</span></a><span class="readonly">Read-only</span></header>
 <main>
-  <section class="card">
-    <div id="drop" class="drop">
-      <p><strong>Open a PUB file</strong></p>
-      <p><input id="pub-file" type="file" accept=".pub,application/vnd.ms-publisher"></p>
-      <button id="open-file" disabled>Open read-only</button>
-      <p id="status">Choose a Publisher (.PUB) file.</p>
-      <p class="small">The filename is not sent. The file is processed in private quarantine and expires automatically.</p>
-    </div>
-    <p class="notice">
-      Viewing authorizes temporary service processing only.
-      It does not authorize Chaptera to retain the file as a research fixture.
-      Exact-file corpus contribution requires a separate explicit consent action.
-    </p>
-  </section>
-  <section class="card">
-    <div class="toolbar">
-      <label>Authorized cloud document ID <input id="document-id" autocomplete="off" placeholder="document-..."></label>
-      <button id="open-document">Open saved document</button>
-      <span id="document-status">Use this only for a document already saved to your account.</span>
-    </div>
-  </section>
-  <section id="summary" class="card" hidden>
-    <div class="meta">
-      <span id="revision"></span>
-      <span id="fidelity"></span>
-      <span id="diagnostics"></span>
-    </div>
-  </section>
-  <section id="pages"></section>
+<section class="intro" aria-labelledby="title">
+<p class="eyebrow">YOUR PUBLISHER DOCUMENTS, ACCESSIBLE AGAIN</p>
+<h1 id="title">Open a Publisher (.PUB) file online</h1>
+<p>View pages, find text and save available images. Your original file stays unchanged.</p>
+</section>
+<section class="card" aria-label="Open a document">
+<div id="drop" class="drop">
+<label class="file-label" for="pub-file">Choose a PUB file</label>
+<input id="pub-file" type="file" accept=".pub,application/vnd.ms-publisher" aria-describedby="privacy">
+<p>or drop a file here</p>
+<div class="actions"><button id="open-file" disabled>Open read-only</button><button id="cancel-open" class="secondary" hidden>Cancel opening</button></div>
+</div>
+<p id="status" role="status" aria-live="polite">Choose a Publisher (.PUB) file.</p>
+<p id="privacy" class="notice">The filename is not sent. Viewing authorizes temporary service processing only.
+The uploaded file expires automatically. Viewing and research contribution are separate actions;
+retaining a file for research requires separate explicit consent.</p>
+<details class="saved">
+<summary>Open a document already saved to your account</summary>
+<div class="toolbar"><label for="document-id">Saved document ID</label><input id="document-id" autocomplete="off" placeholder="document-…"><button id="open-document" class="secondary">Open saved document</button></div>
+</details>
+</section>
+<section id="reader" class="card reader" hidden aria-label="Document reader">
+<div id="summary" class="summary"><strong id="fidelity"></strong><span id="page-count"></span><span id="revision" class="small"></span></div>
+<div class="toolbar controls" aria-label="Page and zoom controls">
+<button id="previous-page" class="secondary" aria-label="Previous page">←</button>
+<label for="page-select">Page</label><select id="page-select" aria-label="Choose page"></select>
+<button id="next-page" class="secondary" aria-label="Next page">→</button>
+<label for="zoom-select">Zoom</label>
+<select id="zoom-select"><option value="fit">Fit width</option><option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.5">150%</option><option value="2">200%</option></select>
+<span class="small">PgUp / PgDn in the page view</span>
+</div>
+<div id="viewer" class="viewer" tabindex="0" role="region" aria-label="Document pages"><div id="pages"></div></div>
+<div class="reader-details">
+<details id="text-panel">
+<summary>Recovered text — search and copy</summary>
+<form id="search-form" class="toolbar"><label for="search-query">Find text</label><input id="search-query" type="search" maxlength="200"><button type="submit" class="secondary">Find</button></form>
+<p id="search-status" role="status" class="small"></p><ol id="search-results"></ol>
+<label for="story-select">Text section</label><select id="story-select"></select>
+<label class="visually-hidden" for="story-text">Recovered document text</label><textarea id="story-text" readonly spellcheck="false" rows="8"></textarea>
+<button id="copy-text" class="secondary">Copy section text</button><p id="copy-status" role="status" class="small"></p>
+</details>
+<details><summary id="assets-summary">Available images</summary><p class="small">Only images provided for this viewing session can be saved here.</p><ul id="assets"></ul></details>
+<details id="limitations-panel"><summary id="diagnostics">Display limitations</summary><p>Partial means some content is approximate or unavailable. Compare with the original before relying on page appearance.</p><ul id="limitations"></ul></details>
+</div>
+</section>
 </main>
-<script type="module">
-import { renderReaderScene } from "./render-v1.mjs";
-
-(() => {
-  const EMU_PER_CSS_PX = 9525;
-  const MAX_PAGE_WIDTH = 920;
-  const documentInput = document.querySelector("#document-id");
-  const documentButton = document.querySelector("#open-document");
-  const documentStatus = document.querySelector("#document-status");
-  const fileInput = document.querySelector("#pub-file");
-  const fileButton = document.querySelector("#open-file");
-  const drop = document.querySelector("#drop");
-  const status = document.querySelector("#status");
-  const pagesHost = document.querySelector("#pages");
-  const summary = document.querySelector("#summary");
-  const csrf = (() => {
-    const bytes = new Uint8Array(16);
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
-  })();
-
-  const params = new URLSearchParams(location.search);
-  documentInput.value = params.get("document_id") ?? "";
-
-  function px(emu, scale) {
-    return (Number(emu) / EMU_PER_CSS_PX) * scale;
-  }
-
-  function rgb(value, fallback) {
-    if (!Array.isArray(value) || value.length !== 3) return fallback;
-    return "rgb(" + value.map(Number).join(" ") + ")";
-  }
-
-  function resetRender() {
-    pagesHost.replaceChildren();
-    summary.hidden = true;
-  }
-
-  async function render(payload) {
-    await renderReaderScene(pagesHost, payload, {
-      emuPerCssPx: EMU_PER_CSS_PX,
-      maxPageWidth: MAX_PAGE_WIDTH
-    });
-
-    document.querySelector("#revision").textContent = "Revision: " + payload.revision_id;
-    document.querySelector("#fidelity").textContent =
-      "Fidelity: " + (payload.fidelity?.state ?? "unknown");
-    document.querySelector("#diagnostics").textContent =
-      "Diagnostics: " + String((payload.diagnostics ?? []).length);
-    summary.hidden = false;
-  }
-
-  async function jsonResponse(response) {
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const code = payload?.error?.code ?? payload?.error ?? ("HTTP " + response.status);
-      throw new Error(code);
-    }
-    return payload;
-  }
-
-  async function openFile(file) {
-    if (!file) return;
-    status.className = "";
-    status.textContent = "Creating private session…";
-    fileButton.disabled = true;
-    fileInput.disabled = true;
-    resetRender();
-
-    let accessToken = null;
-    try {
-      const issued = await jsonResponse(await fetch("/v1/reader/guest-sessions", {
-        method: "POST",
-        credentials: "omit",
-        cache: "no-store",
-        headers: {
-          "content-type": "application/json",
-          "x-csrf-token": csrf
-        },
-        body: JSON.stringify({expected_byte_len: file.size})
-      }));
-      if (issued.protocol_version !== "chaptera.reader-guest-session.v1") {
-        throw new Error("Unsupported guest session protocol");
-      }
-      accessToken = issued.access_token;
-      if (!accessToken) throw new Error("Guest session capability missing");
-
-      status.textContent = "Uploading to private quarantine…";
-      await jsonResponse(await fetch(issued.upload_path, {
-        method: "PUT",
-        credentials: "omit",
-        cache: "no-store",
-        headers: {
-          "content-type": "application/octet-stream",
-          "x-csrf-token": csrf,
-          "x-chaptera-reader-session": accessToken
-        },
-        body: file
-      }));
-
-      status.textContent = "Scanning and opening…";
-      const opened = await jsonResponse(await fetch(issued.open_path, {
-        method: "POST",
-        credentials: "omit",
-        cache: "no-store",
-        headers: {
-          "content-type": "application/json",
-          "x-csrf-token": csrf,
-          "x-chaptera-reader-session": accessToken
-        },
-        body: "{}"
-      }));
-
-      if (opened.scene?.protocol_version === "chaptera.reader-scene.v1") {
-        await render(opened.scene);
-      }
-      status.className =
-        opened.classification === "supported" || opened.classification === "partial"
-          ? "ok"
-          : "error";
-      status.textContent =
-        opened.classification === "supported"
-          ? "Opened read-only."
-          : opened.classification === "partial"
-            ? "Opened with fidelity limitations."
-            : opened.classification === "unsupported"
-              ? "This Publisher file is not supported yet."
-              : "The file was rejected by the safety scanner.";
-    } catch (error) {
-      status.className = "error";
-      status.textContent = String(error?.message ?? error);
-    } finally {
-      accessToken = null;
-      fileButton.disabled = !fileInput.files?.length;
-      fileInput.disabled = false;
-    }
-  }
-
-  async function openDocument() {
-    const documentId = documentInput.value.trim();
-    if (!documentId) return;
-    documentStatus.className = "";
-    documentStatus.textContent = "Opening…";
-    documentButton.disabled = true;
-    resetRender();
-    try {
-      const payload = await jsonResponse(await fetch(
-        "/v1/reader/documents/" + encodeURIComponent(documentId) + "/scene",
-        {credentials: "include", cache: "no-store"}
-      ));
-      if (payload.protocol_version !== "chaptera.reader-scene.v1") {
-        throw new Error("Unsupported Reader scene protocol");
-      }
-      await render(payload);
-      documentStatus.className = "ok";
-      documentStatus.textContent = "Opened saved document read-only.";
-      const url = new URL(location.href);
-      url.searchParams.set("document_id", documentId);
-      history.replaceState(null, "", url);
-    } catch (error) {
-      documentStatus.className = "error";
-      documentStatus.textContent = String(error?.message ?? error);
-    } finally {
-      documentButton.disabled = false;
-    }
-  }
-
-  fileInput.addEventListener("change", () => {
-    fileButton.disabled = !fileInput.files?.length;
-  });
-  fileButton.addEventListener("click", () => openFile(fileInput.files?.[0]));
-  for (const eventName of ["dragenter", "dragover"]) {
-    drop.addEventListener(eventName, (event) => {
-      event.preventDefault();
-      drop.classList.add("drag");
-    });
-  }
-  for (const eventName of ["dragleave", "drop"]) {
-    drop.addEventListener(eventName, (event) => {
-      event.preventDefault();
-      drop.classList.remove("drag");
-    });
-  }
-  drop.addEventListener("drop", (event) => {
-    const file = event.dataTransfer?.files?.[0];
-    if (file) openFile(file);
-  });
-
-  documentButton.addEventListener("click", openDocument);
-  documentInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") openDocument();
-  });
-  if (documentInput.value) openDocument();
-})();
-</script>
+<footer>Chaptera Cloud Reader · Your document remains read-only.</footer>
+<script type="module" src="./reader-app.mjs"></script>
+</body>
+</html>

@@ -49,9 +49,39 @@ permissions:
 jobs:
   contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Guard read-only surface and consent boundary
         run: python3 apps/cloud-reader/check_contract.py
       - name: Test bounded Cloud Reader SVG renderer
         run: node --test apps/cloud-reader/render-v1.test.mjs
+      - name: Test canonical reading controls and privacy-safe paths
+        run: node --test apps/cloud-reader/reader-model.test.mjs
+
+  reading-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the existing pinned browser acceptance runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Exercise desktop, mobile and open lifecycle in Chromium
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node apps/cloud-reader/reader-browser.test.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cloud-reader-ui-synthetic
+          path: target/cloud-reader-ui/
+          if-no-files-found: warn
+          retention-days: 14
