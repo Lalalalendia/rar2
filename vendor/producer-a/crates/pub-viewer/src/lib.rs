@@ -468,9 +468,17 @@ pub struct ViewerTableCell {
 pub struct ViewerNodePaint {
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_shape: Option<ViewerPresetShape>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_fill_rgb: Option<[u8; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_line: Option<ViewerSolidLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerPresetShape {
+    RoundRect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -513,6 +521,20 @@ fn bridge_effective_value<T: Clone>(
     }
 }
 
+fn viewer_preset_shape_from_canonical(
+    node: &Node<PubResolvedNodePayload>,
+) -> Option<ViewerPresetShape> {
+    match (
+        node.payload.officeart_shape_type,
+        &node.payload.officeart_adjust_value,
+    ) {
+        (Some(0x0002), pub_reader::PubOfficeArtAdjustValueSource::Absent) => {
+            Some(ViewerPresetShape::RoundRect)
+        }
+        _ => None,
+    }
+}
+
 fn viewer_node_paint_from_canonical_bridge(
     node: &Node<PubResolvedNodePayload>,
 ) -> Result<Option<ViewerNodePaint>> {
@@ -544,6 +566,7 @@ fn viewer_node_paint_from_canonical_bridge(
         return Ok(
             project_effective_source_paint_to_viewer_v1(&source).map(|paint| ViewerNodePaint {
                 node_id: node.header.id,
+                preset_shape: viewer_preset_shape_from_canonical(node),
                 solid_fill_rgb: paint.solid_fill_rgb,
                 solid_line: paint.solid_line.map(|line| ViewerSolidLine {
                     rgb: line.rgb,
@@ -597,6 +620,7 @@ fn viewer_node_paint_from_canonical_bridge(
 
     Ok(projected.map(|paint| ViewerNodePaint {
         node_id: node.header.id,
+        preset_shape: viewer_preset_shape_from_canonical(node),
         solid_fill_rgb: paint.solid_fill_rgb,
         solid_line: paint.solid_line.map(|line| ViewerSolidLine {
             rgb: line.rgb,
