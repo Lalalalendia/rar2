@@ -1080,7 +1080,8 @@ fn resolve_mixed_size_text_layout_v1(
 
     let mut policy_glyphs = Vec::new();
     for run in &runs {
-        let Some(run_text) = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end) else {
+        let Some(run_text) = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)
+        else {
             return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
         };
         let runtime = BoundedShapingRuntime {
