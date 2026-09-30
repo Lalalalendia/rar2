@@ -8,7 +8,9 @@ use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
 const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
+const FILL_OPACITY: u16 = 0x0182;
 const FILL_BOOLEANS: u16 = 0x01BF;
+const LINE_OPACITY: u16 = 0x01C1;
 const FILL_USE_FILLED_BIT: u32 = 1 << 11;
 const FILL_FILLED_BIT: u32 = 1 << 27;
 const FSP_CONNECTOR_BIT: u32 = 1 << 8;
@@ -21,6 +23,10 @@ struct Counts {
     fill_type_observations: usize,
     fill_color_observations: usize,
     fill_boolean_observations: usize,
+    fill_opacity_observations: usize,
+    fill_opacity_shapes: usize,
+    line_opacity_observations: usize,
+    line_opacity_shapes: usize,
     fill_boolean_use_zero: usize,
     fill_boolean_use_one: usize,
     fill_boolean_used_false: usize,
@@ -32,6 +38,8 @@ struct Counts {
     dgg_fill_type_observations: usize,
     dgg_fill_color_observations: usize,
     dgg_fill_boolean_observations: usize,
+    dgg_fill_opacity_observations: usize,
+    dgg_line_opacity_observations: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -40,10 +48,14 @@ struct Histograms {
     fill_color_class: BTreeMap<String, usize>,
     fill_scheme_ordinal: BTreeMap<String, usize>,
     fill_boolean_raw_hex: BTreeMap<String, usize>,
+    fill_opacity_raw_hex: BTreeMap<String, usize>,
+    line_opacity_raw_hex: BTreeMap<String, usize>,
     cooccurrence: BTreeMap<String, usize>,
     dgg_fill_type_raw_hex: BTreeMap<String, usize>,
     dgg_fill_color_class: BTreeMap<String, usize>,
     dgg_fill_boolean_raw_hex: BTreeMap<String, usize>,
+    dgg_fill_opacity_raw_hex: BTreeMap<String, usize>,
+    dgg_line_opacity_raw_hex: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -159,6 +171,8 @@ fn main() -> Result<()> {
         let mut fill_type = None;
         let mut fill_color = None;
         let mut fill_bool = None;
+        let mut has_fill_opacity = false;
+        let mut has_line_opacity = false;
         for fopt in &shape.fopts {
             for entry in &fopt.properties {
                 if let Some(raw) = scalar_property(entry, FILL_TYPE) {
@@ -177,6 +191,16 @@ fn main() -> Result<()> {
                         );
                     }
                 }
+                if let Some(raw) = scalar_property(entry, FILL_OPACITY) {
+                    counts.fill_opacity_observations += 1;
+                    has_fill_opacity = true;
+                    bump(&mut histograms.fill_opacity_raw_hex, format!("0x{raw:08X}"));
+                }
+                if let Some(raw) = scalar_property(entry, LINE_OPACITY) {
+                    counts.line_opacity_observations += 1;
+                    has_line_opacity = true;
+                    bump(&mut histograms.line_opacity_raw_hex, format!("0x{raw:08X}"));
+                }
                 if let Some(raw) = scalar_property(entry, FILL_BOOLEANS) {
                     counts.fill_boolean_observations += 1;
                     fill_bool = Some(raw);
@@ -193,6 +217,13 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+
+        if has_fill_opacity {
+            counts.fill_opacity_shapes += 1;
+        }
+        if has_line_opacity {
+            counts.line_opacity_shapes += 1;
         }
 
         let type_bucket =
@@ -242,6 +273,20 @@ fn main() -> Result<()> {
                         format!("0x{raw:08X}"),
                     );
                 }
+                if let Some(raw) = scalar_property(entry, FILL_OPACITY) {
+                    counts.dgg_fill_opacity_observations += 1;
+                    bump(
+                        &mut histograms.dgg_fill_opacity_raw_hex,
+                        format!("0x{raw:08X}"),
+                    );
+                }
+                if let Some(raw) = scalar_property(entry, LINE_OPACITY) {
+                    counts.dgg_line_opacity_observations += 1;
+                    bump(
+                        &mut histograms.dgg_line_opacity_raw_hex,
+                        format!("0x{raw:08X}"),
+                    );
+                }
             }
         }
     }
@@ -255,6 +300,7 @@ fn main() -> Result<()> {
         guardrails: vec![
             "Raw OfficeArt values are observations; this receipt does not infer Publisher authoring intent.",
             "The effective-state bucket mirrors only the current bounded solid/visibility admission law.",
+            "Raw fillOpacity/lineOpacity values are observations only; no opacity/transparency semantics are inferred here.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
