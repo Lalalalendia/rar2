@@ -185,7 +185,8 @@ fn main() -> Result<()> {
             }
         }
 
-        let type_bucket = fill_type.map_or("type_absent".to_owned(), |raw| format!("type_0x{raw:08X}"));
+        let type_bucket =
+            fill_type.map_or("type_absent".to_owned(), |raw| format!("type_0x{raw:08X}"));
         let color_bucket = fill_color.map_or("color_absent", color_class);
         let bool_bucket = match fill_bool {
             None => "filled_absent",
