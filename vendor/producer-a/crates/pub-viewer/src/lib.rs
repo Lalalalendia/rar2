@@ -2715,6 +2715,16 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "A grouped text shape falls outside the bounded group geometry profile.",
         ),
+        GroupedImageProjected { .. } => (
+            "viewer.geometry.grouped_image_projected",
+            ViewerDiagnosticSeverity::Info,
+            "A grouped image shape was projected through its exact bounded group geometry chain.",
+        ),
+        GroupedImageProjectionUnavailable { .. } => (
+            "viewer.geometry.grouped_image_projection_unavailable",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "A grouped image shape falls outside the bounded group geometry profile.",
+        ),
         GroupedTableProjected { .. } => (
             "viewer.geometry.grouped_table_projected",
             ViewerDiagnosticSeverity::Info,
@@ -4143,6 +4153,20 @@ mod tests {
         assert_eq!(mapped.severity, ViewerDiagnosticSeverity::FidelityWarning);
         assert!(!mapped.message.contains("Escher"));
         assert!(!mapped.message.contains("seq_num"));
+    }
+
+    #[test]
+    fn grouped_image_projection_uses_source_neutral_product_vocabulary() {
+        let mapped = map_bridge_diagnostic(&PubBridgeDiagnostic::GroupedImageProjected {
+            seq_num: 42,
+            depth: 1,
+        });
+
+        assert_eq!(mapped.code, "viewer.geometry.grouped_image_projected");
+        assert_eq!(mapped.severity, ViewerDiagnosticSeverity::Info);
+        assert!(mapped.message.contains("grouped image shape"));
+        assert!(!mapped.message.contains("seq_num"));
+        assert!(!mapped.message.contains("42"));
     }
 
     #[test]
