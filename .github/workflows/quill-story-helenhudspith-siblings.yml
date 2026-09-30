@@ -145,16 +145,16 @@ jobs:
               return int.from_bytes(data[offset:offset + 4], "little")
 
           def strict_strs_vectors(data, story_count, text_units, fdpp):
-              # Observed ordinary physical shape:
+              # Confirmed on the same-source ordinary controls:
               # chunk_len = 22 + 8*N
-              # service_span = 18 + 4*N
-              # lengths begin at 4 + service_span = 22 + 4*N.
+              # service_span = 8
+              # lengths begin at 4 + service_span = 12.
               n = int(story_count)
               if n <= 0:
                   return {}
               chunk_len = 22 + 8 * n
-              service_span = 18 + 4 * n
-              lengths_rel = 22 + 4 * n
+              service_span = 8
+              lengths_rel = 12
               count_bytes = n.to_bytes(4, "little")
               vectors = {}
               cursor = 0
@@ -211,7 +211,7 @@ jobs:
                   ordinary_count += 1
                   frame_law = (
                       details["strs_declared_count"] == n
-                      and details["strs_service_span"] == 18 + 4 * n
+                      and details["strs_service_span"] == 8
                       and details["strs_descriptor_length"] == 22 + 8 * n
                   )
                   ordinary_frame_law_count += int(frame_law)
