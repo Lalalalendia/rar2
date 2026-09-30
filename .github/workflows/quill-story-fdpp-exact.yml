@@ -1,13 +1,6 @@
 name: Quill exact FDPP Story acceptance
 
 on:
-  push:
-    branches:
-      - reader/quill-story-fdpp-exact-01
-    paths:
-      - ".github/workflows/quill-story-fdpp-exact.yml"
-      - "vendor/producer-a/crates/pub-quill/src/**"
-      - "vendor/producer-a/crates/pub-reader/src/**"
   pull_request:
     paths:
       - ".github/workflows/quill-story-fdpp-exact.yml"
@@ -17,6 +10,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: quill-story-fdpp-exact-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
