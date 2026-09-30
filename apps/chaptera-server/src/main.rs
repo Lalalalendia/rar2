@@ -33,6 +33,7 @@ use chaptera_server::{
     source_validation_job::SourceValidationJobQueue,
     sqlite_store::SqliteRevisionStore,
     state::{AppState, RuntimePorts},
+    untrusted_pub_worker,
     upload_admission::SqliteUploadAdmissionAuthority,
     worker,
     worker_runtime::ConfiguredWorkerRuntime,
@@ -42,6 +43,25 @@ use clap::Parser;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    if let Command::UntrustedPubInspect {
+        max_file_bytes,
+        max_cfb_entries,
+        max_declared_stream_bytes,
+    } = &cli.command
+    {
+        return match untrusted_pub_worker::run_inspect(
+            *max_file_bytes,
+            *max_cfb_entries,
+            *max_declared_stream_bytes,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     if let Command::SourceBaseline {
         document_id,
@@ -358,6 +378,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
             }
             doctor::run(&AppState::new(RuntimePorts::unconfigured()))?;
         }
+        Command::UntrustedPubInspect { .. } => unreachable!(
+            "untrusted-pub-inspect is dispatched synchronously before Tokio runtime creation"
+        ),
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"
         ),
