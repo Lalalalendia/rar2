@@ -200,6 +200,8 @@ pub struct PubPageRoleObservation {
     pub applied_master_raw_type: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pgt_type: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<PubPageFieldObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_document_entry_seq_num: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,6 +213,18 @@ pub struct PubPageRoleObservation {
     pub child_raw_type_counts: BTreeMap<u16, usize>,
     pub shape_child_count: usize,
     pub group_child_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubPageFieldObservation {
+    pub id: u16,
+    pub block_type: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub u16_value: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub u32_value: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_length: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -793,6 +807,30 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             }
         }
 
+        let fields = chunk
+            .fields
+            .iter()
+            .map(|field| {
+                let (u16_value, u32_value, declared_length) = match &field.body {
+                    RawContentsBlockBody::Empty => (None, None, None),
+                    RawContentsBlockBody::U16 { value, .. } => (Some(*value), None, None),
+                    RawContentsBlockBody::U32 { value, .. } => (None, Some(*value), None),
+                    RawContentsBlockBody::Fixed8 { .. }
+                    | RawContentsBlockBody::Fixed16 { .. } => (None, None, None),
+                    RawContentsBlockBody::Container {
+                        declared_length, ..
+                    } => (None, None, Some(*declared_length)),
+                };
+                PubPageFieldObservation {
+                    id: field.id,
+                    block_type: field.block_type,
+                    u16_value,
+                    u32_value,
+                    declared_length,
+                }
+            })
+            .collect();
+
         let mut child_raw_type_counts = BTreeMap::<u16, usize>::new();
         for child in references.values() {
             if single_parent_seq(child) != Some(entry.handle) {
@@ -819,6 +857,7 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             applied_master_seq_num,
             applied_master_raw_type,
             pgt_type,
+            fields,
             previous_document_entry_seq_num: previous_document_entry
                 .map(|item| item.contents_seq_num),
             previous_document_entry_raw_type: previous_document_entry
