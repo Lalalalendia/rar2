@@ -1403,6 +1403,8 @@ mod tests {
             cells: vec![ViewerTableCell {
                 id: cell_id,
                 address: TableCellAddress { row: 0, column: 0 },
+                row_span: 1,
+                column_span: 1,
                 text: "cell".into(),
                 bounds: Some(cell_bounds),
             }],
