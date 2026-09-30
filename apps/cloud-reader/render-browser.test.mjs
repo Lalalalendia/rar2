@@ -124,19 +124,19 @@ try {
 
   const mixed = await page.locator('[data-node-id="mixed-resolved"] [data-text-authority="server-shared-resolved"]').evaluateAll((lines) =>
     lines.map((line) => ({
-      y: line.getBoundingClientRect().y,
       spans: [...line.querySelectorAll("tspan")].map((span) => ({
         text: span.textContent,
-        x: span.getBoundingClientRect().x,
+        x_attr: Number(span.getAttribute("x")),
+        y_attr: Number(span.getAttribute("y")),
         font_size_px: parseFloat(getComputedStyle(span).fontSize)
       }))
     })));
   assert.equal(mixed.length, 2);
   assert.deepEqual(mixed[0].spans.map((span) => [span.text, span.font_size_px]), [["BIG", 24], [" small", 12]]);
   assert.deepEqual(mixed[1].spans.map((span) => [span.text, span.font_size_px]), [["tail", 14]]);
-  assert.ok(Math.abs(mixed[0].spans[1].x - mixed[0].spans[0].x - 48) < 0.1,
+  assert.ok(Math.abs(mixed[0].spans[1].x_attr - mixed[0].spans[0].x_attr - 48) < 0.00001,
     "resolved span x offset, not browser inline flow, places mixed-size runs");
-  assert.ok(Math.abs(mixed[1].y - mixed[0].y - 30) < 0.1,
+  assert.ok(Math.abs(mixed[1].spans[0].y_attr - mixed[0].spans[0].y_attr - 30) < 0.00001,
     "resolved per-line height, not disposition-wide fallback height, places mixed-size lines");
   const clip = await page.locator('[data-node-id="resolved"] g[clip-path]').evaluate((element) => {
     const id = element.getAttribute("clip-path").slice(5, -1);
