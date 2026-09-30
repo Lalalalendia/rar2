@@ -774,7 +774,6 @@ fn font_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     })
 }
 
-
 fn palette_payload_profile(params: &[u8]) -> Value {
     let start = read_u16(params, 0);
     let entry_count = read_u16(params, 2).map(usize::from);
@@ -867,7 +866,10 @@ fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
                         palette_select_count += 1;
                         selected_palette_slot = Some(slot);
                         if let Some((next_function, _)) = records.get(record_index + 1) {
-                            bump_function(&mut immediate_after_palette_select_counts, *next_function);
+                            bump_function(
+                                &mut immediate_after_palette_select_counts,
+                                *next_function,
+                            );
                         }
                     }
                     Some(_) | None => unknown_select_palette_count += 1,
