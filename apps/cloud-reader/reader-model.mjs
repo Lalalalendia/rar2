@@ -75,11 +75,16 @@ export function searchStories(scene, query, limit = 200) {
 export function guestRequestPath(value, action, origin) {
   const url = new URL(value, origin);
   if (url.origin !== origin || url.search || url.hash
-      || !/^\/v1\/reader\/guest-sessions\/[A-Za-z0-9_:-]+\/(content|open|scene)$/.test(url.pathname)
+      || !/^\/v1\/reader\/guest-sessions\/[A-Za-z0-9_:-]+\/(content|open|scene|contribution-capability|contribute)$/.test(url.pathname)
       || !url.pathname.endsWith("/" + action)) {
     throw new Error("guest_path_invalid");
   }
   return url.pathname;
+}
+
+export function contributionEligible(failureClassification) {
+  return failureClassification?.protocol_version === "chaptera.failure-classifier.v1"
+    && ["PUB_HIGH_VALUE", "PUB_DAMAGED"].includes(failureClassification.class);
 }
 
 export function extractableImages(scene) {
