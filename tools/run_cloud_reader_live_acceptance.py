@@ -710,9 +710,6 @@ def main() -> int:
     isolation_wrapper = work / "isolation-wrapper.py"
     isolation_trace = work / "isolation-trace.txt"
     caddy_path = work / "Caddyfile"
-    site_root = work / "site"
-    site_root.mkdir()
-    (site_root / "index.html").write_text("cloud reader acceptance\n", encoding="utf-8")
 
     app_port = free_port()
     caddy_http_port = free_port()
