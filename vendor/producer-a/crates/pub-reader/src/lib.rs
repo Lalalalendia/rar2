@@ -3740,9 +3740,10 @@ fn bounded_officeart_adjust_value(
         .iter()
         .map(|property| property.op)
         .collect::<BTreeSet<_>>();
-    match values.as_slice() {
-        [value] => PubOfficeArtAdjustValueSource::Scalar(*value),
-        _ => PubOfficeArtAdjustValueSource::Unsupported,
+    if values.len() == 1 {
+        PubOfficeArtAdjustValueSource::Scalar(*values.iter().next().expect("one value"))
+    } else {
+        PubOfficeArtAdjustValueSource::Unsupported
     }
 }
 
