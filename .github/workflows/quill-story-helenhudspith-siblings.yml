@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/quill-story-helenhudspith-siblings.yml"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-early-text-boundary-probe.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-fdpc-boundary-probe.rs"
   workflow_dispatch:
 
 permissions:
@@ -91,6 +92,14 @@ jobs:
             -p pub-reader \
             --bin quill-story-early-text-boundary-probe
 
+      - name: Build FDPP x FDPC boundary probe
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin quill-story-fdpc-boundary-probe
+
       - name: Run same-source sibling census
         run: |
           set -euo pipefail
@@ -98,6 +107,13 @@ jobs:
             --siblings \
             "_siblings/lalamu/pub-corpus/corpus/native/unclassified" \
             "out/quill-story-helenhudspith-siblings.json"
+
+      - name: Run FDPP x FDPC boundary discriminator
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/debug/quill-story-fdpc-boundary-probe" \
+            "_siblings/lalamu/pub-corpus/corpus/native/unclassified" \
+            "out/quill-story-fdpc-boundary.json"
 
       - name: Guard known seven and summarize sibling families
         shell: bash
@@ -191,5 +207,6 @@ jobs:
           path: |
             out/quill-story-helenhudspith-siblings.json
             out/quill-story-helenhudspith-siblings-summary.json
+            out/quill-story-fdpc-boundary.json
           if-no-files-found: error
           retention-days: 30
