@@ -505,6 +505,22 @@ fn wmf_raster_error_class(message: &str) -> &'static str {
         "unsupported_restore_dc"
     } else if message.starts_with("unsupported WMF escape") {
         "unsupported_escape"
+    } else if message.starts_with("unsupported palette-dependent WMF COLORREF") {
+        "palette_dependent_colorref"
+    } else if message.starts_with("unsupported WMF Palette compatibility") {
+        "unsupported_palette_profile"
+    } else if message.starts_with("WMF Palette requires META_SELECTPALETTE") {
+        "palette_select_api_mismatch"
+    } else if message.starts_with("WMF SELECTPALETTE") {
+        "select_palette_lifecycle"
+    } else if message.starts_with("WMF REALIZEPALETTE") {
+        "realize_palette_lifecycle"
+    } else if message.starts_with("WMF DELETEOBJECT targets the selected Palette") {
+        "delete_selected_palette"
+    } else if message.starts_with("unsupported WMF ELLIPSE") {
+        "unsupported_ellipse_profile"
+    } else if message.starts_with("unsupported WMF POSTSCRIPT_IGNORE") {
+        "unsupported_postscript_ignore_profile"
     } else if message.contains("object table") || message.contains("graphics object") {
         "object_table_or_object_kind"
     } else if message.contains("raster work") {
@@ -543,6 +559,45 @@ fn wmf_raster_error_detail(message: &str) -> String {
     }
     if message == "WMF selects an unsupported graphics object" {
         return "select_unsupported_object".to_owned();
+    }
+    if message.starts_with("unsupported palette-dependent WMF COLORREF mode ") {
+        return "palette_dependent_colorref".to_owned();
+    }
+    if message.starts_with("unsupported WMF Palette compatibility payload length ") {
+        return "palette_payload_length".to_owned();
+    }
+    if message.starts_with("unsupported WMF Palette compatibility profile ") {
+        return "palette_profile".to_owned();
+    }
+    if message == "WMF Palette requires META_SELECTPALETTE" {
+        return "palette_select_api_mismatch".to_owned();
+    }
+    if message == "WMF SELECTPALETTE has unsupported payload length" {
+        return "select_palette_payload_length".to_owned();
+    }
+    if message == "WMF SELECTPALETTE refers to a non-Palette object" {
+        return "select_palette_non_palette_object".to_owned();
+    }
+    if message == "WMF SELECTPALETTE refers to an empty or invalid slot" {
+        return "select_palette_empty_slot".to_owned();
+    }
+    if message == "WMF REALIZEPALETTE has unsupported payload length" {
+        return "realize_palette_payload_length".to_owned();
+    }
+    if message == "WMF REALIZEPALETTE without selected Palette" {
+        return "realize_palette_without_selection".to_owned();
+    }
+    if message == "WMF REALIZEPALETTE selected Palette is unavailable" {
+        return "realize_palette_unavailable".to_owned();
+    }
+    if message == "WMF DELETEOBJECT targets the selected Palette" {
+        return "delete_selected_palette".to_owned();
+    }
+    if message.starts_with("unsupported WMF ELLIPSE ") {
+        return wmf_raster_error_class(message).to_owned();
+    }
+    if message.starts_with("unsupported WMF POSTSCRIPT_IGNORE ") {
+        return "postscript_ignore_profile".to_owned();
     }
     wmf_raster_error_class(message).to_owned()
 }
