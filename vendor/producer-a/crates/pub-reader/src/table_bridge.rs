@@ -46,7 +46,8 @@ impl From<MatureCellCoordinates> for PubTableCellCoordinates {
 pub struct PubMaterializedTableCell {
     pub id: TableCellId,
     pub address: TableCellAddress,
-    pub coordinates: PubTableCellCoordinates,
+    pub row_span: u32,
+    pub column_span: u32,
     pub text: String,
     pub bounds: Option<RectEmu>,
 }
@@ -61,6 +62,21 @@ pub enum PubTableTextError {
     MissingSourceCell {
         id: TableCellId,
     },
+    MissingCoordinates {
+        id: TableCellId,
+    },
+    InvalidCoordinates {
+        id: TableCellId,
+    },
+    OverlappingCells {
+        id: TableCellId,
+        other_id: TableCellId,
+    },
+    GridCoverageOverflow,
+    IncompleteGridCoverage {
+        expected: u64,
+        covered: u64,
+    },
     InvalidRange {
         id: TableCellId,
         start: u32,
@@ -74,51 +90,6 @@ pub enum PubTableTextError {
     InvalidUtf16 {
         id: TableCellId,
     },
-    MissingCoordinates {
-        id: TableCellId,
-    },
-    CoordinatesOutOfRange {
-        id: TableCellId,
-        coordinates: PubTableCellCoordinates,
-        rows: u32,
-        columns: u32,
-    },
-    OverlappingCoordinates {
-        left: TableCellId,
-        right: TableCellId,
-    },
-}
-
-pub fn materialize_bounded_simple_table_cells(
-    table: &PubTableSource,
-    story: &Story,
-) -> Result<Vec<PubMaterializedTableCell>, PubTableTextError> {
-    let simple = table
-        .simple_table
-        .as_ref()
-        .ok_or(PubTableTextError::NotSimpleRectangular)?;
-    let materialized = materialize_bounded_table_cells(table, story)?;
-
-    let mut semantic_cells = simple.cells.clone();
-    semantic_cells.sort_by_key(|cell| (cell.address.row, cell.address.column, cell.id));
-
-    semantic_cells
-        .into_iter()
-        .map(|semantic| {
-            let cell = materialized
-                .iter()
-                .find(|cell| cell.id == semantic.id)
-                .ok_or(PubTableTextError::MissingSourceCell { id: semantic.id })?;
-            if cell.coordinates.start_row != semantic.address.row
-                || cell.coordinates.end_row != semantic.address.row
-                || cell.coordinates.start_column != semantic.address.column
-                || cell.coordinates.end_column != semantic.address.column
-            {
-                return Err(PubTableTextError::NotSimpleRectangular);
-            }
-            Ok(cell.clone())
-        })
-        .collect()
 }
 
 pub fn materialize_bounded_table_cells(
@@ -132,42 +103,73 @@ pub fn materialize_bounded_table_cells(
         });
     }
 
-    let mut coordinates = Vec::<(TableCellId, PubTableCellCoordinates)>::new();
-    for source in &table.cells {
-        let current = source
+    let expected = u64::from(table.rows)
+        .checked_mul(u64::from(table.columns))
+        .ok_or(PubTableTextError::GridCoverageOverflow)?;
+    let mut covered = 0_u64;
+    let mut semantic_cells = table.cells.iter().collect::<Vec<_>>();
+    semantic_cells.sort_by_key(|cell| {
+        let coordinates = cell.coordinates.unwrap_or(PubTableCellCoordinates {
+            start_row: u32::MAX,
+            end_row: u32::MAX,
+            start_column: u32::MAX,
+            end_column: u32::MAX,
+        });
+        (
+            coordinates.start_row,
+            coordinates.start_column,
+            coordinates.end_row,
+            coordinates.end_column,
+            cell.id,
+        )
+    });
+
+    for (index, cell) in semantic_cells.iter().enumerate() {
+        let coordinates = cell
             .coordinates
-            .ok_or(PubTableTextError::MissingCoordinates { id: source.id })?;
-        if current.start_row > current.end_row
-            || current.start_column > current.end_column
-            || current.end_row >= table.rows
-            || current.end_column >= table.columns
+            .ok_or(PubTableTextError::MissingCoordinates { id: cell.id })?;
+        if coordinates.start_row > coordinates.end_row
+            || coordinates.start_column > coordinates.end_column
+            || coordinates.end_row >= table.rows
+            || coordinates.end_column >= table.columns
         {
-            return Err(PubTableTextError::CoordinatesOutOfRange {
-                id: source.id,
-                coordinates: current,
-                rows: table.rows,
-                columns: table.columns,
-            });
+            return Err(PubTableTextError::InvalidCoordinates { id: cell.id });
         }
-        for (other_id, other) in &coordinates {
-            let rows_overlap =
-                current.start_row <= other.end_row && other.start_row <= current.end_row;
-            let columns_overlap = current.start_column <= other.end_column
-                && other.start_column <= current.end_column;
+
+        let row_span = u64::from(coordinates.end_row - coordinates.start_row + 1);
+        let column_span = u64::from(coordinates.end_column - coordinates.start_column + 1);
+        covered = covered
+            .checked_add(
+                row_span
+                    .checked_mul(column_span)
+                    .ok_or(PubTableTextError::GridCoverageOverflow)?,
+            )
+            .ok_or(PubTableTextError::GridCoverageOverflow)?;
+
+        for other in &semantic_cells[..index] {
+            let other_coordinates = other
+                .coordinates
+                .ok_or(PubTableTextError::MissingCoordinates { id: other.id })?;
+            let rows_overlap = coordinates.start_row <= other_coordinates.end_row
+                && other_coordinates.start_row <= coordinates.end_row;
+            let columns_overlap = coordinates.start_column <= other_coordinates.end_column
+                && other_coordinates.start_column <= coordinates.end_column;
             if rows_overlap && columns_overlap {
-                return Err(PubTableTextError::OverlappingCoordinates {
-                    left: *other_id,
-                    right: source.id,
+                return Err(PubTableTextError::OverlappingCells {
+                    id: cell.id,
+                    other_id: other.id,
                 });
             }
         }
-        coordinates.push((source.id, current));
+    }
+
+    if covered != expected {
+        return Err(PubTableTextError::IncompleteGridCoverage { expected, covered });
     }
 
     let story_utf16 = story.text.encode_utf16().collect::<Vec<_>>();
-    table
-        .cells
-        .iter()
+    semantic_cells
+        .into_iter()
         .map(|source| {
             let coordinates = source
                 .coordinates
@@ -223,12 +225,23 @@ pub fn materialize_bounded_table_cells(
                     row: coordinates.start_row,
                     column: coordinates.start_column,
                 },
-                coordinates,
+                row_span: coordinates.end_row - coordinates.start_row + 1,
+                column_span: coordinates.end_column - coordinates.start_column + 1,
                 text,
                 bounds: source.bounds,
             })
         })
         .collect()
+}
+
+pub fn materialize_bounded_simple_table_cells(
+    table: &PubTableSource,
+    story: &Story,
+) -> Result<Vec<PubMaterializedTableCell>, PubTableTextError> {
+    if table.simple_table.is_none() {
+        return Err(PubTableTextError::NotSimpleRectangular);
+    }
+    materialize_bounded_table_cells(table, story)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
