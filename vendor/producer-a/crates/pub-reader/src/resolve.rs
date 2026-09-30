@@ -16,6 +16,10 @@ pub type PubResolvedGraph = ResolvedGraph<PubResolvedNodePayload, (), (), (), St
 pub struct PubResolvedNodePayload {
     pub contents_seq_num: u32,
     pub officeart_shape_type: Option<u16>,
+    #[serde(
+        default,
+        skip_serializing_if = "PubOfficeArtAdjustValueSource::is_unsupported"
+    )]
     pub officeart_adjust_value: PubOfficeArtAdjustValueSource,
     pub officeart_spid: Option<u32>,
     pub image_slot: Option<u32>,
