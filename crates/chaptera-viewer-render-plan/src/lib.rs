@@ -959,7 +959,6 @@ fn resolve_mixed_size_text_layout_v1(
             let Some(evaluated) = evaluate_mixed_line_v1(
                 fragment,
                 font,
-                fingerprint,
                 &layout,
                 &scalars,
                 cursor,
@@ -1021,7 +1020,6 @@ fn resolve_mixed_size_text_layout_v1(
 fn evaluate_mixed_line_v1(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
-    fingerprint: &str,
     layout: &BoundedLayoutEnvironment,
     scalars: &[char],
     cursor: usize,
@@ -1699,4 +1697,74 @@ mod tests {
             Err(RenderPlanErrorV1::PageIndexOutOfBounds { page_index: 1 })
         ));
     }
+    #[test]
+    fn mixed_size_shared_layout_emits_resolved_spans_without_flattening_sizes() {
+        let font_bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = font_fingerprint_sha256(font_bytes);
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "font:test",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 15 * 12_700,
+            bytes: font_bytes,
+        };
+        let fragment = RenderTextFragmentV1 {
+            story_id: StoryId::from_canonical(canonical(3)),
+            scalar_start: 0,
+            scalar_end: 9,
+            text: "Big small".into(),
+            line_count: 0,
+            typography: vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 3,
+                    source_font_name: "Pinned fallback".into(),
+                    text_size_emu: 24 * 12_700,
+                    font_inherited: false,
+                    size_inherited: false,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 3,
+                    scalar_end: 9,
+                    source_font_name: "Pinned fallback".into(),
+                    text_size_emu: 12 * 12_700,
+                    font_inherited: false,
+                    size_inherited: false,
+                },
+            ],
+            backend_font_resource_id: None,
+            layout: None,
+        };
+
+        let layout = resolve_mixed_size_text_layout_v1(
+            &fragment,
+            &font,
+            &fingerprint,
+            RectEmu::new(
+                LengthEmu::ZERO,
+                LengthEmu::ZERO,
+                LengthEmu::new(20_000_000),
+                LengthEmu::new(20_000_000),
+            ),
+        );
+
+        assert!(matches!(
+            layout.disposition,
+            RenderTextLayoutDispositionV1::SharedResolved { .. }
+        ));
+        assert_eq!(layout.lines.len(), 1);
+        let spans = &layout.lines[0].spans;
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].text, "Big");
+        assert_eq!(spans[0].font_size_emu, 24 * 12_700);
+        assert_eq!(spans[1].text, " small");
+        assert_eq!(spans[1].font_size_emu, 12 * 12_700);
+        assert!(spans[1].x_offset_emu > 0);
+        assert_eq!(
+            layout.lines[0].measured_width_emu,
+            spans.iter().map(|span| span.measured_width_emu).sum()
+        );
+    }
+
 }
