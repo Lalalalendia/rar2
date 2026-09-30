@@ -4733,7 +4733,7 @@ mod tests {
             None
         );
         assert_eq!(
-            (line_disabled & LINE_USE_LINE_BIT != 0).then_some(line_disabled & LINE_LINE_BIT != 0),
+            (line_disabled & LINE_USE_LINE_BIT != 0)\n                .then_some(line_disabled & LINE_LINE_BIT != 0),
             Some(false)
         );
         assert_eq!(
