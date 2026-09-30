@@ -23,8 +23,8 @@ mod resolve;
 mod structural_base;
 mod table_bridge;
 mod wmf;
-mod wmf_preview;
 mod wmf_postscript;
+mod wmf_preview;
 
 pub use asset_export::{
     PUB_ASSET_EXPORT_SCHEMA_V0_1, PUB_ASSET_MANIFEST_FILENAME, PubAssetExportBundle,
@@ -123,10 +123,10 @@ pub use table_bridge::{
     RAW_TYPE_TABLE, materialize_bounded_simple_table_cells,
 };
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
+pub use wmf_postscript::{WmfPostScriptProgram, extract_bounded_wmf_postscript_program};
 pub use wmf_preview::{
     LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, WmfPreviewRgba, rasterize_wmf_preview,
 };
-pub use wmf_postscript::{WmfPostScriptProgram, extract_bounded_wmf_postscript_program};
 
 pub const PUB_ADAPTER_ID: &str = "pub-rs";
 pub const PUB_FORMAT_PROFILE_ID: &str = "pub-mature-0x2c-v0.1";
