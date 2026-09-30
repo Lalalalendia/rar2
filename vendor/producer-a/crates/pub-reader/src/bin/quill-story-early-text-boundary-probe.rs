@@ -399,6 +399,7 @@ struct SiblingScanDetails {
     fdpp_descriptor_lengths: Vec<u32>,
     fdpp_first_stored_count: Option<u16>,
     descriptor_topology: BTreeMap<String, Vec<u32>>,
+    descriptor_payload_profiles: Vec<DescriptorPayloadProfile>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2524,6 +2525,7 @@ fn diagnose_sibling_scan(bytes: &[u8]) -> SiblingScanRow {
         let (revision, story_catalog) = grounded_contents_story_catalog(&contents)?;
         let grounded_story_count = story_catalog.declared_count;
         let descriptors = parse_descriptor_directory(&quill)?;
+        let descriptor_payload_profiles = descriptor_payload_profiles(&quill, &descriptors)?;
         let syid = unique_descriptor(&descriptors, *b"SYID")?;
         let strs = unique_descriptor(&descriptors, *b"STRS")?;
         let text = unique_descriptor(&descriptors, *b"TEXT")?;
@@ -2560,6 +2562,7 @@ fn diagnose_sibling_scan(bytes: &[u8]) -> SiblingScanRow {
             fdpp_descriptor_lengths: descriptor_lengths(&fdpp),
             fdpp_first_stored_count,
             descriptor_topology: descriptor_topology(&descriptors),
+            descriptor_payload_profiles,
         })
     })()
     .ok();
