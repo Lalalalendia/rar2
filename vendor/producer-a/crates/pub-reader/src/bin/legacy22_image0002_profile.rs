@@ -1358,7 +1358,9 @@ fn wmf_blocker_profile(wmf: &[u8], detail: &str) -> Value {
         | "realize_palette_unavailable"
         | "delete_selected_palette"
         | "palette_dependent_colorref" => palette_blocker_profile(&records),
-        "record_function_0x02fb" | "generated:unsupported WMF Font compatibility profile" => {
+        "record_function_0x02fb"
+        | "generated:unsupported WMF Font compatibility profile"
+        | "generated:unsupported WMF Font compatibility payload length 36" => {
             font_blocker_profile(&records)
         }
         "record_function_0x0418" => ellipse_blocker_profile(&records),
