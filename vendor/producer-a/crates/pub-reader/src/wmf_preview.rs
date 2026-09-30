@@ -13,6 +13,8 @@ const MAX_RASTER_WORK_UNITS: u64 = 64 * 1024 * 1024;
 
 const META_EOF: u16 = 0x0000;
 const META_SAVEDC: u16 = 0x001e;
+const META_REALIZEPALETTE: u16 = 0x0035;
+const META_CREATEPALETTE: u16 = 0x00f7;
 const META_SETBKMODE: u16 = 0x0102;
 const META_SETMAPMODE: u16 = 0x0103;
 const META_SETROP2: u16 = 0x0104;
@@ -28,6 +30,7 @@ const META_DELETEOBJECT: u16 = 0x01f0;
 const META_SETBKCOLOR: u16 = 0x0201;
 const META_SETTEXTCOLOR: u16 = 0x0209;
 const META_SETWINDOWORG: u16 = 0x020b;
+const META_SELECTPALETTE: u16 = 0x0234;
 const META_SETWINDOWEXT: u16 = 0x020c;
 const META_CREATEPENINDIRECT: u16 = 0x02fa;
 const META_CREATEFONTINDIRECT: u16 = 0x02fb;
@@ -35,6 +38,7 @@ const META_CREATEBRUSHINDIRECT: u16 = 0x02fc;
 const META_POLYGON: u16 = 0x0324;
 const META_POLYLINE: u16 = 0x0325;
 const META_INTERSECTCLIPRECT: u16 = 0x0416;
+const META_ELLIPSE: u16 = 0x0418;
 const META_RECTANGLE: u16 = 0x041b;
 const META_POLYPOLYGON: u16 = 0x0538;
 const META_ESCAPE: u16 = 0x0626;
@@ -48,6 +52,7 @@ const ABSOLUTE: u16 = 1;
 const ALTERNATE: u16 = 1;
 const WINDING: u16 = 2;
 const META_ESCAPE_ENHANCED_METAFILE: u16 = 0x000f;
+const META_ESCAPE_POSTSCRIPT_IGNORE: u16 = 0x0026;
 const WMFC_COMMENT_IDENTIFIER: u32 = 0x4346_4d57;
 const WMFC_COMMENT_TYPE: u32 = 1;
 const MAX_EMBEDDED_EMF_BYTES: usize = MAX_WMF_BYTES;
@@ -122,6 +127,7 @@ enum GdiObject {
     Pen(Pen),
     Brush(Brush),
     FontCompatibility,
+    PaletteCompatibility,
     RegionCompatibility,
 }
 
@@ -167,6 +173,7 @@ struct PlaybackState {
     polygon_fill_mode: u16,
     pen: Pen,
     brush: Brush,
+    selected_palette: Option<usize>,
 }
 
 impl PlaybackState {
@@ -192,6 +199,7 @@ impl PlaybackState {
                 },
                 pattern: None,
             },
+            selected_palette: None,
         }
     }
 }
@@ -294,12 +302,16 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
 }
 
-fn color_ref(value: u32) -> Color {
-    Color {
+fn color_ref(value: u32) -> Result<Color> {
+    let mode = (value >> 24) as u8;
+    if !matches!(mode, 0x00 | 0x02) {
+        bail!("unsupported palette-dependent WMF COLORREF mode 0x{mode:02x}");
+    }
+    Ok(Color {
         r: (value & 0xff) as u8,
         g: ((value >> 8) & 0xff) as u8,
         b: ((value >> 16) & 0xff) as u8,
-    }
+    })
 }
 
 fn rgb_quad(bytes: &[u8], offset: usize) -> Result<Color> {
@@ -827,6 +839,105 @@ fn draw_polyline(
     Ok(())
 }
 
+fn rasterize_bounded_ellipse(
+    params: &[u8],
+    state: &PlaybackState,
+    canvas: &mut Canvas,
+) -> Result<()> {
+    if params.len() != 8 {
+        bail!("unsupported WMF ELLIPSE payload length");
+    }
+    if !matches!(state.pen.style, PS_NULL | PS_INSIDEFRAME)
+        || !matches!(state.brush.style, BS_SOLID | BS_NULL)
+        || state.brush.pattern.is_some()
+    {
+        bail!("unsupported WMF ELLIPSE pen/brush profile");
+    }
+
+    let bottom = read_i16(params, 0).ok_or_else(|| anyhow!("WMF ELLIPSE bottom is truncated"))?;
+    let right = read_i16(params, 2).ok_or_else(|| anyhow!("WMF ELLIPSE right is truncated"))?;
+    let top = read_i16(params, 4).ok_or_else(|| anyhow!("WMF ELLIPSE top is truncated"))?;
+    let left = read_i16(params, 6).ok_or_else(|| anyhow!("WMF ELLIPSE left is truncated"))?;
+    if right <= left || bottom <= top {
+        bail!("unsupported WMF ELLIPSE logical orientation");
+    }
+
+    let (x0, y0) = map_point(state, canvas, left, top)?;
+    let (x1, y1) = map_point(state, canvas, right, bottom)?;
+    if x1 <= x0 || y1 <= y0 {
+        bail!("unsupported WMF ELLIPSE mapped orientation");
+    }
+
+    let bounds = RectPx {
+        left: x0,
+        top: y0,
+        right: x1,
+        bottom: y1,
+    };
+    let clipped = bounds
+        .intersect(state.clip)
+        .intersect(RectPx::full(canvas.width, canvas.height));
+    if clipped.left >= clipped.right || clipped.top >= clipped.bottom {
+        return Ok(());
+    }
+
+    let width = u64::try_from(clipped.right - clipped.left)
+        .map_err(|_| anyhow!("WMF ELLIPSE work width is out of bounds"))?;
+    let height = u64::try_from(clipped.bottom - clipped.top)
+        .map_err(|_| anyhow!("WMF ELLIPSE work height is out of bounds"))?;
+    canvas.charge_work(
+        width
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("WMF ELLIPSE work count overflow"))?,
+    )?;
+
+    let center_x = (f64::from(x0) + f64::from(x1)) * 0.5;
+    let center_y = (f64::from(y0) + f64::from(y1)) * 0.5;
+    let radius_x = f64::from(x1 - x0) * 0.5;
+    let radius_y = f64::from(y1 - y0) * 0.5;
+    if radius_x <= 0.0 || radius_y <= 0.0 {
+        bail!("unsupported WMF ELLIPSE mapped extent");
+    }
+
+    let pen_width = if state.pen.style == PS_INSIDEFRAME {
+        f64::from(mapped_pen_width(state, canvas))
+    } else {
+        0.0
+    };
+    let inner_radius_x = (radius_x - pen_width).max(0.0);
+    let inner_radius_y = (radius_y - pen_width).max(0.0);
+
+    for y in clipped.top..clipped.bottom {
+        let dy = (f64::from(y) + 0.5 - center_y) / radius_y;
+        for x in clipped.left..clipped.right {
+            let dx = (f64::from(x) + 0.5 - center_x) / radius_x;
+            if dx * dx + dy * dy > 1.0 {
+                continue;
+            }
+
+            let stroke = if state.pen.style == PS_INSIDEFRAME {
+                if inner_radius_x <= 0.0 || inner_radius_y <= 0.0 {
+                    true
+                } else {
+                    let inner_dx = (f64::from(x) + 0.5 - center_x) / inner_radius_x;
+                    let inner_dy = (f64::from(y) + 0.5 - center_y) / inner_radius_y;
+                    inner_dx * inner_dx + inner_dy * inner_dy >= 1.0
+                }
+            } else {
+                false
+            };
+
+            if stroke {
+                canvas.set(state.clip, x, y, state.pen.color);
+            } else if state.brush.style != BS_NULL {
+                canvas.set(state.clip, x, y, state.brush.color_at(x, y));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32)>]) -> Result<()> {
     let Some(min_y) = rings
         .iter()
@@ -915,6 +1026,27 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
         bail!("WMF object table is full");
     };
     *slot = Some(object);
+    Ok(())
+}
+
+fn validate_palette_compatibility_object(params: &[u8]) -> Result<()> {
+    const ENTRY_COUNT: usize = 256;
+    const PALETTE_BYTES: usize = 4 + ENTRY_COUNT * 4;
+
+    if params.len() != PALETTE_BYTES {
+        bail!(
+            "unsupported WMF Palette compatibility payload length {}",
+            params.len()
+        );
+    }
+    let start = read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
+    let entry_count =
+        read_u16(params, 2).ok_or_else(|| anyhow!("WMF Palette entry count is truncated"))?;
+    if start != 0x0300 || usize::from(entry_count) != ENTRY_COUNT {
+        bail!(
+            "unsupported WMF Palette compatibility profile start=0x{start:04x} entries={entry_count}"
+        );
+    }
     Ok(())
 }
 
@@ -1055,17 +1187,28 @@ fn map_points(
         .collect()
 }
 
-fn validate_enhanced_metafile_escape(params: &[u8]) -> Result<()> {
+fn validate_meta_escape(params: &[u8]) -> Result<()> {
     if params.len() < 4 {
         bail!("WMF META_ESCAPE record is truncated");
     }
     let escape = read_u16(params, 0).ok_or_else(|| anyhow!("WMF escape function is truncated"))?;
-    if escape != META_ESCAPE_ENHANCED_METAFILE {
-        bail!("unsupported WMF escape function 0x{escape:04x}");
-    }
     let byte_count = usize::from(
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF escape byte count is truncated"))?,
     );
+
+    if escape == META_ESCAPE_POSTSCRIPT_IGNORE {
+        if params.len() != 6 || byte_count != 2 {
+            bail!("unsupported WMF POSTSCRIPT_IGNORE profile");
+        }
+        let _opaque_control = params
+            .get(4..6)
+            .ok_or_else(|| anyhow!("WMF POSTSCRIPT_IGNORE payload is truncated"))?;
+        return Ok(());
+    }
+
+    if escape != META_ESCAPE_ENHANCED_METAFILE {
+        bail!("unsupported WMF escape function 0x{escape:04x}");
+    }
     if byte_count > params.len().saturating_sub(4) {
         bail!("WMF MFCOMMENT payload is truncated");
     }
@@ -1368,13 +1511,17 @@ pub fn rasterize_wmf_preview(
                 let pen = Pen {
                     style,
                     width_x: read_i16(params, 2).unwrap(),
-                    color: color_ref(read_u32(params, 6).unwrap()),
+                    color: color_ref(read_u32(params, 6).unwrap())?,
                 };
                 allocate_object(&mut objects, GdiObject::Pen(pen))?;
             }
             META_CREATEFONTINDIRECT => {
                 validate_font_compatibility_object(params)?;
                 allocate_object(&mut objects, GdiObject::FontCompatibility)?;
+            }
+            META_CREATEPALETTE => {
+                validate_palette_compatibility_object(params)?;
+                allocate_object(&mut objects, GdiObject::PaletteCompatibility)?;
             }
             META_CREATEBRUSHINDIRECT => {
                 if params.len() < 8 {
@@ -1386,7 +1533,7 @@ pub fn rasterize_wmf_preview(
                 }
                 let brush = Brush {
                     style,
-                    color: color_ref(read_u32(params, 2).unwrap()),
+                    color: color_ref(read_u32(params, 2).unwrap())?,
                     pattern: None,
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
@@ -1403,6 +1550,9 @@ pub fn rasterize_wmf_preview(
                 let index = usize::from(
                     read_u16(params, 0).ok_or_else(|| anyhow!("WMF DELETEOBJECT is truncated"))?,
                 );
+                if state.selected_palette == Some(index) {
+                    bail!("WMF DELETEOBJECT targets the selected Palette");
+                }
                 let slot = objects
                     .get_mut(index)
                     .ok_or_else(|| anyhow!("WMF DELETEOBJECT index is out of bounds"))?;
@@ -1420,9 +1570,39 @@ pub fn rasterize_wmf_preview(
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
                     GdiObject::FontCompatibility => {}
+                    GdiObject::PaletteCompatibility => {
+                        bail!("WMF Palette requires META_SELECTPALETTE");
+                    }
                     GdiObject::RegionCompatibility => {
                         pending_region_compat_cliprect = true;
                     }
+                }
+            }
+            META_SELECTPALETTE => {
+                if params.len() != 2 {
+                    bail!("WMF SELECTPALETTE has unsupported payload length");
+                }
+                let index = usize::from(
+                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SELECTPALETTE is truncated"))?,
+                );
+                match objects.get(index).and_then(|object| *object) {
+                    Some(GdiObject::PaletteCompatibility) => state.selected_palette = Some(index),
+                    Some(_) => bail!("WMF SELECTPALETTE refers to a non-Palette object"),
+                    None => bail!("WMF SELECTPALETTE refers to an empty or invalid slot"),
+                }
+            }
+            META_REALIZEPALETTE => {
+                if !params.is_empty() {
+                    bail!("WMF REALIZEPALETTE has unsupported payload length");
+                }
+                let index = state
+                    .selected_palette
+                    .ok_or_else(|| anyhow!("WMF REALIZEPALETTE without selected Palette"))?;
+                if !matches!(
+                    objects.get(index).and_then(|object| *object),
+                    Some(GdiObject::PaletteCompatibility)
+                ) {
+                    bail!("WMF REALIZEPALETTE selected Palette is unavailable");
                 }
             }
             META_SELECTCLIPREGION => {
@@ -1495,6 +1675,7 @@ pub fn rasterize_wmf_preview(
                     draw_polyline(&mut canvas, &state, ring, true)?;
                 }
             }
+            META_ELLIPSE => rasterize_bounded_ellipse(params, &state, &mut canvas)?,
             META_RECTANGLE => {
                 let bottom = read_i16(params, 0)
                     .ok_or_else(|| anyhow!("WMF RECTANGLE bottom is truncated"))?;
@@ -1512,7 +1693,7 @@ pub fn rasterize_wmf_preview(
                 draw_polyline(&mut canvas, &state, &points, true)?;
             }
             META_STRETCHDIB => rasterize_bounded_stretchdib(params, &state, &mut canvas)?,
-            META_ESCAPE => validate_enhanced_metafile_escape(params)?,
+            META_ESCAPE => validate_meta_escape(params)?,
             other => bail!("unsupported WMF record function 0x{other:04x}"),
         }
 
@@ -1577,6 +1758,20 @@ mod tests {
         if extra_words > max_record_words {
             bytes[12..16].copy_from_slice(&extra_words.to_le_bytes());
         }
+    }
+
+    fn palette_compatibility_params() -> Vec<u8> {
+        let mut params = Vec::with_capacity(1028);
+        params.extend_from_slice(&0x0300_u16.to_le_bytes());
+        params.extend_from_slice(&256_u16.to_le_bytes());
+        for index in 0..256_u16 {
+            params.push(index as u8);
+            params.push((255 - index) as u8);
+            params.push((index / 2) as u8);
+            params.push(0x04);
+        }
+        assert_eq!(params.len(), 1028);
+        params
     }
 
     fn font_compatibility_params(height: i16, width: i16) -> Vec<u8> {
@@ -1649,6 +1844,49 @@ mod tests {
             polygon.extend_from_slice(&y.to_le_bytes());
         }
         records.extend(record(META_POLYGON, &polygon));
+        records.extend(record(META_EOF, &[]));
+
+        let total_len = 18 + records.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&20_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
+    fn synthetic_ellipse() -> Vec<u8> {
+        let mut records = Vec::<u8>::new();
+        let mut window = Vec::new();
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        records.extend(record(META_SETWINDOWEXT, &window));
+
+        let mut brush = Vec::new();
+        brush.extend_from_slice(&BS_SOLID.to_le_bytes());
+        brush.extend_from_slice(&0x0000_00ff_u32.to_le_bytes());
+        brush.extend_from_slice(&0_u16.to_le_bytes());
+        records.extend(record(META_CREATEBRUSHINDIRECT, &brush));
+
+        let mut pen = Vec::new();
+        pen.extend_from_slice(&PS_NULL.to_le_bytes());
+        pen.extend_from_slice(&0_i16.to_le_bytes());
+        pen.extend_from_slice(&0_i16.to_le_bytes());
+        pen.extend_from_slice(&0_u32.to_le_bytes());
+        records.extend(record(META_CREATEPENINDIRECT, &pen));
+
+        records.extend(record(META_SELECTOBJECT, &0_u16.to_le_bytes()));
+        records.extend(record(META_SELECTOBJECT, &1_u16.to_le_bytes()));
+
+        let mut ellipse = Vec::new();
+        for value in [80_i16, 80, 20, 20] {
+            ellipse.extend_from_slice(&value.to_le_bytes());
+        }
+        records.extend(record(META_ELLIPSE, &ellipse));
         records.extend(record(META_EOF, &[]));
 
         let total_len = 18 + records.len();
@@ -1792,6 +2030,32 @@ mod tests {
     }
 
     #[test]
+    fn rasterizes_bounded_ellipse_with_existing_brush_state() {
+        let image = rasterize_wmf_preview(&synthetic_ellipse(), 100, 100).expect("ellipse");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        let corner = ((20 * 100 + 20) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+        assert_eq!(&image.rgba[corner..corner + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_reversed_ellipse_outside_proven_profile() {
+        let mut bytes = synthetic_ellipse();
+        let mut offset = 18usize;
+        while offset + 6 <= bytes.len() {
+            let words = read_u32(&bytes, offset).expect("record size");
+            let function = read_u16(&bytes, offset + 4).expect("record function");
+            if function == META_ELLIPSE {
+                bytes[offset + 8..offset + 10].copy_from_slice(&10_i16.to_le_bytes());
+                bytes[offset + 12..offset + 14].copy_from_slice(&90_i16.to_le_bytes());
+                break;
+            }
+            offset += usize::try_from(words * 2).expect("record bytes");
+        }
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
     fn rasterizes_corpus_proven_8bpp_stretchdib() {
         let image =
             rasterize_wmf_preview(&synthetic_stretchdib(8), 96, 96).expect("bounded 8bpp DIB");
@@ -1860,6 +2124,72 @@ mod tests {
         params[20..24].copy_from_slice(&BI_RGB.to_le_bytes());
         params[36..40].copy_from_slice(&2_u32.to_le_bytes());
         assert!(parse_legacy_pattern_brush(&params).is_err());
+    }
+
+    #[test]
+    fn validates_exact_palette_compatibility_profile() {
+        assert!(validate_palette_compatibility_object(&palette_compatibility_params()).is_ok());
+
+        let mut wrong_start = palette_compatibility_params();
+        wrong_start[0..2].copy_from_slice(&0_u16.to_le_bytes());
+        assert!(validate_palette_compatibility_object(&wrong_start).is_err());
+
+        let mut short = palette_compatibility_params();
+        short.truncate(1024);
+        assert!(validate_palette_compatibility_object(&short).is_err());
+    }
+
+    #[test]
+    fn palette_relative_rgb_is_true_color_but_palette_index_fails_closed() {
+        assert_eq!(
+            color_ref(0x0203_0201).expect("PALETTERGB"),
+            Color { r: 1, g: 2, b: 3 }
+        );
+        assert!(color_ref(0x0103_0201).is_err());
+    }
+
+    #[test]
+    fn selected_palette_lifecycle_is_inert_for_true_color_raster() {
+        let baseline = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("baseline");
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEPALETTE, &palette_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTPALETTE, &2_u16.to_le_bytes()),
+        );
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_REALIZEPALETTE, &[]));
+
+        let with_palette = rasterize_wmf_preview(&bytes, 100, 100).expect("palette compatibility");
+        assert_eq!(with_palette, baseline);
+    }
+
+    #[test]
+    fn deleting_selected_palette_fails_closed() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEPALETTE, &palette_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTPALETTE, &2_u16.to_le_bytes()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_DELETEOBJECT, &2_u16.to_le_bytes()),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
@@ -2079,7 +2409,29 @@ mod tests {
         params.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
         params.extend_from_slice(&body);
 
-        assert!(validate_enhanced_metafile_escape(&params).is_err());
+        assert!(validate_meta_escape(&params).is_err());
+    }
+
+    #[test]
+    fn accepts_bounded_postscript_ignore_without_postscript_execution() {
+        let mut bytes = synthetic_polygon();
+        let mut params = Vec::new();
+        params.extend_from_slice(&META_ESCAPE_POSTSCRIPT_IGNORE.to_le_bytes());
+        params.extend_from_slice(&2_u16.to_le_bytes());
+        params.extend_from_slice(&[0x01, 0x00]);
+        insert_record_before_eof(&mut bytes, record(META_ESCAPE, &params));
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("POSTSCRIPT_IGNORE no-op");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+
+        let mut wrong_count = params.clone();
+        wrong_count[2..4].copy_from_slice(&1_u16.to_le_bytes());
+        assert!(validate_meta_escape(&wrong_count).is_err());
+
+        let mut oversized = params;
+        oversized.extend_from_slice(&[0, 0]);
+        assert!(validate_meta_escape(&oversized).is_err());
     }
 
     #[test]
