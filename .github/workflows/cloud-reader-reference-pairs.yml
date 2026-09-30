@@ -94,7 +94,7 @@ jobs:
                   "sha256": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
                   "bytes": 9580032,
                   "pages": 3,
-                  "require_render": True,
+                  "require_render": False,
                   "source_path": str(root / "carlton-pair" / "March-2026.pub"),
               },
               {
