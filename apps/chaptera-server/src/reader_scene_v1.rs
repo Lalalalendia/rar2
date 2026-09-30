@@ -297,19 +297,12 @@ pub fn from_viewer_geometry(
         if !resource_ids.insert(resource_id.clone()) {
             return Err(format!("duplicate Viewer image resource {resource_id}"));
         }
-        let inline_data_url =
-            inline_image_data_url(&image.mime, &image.bytes, &mut inline_image_budget);
-        let availability = if inline_data_url.is_some() {
-            "inline_data_url"
-        } else {
-            "descriptor_only"
-        };
-        resources.push(ReaderImageResourceV1 {
-            resource_id: resource_id.clone(),
-            mime: image.mime.clone(),
-            availability,
-            inline_data_url,
-        });
+        resources.push(reader_image_resource(
+            resource_id.clone(),
+            image.mime.clone(),
+            &image.bytes,
+            &mut inline_image_budget,
+        ));
 
         for placement in &image.placements {
             let node_id = serialized_string(&placement.node_id, "image placement node id")?;
@@ -796,6 +789,26 @@ fn shared_text_font_resource() -> ExplicitRenderTextFontResourceV1<'static> {
     }
 }
 
+fn reader_image_resource(
+    resource_id: String,
+    mime: String,
+    bytes: &[u8],
+    remaining_budget: &mut usize,
+) -> ReaderImageResourceV1 {
+    let inline_data_url = inline_image_data_url(&mime, bytes, remaining_budget);
+    let availability = if inline_data_url.is_some() {
+        "inline_data_url"
+    } else {
+        "descriptor_only"
+    };
+    ReaderImageResourceV1 {
+        resource_id,
+        mime,
+        availability,
+        inline_data_url,
+    }
+}
+
 fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
     if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif")
         || bytes.is_empty()
@@ -842,7 +855,7 @@ mod tests {
 
     use super::{
         MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderPaintV1, base64_encode, bind_visible_paint,
-        inline_image_data_url,
+        inline_image_data_url, reader_image_resource,
     };
 
     #[test]
@@ -893,6 +906,29 @@ mod tests {
         assert_eq!(base64_encode(b"f"), "Zg==");
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
+    }
+
+    #[test]
+    fn viewer_materialized_ole_preview_png_uses_generic_reader_image_resource_path() {
+        let mut budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+        let resource = reader_image_resource(
+            "resource:legacy-ole-preview".to_owned(),
+            "image/png".to_owned(),
+            b"bounded-ole-preview-png",
+            &mut budget,
+        );
+
+        assert_eq!(resource.resource_id, "resource:legacy-ole-preview");
+        assert_eq!(resource.mime, "image/png");
+        assert_eq!(resource.availability, "inline_data_url");
+        assert_eq!(
+            resource.inline_data_url.as_deref(),
+            Some("data:image/png;base64,Ym91bmRlZC1vbGUtcHJldmlldy1wbmc=")
+        );
+        assert_eq!(
+            budget,
+            MAX_INLINE_IMAGE_TOTAL_BYTES - b"bounded-ole-preview-png".len()
+        );
     }
 
     #[test]
