@@ -52,6 +52,7 @@ const ABSOLUTE: u16 = 1;
 const ALTERNATE: u16 = 1;
 const WINDING: u16 = 2;
 const META_ESCAPE_ENHANCED_METAFILE: u16 = 0x000f;
+const META_ESCAPE_POSTSCRIPT_IGNORE: u16 = 0x0026;
 const WMFC_COMMENT_IDENTIFIER: u32 = 0x4346_4d57;
 const WMFC_COMMENT_TYPE: u32 = 1;
 const MAX_EMBEDDED_EMF_BYTES: usize = MAX_WMF_BYTES;
@@ -1190,17 +1191,28 @@ fn map_points(
         .collect()
 }
 
-fn validate_enhanced_metafile_escape(params: &[u8]) -> Result<()> {
+fn validate_meta_escape(params: &[u8]) -> Result<()> {
     if params.len() < 4 {
         bail!("WMF META_ESCAPE record is truncated");
     }
     let escape = read_u16(params, 0).ok_or_else(|| anyhow!("WMF escape function is truncated"))?;
-    if escape != META_ESCAPE_ENHANCED_METAFILE {
-        bail!("unsupported WMF escape function 0x{escape:04x}");
-    }
     let byte_count = usize::from(
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF escape byte count is truncated"))?,
     );
+
+    if escape == META_ESCAPE_POSTSCRIPT_IGNORE {
+        if params.len() != 6 || byte_count != 2 {
+            bail!("unsupported WMF POSTSCRIPT_IGNORE profile");
+        }
+        let _opaque_control = params
+            .get(4..6)
+            .ok_or_else(|| anyhow!("WMF POSTSCRIPT_IGNORE payload is truncated"))?;
+        return Ok(());
+    }
+
+    if escape != META_ESCAPE_ENHANCED_METAFILE {
+        bail!("unsupported WMF escape function 0x{escape:04x}");
+    }
     if byte_count > params.len().saturating_sub(4) {
         bail!("WMF MFCOMMENT payload is truncated");
     }
@@ -1685,7 +1697,7 @@ pub fn rasterize_wmf_preview(
                 draw_polyline(&mut canvas, &state, &points, true)?;
             }
             META_STRETCHDIB => rasterize_bounded_stretchdib(params, &state, &mut canvas)?,
-            META_ESCAPE => validate_enhanced_metafile_escape(params)?,
+            META_ESCAPE => validate_meta_escape(params)?,
             other => bail!("unsupported WMF record function 0x{other:04x}"),
         }
 
@@ -2436,7 +2448,29 @@ mod tests {
         params.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
         params.extend_from_slice(&body);
 
-        assert!(validate_enhanced_metafile_escape(&params).is_err());
+        assert!(validate_meta_escape(&params).is_err());
+    }
+
+    #[test]
+    fn accepts_bounded_postscript_ignore_without_postscript_execution() {
+        let mut bytes = synthetic_polygon();
+        let mut params = Vec::new();
+        params.extend_from_slice(&META_ESCAPE_POSTSCRIPT_IGNORE.to_le_bytes());
+        params.extend_from_slice(&2_u16.to_le_bytes());
+        params.extend_from_slice(&[0x01, 0x00]);
+        insert_record_before_eof(&mut bytes, record(META_ESCAPE, &params));
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("POSTSCRIPT_IGNORE no-op");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+
+        let mut wrong_count = params.clone();
+        wrong_count[2..4].copy_from_slice(&1_u16.to_le_bytes());
+        assert!(validate_meta_escape(&wrong_count).is_err());
+
+        let mut oversized = params;
+        oversized.extend_from_slice(&[0, 0]);
+        assert!(validate_meta_escape(&oversized).is_err());
     }
 
     #[test]
