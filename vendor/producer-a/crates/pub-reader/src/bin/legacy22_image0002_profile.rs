@@ -1832,15 +1832,7 @@ fn postscript_executable_name_profile(payload: &[u8]) -> Value {
     })
 }
 
-fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
-    let Some((record_index, (_, params))) =
-        records.iter().enumerate().find(|(_, (function, params))| {
-            *function == META_ESCAPE_FUNCTION && read_u16(params, 0) == Some(0x0025)
-        })
-    else {
-        return json!({"kind": "postscript_data", "record": "missing"});
-    };
-
+fn postscript_data_record_profile(record_index: usize, params: &[u8]) -> Value {
     let byte_count = read_u16(params, 2).map(usize::from);
     let payload = params.get(4..).unwrap_or(&[]);
     let declared_payload = byte_count
@@ -1855,32 +1847,10 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         .filter(|byte| **byte >= 0x80)
         .count();
     let nul_count = declared_payload.iter().filter(|byte| **byte == 0).count();
-    let known_operator_counts = postscript_known_operator_counts(declared_payload);
-    let executable_name_profile = postscript_executable_name_profile(declared_payload);
-
-    let previous_function = record_index
-        .checked_sub(1)
-        .and_then(|index| records.get(index))
-        .map(|(function, _)| format!("0x{function:04x}"));
-    let next_function = records
-        .get(record_index + 1)
-        .map(|(function, _)| format!("0x{function:04x}"));
-    let escape_function_sequence = records
-        .iter()
-        .filter(|(function, _)| *function == META_ESCAPE_FUNCTION)
-        .filter_map(|(_, escape_params)| read_u16(escape_params, 0))
-        .map(|escape| format!("0x{escape:04x}"))
-        .collect::<Vec<_>>();
-    let postscript_data_record_count = escape_function_sequence
-        .iter()
-        .filter(|escape| escape.as_str() == "0x0025")
-        .count();
 
     json!({
-        "kind": "postscript_data",
         "record_index": record_index,
         "param_len": params.len(),
-        "escape_function": read_u16(params, 0).map(|value| format!("0x{value:04x}")),
         "byte_count": byte_count,
         "payload_len": payload.len(),
         "byte_count_matches_payload": byte_count == Some(payload.len()),
@@ -1889,12 +1859,33 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         "high_bit_count": high_bit_count,
         "nul_count": nul_count,
         "starts_percent_bang": declared_payload.starts_with(b"%!"),
-        "known_operator_counts": known_operator_counts,
-        "executable_name_profile": executable_name_profile,
-        "previous_function": previous_function,
-        "next_function": next_function,
+        "known_operator_counts": postscript_known_operator_counts(declared_payload),
+        "executable_name_profile": postscript_executable_name_profile(declared_payload),
+    })
+}
+
+fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
+    let postscript_data_records = records
+        .iter()
+        .enumerate()
+        .filter(|(_, (function, params))| {
+            *function == META_ESCAPE_FUNCTION && read_u16(params, 0) == Some(0x0025)
+        })
+        .map(|(record_index, (_, params))| postscript_data_record_profile(record_index, params))
+        .collect::<Vec<_>>();
+
+    let escape_function_sequence = records
+        .iter()
+        .filter(|(function, _)| *function == META_ESCAPE_FUNCTION)
+        .filter_map(|(_, escape_params)| read_u16(escape_params, 0))
+        .map(|escape| format!("0x{escape:04x}"))
+        .collect::<Vec<_>>();
+
+    json!({
+        "kind": "postscript_data",
+        "postscript_data_record_count": postscript_data_records.len(),
+        "postscript_data_records": postscript_data_records,
         "escape_function_sequence": escape_function_sequence,
-        "postscript_data_record_count": postscript_data_record_count,
     })
 }
 
