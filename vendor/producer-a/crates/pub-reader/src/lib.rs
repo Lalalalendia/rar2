@@ -100,9 +100,9 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillScriptFontEntryDisposition, QuillStoryReadError,
-    QuillTypographyValueSource, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    QuillFdppStoryIdentity, QuillMcldReadError, QuillScriptFontEntryDisposition,
+    QuillStoryReadError, QuillTypographyValueSource, parse_bounded_ff_story_catalog_from_fdpp,
+    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -554,6 +554,9 @@ pub enum PubBridgeDiagnostic {
     McldRecordCountMismatch {
         record_count: u32,
         record_id_count: u32,
+    },
+    QuillStoriesRecoveredFromFdpp {
+        story_count: usize,
     },
     EquivalentMarginsPageExtents {
         count: usize,
@@ -1895,10 +1898,10 @@ pub fn build_mature_0x2c_from_streams(
     )?;
     let story_catalog_chunk =
         chunk_for_reference(contents_stream.clone(), contents, story_catalog_reference)?;
-    let (story_layout_keys, physical_empty_story_catalog): (BTreeMap<_, _>, bool) =
+    let (mature_story_catalog, story_layout_keys, physical_empty_story_catalog) =
         match parse_confirmed_mature_story_catalog(contents, &story_catalog_chunk) {
-            Ok(story_catalog) => (
-                story_catalog
+            Ok(story_catalog) => {
+                let story_layout_keys = story_catalog
                     .entries
                     .iter()
                     .filter_map(|entry| {
@@ -1907,9 +1910,9 @@ pub fn build_mature_0x2c_from_streams(
                             (entry.layout_key?, entry.layout_key_source.as_ref()?.clone()),
                         ))
                     })
-                    .collect(),
-                false,
-            ),
+                    .collect::<BTreeMap<_, _>>();
+                (Some(story_catalog), story_layout_keys, false)
+            }
             Err(StoryCatalogReadError::MissingDeclaredCount) => {
                 let _physical_empty = parse_bounded_empty_mature_story_catalog_variant(
                     contents,
@@ -1936,7 +1939,7 @@ pub fn build_mature_0x2c_from_streams(
                         referenced_story_ids
                     );
                 }
-                (BTreeMap::new(), true)
+                (None, BTreeMap::new(), true)
             }
             Err(error) => return Err(error).context("parse mature Story catalog 0x65"),
         };
@@ -2051,6 +2054,7 @@ pub fn build_mature_0x2c_from_streams(
     graph.pages = pages;
 
     let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
+    let mut fdpp_recovered_catalog = None;
     let quill_catalog = match parse_confirmed_story_catalog(quill_stream.clone(), quill) {
         Ok(catalog) => Some(catalog),
         Err(QuillStoryReadError::MissingRequiredChunk { name })
@@ -2061,7 +2065,34 @@ pub fn build_mature_0x2c_from_streams(
             });
             None
         }
-        Err(error) => return Err(error).context("parse grounded Quill story catalog"),
+        Err(error) => {
+            let Some(story_catalog) = mature_story_catalog.as_ref() else {
+                return Err(error).context("parse grounded Quill story catalog");
+            };
+            let identities = story_catalog
+                .entries
+                .iter()
+                .map(|entry| QuillFdppStoryIdentity {
+                    text_id: entry.text_id,
+                    source: entry.text_id_source.clone(),
+                })
+                .collect::<Vec<_>>();
+
+            match parse_bounded_ff_story_catalog_from_fdpp(
+                quill_stream.clone(),
+                quill,
+                &identities,
+            ) {
+                Ok(recovered) => {
+                    diagnostics.push(PubBridgeDiagnostic::QuillStoriesRecoveredFromFdpp {
+                        story_count: recovered.stories.len(),
+                    });
+                    fdpp_recovered_catalog = Some(recovered);
+                    None
+                }
+                Err(_) => return Err(error).context("parse grounded Quill story catalog"),
+            }
+        }
     };
     let typography_catalog = if let Some(quill_catalog) = quill_catalog.as_ref() {
         match parse_bounded_typography(quill, quill_catalog) {
@@ -2155,6 +2186,59 @@ pub fn build_mature_0x2c_from_streams(
                 },
             );
             story_by_syid.insert(syid, story_id);
+        }
+    } else if let Some(recovered_catalog) = fdpp_recovered_catalog.as_ref() {
+        for story_slice in &recovered_catalog.stories {
+            let text_id = story_slice.text_id;
+            let story_id = derive_pub_story_id(&source_hash, text_id)?;
+            let object_key = quill_story_object_key(text_id);
+            let text = decode_utf16le_strict(&story_slice.utf16le).with_context(|| {
+                format!("decode FDPP-recovered Quill Story textId {text_id} as strict UTF-16LE")
+            })?;
+
+            let source_refs = vec![
+                source_ref(
+                    &graph.source,
+                    &story_slice.identity_source,
+                    Some(object_key.clone()),
+                    Some("Contents/0x65/textId".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &story_slice.boundary_source,
+                    Some(object_key.clone()),
+                    Some("FDPP/story-end".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &story_slice.text_source,
+                    Some(object_key),
+                    Some("TEXT".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ];
+
+            graph.stories.insert(
+                story_id,
+                Story {
+                    id: story_id,
+                    text,
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs,
+                },
+            );
+            story_by_syid.insert(text_id, story_id);
         }
     }
 
@@ -2515,9 +2599,9 @@ pub fn build_mature_0x2c_from_streams(
                     table_bridge::build_table_source(&context, seq_num, &chunk, &mut diagnostics)?,
                 )
             } else {
-                // The only no-catalog admission is the already-fenced physical-empty
-                // Story65 variant with no live SHAPE/TABLE Story identity. Do not
-                // fabricate Quill/TCD-backed table semantics in that geometry-only path.
+                // No ordinary Quill catalog means either the already-fenced
+                // physical-empty Story65 variant or the exact FDPP recovery path.
+                // Neither authorizes fabricated TCD-backed table semantics.
                 (None, None)
             }
         } else {
