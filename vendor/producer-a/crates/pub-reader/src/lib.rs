@@ -359,7 +359,6 @@ pub struct PubNodePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PubOfficeArtAdjustValueSource {
     Absent,
@@ -367,6 +366,7 @@ pub enum PubOfficeArtAdjustValueSource {
     Unsupported,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubExplicitImageCropSource {
     pub top_raw: Option<u32>,
     pub bottom_raw: Option<u32>,
