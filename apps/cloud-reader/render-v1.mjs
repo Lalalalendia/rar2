@@ -173,16 +173,45 @@ export function resolvedTextLinePaintPlan(node) {
   const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
   if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
 
-  const lines = [...(layout.lines ?? [])]
-    .sort((left, right) => left.line_index - right.line_index)
-    .map((line) => ({
-      line_index: safeInteger(line.line_index, "text.line_index"),
+  const lines = [];
+  let cursorY = y;
+  for (const line of [...(layout.lines ?? [])].sort((left, right) => left.line_index - right.line_index)) {
+    const lineIndex = safeInteger(line.line_index, "text.line_index");
+    const currentLineHeight = safeInteger(line.line_height_emu, "text.line_height_emu");
+    const measuredWidth = safeInteger(line.measured_width_emu, "text.measured_width_emu");
+    if (currentLineHeight <= 0 || measuredWidth < 0) return null;
+
+    const spans = [];
+    for (const span of line.spans ?? []) {
+      const scalarStart = safeInteger(span.scalar_start, "text.span.scalar_start");
+      const scalarEnd = safeInteger(span.scalar_end, "text.span.scalar_end");
+      const xOffset = safeInteger(span.x_offset_emu, "text.span.x_offset_emu");
+      const spanWidth = safeInteger(span.measured_width_emu, "text.span.measured_width_emu");
+      const spanFontSize = safeInteger(span.font_size_emu, "text.span.font_size_emu");
+      if (scalarEnd <= scalarStart || xOffset < 0 || spanWidth < 0 || spanFontSize <= 0) return null;
+      spans.push(Object.freeze({
+        scalar_start: scalarStart,
+        scalar_end: scalarEnd,
+        text: String(span.text ?? ""),
+        x_offset_emu: xOffset,
+        measured_width_emu: spanWidth,
+        font_size_emu: spanFontSize
+      }));
+    }
+
+    lines.push(Object.freeze({
+      line_index: lineIndex,
       x,
-      y: y + safeInteger(line.line_index, "text.line_index") * lineHeight,
+      y: cursorY,
       text: String(line.text ?? ""),
-      measured_width_emu: safeInteger(line.measured_width_emu, "text.measured_width_emu"),
-      line_height_emu: safeInteger(line.line_height_emu, "text.line_height_emu")
+      measured_width_emu: measuredWidth,
+      line_height_emu: currentLineHeight,
+      spans: Object.freeze(spans)
     }));
+    cursorY += currentLineHeight;
+    if (cursorY - y > height) return null;
+  }
+
   return Object.freeze({
     bounds: Object.freeze({ x, y, width, height }),
     font_resource_id: layout.font_resource_id,
@@ -246,7 +275,22 @@ function appendText(group, defs, node, fonts, index) {
       "data-measured-width-emu": line.measured_width_emu
     });
     text.setAttribute("xml:space", "preserve");
-    text.textContent = line.text;
+    if (line.spans.length) {
+      for (const span of line.spans) {
+        const tspan = svgNode("tspan", {
+          x: (line.x + span.x_offset_emu - plan.bounds.x) / EMU_PER_CSS_PX,
+          "font-size": span.font_size_emu / EMU_PER_CSS_PX,
+          "data-text-span-start": span.scalar_start,
+          "data-text-span-end": span.scalar_end,
+          "data-measured-width-emu": span.measured_width_emu
+        });
+        tspan.setAttribute("xml:space", "preserve");
+        tspan.textContent = span.text;
+        text.appendChild(tspan);
+      }
+    } else {
+      text.textContent = line.text;
+    }
     local.appendChild(text);
   }
 }
