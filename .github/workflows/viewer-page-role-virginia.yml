@@ -54,6 +54,15 @@ jobs:
           test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
           test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf"
 
+      - name: Census exact Virginia RoundRectangle master-shape paint
+        run: |
+          set -euo pipefail
+          mkdir -p target/viewer-page-role-virginia
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census -- \
+            "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub" \
+            target/viewer-page-role-virginia/virginia-devinettes-fill-state.json
+          cat target/viewer-page-role-virginia/virginia-devinettes-fill-state.json
+
       - name: Prove exact Virginia Viewer page projection
         env:
           CHAPTERA_VIRGINIA_DEVINETTES_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
