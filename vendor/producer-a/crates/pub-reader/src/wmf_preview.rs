@@ -62,6 +62,7 @@ const PS_NULL: u16 = 5;
 const PS_INSIDEFRAME: u16 = 6;
 const BS_SOLID: u16 = 0;
 const BS_NULL: u16 = 1;
+const BS_PATTERN: u16 = 3;
 const BS_DIBPATTERNPT: u16 = 5;
 const DIB_RGB_COLORS: u16 = 0;
 const BI_RGB: u32 = 0;
@@ -328,14 +329,14 @@ fn rgb_quad(bytes: &[u8], offset: usize) -> Result<Color> {
 }
 
 fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
-    if params.len() != 4 + LEGACY_PATTERN_DIB_BYTES {
-        bail!("unsupported WMF DIB pattern brush payload length");
-    }
     let style =
         read_u16(params, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush style is truncated"))?;
     let color_usage = read_u16(params, 2)
         .ok_or_else(|| anyhow!("WMF DIB pattern brush color usage is truncated"))?;
-    if style != BS_DIBPATTERNPT || color_usage != DIB_RGB_COLORS {
+    let long_legacy_profile =
+        params.len() == 4 + LEGACY_PATTERN_DIB_BYTES && style == BS_DIBPATTERNPT;
+    let compact_pattern_profile = params.len() == 84 && style == BS_PATTERN;
+    if color_usage != DIB_RGB_COLORS || !(long_legacy_profile || compact_pattern_profile) {
         bail!("unsupported WMF DIB pattern brush profile");
     }
 
@@ -364,7 +365,10 @@ fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
         || bit_count != 1
         || compression != BI_RGB
         || !matches!(image_size, 0 | 32)
-        || colors_used != 2
+        || !matches!(
+            (long_legacy_profile, compact_pattern_profile, colors_used),
+            (true, false, 2) | (false, true, 0)
+        )
     {
         bail!("unsupported WMF DIB pattern brush bitmap profile");
     }
@@ -2097,6 +2101,29 @@ mod tests {
             brush.pattern.expect("pattern").rows,
             [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]
         );
+    }
+
+    #[test]
+    fn accepts_compact_8x8_monochrome_dib_pattern_brush() {
+        let mut params = Vec::new();
+        params.extend_from_slice(&BS_PATTERN.to_le_bytes());
+        params.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        params.extend_from_slice(&40_u32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&BI_RGB.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&[0, 0, 0, 0]);
+        params.extend_from_slice(&[0, 0, 255, 0]);
+        params.extend_from_slice(&[0_u8; 32]);
+        assert_eq!(params.len(), 84);
+        assert!(parse_legacy_pattern_brush(&params).is_ok());
     }
 
     #[test]
