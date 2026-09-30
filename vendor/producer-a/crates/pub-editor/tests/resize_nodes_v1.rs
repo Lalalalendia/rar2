@@ -34,6 +34,7 @@ fn payload(seq: u32) -> PubResolvedNodePayload {
     PubResolvedNodePayload {
         contents_seq_num: seq,
         officeart_shape_type: Some(1),
+       officeart_adjust_value: PubOfficeArtAdjustValueSource::Unsupported,
         officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
         officeart_spid: Some(seq),
         image_slot: None,
