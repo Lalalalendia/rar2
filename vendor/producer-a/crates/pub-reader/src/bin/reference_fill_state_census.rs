@@ -1,11 +1,17 @@
 use anyhow::{bail, Context, Result};
 use pub_cfb::read_stream_path;
+use pub_contents::{
+    parse_0x2c_header, parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
+    parse_confirmed_chunk_reference, parse_confirmed_mature_color_scheme,
+    Contents0x2cChunkReference, MatureColorScheme,
+};
 use pub_core::StreamPath;
 use pub_escher::{inspect_dgg_default_options, inspect_sp_containers, Fopte};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
+const RAW_TYPE_COLOR_SCHEME: u16 = 0x5C;
 const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
 const FILL_OPACITY: u16 = 0x0182;
@@ -74,6 +80,21 @@ struct Histograms {
     dgg_line_opacity_raw_hex: BTreeMap<String, usize>,
 }
 
+#[derive(Debug, Default, Serialize)]
+struct PublicationSchemeSummary {
+    declared_count: u32,
+    observed_slots: usize,
+    slot_rgb_hex: BTreeMap<String, String>,
+    fill_scheme_resolved_rgb: BTreeMap<String, usize>,
+    fill_scheme_unresolved: usize,
+    line_scheme_resolved_rgb: BTreeMap<String, usize>,
+    line_scheme_unresolved: usize,
+    client_textbox_fill_scheme_resolved_rgb: BTreeMap<String, usize>,
+    client_textbox_fill_scheme_unresolved: usize,
+    client_textbox_line_scheme_resolved_rgb: BTreeMap<String, usize>,
+    client_textbox_line_scheme_unresolved: usize,
+}
+
 #[derive(Debug, Serialize)]
 struct Receipt {
     schema: &'static str,
@@ -81,7 +102,74 @@ struct Receipt {
     byte_len: usize,
     counts: Counts,
     histograms: Histograms,
+    publication_scheme: PublicationSchemeSummary,
     guardrails: Vec<&'static str>,
+}
+
+fn one_raw_type(reference: &Contents0x2cChunkReference) -> Option<u16> {
+    match reference.raw_types.as_slice() {
+        [field] => Some(field.value),
+        _ => None,
+    }
+}
+
+fn current_color_scheme(contents: &[u8]) -> Result<MatureColorScheme> {
+    let stream = StreamPath("/Contents".to_owned());
+    let header =
+        parse_0x2c_header(stream.clone(), contents).context("parse mature Contents header")?;
+    let trailer = parse_confirmed_0x2c_trailer_root(contents, &header)
+        .context("parse mature Contents trailer")?;
+
+    let mut matches = Vec::new();
+    for seq_num in 0..trailer.directory.slots.len() {
+        let Some(reference) =
+            parse_confirmed_chunk_reference(contents, &trailer.directory, seq_num)
+                .with_context(|| format!("parse Contents reference seq {seq_num}"))?
+        else {
+            continue;
+        };
+        if one_raw_type(&reference) == Some(RAW_TYPE_COLOR_SCHEME) {
+            matches.push(reference);
+        }
+    }
+
+    let reference = match matches.as_slice() {
+        [reference] => reference,
+        [] => bail!("missing unique raw0x5C/OplSccm reference"),
+        many => bail!("multiple raw0x5C/OplSccm references: {}", many.len()),
+    };
+    let offset = match reference.chunk_offsets.as_slice() {
+        [offset] => offset.value,
+        offsets => bail!(
+            "raw0x5C/OplSccm seq {} has {} chunk offsets",
+            reference.seq_num,
+            offsets.len()
+        ),
+    };
+    let chunk = parse_confirmed_0x2c_chunk(stream, contents, offset)
+        .with_context(|| format!("parse raw0x5C/OplSccm seq {}", reference.seq_num))?;
+    parse_confirmed_mature_color_scheme(contents, &chunk)
+        .with_context(|| format!("decode raw0x5C/OplSccm seq {}", reference.seq_num))
+}
+
+fn rgb_hex(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
+fn record_scheme_resolution(
+    raw: u32,
+    scheme: &MatureColorScheme,
+    resolved: &mut BTreeMap<String, usize>,
+    unresolved: &mut usize,
+) {
+    if (raw >> 24) as u8 != 0x08 {
+        return;
+    }
+    let ordinal = usize::try_from(raw & 0x00FF_FFFF).expect("24-bit scheme ordinal fits usize");
+    match scheme.slots.get(ordinal).and_then(|slot| slot.rgb) {
+        Some(rgb) => bump(resolved, format!("{ordinal}|{}", rgb_hex(rgb))),
+        None => *unresolved += 1,
+    }
 }
 
 fn scalar_property(entry: &Fopte, property_id: u16) -> Option<u32> {
@@ -170,6 +258,9 @@ fn main() -> Result<()> {
     }
 
     let pub_bytes = fs::read(&source).with_context(|| format!("read {}", source.display()))?;
+    let contents =
+        read_stream_path(&source, "/Contents").context("read Publisher Contents stream")?;
+    let scheme = current_color_scheme(&contents)?;
     let escher =
         read_stream_path(&source, "/Escher/EscherStm").context("read Publisher Escher stream")?;
     let shapes = inspect_sp_containers(StreamPath("/Escher/EscherStm".to_owned()), &escher)
@@ -182,6 +273,19 @@ fn main() -> Result<()> {
         ..Counts::default()
     };
     let mut histograms = Histograms::default();
+    let mut publication_scheme = PublicationSchemeSummary {
+        declared_count: scheme.declared_count,
+        observed_slots: scheme.slots.len(),
+        ..PublicationSchemeSummary::default()
+    };
+    for slot in &scheme.slots {
+        publication_scheme.slot_rgb_hex.insert(
+            slot.ordinal.to_string(),
+            slot.rgb
+                .map(rgb_hex)
+                .unwrap_or_else(|| "unresolved".to_owned()),
+        );
+    }
 
     for shape in &shapes.shapes {
         let mut fill_type = None;
@@ -280,6 +384,39 @@ fn main() -> Result<()> {
                 bump(
                     &mut histograms.shape_type_with_scheme_fill,
                     format!("0x{shape_type:04X}"),
+                );
+            }
+        }
+
+        if let Some(raw) = fill_color {
+            record_scheme_resolution(
+                raw,
+                &scheme,
+                &mut publication_scheme.fill_scheme_resolved_rgb,
+                &mut publication_scheme.fill_scheme_unresolved,
+            );
+            if has_client_textbox {
+                record_scheme_resolution(
+                    raw,
+                    &scheme,
+                    &mut publication_scheme.client_textbox_fill_scheme_resolved_rgb,
+                    &mut publication_scheme.client_textbox_fill_scheme_unresolved,
+                );
+            }
+        }
+        if let Some(raw) = line_color {
+            record_scheme_resolution(
+                raw,
+                &scheme,
+                &mut publication_scheme.line_scheme_resolved_rgb,
+                &mut publication_scheme.line_scheme_unresolved,
+            );
+            if has_client_textbox {
+                record_scheme_resolution(
+                    raw,
+                    &scheme,
+                    &mut publication_scheme.client_textbox_line_scheme_resolved_rgb,
+                    &mut publication_scheme.client_textbox_line_scheme_unresolved,
                 );
             }
         }
@@ -383,16 +520,19 @@ fn main() -> Result<()> {
     }
 
     let receipt = Receipt {
-        schema: "chaptera.reference-fill-state-census.v1",
+        schema: "chaptera.reference-fill-state-census.v2",
         source_sha256: sha256_hex(&pub_bytes),
         byte_len: pub_bytes.len(),
         counts,
         histograms,
+        publication_scheme,
         guardrails: vec![
             "Raw OfficeArt values are observations; this receipt does not infer Publisher authoring intent.",
             "The effective-state bucket mirrors only the current bounded solid/visibility admission law.",
             "Raw fillOpacity/lineOpacity values are observations only; no opacity/transparency semantics are inferred here.",
             "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
+            "Publication scheme values are exact raw0x5C/OplSccm ordinal-to-RGB observations; no palette or UI-order remapping is inferred.",
+            "Scheme-resolution histograms retain only ordinal, effective RGB, and counts; no shape identity is emitted.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
