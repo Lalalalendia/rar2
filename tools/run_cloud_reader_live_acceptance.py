@@ -404,7 +404,7 @@ if "--" in args:
     child = args[args.index("--") + 1:]
     if child:
         executable = os.path.basename(child[0])
-        if executable == "chaptera-untrusted-pub-worker":
+        if "untrusted-pub-inspect" in child or executable == "chaptera-untrusted-pub-worker":
             kind = "structural_scan"
         elif "guest-reader-scene" in child:
             kind = "guest_scene"
@@ -799,7 +799,6 @@ def main() -> int:
         caddy_env = os.environ.copy()
         caddy_env.update(
             {
-                "CHAPTERA_READER_ROOT": str(site_root),
                 "XDG_DATA_HOME": str(work / "caddy-data"),
                 "XDG_CONFIG_HOME": str(work / "caddy-config"),
             }
