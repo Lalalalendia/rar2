@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/chaptera-server/src/guest_reader_http.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "apps/chaptera-server/src/untrusted_pub_worker.rs"
       - "apps/chaptera-server/src/source_ingress_security.rs"
       - "apps/chaptera-server/src/blob_store.rs"
       - "apps/chaptera-server/src/blob_runtime.rs"
@@ -74,16 +75,14 @@ jobs:
           tar --no-same-owner -xzf "$RUNNER_TEMP/live-reader/caddy.tar.gz" -C "$RUNNER_TEMP/live-reader" caddy
           "$RUNNER_TEMP/live-reader/caddy" version
 
-      - name: Build canonical server and structural scanner workers
-        run: |
-          cargo build -p chaptera-server --bin chaptera --jobs 2
-          cargo build -p chaptera-untrusted-pub-scan --bin chaptera-untrusted-pub-worker --jobs 2
+      - name: Build canonical one-binary server and isolated workers
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
       - name: Exercise HTTPS upload open Scene and TTL deletion
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          python tools/run_cloud_reader_live_acceptance.py             --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera"             --structural-worker "$GITHUB_WORKSPACE/target/debug/chaptera-untrusted-pub-worker"             --caddy "$RUNNER_TEMP/live-reader/caddy"             --fixture "$RUNNER_TEMP/live-reader/source.pub"             --fixture-sha256 "$FIXTURE_SHA256"             --repository-commit "$REPOSITORY_COMMIT_SHA"             --out "$GITHUB_WORKSPACE/target/cloud-reader-live-https"
+          python tools/run_cloud_reader_live_acceptance.py             --chaptera "$GITHUB_WORKSPACE/target/debug/chaptera"             --structural-worker "$GITHUB_WORKSPACE/target/debug/chaptera"             --caddy "$RUNNER_TEMP/live-reader/caddy"             --fixture "$RUNNER_TEMP/live-reader/source.pub"             --fixture-sha256 "$FIXTURE_SHA256"             --repository-commit "$REPOSITORY_COMMIT_SHA"             --out "$GITHUB_WORKSPACE/target/cloud-reader-live-https"
 
       - uses: actions/upload-artifact@v4
         if: always()

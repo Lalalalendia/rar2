@@ -135,7 +135,7 @@ fn probe() -> Result<(), String> {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
-        Some("inspect") => inspect(&args[1..]),
+        Some("inspect") | Some("untrusted-pub-inspect") => inspect(&args[1..]),
         Some("probe") => probe(),
         _ => Err("usage: chaptera-untrusted-pub-worker <inspect|probe> ...".to_owned()),
     };

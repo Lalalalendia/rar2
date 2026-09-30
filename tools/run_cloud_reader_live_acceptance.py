@@ -404,7 +404,7 @@ if "--" in args:
     child = args[args.index("--") + 1:]
     if child:
         executable = os.path.basename(child[0])
-        if executable == "chaptera-untrusted-pub-worker":
+        if "untrusted-pub-inspect" in child or executable == "chaptera-untrusted-pub-worker":
             kind = "structural_scan"
         elif "guest-reader-scene" in child:
             kind = "guest_scene"
@@ -710,9 +710,6 @@ def main() -> int:
     isolation_wrapper = work / "isolation-wrapper.py"
     isolation_trace = work / "isolation-trace.txt"
     caddy_path = work / "Caddyfile"
-    site_root = work / "site"
-    site_root.mkdir()
-    (site_root / "index.html").write_text("cloud reader acceptance\n", encoding="utf-8")
 
     app_port = free_port()
     caddy_http_port = free_port()
@@ -799,7 +796,6 @@ def main() -> int:
         caddy_env = os.environ.copy()
         caddy_env.update(
             {
-                "CHAPTERA_READER_ROOT": str(site_root),
                 "XDG_DATA_HOME": str(work / "caddy-data"),
                 "XDG_CONFIG_HOME": str(work / "caddy-config"),
             }
@@ -820,6 +816,18 @@ def main() -> int:
             stderr=subprocess.STDOUT,
         )
         certificate_sha256 = wait_tls(caddy_https_port, caddy_process, caddy_log_path)
+
+        index_path = work / "index.html"
+        index_status, index_raw = curl_request(
+            https_port=caddy_https_port,
+            method="GET",
+            path="/",
+            output=index_path,
+        )
+        if index_status != 200:
+            raise AssertionError(f"embedded Cloud Reader root returned HTTP {index_status}")
+        if b"Chaptera <span>Cloud Reader</span>" not in index_raw:
+            raise AssertionError("HTTPS root did not serve the embedded Cloud Reader UI")
 
         response_path = work / "response.json"
         header_path = work / "headers.txt"
@@ -977,6 +985,8 @@ def main() -> int:
                 "security_headers_present": True,
                 "server_header_absent": True,
                 "application_listener_loopback": True,
+                "embedded_reader_root_status": index_status,
+                "embedded_reader_marker_present": True,
             },
             "service_path": {
                 "issue_status": status,

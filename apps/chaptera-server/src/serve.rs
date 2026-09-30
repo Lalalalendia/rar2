@@ -25,6 +25,7 @@ use tokio::net::TcpListener;
 use crate::{
     auth_http::{self, AuthHttpState},
     build_info::{BUILD_GIT_SHA, BUILD_IDENTITY},
+    cloud_reader_assets,
     config::RuntimeConfig,
     edge::{self, EdgePolicy},
     shutdown,
@@ -87,7 +88,8 @@ pub fn router_with_edge_auth_local_and_product(
     let base = Router::new()
         .route("/live", get(live))
         .route("/ready", get(ready))
-        .route("/version", get(version));
+        .route("/version", get(version))
+        .merge(cloud_reader_assets::router());
 
     let base = if local_ui {
         base.route("/local", get(local_dashboard))
@@ -243,6 +245,7 @@ async fn version() -> impl IntoResponse {
         Json(json!({
             "version": BUILD_IDENTITY,
             "git_sha": BUILD_GIT_SHA,
+            "cloud_reader": cloud_reader_assets::version_manifest(),
         })),
     )
 }
