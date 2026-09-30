@@ -3458,15 +3458,25 @@ pub fn resolve_bounded_effective_officeart_paint(
     )
     .and_then(|value| (value.value == 0).then(|| value.map(|_| true)));
 
-    let fill_color = resolve_effective_officeart_scalar(
-        shape,
-        dgg_defaults,
-        OFFICE_ART_FILL_COLOR,
-        NORMATIVE_FILL_COLOR,
-    )
-    .and_then(|value| {
-        bounded_officeart_rgb(value.value, color_scheme).map(|rgb| value.map(|_| rgb))
-    });
+    let fill_color = if shape_has_explicit_filled_without_fill_color(shape) {
+        bounded_officeart_rgb(NORMATIVE_FILL_COLOR, color_scheme).map(|rgb| {
+            PubEffectivePaintValue {
+                value: rgb,
+                authority: PubEffectivePaintAuthority::NormativeDefault,
+                source: None,
+            }
+        })
+    } else {
+        resolve_effective_officeart_scalar(
+            shape,
+            dgg_defaults,
+            OFFICE_ART_FILL_COLOR,
+            NORMATIVE_FILL_COLOR,
+        )
+        .and_then(|value| {
+            bounded_officeart_rgb(value.value, color_scheme).map(|rgb| value.map(|_| rgb))
+        })
+    };
 
     let fill_visible = resolve_effective_officeart_boolean(
         shape,
@@ -3516,6 +3526,30 @@ pub fn resolve_bounded_effective_officeart_paint(
             visible: line_visible,
         },
     })
+}
+
+fn shape_has_explicit_filled_without_fill_color(
+    shape: &pub_escher::SpContainerObservation,
+) -> bool {
+    let fill_color = paint_scalar_from_records(
+        &shape.fopts,
+        OFFICE_ART_FILL_COLOR,
+        PubEffectivePaintAuthority::ShapeLocal,
+    );
+    if !matches!(fill_color, PaintScalarLayer::Absent) {
+        return false;
+    }
+
+    matches!(
+        paint_scalar_from_records(
+            &shape.fopts,
+            OFFICE_ART_FILL_BOOLEANS,
+            PubEffectivePaintAuthority::ShapeLocal,
+        ),
+        PaintScalarLayer::Value(value)
+            if value.value & FILL_USE_FILLED_BIT != 0
+                && value.value & FILL_FILLED_BIT != 0
+    )
 }
 
 fn resolve_effective_officeart_scalar(
@@ -4684,6 +4718,29 @@ mod tests {
         assert_eq!(line_width.value, 30_000);
         assert_eq!(line_width.authority, PubEffectivePaintAuthority::ShapeLocal);
         assert!(paint.line.visible.unwrap().value);
+    }
+
+    #[test]
+    fn effective_officeart_paint_keeps_sparse_explicit_fill_on_normative_color() {
+        let shape = crop_test_shape(vec![crop_test_property(
+            OFFICE_ART_FILL_BOOLEANS,
+            FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+        )]);
+        let dgg = dgg_test_defaults(
+            vec![crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF)],
+            Vec::new(),
+        );
+
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("sparse explicit fill remains bounded");
+
+        let fill_color = paint.fill.color_rgb.expect("normative fill color");
+        assert_eq!(fill_color.value, [0xFF, 0xFF, 0xFF]);
+        assert_eq!(
+            fill_color.authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+        assert!(paint.fill.visible.expect("explicit visibility").value);
     }
 
     #[test]
