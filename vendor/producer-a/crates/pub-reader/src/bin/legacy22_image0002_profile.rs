@@ -1701,9 +1701,12 @@ fn postscript_executable_name_profile(payload: &[u8]) -> Value {
 
     let mut standard_counts = BTreeMap::<String, usize>::new();
     let mut unknown_executable_name_count = 0usize;
+    let mut unknown_top_level_count = 0usize;
+    let mut unknown_procedure_body_count = 0usize;
     let mut literal_name_count = 0usize;
     let mut numeric_token_count = 0usize;
     let mut procedure_delimiter_count = 0usize;
+    let mut procedure_depth = 0usize;
     let mut index = 0usize;
     let mut string_depth = 0usize;
     let mut escaped = false;
@@ -1748,8 +1751,16 @@ fn postscript_executable_name_profile(payload: &[u8]) -> Value {
             index += 1;
             continue;
         }
-        if matches!(byte, b'{' | b'}') {
+        if byte == b'{' {
             procedure_delimiter_count += 1;
+            procedure_depth += 1;
+            literal_next = false;
+            index += 1;
+            continue;
+        }
+        if byte == b'}' {
+            procedure_delimiter_count += 1;
+            procedure_depth = procedure_depth.saturating_sub(1);
             literal_next = false;
             index += 1;
             continue;
@@ -1802,12 +1813,19 @@ fn postscript_executable_name_profile(payload: &[u8]) -> Value {
             *standard_counts.entry((*operator).to_owned()).or_default() += 1;
         } else if lower != b"true" && lower != b"false" && lower != b"null" {
             unknown_executable_name_count += 1;
+            if procedure_depth == 0 {
+                unknown_top_level_count += 1;
+            } else {
+                unknown_procedure_body_count += 1;
+            }
         }
     }
 
     json!({
         "standard_operator_counts": standard_counts,
         "unknown_executable_name_count": unknown_executable_name_count,
+        "unknown_top_level_count": unknown_top_level_count,
+        "unknown_procedure_body_count": unknown_procedure_body_count,
         "literal_name_count": literal_name_count,
         "numeric_token_count": numeric_token_count,
         "procedure_delimiter_count": procedure_delimiter_count,
@@ -1847,6 +1865,16 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     let next_function = records
         .get(record_index + 1)
         .map(|(function, _)| format!("0x{function:04x}"));
+    let escape_function_sequence = records
+        .iter()
+        .filter(|(function, _)| *function == META_ESCAPE_FUNCTION)
+        .filter_map(|(_, escape_params)| read_u16(escape_params, 0))
+        .map(|escape| format!("0x{escape:04x}"))
+        .collect::<Vec<_>>();
+    let postscript_data_record_count = escape_function_sequence
+        .iter()
+        .filter(|escape| escape.as_str() == "0x0025")
+        .count();
 
     json!({
         "kind": "postscript_data",
@@ -1865,6 +1893,8 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         "executable_name_profile": executable_name_profile,
         "previous_function": previous_function,
         "next_function": next_function,
+        "escape_function_sequence": escape_function_sequence,
+        "postscript_data_record_count": postscript_data_record_count,
     })
 }
 
