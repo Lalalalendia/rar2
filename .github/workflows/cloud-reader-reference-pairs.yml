@@ -8,6 +8,7 @@ on:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
@@ -20,6 +21,7 @@ on:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
@@ -85,6 +87,16 @@ jobs:
           CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
           CHAPTERA_READER_SCENE_PROBE_SHA256: 077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e
         run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
+
+      - name: Census exact reference fill state
+        run: |
+          set -euo pipefail
+          mkdir -p target/cloud-reader-reference-pairs
+          cargo run -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
+          cargo run -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
+          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
+            cargo run -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
+          fi
 
       - name: Build exact reference fixture manifest
         run: |
