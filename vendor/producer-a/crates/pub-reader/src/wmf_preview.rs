@@ -843,8 +843,7 @@ fn rasterize_bounded_ellipse(
         bail!("unsupported WMF ELLIPSE pen/brush profile");
     }
 
-    let bottom =
-        read_i16(params, 0).ok_or_else(|| anyhow!("WMF ELLIPSE bottom is truncated"))?;
+    let bottom = read_i16(params, 0).ok_or_else(|| anyhow!("WMF ELLIPSE bottom is truncated"))?;
     let right = read_i16(params, 2).ok_or_else(|| anyhow!("WMF ELLIPSE right is truncated"))?;
     let top = read_i16(params, 4).ok_or_else(|| anyhow!("WMF ELLIPSE top is truncated"))?;
     let left = read_i16(params, 6).ok_or_else(|| anyhow!("WMF ELLIPSE left is truncated"))?;
