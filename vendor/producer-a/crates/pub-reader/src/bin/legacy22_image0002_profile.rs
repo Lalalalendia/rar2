@@ -1272,12 +1272,9 @@ fn stretchdib_blocker_profile(params: &[u8]) -> Value {
 }
 
 fn stretchdib_context_profile(records: &[(u16, &[u8])]) -> Value {
-    let Some((target_index, (_, params))) = records
-        .iter()
-        .enumerate()
-        .find(|(_, (function, params))| {
-            *function == META_STRETCHDIB_FUNCTION
-                && read_u32(params, 0) == Some(0x0088_00c6)
+    let Some((target_index, (_, params))) =
+        records.iter().enumerate().find(|(_, (function, params))| {
+            *function == META_STRETCHDIB_FUNCTION && read_u32(params, 0) == Some(0x0088_00c6)
         })
     else {
         return json!({"kind": "stretchdib", "record": "missing"});
@@ -1325,7 +1322,10 @@ fn stretchdib_context_profile(records: &[(u16, &[u8])]) -> Value {
             "prior_drawing_function_counts".to_owned(),
             json!(prior_drawing_counts),
         );
-        object.insert("prior_intersect_cliprect_count".to_owned(), json!(prior_clip_count));
+        object.insert(
+            "prior_intersect_cliprect_count".to_owned(),
+            json!(prior_clip_count),
+        );
     }
     profile
 }
