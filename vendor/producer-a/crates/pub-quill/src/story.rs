@@ -512,8 +512,8 @@ pub fn parse_bounded_ff_story_catalog_from_fdpp(
     for (index, (identity, boundary)) in identities.iter().zip(boundaries).enumerate() {
         let start_usize =
             usize::try_from(start).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
-        let end_usize = usize::try_from(boundary.value)
-            .map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+        let end_usize =
+            usize::try_from(boundary.value).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
         let byte_len = end_usize
             .checked_sub(start_usize)
             .ok_or(QuillStoryReadError::TextLengthOverflow)?;
