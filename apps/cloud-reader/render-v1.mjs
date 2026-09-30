@@ -286,11 +286,22 @@ function appendTableText(group, node) {
   }
 }
 
-function appendImage(group, defs, node, resource, clipId) {
+export function imageResourcePaintPlan(node, resource) {
   const href = imageDataUrl(resource);
-  if (!href) return false;
-  const imageGeometry = imagePaintGeometry(node.bounds, node.image_source_window ?? null);
-  if (!imageGeometry) return false;
+  if (!href) return null;
+  const geometry = imagePaintGeometry(node?.bounds, node?.image_source_window ?? null);
+  if (!geometry) return null;
+  return Object.freeze({
+    href,
+    resource_id: resource.resource_id,
+    availability: resource.availability,
+    geometry
+  });
+}
+
+function appendImage(group, defs, node, resource, clipId) {
+  const plan = imageResourcePaintPlan(node, resource);
+  if (!plan) return false;
 
   const clipPath = svgNode("clipPath", { id: clipId });
   clipPath.appendChild(svgNode("rect", {
@@ -302,16 +313,16 @@ function appendImage(group, defs, node, resource, clipId) {
   defs.appendChild(clipPath);
 
   const image = svgNode("image", {
-    x: imageGeometry.x,
-    y: imageGeometry.y,
-    width: imageGeometry.width,
-    height: imageGeometry.height,
+    x: plan.geometry.x,
+    y: plan.geometry.y,
+    width: plan.geometry.width,
+    height: plan.geometry.height,
     preserveAspectRatio: "none",
     "clip-path": "url(#" + clipId + ")",
-    "data-resource-id": resource.resource_id,
-    "data-resource-availability": resource.availability
+    "data-resource-id": plan.resource_id,
+    "data-resource-availability": plan.availability
   });
-  image.setAttribute("href", href);
+  image.setAttribute("href", plan.href);
   group.appendChild(image);
   return true;
 }
