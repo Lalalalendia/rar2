@@ -30,6 +30,7 @@ const META_SETTEXTCOLOR: u16 = 0x0209;
 const META_SETWINDOWORG: u16 = 0x020b;
 const META_SETWINDOWEXT: u16 = 0x020c;
 const META_CREATEPENINDIRECT: u16 = 0x02fa;
+const META_CREATEFONTINDIRECT: u16 = 0x02fb;
 const META_CREATEBRUSHINDIRECT: u16 = 0x02fc;
 const META_POLYGON: u16 = 0x0324;
 const META_POLYLINE: u16 = 0x0325;
@@ -120,6 +121,7 @@ impl Brush {
 enum GdiObject {
     Pen(Pen),
     Brush(Brush),
+    FontCompatibility,
     RegionCompatibility,
 }
 
@@ -916,6 +918,47 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
     Ok(())
 }
 
+fn validate_font_compatibility_object(params: &[u8]) -> Result<()> {
+    // Exact-1050 evidence for the Publisher text-free Font compatibility
+    // cohort. The short face-name tail stays opaque: this rasterizer does not
+    // resolve fonts or paint text, and TEXTOUT/EXTTEXTOUT remain unsupported.
+    if params.len() != 26 {
+        bail!(
+            "unsupported WMF Font compatibility payload length {}",
+            params.len()
+        );
+    }
+
+    let height = read_i16(params, 0).ok_or_else(|| anyhow!("WMF Font height is truncated"))?;
+    let width = read_i16(params, 2).ok_or_else(|| anyhow!("WMF Font width is truncated"))?;
+    let escapement =
+        read_i16(params, 4).ok_or_else(|| anyhow!("WMF Font escapement is truncated"))?;
+    let orientation =
+        read_i16(params, 6).ok_or_else(|| anyhow!("WMF Font orientation is truncated"))?;
+    let weight = read_u16(params, 8).ok_or_else(|| anyhow!("WMF Font weight is truncated"))?;
+
+    let scalar_profile_matches = matches!((height, width), (16, 7) | (20, 9))
+        && escapement == 0
+        && orientation == 0
+        && weight == 700
+        && params[10] == 0
+        && params[11] == 0
+        && params[12] == 0
+        && params[13] == 0
+        && params[14] == 1
+        && params[15] == 2
+        && params[16] == 2
+        && params[17] == 34;
+    if !scalar_profile_matches {
+        bail!("unsupported WMF Font compatibility profile");
+    }
+
+    let _opaque_face_tail = params
+        .get(18..26)
+        .ok_or_else(|| anyhow!("WMF Font compatibility face tail is truncated"))?;
+    Ok(())
+}
+
 fn validate_region_compatibility_object(params: &[u8]) -> Result<()> {
     // Exact-1050 evidence for the seven Publisher Region compatibility objects:
     // 42-byte payload, ObjectType=6, RegionSize=42, one scan, maxScan=2.
@@ -1329,6 +1372,10 @@ pub fn rasterize_wmf_preview(
                 };
                 allocate_object(&mut objects, GdiObject::Pen(pen))?;
             }
+            META_CREATEFONTINDIRECT => {
+                validate_font_compatibility_object(params)?;
+                allocate_object(&mut objects, GdiObject::FontCompatibility)?;
+            }
             META_CREATEBRUSHINDIRECT => {
                 if params.len() < 8 {
                     bail!("WMF CREATEBRUSHINDIRECT is truncated");
@@ -1372,6 +1419,7 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
+                    GdiObject::FontCompatibility => {}
                     GdiObject::RegionCompatibility => {
                         pending_region_compat_cliprect = true;
                     }
@@ -1529,6 +1577,24 @@ mod tests {
         if extra_words > max_record_words {
             bytes[12..16].copy_from_slice(&extra_words.to_le_bytes());
         }
+    }
+
+    fn font_compatibility_params(height: i16, width: i16) -> Vec<u8> {
+        let mut params = Vec::new();
+        params.extend_from_slice(&height.to_le_bytes());
+        params.extend_from_slice(&width.to_le_bytes());
+        params.extend_from_slice(&0_i16.to_le_bytes());
+        params.extend_from_slice(&0_i16.to_le_bytes());
+        params.extend_from_slice(&700_u16.to_le_bytes());
+        params.extend_from_slice(&[0, 0, 0]);
+        params.push(0);
+        params.push(1);
+        params.push(2);
+        params.push(2);
+        params.push(34);
+        params.extend_from_slice(&[b'A', b'B', b'C', b'D', b'E', b'F', 0, 1]);
+        assert_eq!(params.len(), 26);
+        params
     }
 
     fn region_compatibility_params() -> Vec<u8> {
@@ -1794,6 +1860,67 @@ mod tests {
         params[20..24].copy_from_slice(&BI_RGB.to_le_bytes());
         params[36..40].copy_from_slice(&2_u32.to_le_bytes());
         assert!(parse_legacy_pattern_brush(&params).is_err());
+    }
+
+    #[test]
+    fn validates_only_observed_short_font_compatibility_profiles() {
+        assert!(validate_font_compatibility_object(&font_compatibility_params(16, 7)).is_ok());
+        assert!(validate_font_compatibility_object(&font_compatibility_params(20, 9)).is_ok());
+
+        let mut unobserved = font_compatibility_params(16, 7);
+        unobserved[8..10].copy_from_slice(&400_u16.to_le_bytes());
+        assert!(validate_font_compatibility_object(&unobserved).is_err());
+
+        let mut long = font_compatibility_params(16, 7);
+        long.extend_from_slice(&[0, 0]);
+        assert!(validate_font_compatibility_object(&long).is_err());
+    }
+
+    #[test]
+    fn selected_font_compatibility_object_does_not_change_raster_state() {
+        let baseline = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("baseline");
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEFONTINDIRECT, &font_compatibility_params(16, 7)),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+
+        let with_font = rasterize_wmf_preview(&bytes, 100, 100).expect("font compatibility");
+        assert_eq!(with_font, baseline);
+    }
+
+    #[test]
+    fn selected_font_still_fails_closed_when_text_output_is_encountered() {
+        const META_EXTTEXTOUT_TEST: u16 = 0x0a32;
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEFONTINDIRECT, &font_compatibility_params(16, 7)),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_EXTTEXTOUT_TEST, &[]));
+
+        let error = rasterize_wmf_preview(&bytes, 100, 100).expect_err("text remains unsupported");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported WMF record function 0x0a32")
+        );
     }
 
     #[test]
