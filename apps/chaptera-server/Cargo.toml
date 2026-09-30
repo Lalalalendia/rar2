@@ -13,10 +13,10 @@ path = "src/main.rs"
 [dependencies]
 pub-editor = { path = "../../vendor/producer-a/crates/pub-editor" }
 pub-reader = { path = "../../vendor/producer-a/crates/pub-reader" }
-pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer" }
+pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer", features = ["cmo-slot-compose"] }
 chaptera-cdm-model = { package = "pub-model", path = "../../crates/pub-model" }
 chaptera-untrusted-pub-scan = { path = "../../crates/chaptera-untrusted-pub-scan" }
-chaptera-viewer-render-plan = { path = "../../crates/chaptera-viewer-render-plan" }
+chaptera-viewer-render-plan = { path = "../../crates/chaptera-viewer-render-plan", features = ["projected-scene-instances"] }
 chaptera-desktop-fallback-font-resource = { path = "../../crates/chaptera-desktop-fallback-font-resource" }
 aws-config = "=1.12.0"
 aws-sdk-s3 = "=1.149.0"
