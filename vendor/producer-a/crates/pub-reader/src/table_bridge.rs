@@ -298,6 +298,210 @@ pub(crate) struct TableBridgeContext<'a> {
     pub table_bounds: &'a RectEmu,
 }
 
+fn populate_exact_table_cell_bounds(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    table_chunk: &Contents0x2cChunk,
+    tail_scalars: &TableTailScalars,
+    rows: u32,
+    columns: u32,
+    cells: &mut [PubTableCellSource],
+) -> Result<bool> {
+    let mut arrays = table_chunk
+        .fields
+        .iter()
+        .filter(|field| field.id == TABLE_ROWCOL_ARRAY_ID);
+    let Some(array) = arrays.next() else {
+        return Ok(false);
+    };
+    if arrays.next().is_some() {
+        bail!("TABLE has duplicate row/column arrays");
+    }
+    let RawContentsBlockBody::Container { content_source, .. } = &array.body else {
+        bail!("TABLE row/column array is not a container");
+    };
+
+    let start = usize::try_from(content_source.offset)
+        .map_err(|_| anyhow!("TABLE row/column array offset does not fit usize"))?;
+    let len = usize::try_from(content_source.len)
+        .map_err(|_| anyhow!("TABLE row/column array length does not fit usize"))?;
+    let mut cursor = ContentsCursor::bounded(content_source.stream.clone(), context.contents, start, len)?;
+    let mut sizes = Vec::new();
+
+    while cursor.remaining() > 0 {
+        let item = parse_confirmed_block(&mut cursor)?;
+        if item.id != 0 {
+            bail!("TABLE row/column array item has nonzero id 0x{:02X}", item.id);
+        }
+        let RawContentsBlockBody::Container {
+            content_source: item_source,
+            ..
+        } = &item.body
+        else {
+            bail!("TABLE row/column array item is not a container");
+        };
+        let item_start = usize::try_from(item_source.offset)
+            .map_err(|_| anyhow!("TABLE row/column item offset does not fit usize"))?;
+        let item_len = usize::try_from(item_source.len)
+            .map_err(|_| anyhow!("TABLE row/column item length does not fit usize"))?;
+        let mut item_cursor =
+            ContentsCursor::bounded(item_source.stream.clone(), context.contents, item_start, item_len)?;
+        let mut size = None;
+        while item_cursor.remaining() > 0 {
+            let field = parse_confirmed_block(&mut item_cursor)?;
+            if field.id != TABLE_ROWCOL_SIZE_ID {
+                continue;
+            }
+            let RawContentsBlockBody::U32 { value, .. } = field.body else {
+                bail!("TABLE row/column size is not u32");
+            };
+            if size.replace(value).is_some() {
+                bail!("TABLE row/column item has duplicate size");
+            }
+        }
+        let size = size.context("TABLE row/column item has no size")?;
+        if size == 0 {
+            bail!("TABLE row/column size is zero");
+        }
+        sizes.push(size);
+    }
+
+    let expected = usize::try_from(columns)
+        .ok()
+        .and_then(|columns| usize::try_from(rows).ok().and_then(|rows| columns.checked_add(rows)))
+        .context("TABLE row/column count overflows usize")?;
+    if sizes.len() != expected {
+        bail!(
+            "TABLE row/column array count {} differs from columns+rows {}",
+            sizes.len(),
+            expected
+        );
+    }
+
+    let split = usize::try_from(columns).context("TABLE column count does not fit usize")?;
+    let (column_widths, row_heights) = sizes.split_at(split);
+    let declared_width = unique_table_scalar(table_chunk, tail_scalars, TABLE_WIDTH_ID)?
+        .map(|(value, _)| value)
+        .context("TABLE width is missing")?;
+    let declared_height = unique_table_scalar(table_chunk, tail_scalars, TABLE_HEIGHT_ID)?
+        .map(|(value, _)| value)
+        .context("TABLE height is missing")?;
+
+    let sum = |values: &[u32]| -> Result<u64> {
+        values.iter().try_fold(0_u64, |total, value| {
+            total
+                .checked_add(u64::from(*value))
+                .context("TABLE track extent sum overflow")
+        })
+    };
+    let width_sum = sum(column_widths)?;
+    let height_sum = sum(row_heights)?;
+    if width_sum != u64::from(declared_width) || height_sum != u64::from(declared_height) {
+        bail!(
+            "TABLE track sums {}x{} differ from declared {}x{}",
+            width_sum,
+            height_sum,
+            declared_width,
+            declared_height
+        );
+    }
+
+    let owner_width = u64::try_from(context.table_bounds.width.get())
+        .map_err(|_| anyhow!("TABLE owner width is negative"))?;
+    let owner_height = u64::try_from(context.table_bounds.height.get())
+        .map_err(|_| anyhow!("TABLE owner height is negative"))?;
+    if width_sum > owner_width || height_sum > owner_height {
+        bail!(
+            "TABLE tracks {}x{} exceed owner bounds {}x{}",
+            width_sum,
+            height_sum,
+            owner_width,
+            owner_height
+        );
+    }
+
+    let prefix = |values: &[u32]| -> Result<Vec<u64>> {
+        let mut out = Vec::with_capacity(values.len() + 1);
+        out.push(0);
+        for value in values {
+            let next = out
+                .last()
+                .copied()
+                .unwrap_or(0_u64)
+                .checked_add(u64::from(*value))
+                .context("TABLE track prefix overflow")?;
+            out.push(next);
+        }
+        Ok(out)
+    };
+    let column_prefix = prefix(column_widths)?;
+    let row_prefix = prefix(row_heights)?;
+
+    for cell in cells {
+        let coordinates = cell
+            .coordinates
+            .context("TABLE cell coordinates are unavailable for exact track geometry")?;
+        if coordinates.start_row > coordinates.end_row
+            || coordinates.start_column > coordinates.end_column
+            || coordinates.end_row >= rows
+            || coordinates.end_column >= columns
+        {
+            bail!("TABLE cell coordinates exceed bounded table grid");
+        }
+
+        let start_column =
+            usize::try_from(coordinates.start_column).context("TABLE column index overflow")?;
+        let end_column = usize::try_from(coordinates.end_column)
+            .context("TABLE column index overflow")?
+            .checked_add(1)
+            .context("TABLE column end overflow")?;
+        let start_row = usize::try_from(coordinates.start_row).context("TABLE row index overflow")?;
+        let end_row = usize::try_from(coordinates.end_row)
+            .context("TABLE row index overflow")?
+            .checked_add(1)
+            .context("TABLE row end overflow")?;
+
+        let x_offset = i64::try_from(column_prefix[start_column])
+            .context("TABLE x offset does not fit i64")?;
+        let y_offset =
+            i64::try_from(row_prefix[start_row]).context("TABLE y offset does not fit i64")?;
+        let width = i64::try_from(column_prefix[end_column] - column_prefix[start_column])
+            .context("TABLE cell width does not fit i64")?;
+        let height = i64::try_from(row_prefix[end_row] - row_prefix[start_row])
+            .context("TABLE cell height does not fit i64")?;
+        let x = context
+            .table_bounds
+            .x
+            .get()
+            .checked_add(x_offset)
+            .context("TABLE cell x overflow")?;
+        let y = context
+            .table_bounds
+            .y
+            .get()
+            .checked_add(y_offset)
+            .context("TABLE cell y overflow")?;
+
+        cell.bounds = Some(RectEmu::new(
+            LengthEmu::new(x),
+            LengthEmu::new(y),
+            LengthEmu::new(width),
+            LengthEmu::new(height),
+        ));
+        cell.source_refs.push(source_ref(
+            context.source,
+            &array.source,
+            Some(contents_object_key(table_seq_num)),
+            Some("TABLE/rowcol_array".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ));
+    }
+
+    Ok(true)
+}
+
 pub(crate) fn build_table_story_ownership_source(
     context: &TableBridgeContext<'_>,
     table_seq_num: u32,
