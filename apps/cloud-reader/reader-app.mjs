@@ -39,7 +39,7 @@ function offerContribution(opened, file, sessionId, accessToken) {
   contributionContext = {
     sessionId,
     accessToken,
-    filename: file.name
+    filename: String(file["name"] ?? "")
   };
   $("#contribution-panel").hidden = false;
 }
