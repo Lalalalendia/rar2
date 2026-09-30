@@ -1310,6 +1310,31 @@ fn stretchdib_context_profile(records: &[(u16, &[u8])]) -> Value {
         .get(target_index + 1)
         .map(|(function, _)| format!("0x{function:04x}"));
 
+    let mut following_drawing_counts = BTreeMap::<String, usize>::new();
+    let mut following_stretchdib_rop_counts = BTreeMap::<String, usize>::new();
+    let mut first_following_canvas_mutation = None::<String>;
+    for (function, following_params) in records.iter().skip(target_index + 1) {
+        if matches!(
+            *function,
+            META_POLYGON_FUNCTION
+                | META_POLYLINE_FUNCTION
+                | META_ELLIPSE_FUNCTION
+                | META_RECTANGLE_FUNCTION
+                | META_POLYPOLYGON_FUNCTION
+                | META_STRETCHDIB_FUNCTION
+        ) {
+            bump_function(&mut following_drawing_counts, *function);
+            first_following_canvas_mutation
+                .get_or_insert_with(|| format!("0x{function:04x}"));
+        }
+        if *function == META_STRETCHDIB_FUNCTION {
+            let rop = read_u32(following_params, 0)
+                .map(|value| format!("0x{value:08x}"))
+                .unwrap_or_else(|| "missing".to_owned());
+            *following_stretchdib_rop_counts.entry(rop).or_default() += 1;
+        }
+    }
+
     if let Some(object) = profile.as_object_mut() {
         object.insert("target_record_index".to_owned(), json!(target_index));
         object.insert("previous_function".to_owned(), json!(previous_function));
@@ -1325,6 +1350,18 @@ fn stretchdib_context_profile(records: &[(u16, &[u8])]) -> Value {
         object.insert(
             "prior_intersect_cliprect_count".to_owned(),
             json!(prior_clip_count),
+        );
+        object.insert(
+            "following_drawing_function_counts".to_owned(),
+            json!(following_drawing_counts),
+        );
+        object.insert(
+            "following_stretchdib_rop_counts".to_owned(),
+            json!(following_stretchdib_rop_counts),
+        );
+        object.insert(
+            "first_following_canvas_mutation".to_owned(),
+            json!(first_following_canvas_mutation),
         );
     }
     profile
