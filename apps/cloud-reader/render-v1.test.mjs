@@ -136,6 +136,76 @@ test("shared resolved text paint plan preserves server line breaks", () => {
   );
 });
 
+test("mixed shared text plan preserves server span sizes and cumulative line heights", () => {
+  const plan = resolvedTextLinePaintPlan({
+    bounds: { x: 100, y: 200, width: 1000, height: 600 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 180,
+      line_height_emu: 180,
+      lines: [
+        {
+          line_index: 1,
+          text: "tail",
+          measured_width_emu: 240,
+          line_height_emu: 90,
+          spans: [
+            {
+              scalar_start: 3,
+              scalar_end: 7,
+              text: "tail",
+              x_offset_emu: 0,
+              measured_width_emu: 240,
+              font_size_emu: 90
+            }
+          ]
+        },
+        {
+          line_index: 0,
+          text: "A B",
+          measured_width_emu: 420,
+          line_height_emu: 180,
+          spans: [
+            {
+              scalar_start: 0,
+              scalar_end: 2,
+              text: "A ",
+              x_offset_emu: 0,
+              measured_width_emu: 180,
+              font_size_emu: 100
+            },
+            {
+              scalar_start: 2,
+              scalar_end: 3,
+              text: "B",
+              x_offset_emu: 180,
+              measured_width_emu: 240,
+              font_size_emu: 180
+            }
+          ]
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(
+    plan.lines.map((line) => [line.line_index, line.y, line.line_height_emu]),
+    [[0, 200, 180], [1, 380, 90]]
+  );
+  assert.deepEqual(
+    plan.lines[0].spans.map((span) => [
+      span.scalar_start,
+      span.scalar_end,
+      span.x_offset_emu,
+      span.font_size_emu,
+      span.text
+    ]),
+    [[0, 2, 0, 100, "A "], [2, 3, 180, 180, "B"]]
+  );
+});
+
+
 test("shared text plan refuses invalid frame or font metrics", () => {
   assert.equal(
     resolvedTextLinePaintPlan({
