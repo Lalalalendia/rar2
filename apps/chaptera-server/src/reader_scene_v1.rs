@@ -956,6 +956,8 @@ mod tests {
         let mut shared_nonempty_lines = 0_usize;
         let mut layout_none = 0_usize;
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+        let mut story_extent_profiles = BTreeMap::<String, usize>::new();
+        let mut typography_gap_profiles = BTreeMap::<String, usize>::new();
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
@@ -983,6 +985,55 @@ mod tests {
                     }
                     RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                         *backend_fallbacks.entry(reason.code()).or_default() += 1;
+                        if reason.code() == "story_extent_mismatch" {
+                            let story = bundle
+                                .geometry
+                                .document
+                                .stories
+                                .iter()
+                                .find(|story| story.id == text.story_id);
+                            let profile = if let Some(story) = story {
+                                let story_len = i64::try_from(story.text.chars().count())
+                                    .expect("story scalar count fits i64");
+                                let fragment_text_len = i64::try_from(text.text.chars().count())
+                                    .expect("fragment scalar count fits i64");
+                                format!(
+                                    "page{}:start={}:end_delta={}:fragment_len_delta={}:text_equal={}",
+                                    page_index + 1,
+                                    text.scalar_start,
+                                    i64::from(text.scalar_end) - story_len,
+                                    fragment_text_len - story_len,
+                                    text.text == story.text,
+                                )
+                            } else {
+                                format!("page{}:story_missing", page_index + 1)
+                            };
+                            *story_extent_profiles.entry(profile).or_default() += 1;
+                        } else if reason.code() == "typography_coverage_gap" {
+                            let mut cursor = text.scalar_start;
+                            let mut discontinuities = 0_usize;
+                            let mut zero_sizes = 0_usize;
+                            for run in &text.typography {
+                                if run.scalar_start != cursor || run.scalar_end <= run.scalar_start {
+                                    discontinuities += 1;
+                                }
+                                if run.text_size_emu == 0 {
+                                    zero_sizes += 1;
+                                }
+                                cursor = run.scalar_end;
+                            }
+                            let profile = format!(
+                                "page{}:fragment={}..{}:runs={}:last_end_delta={}:discontinuities={}:zero_sizes={}",
+                                page_index + 1,
+                                text.scalar_start,
+                                text.scalar_end,
+                                text.typography.len(),
+                                i64::from(cursor) - i64::from(text.scalar_end),
+                                discontinuities,
+                                zero_sizes,
+                            );
+                            *typography_gap_profiles.entry(profile).or_default() += 1;
+                        }
                     }
                 }
             }
@@ -990,8 +1041,12 @@ mod tests {
 
         let backend_fallbacks_json =
             serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
+        let story_extent_profiles_json =
+            serde_json::to_string(&story_extent_profiles).expect("serialize story extent profiles");
+        let typography_gap_profiles_json = serde_json::to_string(&typography_gap_profiles)
+            .expect("serialize typography gap profiles");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} story_extent_profiles={} typography_gap_profiles={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1000,6 +1055,8 @@ mod tests {
             shared_nonempty_lines,
             layout_none,
             backend_fallbacks_json,
+            story_extent_profiles_json,
+            typography_gap_profiles_json,
         );
     }
 
