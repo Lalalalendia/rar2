@@ -1,6 +1,6 @@
 use crate::{
     PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
-    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource,
+    PubLegacyOleSource, PubNodePayload, PubOfficeArtAdjustValueSource, PubSourceGraph, PubTableSource,
     PubTableStoryOwnershipSource,
 };
 use anyhow::{Result, bail};
@@ -16,6 +16,7 @@ pub type PubResolvedGraph = ResolvedGraph<PubResolvedNodePayload, (), (), (), St
 pub struct PubResolvedNodePayload {
     pub contents_seq_num: u32,
     pub officeart_shape_type: Option<u16>,
+    pub officeart_adjust_value: PubOfficeArtAdjustValueSource,
     pub officeart_spid: Option<u32>,
     pub image_slot: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
