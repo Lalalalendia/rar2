@@ -1379,6 +1379,109 @@ fn postscript_ignore_blocker_profile(params: &[u8]) -> Value {
     })
 }
 
+fn postscript_known_operator_counts(payload: &[u8]) -> BTreeMap<String, usize> {
+    const KNOWN: &[&str] = &[
+        "show",
+        "showpage",
+        "ashow",
+        "widthshow",
+        "awidthshow",
+        "kshow",
+        "findfont",
+        "setfont",
+        "image",
+        "colorimage",
+        "imagemask",
+        "stroke",
+        "fill",
+        "eofill",
+        "moveto",
+        "lineto",
+        "curveto",
+        "rectfill",
+        "rectstroke",
+        "newpath",
+        "clip",
+        "eoclip",
+        "gsave",
+        "grestore",
+        "translate",
+        "scale",
+        "rotate",
+        "concat",
+        "setrgbcolor",
+        "setgray",
+        "setcmykcolor",
+        "currentfile",
+        "readhexstring",
+    ];
+
+    let mut counts = BTreeMap::<String, usize>::new();
+    let mut index = 0usize;
+    let mut string_depth = 0usize;
+    let mut escaped = false;
+    let mut comment = false;
+
+    while index < payload.len() {
+        let byte = payload[index];
+
+        if comment {
+            if matches!(byte, b'\n' | b'\r') {
+                comment = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if string_depth > 0 {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'(' {
+                string_depth += 1;
+            } else if byte == b')' {
+                string_depth -= 1;
+            }
+            index += 1;
+            continue;
+        }
+
+        if byte == b'%' {
+            comment = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'(' {
+            string_depth = 1;
+            index += 1;
+            continue;
+        }
+        if byte.is_ascii_alphabetic() {
+            let start = index;
+            index += 1;
+            while index < payload.len() && payload[index].is_ascii_alphabetic() {
+                index += 1;
+            }
+            let token = payload[start..index]
+                .iter()
+                .map(|byte| byte.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            for known in KNOWN {
+                if token.as_slice() == known.as_bytes() {
+                    *counts.entry((*known).to_owned()).or_default() += 1;
+                    break;
+                }
+            }
+            continue;
+        }
+
+        index += 1;
+    }
+
+    counts
+}
+
 fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     let Some((record_index, (_, params))) =
         records.iter().enumerate().find(|(_, (function, params))| {
@@ -1402,15 +1505,7 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         .filter(|byte| **byte >= 0x80)
         .count();
     let nul_count = declared_payload.iter().filter(|byte| **byte == 0).count();
-    let lowercase = declared_payload
-        .iter()
-        .map(|byte| byte.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let has_token = |needle: &[u8]| {
-        lowercase
-            .windows(needle.len())
-            .any(|window| window == needle)
-    };
+    let known_operator_counts = postscript_known_operator_counts(declared_payload);
 
     let previous_function = record_index
         .checked_sub(1)
@@ -1433,13 +1528,7 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         "high_bit_count": high_bit_count,
         "nul_count": nul_count,
         "starts_percent_bang": declared_payload.starts_with(b"%!"),
-        "contains_image_operator": has_token(b"image"),
-        "contains_imagemask_operator": has_token(b"imagemask"),
-        "contains_show_operator": has_token(b"show"),
-        "contains_stroke_operator": has_token(b"stroke"),
-        "contains_fill_operator": has_token(b"fill"),
-        "contains_moveto_operator": has_token(b"moveto"),
-        "contains_lineto_operator": has_token(b"lineto"),
+        "known_operator_counts": known_operator_counts,
         "previous_function": previous_function,
         "next_function": next_function,
     })
