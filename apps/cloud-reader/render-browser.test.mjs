@@ -4,12 +4,26 @@ import { createServer } from "node:http";
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { chromium } from "playwright";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const output = resolve(process.env.READER_RENDER_OUTPUT ?? join(root, "../../target/cloud-reader-render"));
 const emu = (px) => px * 9525;
 const rectangle = (x, y, width, height) => ({ x: emu(x), y: emu(y), width: emu(width), height: emu(height) });
+// The existing server fallback provider pins these public bytes; this fixture
+// exercises a loaded font, without adding fonts to the static release.
+const fontId = "chaptera.desktop.fallback-font.ubuntu-light.v1";
+const fontSha = "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70";
+let fontBytes;
+if (process.env.READER_FALLBACK_FONT) fontBytes = await readFile(process.env.READER_FALLBACK_FONT);
+else {
+  const response = await fetch("https://raw.githubusercontent.com/emilk/egui/1669e52a7ccfc3489c1b0999b9ed48894a0b3887/crates/epaint_default_fonts/fonts/Ubuntu-Light.ttf");
+  assert.equal(response.ok, true, "pinned fallback font acquisition must succeed");
+  fontBytes = Buffer.from(await response.arrayBuffer());
+}
+assert.equal(fontBytes.length, 361676);
+assert.equal(createHash("sha256").update(fontBytes).digest("hex"), fontSha);
 const scene = {
   protocol_version: "chaptera.reader-scene.v1",
   pages: [{ page_id: "p", order: 0, width_emu: emu(600), height_emu: emu(400) }],
@@ -24,8 +38,16 @@ const scene = {
     { node_id: "unresolved-font", page_id: "p", kind: "text", bounds: rectangle(30, 260, 300, 80), text: "Fallback after unavailable font", text_layout: {
       disposition: "shared_resolved", font_resource_id: "missing", font_size_emu: emu(16), line_height_emu: emu(20),
       lines: [{ line_index: 0, text: "Fallback after unavailable font", measured_width_emu: emu(240), line_height_emu: emu(20) }]
-    } }
-  ], stories: [], resources: []
+    } },
+    { node_id: "resolved", page_id: "p", kind: "text", bounds: rectangle(350, 30, 220, 80),
+      transform: { a: 1, b: 0, c: 0, d: 1, tx: emu(5), ty: emu(7) }, text: "Server line A\nServer line B", text_layout: {
+        disposition: "shared_resolved", font_resource_id: fontId, font_size_emu: emu(16), line_height_emu: emu(20),
+        lines: [{ line_index: 0, text: "Server line A", measured_width_emu: emu(120), line_height_emu: emu(20) },
+          { line_index: 1, text: "Server line B", measured_width_emu: emu(120), line_height_emu: emu(20) }]
+      }
+    }
+  ], stories: [], resources: [], fonts: [{ resource_id: fontId, expected_sha256: fontSha,
+    availability: "inline_data_url", inline_data_url: "data:font/ttf;base64," + fontBytes.toString("base64") }]
 };
 const server = createServer(async (request, response) => {
   if (request.url === "/render-v1.mjs") {
@@ -71,17 +93,40 @@ try {
     assert.equal(measurement.inside_frame, true);
     assert.equal(measurement.authority, "browser-preview-only");
   }
+  const shared = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
+    const bounds = line.getBoundingClientRect();
+    return { text: line.textContent, font_size_px: parseFloat(getComputedStyle(line).fontSize),
+      font_family: getComputedStyle(line).fontFamily, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  }));
+  assert.deepEqual(shared.map((line) => line.text), ["Server line A", "Server line B"]);
+  for (const line of shared) {
+    assert.equal(line.font_size_px, 16, "SVG font-size must not hit Chromium's 10000px clamp");
+    assert.ok(line.font_family.includes("ChapteraReader_80307b8da7649aa4"));
+    assert.ok(line.height >= 12 && line.height <= 24, "loaded shared text must have a visible physical size");
+    assert.ok(line.width > 60 && line.width < 200);
+    assert.ok(Math.abs(line.x - 375) < 0.1, "canonical x plus node transform must be preserved");
+  }
+  assert.ok(Math.abs(shared[1].y - shared[0].y - 20) < 0.1, "server line-height, not browser reflow, places lines");
+  const clip = await page.locator('[data-node-id="resolved"] g[clip-path]').evaluate((element) => {
+    const id = element.getAttribute("clip-path").slice(5, -1);
+    const bounds = document.getElementById(id).firstElementChild;
+    return ["x", "y", "width", "height"].map((key) => Number(bounds.getAttribute(key)));
+  });
+  assert.deepEqual(clip, [emu(350), emu(30), emu(220), emu(80)], "clip remains in canonical node space");
   const before = await page.locator("svg").getAttribute("viewBox");
   await page.locator("svg").evaluate((svg) => { svg.setAttribute("width", 300); svg.setAttribute("height", 200); });
   const scaledHeight = await page.locator("foreignObject").first().evaluate((element) => {
     const range = document.createRange(); range.selectNodeContents(element.firstElementChild); return range.getBoundingClientRect().height;
   });
   assert.ok(Math.abs(scaledHeight * 2 - measurements[0].text_height_px) < 0.1);
+  const scaledSharedHeight = await page.locator('[data-text-authority="server-shared-resolved"]').first().evaluate((element) => element.getBoundingClientRect().height);
+  assert.ok(Math.abs(scaledSharedHeight * 2 - shared[0].height) < 0.1);
   assert.equal(await page.locator("svg").getAttribute("viewBox"), before);
   const receipt = { protocol: "chaptera.cloud-reader-preview-scale.v1", scope: "synthetic renderer readability only; excludes source typography and real-PUB reference parity",
-    repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(), measurements, zoom_preserves_geometry: true };
+    repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(), measurements,
+    shared_lines: shared, loaded_fallback_font_sha256: fontSha, zoom_preserves_geometry: true };
   await writeFile(join(output, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
-  console.log(JSON.stringify({ readable_preview_frames: measurements.length, zoom_preserves_geometry: true, receipt: join(output, "receipt.json") }));
+  console.log(JSON.stringify({ readable_preview_frames: measurements.length, readable_shared_lines: shared.length, zoom_preserves_geometry: true, receipt: join(output, "receipt.json") }));
 } finally {
   if (browser) await browser.close();
   server.closeAllConnections();
