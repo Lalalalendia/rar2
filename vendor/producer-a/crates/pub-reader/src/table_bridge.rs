@@ -1239,6 +1239,63 @@ mod tests {
     }
 
     #[test]
+    fn spanning_cell_materializes_without_flattening() {
+        let story_id = StoryId::from_canonical(CanonicalId::from_bytes([8; 16]));
+        let cell_id = table_cell_id(5);
+        let bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(600),
+            LengthEmu::new(100),
+        );
+        let table = PubTableSource {
+            text_id: 2,
+            story_id: Some(story_id),
+            rows: 1,
+            columns: 2,
+            cells_seq_num: None,
+            tcd_story_ordinal: None,
+            cells: vec![PubTableCellSource {
+                id: cell_id,
+                stored_record_index: 0,
+                coordinates: Some(PubTableCellCoordinates {
+                    start_row: 0,
+                    end_row: 0,
+                    start_column: 0,
+                    end_column: 1,
+                }),
+                utf16_start: 0,
+                utf16_end: 6,
+                bounds: Some(bounds),
+                source_refs: Vec::new(),
+            }],
+            simple_table: None,
+            layout_metrics: None,
+            source_refs: Vec::new(),
+        };
+        let story = Story {
+            id: story_id,
+            text: "Header".into(),
+            paragraphs: Vec::new(),
+            runs: Vec::new(),
+            fields: Vec::new(),
+            hyperlinks: Vec::new(),
+            source_refs: Vec::new(),
+        };
+
+        let cells = materialize_bounded_table_cells(&table, &story)
+            .expect("one cell spanning two columns must remain one semantic cell");
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].id, cell_id);
+        assert_eq!(cells[0].address, TableCellAddress { row: 0, column: 0 });
+        assert_eq!(cells[0].row_span, 1);
+        assert_eq!(cells[0].column_span, 2);
+        assert_eq!(cells[0].text, "Header");
+        assert_eq!(cells[0].bounds, Some(bounds));
+    }
+
+    #[test]
     fn spanning_cell_is_not_flattened_to_simple_subset() {
         let cells = vec![PubTableCellSource {
             id: table_cell_id(0),
