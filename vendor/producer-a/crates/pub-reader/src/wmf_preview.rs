@@ -63,6 +63,7 @@ const PS_NULL: u16 = 5;
 const PS_INSIDEFRAME: u16 = 6;
 const BS_SOLID: u16 = 0;
 const BS_NULL: u16 = 1;
+const BS_PATTERN: u16 = 3;
 const BS_DIBPATTERNPT: u16 = 5;
 const DIB_RGB_COLORS: u16 = 0;
 const BI_RGB: u32 = 0;
@@ -329,14 +330,14 @@ fn rgb_quad(bytes: &[u8], offset: usize) -> Result<Color> {
 }
 
 fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
-    if params.len() != 4 + LEGACY_PATTERN_DIB_BYTES {
-        bail!("unsupported WMF DIB pattern brush payload length");
-    }
     let style =
         read_u16(params, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush style is truncated"))?;
     let color_usage = read_u16(params, 2)
         .ok_or_else(|| anyhow!("WMF DIB pattern brush color usage is truncated"))?;
-    if style != BS_DIBPATTERNPT || color_usage != DIB_RGB_COLORS {
+    let long_legacy_profile =
+        params.len() == 4 + LEGACY_PATTERN_DIB_BYTES && style == BS_DIBPATTERNPT;
+    let compact_pattern_profile = params.len() == 84 && style == BS_PATTERN;
+    if color_usage != DIB_RGB_COLORS || !(long_legacy_profile || compact_pattern_profile) {
         bail!("unsupported WMF DIB pattern brush profile");
     }
 
@@ -365,7 +366,10 @@ fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
         || bit_count != 1
         || compression != BI_RGB
         || !matches!(image_size, 0 | 32)
-        || colors_used != 2
+        || !matches!(
+            (long_legacy_profile, compact_pattern_profile, colors_used),
+            (true, false, 2) | (false, true, 0)
+        )
     {
         bail!("unsupported WMF DIB pattern brush bitmap profile");
     }
@@ -1065,18 +1069,25 @@ fn validate_font_compatibility_object(params: &[u8]) -> Result<()> {
         read_i16(params, 6).ok_or_else(|| anyhow!("WMF Font orientation is truncated"))?;
     let weight = read_u16(params, 8).ok_or_else(|| anyhow!("WMF Font weight is truncated"))?;
 
-    let scalar_profile_matches = matches!((height, width), (16, 7) | (20, 9))
-        && escapement == 0
-        && orientation == 0
-        && weight == 700
+    let shared_profile = weight == 700
         && params[10] == 0
         && params[11] == 0
         && params[12] == 0
         && params[13] == 0
-        && params[14] == 1
-        && params[15] == 2
         && params[16] == 2
         && params[17] == 34;
+    let scalar_profile_matches = shared_profile
+        && ((matches!((height, width), (16, 7) | (20, 9))
+            && escapement == 0
+            && orientation == 0
+            && params[14] == 1
+            && params[15] == 2)
+            || (height == 16
+                && width == 7
+                && escapement == 900
+                && orientation == 900
+                && params[14] == 7
+                && params[15] == 18));
     if !scalar_profile_matches {
         bail!("unsupported WMF Font compatibility profile");
     }
@@ -2108,6 +2119,29 @@ mod tests {
     }
 
     #[test]
+    fn accepts_compact_8x8_monochrome_dib_pattern_brush() {
+        let mut params = Vec::new();
+        params.extend_from_slice(&BS_PATTERN.to_le_bytes());
+        params.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        params.extend_from_slice(&40_u32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&BI_RGB.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&[0, 0, 0, 0]);
+        params.extend_from_slice(&[0, 0, 255, 0]);
+        params.extend_from_slice(&[0_u8; 32]);
+        assert_eq!(params.len(), 84);
+        assert!(parse_legacy_pattern_brush(&params).is_ok());
+    }
+
+    #[test]
     fn rejects_pattern_brush_outside_proven_dib_profile() {
         let mut params = vec![0_u8; 100];
         params[0..2].copy_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
@@ -2192,6 +2226,13 @@ mod tests {
     fn validates_only_observed_short_font_compatibility_profiles() {
         assert!(validate_font_compatibility_object(&font_compatibility_params(16, 7)).is_ok());
         assert!(validate_font_compatibility_object(&font_compatibility_params(20, 9)).is_ok());
+
+        let mut rotated = font_compatibility_params(16, 7);
+        rotated[4..6].copy_from_slice(&900_i16.to_le_bytes());
+        rotated[6..8].copy_from_slice(&900_i16.to_le_bytes());
+        rotated[14] = 7;
+        rotated[15] = 18;
+        assert!(validate_font_compatibility_object(&rotated).is_ok());
 
         let mut unobserved = font_compatibility_params(16, 7);
         unobserved[8..10].copy_from_slice(&400_u16.to_le_bytes());
