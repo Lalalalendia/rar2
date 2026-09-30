@@ -126,9 +126,7 @@ pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validat
 pub use wmf_preview::{
     LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, WmfPreviewRgba, rasterize_wmf_preview,
 };
-pub use wmf_postscript::{
-    WmfPostScriptProgram, extract_bounded_wmf_postscript_program,
-};
+pub use wmf_postscript::{WmfPostScriptProgram, extract_bounded_wmf_postscript_program};
 
 pub const PUB_ADAPTER_ID: &str = "pub-rs";
 pub const PUB_FORMAT_PROFILE_ID: &str = "pub-mature-0x2c-v0.1";
