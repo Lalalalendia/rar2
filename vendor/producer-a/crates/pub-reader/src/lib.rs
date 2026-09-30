@@ -2078,11 +2078,8 @@ pub fn build_mature_0x2c_from_streams(
                 })
                 .collect::<Vec<_>>();
 
-            match parse_bounded_ff_story_catalog_from_fdpp(
-                quill_stream.clone(),
-                quill,
-                &identities,
-            ) {
+            match parse_bounded_ff_story_catalog_from_fdpp(quill_stream.clone(), quill, &identities)
+            {
                 Ok(recovered) => {
                     diagnostics.push(PubBridgeDiagnostic::QuillStoriesRecoveredFromFdpp {
                         story_count: recovered.stories.len(),
