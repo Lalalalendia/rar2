@@ -864,7 +864,8 @@ mod tests {
 
     use super::{
         MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderPaintV1, base64_encode, bind_visible_paint,
-        from_viewer_geometry, inline_image_data_url, reader_image_resource, shared_text_font_resource,
+        from_viewer_geometry, inline_image_data_url, reader_image_resource,
+        shared_text_font_resource,
     };
 
     #[test]
