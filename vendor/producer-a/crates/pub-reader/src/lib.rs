@@ -623,6 +623,14 @@ pub enum PubBridgeDiagnostic {
         seq_num: u32,
         reason: String,
     },
+    GroupedImageProjected {
+        seq_num: u32,
+        depth: usize,
+    },
+    GroupedImageProjectionUnavailable {
+        seq_num: u32,
+        reason: String,
+    },
     GroupedTableProjected {
         seq_num: u32,
         depth: usize,
@@ -2540,9 +2548,11 @@ pub fn build_mature_0x2c_from_streams(
             }
             _ => None,
         };
+        let image_slot = exact_image_slot(shape, seq_num, &mut diagnostics);
+        let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
         let grouped_projection = if direct_page.is_none()
             && references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
-            && exact_story_identity.is_some()
+            && (exact_story_identity.is_some() || exact_grouped_image_identity)
         {
             match project_grouped_object_shape(
                 parent_seq,
@@ -2559,8 +2569,13 @@ pub fn build_mature_0x2c_from_streams(
                             seq_num,
                             depth: projection.depth,
                         }
-                    } else {
+                    } else if exact_story_identity.is_some() {
                         PubBridgeDiagnostic::GroupedStoryProjected {
+                            seq_num,
+                            depth: projection.depth,
+                        }
+                    } else {
+                        PubBridgeDiagnostic::GroupedImageProjected {
                             seq_num,
                             depth: projection.depth,
                         }
@@ -2574,8 +2589,13 @@ pub fn build_mature_0x2c_from_streams(
                             seq_num,
                             reason: error.to_string(),
                         }
-                    } else {
+                    } else if exact_story_identity.is_some() {
                         PubBridgeDiagnostic::GroupedStoryProjectionUnavailable {
+                            seq_num,
+                            reason: error.to_string(),
+                        }
+                    } else {
+                        PubBridgeDiagnostic::GroupedImageProjectionUnavailable {
                             seq_num,
                             reason: error.to_string(),
                         }
@@ -2619,7 +2639,6 @@ pub fn build_mature_0x2c_from_streams(
         };
 
         let node_id = derive_pub_node_id(&source_hash, seq_num)?;
-        let image_slot = exact_image_slot(shape, seq_num, &mut diagnostics);
         let explicit_paint =
             explicit_officeart_paint(shape, color_scheme.as_ref().map(|scheme| &scheme.scheme));
         let effective_paint = dgg_defaults_unambiguous
@@ -2756,7 +2775,7 @@ pub fn build_mature_0x2c_from_streams(
         graph.nodes.insert(
             node_id,
             Node {
-                // Grouped Story shapes and TABLEs are projected to page-relative
+                // Grouped Story/image shapes and TABLEs are projected to page-relative
                 // geometry while exact group ancestry remains in provenance.
                 // The current resolver does not yet compose Group transforms.
                 kind: if raw_type == Some(RAW_TYPE_TABLE) {
