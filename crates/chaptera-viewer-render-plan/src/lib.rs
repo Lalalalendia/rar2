@@ -986,7 +986,7 @@ fn shape_mixed_line_candidate_v1(
         while scalar_end > cursor {
             let index = usize::try_from(scalar_end - 1)
                 .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
-            if !matches!(scalars.get(index), Some('\r' | '\n')) {
+            if !matches!(scalars.get(index).copied(), Some('\r' | '\n')) {
                 break;
             }
             scalar_end -= 1;
