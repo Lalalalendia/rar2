@@ -89,6 +89,10 @@ struct Histograms {
     roundrect_master_fill_scheme_ordinal: BTreeMap<String, usize>,
     roundrect_master_fill_boolean_raw_hex: BTreeMap<String, usize>,
     roundrect_master_fill_profile: BTreeMap<String, usize>,
+    roundrect_primary_property_id_hex: BTreeMap<String, usize>,
+    roundrect_tertiary_property_id_hex: BTreeMap<String, usize>,
+    roundrect_primary_fill_family_raw_hex: BTreeMap<String, usize>,
+    roundrect_tertiary_fill_family_raw_hex: BTreeMap<String, usize>,
     shape_profile: BTreeMap<String, usize>,
     cooccurrence: BTreeMap<String, usize>,
     dgg_fill_type_raw_hex: BTreeMap<String, usize>,
@@ -230,6 +234,31 @@ fn main() -> Result<()> {
         }
         if shape_type == Some(SHAPE_TYPE_ROUND_RECTANGLE) {
             counts.roundrect_shapes += 1;
+            for record in &shape.fopts {
+                let (property_ids, fill_family) = match record.rec_type {
+                    0xF00B => (
+                        &mut histograms.roundrect_primary_property_id_hex,
+                        &mut histograms.roundrect_primary_fill_family_raw_hex,
+                    ),
+                    0xF122 => (
+                        &mut histograms.roundrect_tertiary_property_id_hex,
+                        &mut histograms.roundrect_tertiary_fill_family_raw_hex,
+                    ),
+                    _ => continue,
+                };
+                for entry in &record.properties {
+                    bump(property_ids, format!("0x{:04X}", entry.property_id()));
+                    if (0x0180..=0x01BF).contains(&entry.property_id())
+                        && !entry.f_bid()
+                        && !entry.f_complex()
+                    {
+                        bump(
+                            fill_family,
+                            format!("0x{:04X}=0x{:08X}", entry.property_id(), entry.op),
+                        );
+                    }
+                }
+            }
             let adjustment_entries = shape
                 .fopts
                 .iter()
@@ -548,6 +577,7 @@ fn main() -> Result<()> {
             "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
             "RoundRectangle adjustment evidence records only property 0x0147 form/raw scalar counts; absent adjustment is not converted into a PDF-derived radius.",
             "RoundRectangle master-shape evidence records only aggregate fHaveMaster/hspMaster join and master fill-property profiles; master inheritance is not promoted by this receipt.",
+            "RoundRectangle option-block evidence records only aggregate primary/tertiary property IDs and scalar fill-family values; it does not promote new paint semantics.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
