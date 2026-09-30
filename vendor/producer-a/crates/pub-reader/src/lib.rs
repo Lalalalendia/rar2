@@ -230,10 +230,27 @@ pub struct PubEffectivePageProjection {
     pub scenario_evidence_list_count: usize,
 }
 
+pub const PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1: &str =
+    "chaptera.pub-source-page-paint-order.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubSourcePagePaintOrderV1 {
+    pub schema_version: String,
+    pub page_id: PageId,
+    /// Canonical Node identities in persisted OfficeArt back-to-front order.
+    pub node_ids: Vec<NodeId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubSourceGraphBuild {
     pub graph: PubSourceGraph,
     pub effective_pages: PubEffectivePageProjection,
+    /// Page-local back-to-front order for the bounded direct source-backed
+    /// object class whose persisted OfficeArt SpContainer order can be joined
+    /// unambiguously to canonical Nodes. Pages with incomplete/ambiguous
+    /// coverage are omitted rather than assigned an invented order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_page_paint_orders: Vec<PubSourcePagePaintOrderV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<PubBridgeDiagnostic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2642,9 +2659,18 @@ pub fn build_mature_0x2c_from_streams(
 
     add_missing_link_target_diagnostics(&graph, &mut diagnostics);
 
+    let source_page_paint_orders = source_page_paint_orders_v1(
+        source_hash,
+        &graph,
+        &references,
+        &page_seq_to_id,
+        &escher_inventory,
+    );
+
     Ok(PubSourceGraphBuild {
         graph,
         effective_pages,
+        source_page_paint_orders,
         diagnostics,
         typography_runs,
         script_font_maps,
@@ -3114,6 +3140,86 @@ fn index_escher_by_contents_seq(inventory: &SpContainerInventory) -> BTreeMap<u3
     }
 
     index
+}
+
+fn source_page_paint_orders_v1(
+    source_hash: Sha256Digest,
+    graph: &PubSourceGraph,
+    references: &BTreeMap<u32, Contents0x2cChunkReference>,
+    page_seq_to_id: &BTreeMap<u32, PageId>,
+    inventory: &SpContainerInventory,
+) -> Vec<PubSourcePagePaintOrderV1> {
+    let mut expected = BTreeMap::<PageId, BTreeSet<NodeId>>::new();
+    for node in graph.nodes.values() {
+        let seq_num = node.payload.contents_seq_num;
+        let Some(reference) = references.get(&seq_num) else {
+            continue;
+        };
+        let Some(parent_seq) = single_parent_seq(reference) else {
+            continue;
+        };
+        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
+            continue;
+        };
+        if node.header.parent_id == page_id.into_canonical() {
+            expected.entry(page_id).or_default().insert(node.header.id);
+        }
+    }
+
+    let mut ordered = BTreeMap::<PageId, Vec<NodeId>>::new();
+    let mut rejected = BTreeSet::<PageId>::new();
+    let mut seen_seq = BTreeSet::<u32>::new();
+
+    // inspect_sp_containers preserves serialized traversal order. Do not sort
+    // SPIDs here: serialized page SpContainer order is the bounded authority.
+    for shape in &inventory.shapes {
+        let Some(client_data) = shape.client_data.as_ref() else {
+            continue;
+        };
+        let Some(shape_id) = unique_escher_field(client_data, PUBLISHER_FIELD_SHAPE_ID) else {
+            continue;
+        };
+        let seq_num = shape_id.value;
+        let Some(reference) = references.get(&seq_num) else {
+            continue;
+        };
+        let Some(parent_seq) = single_parent_seq(reference) else {
+            continue;
+        };
+        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
+            continue;
+        };
+        let Ok(node_id) = derive_pub_node_id(&source_hash, seq_num) else {
+            rejected.insert(page_id);
+            continue;
+        };
+        if !graph.nodes.contains_key(&node_id) {
+            continue;
+        }
+        if !seen_seq.insert(seq_num) {
+            rejected.insert(page_id);
+            continue;
+        }
+        ordered.entry(page_id).or_default().push(node_id);
+    }
+
+    expected
+        .into_iter()
+        .filter_map(|(page_id, expected_nodes)| {
+            if rejected.contains(&page_id) || expected_nodes.is_empty() {
+                return None;
+            }
+            let node_ids = ordered.remove(&page_id)?;
+            let actual_nodes = node_ids.iter().copied().collect::<BTreeSet<_>>();
+            (node_ids.len() == actual_nodes.len() && actual_nodes == expected_nodes).then(|| {
+                PubSourcePagePaintOrderV1 {
+                    schema_version: PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1.to_owned(),
+                    page_id,
+                    node_ids,
+                }
+            })
+        })
+        .collect()
 }
 
 const OFFICE_ART_FILL_TYPE: u16 = 0x0180;
