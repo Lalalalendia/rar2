@@ -321,12 +321,6 @@ jobs:
           print(json.dumps(result, indent=2, sort_keys=True))
           PY
 
-      - name: Query exact-four Wayback lineage variants
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/research/quill_story_wayback_lineage.py out
-
       - name: Compare 2009 packag_advDis same-document donor
         shell: bash
         run: |
@@ -357,6 +351,12 @@ jobs:
             "_siblings/lalamu/pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub" \
             "out/packag_advDis-2009.pub" \
             "out/quill-story-packag-lineage.json"
+
+      - name: Query exact-four Wayback lineage variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/research/quill_story_wayback_lineage.py out
 
       - name: Guard known seven and summarize sibling families
         shell: bash
