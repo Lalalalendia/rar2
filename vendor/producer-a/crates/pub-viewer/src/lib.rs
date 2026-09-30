@@ -36,9 +36,11 @@ use pub_paint_bridge::{
     project_explicit_source_paint_to_viewer_v1,
 };
 use pub_presentation_profile::{
+    AUX4_PRESENTATION_INPUT_SCHEMA_V1, Aux4PageEvidenceV1, Aux4PresentationProfileInputV1,
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
-    carlton_admitted_carrier_page_seq_nums_v1, reference_fixture_profile_known_v1,
-    select_carlton_customer_page_seq_nums_v1, select_reference_fixture_customer_page_seq_nums_v1,
+    carlton_admitted_carrier_page_seq_nums_v1, evaluate_aux4_presentation_profile_v1,
+    reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
+    select_reference_fixture_customer_page_seq_nums_v1,
 };
 #[cfg(test)]
 use pub_reader::LegacyOleCachedPresentation;
@@ -2058,6 +2060,70 @@ fn select_viewer_pages(
                 customer_page_count: selection.customer_page_seq_nums.len(),
             },
         };
+    }
+
+    if carlton_admitted_carrier_page_seq_nums_v1(&source_sha256).is_none() {
+        if let Ok(page_roles) = analyze_mature_0x2c_page_roles(Cursor::new(bytes)) {
+            let evaluation = evaluate_aux4_presentation_profile_v1(
+                Aux4PresentationProfileInputV1 {
+                    schema_version: AUX4_PRESENTATION_INPUT_SCHEMA_V1.to_owned(),
+                    scenario_evidence_list_count: source
+                        .effective_pages
+                        .scenario_evidence_list_count,
+                    pages: page_roles
+                        .pages
+                        .into_iter()
+                        .map(|page| Aux4PageEvidenceV1 {
+                            document_ordinal: page.document_ordinal,
+                            contents_seq_num: page.contents_seq_num,
+                            oid_dword0: page.oid_dword0,
+                            oid_dword1: page.oid_dword1,
+                            applied_master_seq_num: page.applied_master_seq_num,
+                        })
+                        .collect(),
+                },
+            );
+
+            if let Some(selection) = evaluation.selection {
+                let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+                for seq_num in &selection.customer_page_seq_nums {
+                    let page_id = match derive_pub_page_id(&source_hash, *seq_num) {
+                        Ok(page_id) => page_id,
+                        Err(error) => {
+                            return ViewerPageSelection {
+                                page_ids: source.effective_pages.page_ids.clone(),
+                                disposition:
+                                    ViewerPageSelectionDisposition::FamilyProfileUnavailable {
+                                        reason: format!(
+                                            "aux4_customer_page_identity_unavailable:{seq_num}:{error}"
+                                        ),
+                                    },
+                            };
+                        }
+                    };
+                    if !resolved.graph.pages.contains_key(&page_id) {
+                        return ViewerPageSelection {
+                            page_ids: source.effective_pages.page_ids.clone(),
+                            disposition: ViewerPageSelectionDisposition::FamilyProfileUnavailable {
+                                reason: format!(
+                                    "aux4_customer_page_missing_from_resolved_graph:{seq_num}"
+                                ),
+                            },
+                        };
+                    }
+                    page_ids.push(page_id);
+                }
+
+                return ViewerPageSelection {
+                    page_ids,
+                    disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                        profile_id: selection.profile_id,
+                        raw_page_count: selection.raw_page_count,
+                        customer_page_count: selection.customer_page_seq_nums.len(),
+                    },
+                };
+            }
+        }
     }
 
     let Some(carrier_page_seq_nums) = carlton_admitted_carrier_page_seq_nums_v1(&source_sha256)

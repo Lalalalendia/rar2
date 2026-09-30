@@ -3,7 +3,9 @@ name: Viewer Virginia page-role validation
 on:
   pull_request:
     paths:
+      - "crates/pub-presentation-profile/**"
       - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/validate_virginia_page_roles.py"
       - ".github/workflows/viewer-page-role-virginia.yml"

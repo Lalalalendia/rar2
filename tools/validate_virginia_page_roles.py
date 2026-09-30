@@ -34,6 +34,18 @@ def run_page_role(source: Path, output: Path) -> None:
     )
 
 
+def run_viewer_projection(source: Path, output: Path) -> None:
+    subprocess.run(
+        [
+            "cargo", "run", "--quiet",
+            "--manifest-path", "vendor/producer-a/crates/pub-viewer/Cargo.toml",
+            "--bin", "page-projection-receipt", "--",
+            str(source), str(output),
+        ],
+        check=True,
+    )
+
+
 def project_current_scenario(receipt: dict) -> dict:
     pages = sorted(receipt["pages"], key=lambda page: page["document_ordinal"])
     document_order = [page["contents_seq_num"] for page in pages]
@@ -148,8 +160,36 @@ def main() -> int:
         run_page_role(pub, raw_receipt)
         observation = json.loads(raw_receipt.read_text(encoding="utf-8"))
         scenario = project_current_scenario(observation)
+
+        viewer_receipt = args.out / f"{spec['id']}-viewer-page-projection.json"
+        run_viewer_projection(pub, viewer_receipt)
+        viewer_projection = json.loads(viewer_receipt.read_text(encoding="utf-8"))
+
         with fitz.open(pdf) as document:
             reference_pages = document.page_count
+
+        aux4_profile = viewer_projection.get("aux4_profile")
+        if not aux4_profile or not aux4_profile.get("admitted"):
+            raise SystemExit(
+                f"bounded AUX4 product profile was not admitted for {spec['id']}: "
+                f"{aux4_profile}"
+            )
+        if viewer_projection.get("viewer_page_count") != reference_pages:
+            raise SystemExit(
+                f"Viewer page projection mismatch for {spec['id']}: "
+                f"{viewer_projection.get('viewer_page_count')} != {reference_pages}"
+            )
+        if viewer_projection.get("scene_surface_count") != reference_pages:
+            raise SystemExit(
+                f"Viewer scene surface mismatch for {spec['id']}: "
+                f"{viewer_projection.get('scene_surface_count')} != {reference_pages}"
+            )
+        if "viewer.page_projection.family_profile_applied" not in viewer_projection.get(
+            "diagnostic_codes", []
+        ):
+            raise SystemExit(
+                f"Viewer did not report bounded family profile authority for {spec['id']}"
+            )
 
         projected_count = scenario.get("projected_page_count")
         pages = sorted(
@@ -231,6 +271,13 @@ def main() -> int:
                 "raw_page_count": scenario["raw_document_page_count"],
                 "reference_pdf_page_count": reference_pages,
                 "roles_unresolved_at_baseline": True,
+                "viewer_page_count": viewer_projection["viewer_page_count"],
+                "viewer_scene_surface_count": viewer_projection["scene_surface_count"],
+                "viewer_page_count_matches_reference": (
+                    viewer_projection["viewer_page_count"] == reference_pages
+                ),
+                "viewer_family_profile_applied": True,
+                "viewer_aux4_profile": aux4_profile,
                 "scenario_authority_state": scenario["authority_state"],
                 "scenario_reason": scenario["reason"],
                 "scenario_evidence_list_count": scenario["scenario_evidence_list_count"],
@@ -294,6 +341,8 @@ def main() -> int:
             "libmspub_magic_constants_used": False,
             "cloud_specific_page_filter_used": False,
             "service_role_profiles_are_discovery_only": True,
+            "aux4_structural_profile_is_bounded_product_authority": True,
+            "aux4_admission_does_not_use_pdf_page_count": True,
             "raw_pub_bytes_emitted": False,
             "raw_story_text_emitted": False,
         },

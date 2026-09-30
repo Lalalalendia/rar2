@@ -114,6 +114,224 @@ pub struct ReferenceFixturePresentationSelectionV1 {
     pub customer_page_seq_nums: Vec<u32>,
 }
 
+pub const AUX4_PRESENTATION_INPUT_SCHEMA_V1: &str =
+    "chaptera.aux4-presentation-profile-input.v1";
+pub const AUX4_PRESENTATION_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/aux4-structural/v1";
+const AUX4_TRAILING_AUXILIARY_PAGE_COUNT_V1: usize = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Aux4PageEvidenceV1 {
+    pub document_ordinal: usize,
+    pub contents_seq_num: u32,
+    pub oid_dword0: Option<u32>,
+    pub oid_dword1: Option<u32>,
+    pub applied_master_seq_num: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Aux4PresentationProfileInputV1 {
+    pub schema_version: String,
+    pub scenario_evidence_list_count: usize,
+    pub pages: Vec<Aux4PageEvidenceV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Aux4PresentationRejectReasonV1 {
+    SchemaVersionMismatch,
+    ScenarioAuthorityPresent,
+    InsufficientPageCount,
+    DuplicateDocumentOrdinal,
+    DuplicatePageSeqNum,
+    LeadingMasterOidUnavailable,
+    LeadingMasterOidNotZero,
+    CustomerOidUnavailable,
+    CustomerOidZero,
+    AuxiliaryOidUnavailable,
+    AuxiliaryOidNonzero,
+    AppliedMasterMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Aux4PresentationSelectionV1 {
+    pub profile_id: String,
+    pub raw_page_count: usize,
+    pub customer_page_seq_nums: Vec<u32>,
+    pub master_page_seq_num: u32,
+    pub auxiliary_page_seq_nums: Vec<u32>,
+    pub customer_run_start_ordinal: usize,
+    pub customer_run_end_ordinal: usize,
+    pub zero_oid_page_count: usize,
+    pub nonzero_oid_page_count: usize,
+    pub applied_master_consistent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Aux4PresentationEvaluationV1 {
+    pub profile_id: String,
+    pub raw_page_count: usize,
+    pub admitted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<Aux4PresentationRejectReasonV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_page_seq_num: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<Aux4PresentationSelectionV1>,
+}
+
+/// Evaluates the bounded structural profile identified by hosted PAGE-role
+/// receipts. This is deliberately a presentation profile, not generic PAGE
+/// semantics: non-admission means callers must preserve their no-loss path.
+pub fn evaluate_aux4_presentation_profile_v1(
+    mut input: Aux4PresentationProfileInputV1,
+) -> Aux4PresentationEvaluationV1 {
+    let raw_page_count = input.pages.len();
+    let rejected = |reason, page_seq_num| Aux4PresentationEvaluationV1 {
+        profile_id: AUX4_PRESENTATION_PROFILE_ID_V1.to_owned(),
+        raw_page_count,
+        admitted: false,
+        rejection_reason: Some(reason),
+        rejection_page_seq_num: page_seq_num,
+        selection: None,
+    };
+
+    if input.schema_version != AUX4_PRESENTATION_INPUT_SCHEMA_V1 {
+        return rejected(Aux4PresentationRejectReasonV1::SchemaVersionMismatch, None);
+    }
+    if input.scenario_evidence_list_count != 0 {
+        return rejected(
+            Aux4PresentationRejectReasonV1::ScenarioAuthorityPresent,
+            None,
+        );
+    }
+    if input.pages.len() < AUX4_TRAILING_AUXILIARY_PAGE_COUNT_V1 + 2 {
+        return rejected(Aux4PresentationRejectReasonV1::InsufficientPageCount, None);
+    }
+
+    input.pages.sort_by_key(|page| page.document_ordinal);
+    let mut ordinals = BTreeSet::new();
+    let mut seq_nums = BTreeSet::new();
+    for page in &input.pages {
+        if !ordinals.insert(page.document_ordinal) {
+            return rejected(
+                Aux4PresentationRejectReasonV1::DuplicateDocumentOrdinal,
+                Some(page.contents_seq_num),
+            );
+        }
+        if !seq_nums.insert(page.contents_seq_num) {
+            return rejected(
+                Aux4PresentationRejectReasonV1::DuplicatePageSeqNum,
+                Some(page.contents_seq_num),
+            );
+        }
+    }
+
+    let master = &input.pages[0];
+    let master_oid = match (master.oid_dword0, master.oid_dword1) {
+        (Some(dword0), Some(dword1)) => (dword0, dword1),
+        _ => {
+            return rejected(
+                Aux4PresentationRejectReasonV1::LeadingMasterOidUnavailable,
+                Some(master.contents_seq_num),
+            );
+        }
+    };
+    if master_oid != (0, 0) {
+        return rejected(
+            Aux4PresentationRejectReasonV1::LeadingMasterOidNotZero,
+            Some(master.contents_seq_num),
+        );
+    }
+
+    let auxiliary_start = input.pages.len() - AUX4_TRAILING_AUXILIARY_PAGE_COUNT_V1;
+    let customers = &input.pages[1..auxiliary_start];
+    let auxiliaries = &input.pages[auxiliary_start..];
+
+    for page in customers {
+        let oid = match (page.oid_dword0, page.oid_dword1) {
+            (Some(dword0), Some(dword1)) => (dword0, dword1),
+            _ => {
+                return rejected(
+                    Aux4PresentationRejectReasonV1::CustomerOidUnavailable,
+                    Some(page.contents_seq_num),
+                );
+            }
+        };
+        if oid == (0, 0) {
+            return rejected(
+                Aux4PresentationRejectReasonV1::CustomerOidZero,
+                Some(page.contents_seq_num),
+            );
+        }
+        if page.applied_master_seq_num != Some(master.contents_seq_num) {
+            return rejected(
+                Aux4PresentationRejectReasonV1::AppliedMasterMismatch,
+                Some(page.contents_seq_num),
+            );
+        }
+    }
+
+    for page in auxiliaries {
+        let oid = match (page.oid_dword0, page.oid_dword1) {
+            (Some(dword0), Some(dword1)) => (dword0, dword1),
+            _ => {
+                return rejected(
+                    Aux4PresentationRejectReasonV1::AuxiliaryOidUnavailable,
+                    Some(page.contents_seq_num),
+                );
+            }
+        };
+        if oid != (0, 0) {
+            return rejected(
+                Aux4PresentationRejectReasonV1::AuxiliaryOidNonzero,
+                Some(page.contents_seq_num),
+            );
+        }
+        if page.applied_master_seq_num != Some(master.contents_seq_num) {
+            return rejected(
+                Aux4PresentationRejectReasonV1::AppliedMasterMismatch,
+                Some(page.contents_seq_num),
+            );
+        }
+    }
+
+    let customer_page_seq_nums = customers
+        .iter()
+        .map(|page| page.contents_seq_num)
+        .collect::<Vec<_>>();
+    let auxiliary_page_seq_nums = auxiliaries
+        .iter()
+        .map(|page| page.contents_seq_num)
+        .collect::<Vec<_>>();
+
+    Aux4PresentationEvaluationV1 {
+        profile_id: AUX4_PRESENTATION_PROFILE_ID_V1.to_owned(),
+        raw_page_count,
+        admitted: true,
+        rejection_reason: None,
+        rejection_page_seq_num: None,
+        selection: Some(Aux4PresentationSelectionV1 {
+            profile_id: AUX4_PRESENTATION_PROFILE_ID_V1.to_owned(),
+            raw_page_count,
+            customer_page_seq_nums,
+            master_page_seq_num: master.contents_seq_num,
+            auxiliary_page_seq_nums,
+            customer_run_start_ordinal: customers
+                .first()
+                .expect("minimum page count guarantees one customer")
+                .document_ordinal,
+            customer_run_end_ordinal: customers
+                .last()
+                .expect("minimum page count guarantees one customer")
+                .document_ordinal,
+            zero_oid_page_count: 1 + AUX4_TRAILING_AUXILIARY_PAGE_COUNT_V1,
+            nonzero_oid_page_count: customers.len(),
+            applied_master_consistent: true,
+        }),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReferenceFixturePresentationError {
     RawPageSequenceMismatch {
@@ -611,6 +829,94 @@ mod tests {
                 .collect(),
             carrier_page_seq_nums: vec![279],
         }
+    }
+
+    fn aux4_input(customer_count: usize) -> Aux4PresentationProfileInputV1 {
+        let master_seq = 263_u32;
+        let mut pages = vec![Aux4PageEvidenceV1 {
+            document_ordinal: 0,
+            contents_seq_num: master_seq,
+            oid_dword0: Some(0),
+            oid_dword1: Some(0),
+            applied_master_seq_num: None,
+        }];
+        for index in 0..customer_count {
+            pages.push(Aux4PageEvidenceV1 {
+                document_ordinal: index + 1,
+                contents_seq_num: 300 + u32::try_from(index).unwrap(),
+                oid_dword0: Some(2),
+                oid_dword1: Some(u32::try_from(index).unwrap()),
+                applied_master_seq_num: Some(master_seq),
+            });
+        }
+        for index in 0..4 {
+            pages.push(Aux4PageEvidenceV1 {
+                document_ordinal: customer_count + index + 1,
+                contents_seq_num: 900 + u32::try_from(index).unwrap(),
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(master_seq),
+            });
+        }
+        Aux4PresentationProfileInputV1 {
+            schema_version: AUX4_PRESENTATION_INPUT_SCHEMA_V1.to_owned(),
+            scenario_evidence_list_count: 0,
+            pages,
+        }
+    }
+
+    #[test]
+    fn aux4_structural_profile_selects_customer_middle_run() {
+        let evaluation = evaluate_aux4_presentation_profile_v1(aux4_input(6));
+        assert!(evaluation.admitted);
+        let selection = evaluation.selection.unwrap();
+        assert_eq!(selection.raw_page_count, 11);
+        assert_eq!(selection.customer_page_seq_nums.len(), 6);
+        assert_eq!(selection.auxiliary_page_seq_nums, vec![900, 901, 902, 903]);
+        assert_eq!(selection.master_page_seq_num, 263);
+        assert_eq!(selection.zero_oid_page_count, 5);
+        assert_eq!(selection.nonzero_oid_page_count, 6);
+        assert!(selection.applied_master_consistent);
+    }
+
+    #[test]
+    fn aux4_structural_profile_scales_to_long_customer_run() {
+        let evaluation = evaluate_aux4_presentation_profile_v1(aux4_input(25));
+        assert!(evaluation.admitted);
+        let selection = evaluation.selection.unwrap();
+        assert_eq!(selection.raw_page_count, 30);
+        assert_eq!(selection.customer_page_seq_nums.len(), 25);
+    }
+
+    #[test]
+    fn aux4_structural_profile_fails_open_on_scenario_or_tail_drift() {
+        let mut scenario = aux4_input(2);
+        scenario.scenario_evidence_list_count = 1;
+        let evaluation = evaluate_aux4_presentation_profile_v1(scenario);
+        assert!(!evaluation.admitted);
+        assert_eq!(
+            evaluation.rejection_reason,
+            Some(Aux4PresentationRejectReasonV1::ScenarioAuthorityPresent)
+        );
+
+        let mut nonzero_tail = aux4_input(2);
+        nonzero_tail.pages.last_mut().unwrap().oid_dword0 = Some(2);
+        let evaluation = evaluate_aux4_presentation_profile_v1(nonzero_tail);
+        assert!(!evaluation.admitted);
+        assert_eq!(
+            evaluation.rejection_reason,
+            Some(Aux4PresentationRejectReasonV1::AuxiliaryOidNonzero)
+        );
+
+        let mut fifth_zero_tail = aux4_input(2);
+        fifth_zero_tail.pages[2].oid_dword0 = Some(0);
+        fifth_zero_tail.pages[2].oid_dword1 = Some(0);
+        let evaluation = evaluate_aux4_presentation_profile_v1(fifth_zero_tail);
+        assert!(!evaluation.admitted);
+        assert_eq!(
+            evaluation.rejection_reason,
+            Some(Aux4PresentationRejectReasonV1::CustomerOidZero)
+        );
     }
 
     #[test]
