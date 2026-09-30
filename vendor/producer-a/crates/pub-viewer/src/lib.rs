@@ -2725,16 +2725,6 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "A grouped image shape falls outside the bounded group geometry profile.",
         ),
-        GroupedImageProjected { .. } => (
-            "viewer.geometry.grouped_image_projected",
-            ViewerDiagnosticSeverity::Info,
-            "A grouped image shape was projected through its exact bounded group geometry chain.",
-        ),
-        GroupedImageProjectionUnavailable { .. } => (
-            "viewer.geometry.grouped_image_projection_unavailable",
-            ViewerDiagnosticSeverity::FidelityWarning,
-            "A grouped image shape falls outside the bounded group geometry profile.",
-        ),
         GroupedTableProjected { .. } => (
             "viewer.geometry.grouped_table_projected",
             ViewerDiagnosticSeverity::Info,
