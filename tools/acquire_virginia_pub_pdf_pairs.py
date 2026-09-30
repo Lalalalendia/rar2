@@ -18,6 +18,7 @@ MAX_PAGE_BYTES = 2_000_000
 PAIRS = [
     {
         "pair_id": "virginia-devinettes-2021",
+        "required": True,
         "source_page": "https://laclassedevirginia.blogspot.com/2021/08/devinettes-de-rentree.html",
         "pub": {
             "anchor": "Devinettes format modifiable Publisher",
@@ -36,6 +37,7 @@ PAIRS = [
     },
     {
         "pair_id": "virginia-remplacante-zone-a-2015",
+        "required": False,
         "source_page": "https://laclassedevirginia.blogspot.com/2015/08/cahier-de-la-maitresse-remplacante.html",
         "source_fallbacks": [
             "https://laclassedevirginia.blogspot.com/2015/08/",
@@ -236,15 +238,35 @@ def main(argv: list[str]) -> None:
 
     receipt_pairs = []
     for pair in PAIRS:
-        selected_source, final_url, raw = source_html(
-            session,
-            [pair["source_page"], *pair.get("source_fallbacks", [])],
-        )
-        entries = anchors(raw, final_url)
-        pub_link = exact_anchor_link(entries, pair["pub"]["anchor"])
-        pdf_link = exact_anchor_link(entries, pair["pdf"]["anchor"])
-        pub = acquire_exact(session, pub_link, pair["pub"], output_dir)
-        pdf = acquire_exact(session, pdf_link, pair["pdf"], output_dir)
+        try:
+            selected_source, final_url, raw = source_html(
+                session,
+                [pair["source_page"], *pair.get("source_fallbacks", [])],
+            )
+            entries = anchors(raw, final_url)
+            pub_link = exact_anchor_link(entries, pair["pub"]["anchor"])
+            pdf_link = exact_anchor_link(entries, pair["pdf"]["anchor"])
+            pub = acquire_exact(session, pub_link, pair["pub"], output_dir)
+            pdf = acquire_exact(session, pdf_link, pair["pdf"], output_dir)
+        except Exception as error:
+            if pair.get("required", False):
+                raise
+            receipt_pairs.append(
+                {
+                    "pair_id": pair["pair_id"],
+                    "source_page": pair["source_page"],
+                    "pair_class": "exact_source_pair",
+                    "status": "source_temporarily_unavailable",
+                    "error_class": type(error).__name__,
+                }
+            )
+            print(
+                f"UNAVAILABLE {pair['pair_id']}: "
+                f"{type(error).__name__}",
+                file=sys.stderr,
+            )
+            continue
+
         receipt_pairs.append(
             {
                 "pair_id": pair["pair_id"],
@@ -252,6 +274,7 @@ def main(argv: list[str]) -> None:
                 "selected_source_page": selected_source,
                 "resolved_source_page": final_url,
                 "pair_class": "exact_source_pair",
+                "status": "acquired",
                 "pub": pub,
                 "pdf": pdf,
             }
