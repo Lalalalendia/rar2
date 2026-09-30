@@ -43,6 +43,8 @@ const META_SELECTPALETTE_FUNCTION: u16 = 0x0234;
 const META_DIBCREATEPATTERNBRUSH_FUNCTION: u16 = 0x0142;
 const META_CREATEPATTERNBRUSH_FUNCTION: u16 = 0x01f9;
 const META_DELETEOBJECT_FUNCTION: u16 = 0x01f0;
+const META_SETBKCOLOR_FUNCTION: u16 = 0x0201;
+const META_SETTEXTCOLOR_FUNCTION: u16 = 0x0209;
 const META_CREATEPENINDIRECT_FUNCTION: u16 = 0x02fa;
 const META_CREATEFONTINDIRECT_FUNCTION: u16 = 0x02fb;
 const META_CREATEBRUSHINDIRECT_FUNCTION: u16 = 0x02fc;
@@ -800,6 +802,16 @@ fn palette_payload_profile(params: &[u8]) -> Value {
     })
 }
 
+fn colorref_mode(value: Option<u32>) -> &'static str {
+    match value {
+        Some(value) if value & 0xff00_0000 == 0 => "rgb",
+        Some(value) if value & 0xff00_0000 == 0x0100_0000 => "palette_index",
+        Some(value) if value & 0xff00_0000 == 0x0200_0000 => "palette_rgb",
+        Some(_) => "other",
+        None => "missing",
+    }
+}
+
 fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     let first_palette = records
         .iter()
@@ -827,8 +839,49 @@ fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     let mut animate_palette_count = 0usize;
     let mut unknown_select_palette_count = 0usize;
     let mut unknown_delete_count = 0usize;
+    let mut all_colorref_mode_counts = BTreeMap::<String, usize>::new();
+    let mut dib_color_usage_counts = BTreeMap::<String, usize>::new();
+    let mut select_palette_param_len_counts = BTreeMap::<String, usize>::new();
+    let mut realize_palette_param_len_counts = BTreeMap::<String, usize>::new();
 
     for (record_index, (function, params)) in records.iter().enumerate() {
+        let colorref = match *function {
+            META_SETBKCOLOR_FUNCTION | META_SETTEXTCOLOR_FUNCTION => read_u32(params, 0),
+            META_CREATEPENINDIRECT_FUNCTION => read_u32(params, 6),
+            META_CREATEBRUSHINDIRECT_FUNCTION => read_u32(params, 2),
+            _ => None,
+        };
+        if matches!(
+            *function,
+            META_SETBKCOLOR_FUNCTION
+                | META_SETTEXTCOLOR_FUNCTION
+                | META_CREATEPENINDIRECT_FUNCTION
+                | META_CREATEBRUSHINDIRECT_FUNCTION
+        ) {
+            *all_colorref_mode_counts
+                .entry(colorref_mode(colorref).to_owned())
+                .or_default() += 1;
+        }
+        match *function {
+            META_DIBCREATEPATTERNBRUSH_FUNCTION => {
+                let usage = read_u16(params, 2)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "missing".to_owned());
+                *dib_color_usage_counts
+                    .entry(format!("pattern:{usage}"))
+                    .or_default() += 1;
+            }
+            META_STRETCHDIB_FUNCTION => {
+                let usage = read_u16(params, 4)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "missing".to_owned());
+                *dib_color_usage_counts
+                    .entry(format!("stretchdib:{usage}"))
+                    .or_default() += 1;
+            }
+            _ => {}
+        }
+
         if selected_palette_slot.is_some()
             && !matches!(
                 *function,
@@ -857,6 +910,9 @@ fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
 
         match *function {
             META_SELECTPALETTE_FUNCTION => {
+                *select_palette_param_len_counts
+                    .entry(params.len().to_string())
+                    .or_default() += 1;
                 let Some(slot) = read_u16(params, 0).map(usize::from) else {
                     unknown_select_palette_count += 1;
                     continue;
@@ -900,6 +956,9 @@ fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
             }
             META_REALIZEPALETTE_FUNCTION if selected_palette_slot.is_some() => {
                 realize_palette_count += 1;
+                *realize_palette_param_len_counts
+                    .entry(params.len().to_string())
+                    .or_default() += 1;
             }
             META_SETPALENTRIES_FUNCTION if selected_palette_slot.is_some() => {
                 set_palette_entries_count += 1;
@@ -936,6 +995,10 @@ fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
             "selected_palette_function_counts": selected_palette_function_counts,
             "unknown_select_palette_count": unknown_select_palette_count,
             "unknown_delete_count": unknown_delete_count,
+            "all_colorref_mode_counts": all_colorref_mode_counts,
+            "dib_color_usage_counts": dib_color_usage_counts,
+            "select_palette_param_len_counts": select_palette_param_len_counts,
+            "realize_palette_param_len_counts": realize_palette_param_len_counts,
         }
     })
 }
@@ -1483,6 +1546,15 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colorref_mode_distinguishes_palette_index_from_truecolor() {
+        assert_eq!(colorref_mode(Some(0x0011_2233)), "rgb");
+        assert_eq!(colorref_mode(Some(0x0100_0007)), "palette_index");
+        assert_eq!(colorref_mode(Some(0x0211_2233)), "palette_rgb");
+        assert_eq!(colorref_mode(Some(0x0311_2233)), "other");
+        assert_eq!(colorref_mode(None), "missing");
+    }
 
     #[test]
     fn palette_lifecycle_tracks_select_realize_delete_and_reuse() {
