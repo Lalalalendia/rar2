@@ -1,6 +1,6 @@
 import { renderReaderScene } from "./render-v1.mjs";
 import {
-  EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath,
+  EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath, contributionEligible,
   extractableImages, classificationMessage, errorMessage
 } from "./reader-model.mjs";
 
@@ -21,6 +21,29 @@ let pages = [];
 let generation = 0;
 let pending = null;
 let pageIndex = 0;
+let contributionContext = null;
+
+function clearContribution() {
+  contributionContext = null;
+  $("#contribution-panel").hidden = true;
+  $("#contribution-filename").textContent = "";
+  $("#contribution-status").textContent = "";
+  $("#send-contribution").disabled = false;
+  $("#cancel-contribution").disabled = false;
+  if ($("#contribution-dialog").open) $("#contribution-dialog").close();
+}
+
+function offerContribution(opened, file, sessionId, accessToken) {
+  if (opened.classification !== "unsupported"
+      || !contributionEligible(opened.failure_classification)) return;
+  contributionContext = {
+    sessionId,
+    accessToken,
+    filename: file.name
+  };
+  $("#contribution-panel").hidden = false;
+}
+
 
 const csrfBytes = crypto.getRandomValues(new Uint8Array(16));
 const csrf = [...csrfBytes].map((value) => value.toString(16).padStart(2, "0")).join("");
@@ -38,6 +61,7 @@ function busy(value) {
 }
 
 function clearReader() {
+  clearContribution();
   scene = null;
   pages = [];
   pagesHost.replaceChildren();
@@ -255,12 +279,94 @@ async function openFile(file) {
       if (!opened.scene) throw new Error("scene_protocol_mismatch");
       if (!await render(opened.scene, operation)) return;
     }
-    if (isCurrent(operation)) message(classificationMessage(opened.classification), !["supported", "partial"].includes(opened.classification));
+    if (isCurrent(operation)) {
+      message(
+        classificationMessage(opened.classification),
+        !["supported", "partial"].includes(opened.classification)
+      );
+      offerContribution(opened, file, issued.session_id, accessToken);
+    }
   } catch (error) {
     if (isCurrent(operation)) message(errorMessage(error), true);
   } finally {
     accessToken = null;
     if (operation.generation === generation) { pending = null; busy(false); }
+  }
+}
+
+async function contributeCurrentFile() {
+  const context = contributionContext;
+  if (!context) return;
+  const send = $("#send-contribution");
+  const cancel = $("#cancel-contribution");
+  send.disabled = true;
+  cancel.disabled = true;
+  $("#contribution-status").textContent = "Preparing a private one-time contribution…";
+  let contributionToken = null;
+  try {
+    const base = "/v1/reader/guest-sessions/" + context.sessionId + "/";
+    const capabilityPath = guestRequestPath(
+      base + "contribution-capability",
+      "contribution-capability",
+      location.origin
+    );
+    const contributePath = guestRequestPath(base + "contribute", "contribute", location.origin);
+    const sessionHeaders = {
+      "x-csrf-token": csrf,
+      "x-chaptera-reader-session": context.accessToken
+    };
+    const capability = await jsonResponse(await fetch(capabilityPath, {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      headers: { ...sessionHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        protocol_version: "chaptera.intake-capability-request.v1",
+        consent_version: "chaptera-intake-consent-v1"
+      })
+    }));
+    if (capability.protocol_version !== "chaptera.reader-contribution-capability.v1"
+        || typeof capability.submission_id !== "string"
+        || !/^[A-Za-z0-9_:-]{16,160}$/.test(capability.submission_id)
+        || typeof capability.capability_token !== "string"
+        || !/^[0-9a-f]{64}$/.test(capability.capability_token)
+        || capability.retention_policy !== "chaptera-intake-retention-v1") {
+      throw new Error("guest_protocol_mismatch");
+    }
+    contributionToken = capability.capability_token;
+    $("#contribution-status").textContent = "Sending the exact file for compatibility research…";
+    const receipt = await jsonResponse(await fetch(contributePath, {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      headers: {
+        ...sessionHeaders,
+        "x-chaptera-reader-contribution": contributionToken
+      }
+    }));
+    contributionToken = null;
+    if (receipt.protocol_version !== "chaptera.intake-receipt.v1"
+        || receipt.submission_id !== capability.submission_id
+        || typeof receipt.server_sha256 !== "string"
+        || !/^[0-9a-f]{64}$/.test(receipt.server_sha256)
+        || !["new_exact_bytes", "duplicate_exact_bytes"].includes(receipt.exact_byte_disposition)
+        || receipt.cluster_disposition !== "deferred"
+        || receipt.retention_policy !== "chaptera-intake-retention-v1") {
+      throw new Error("guest_protocol_mismatch");
+    }
+    contributionContext = null;
+    $("#contribution-panel").hidden = true;
+    $("#contribution-status").textContent = "";
+    $("#contribution-dialog").close();
+    message("Contribution received for compatibility research. Your original file is unchanged.");
+  } catch (error) {
+    contributionToken = null;
+    $("#contribution-status").textContent =
+      "Contribution failed. Nothing new was authorized; retry while this viewing session is active.";
+    send.disabled = false;
+    cancel.disabled = false;
   }
 }
 
@@ -280,6 +386,21 @@ async function openDocument() {
     if (operation.generation === generation) { pending = null; busy(false); }
   }
 }
+
+$("#open-contribution").addEventListener("click", () => {
+  if (!contributionContext) return;
+  $("#contribution-filename").textContent = contributionContext.filename;
+  $("#contribution-status").textContent = "";
+  $("#contribution-dialog").showModal();
+});
+$("#cancel-contribution").addEventListener("click", () => {
+  $("#contribution-status").textContent = "";
+  $("#contribution-dialog").close();
+});
+$("#send-contribution").addEventListener("click", contributeCurrentFile);
+$("#contribution-dialog").addEventListener("cancel", () => {
+  $("#contribution-status").textContent = "";
+});
 
 $("#cancel-open").addEventListener("click", () => {
   pending?.controller.abort();
