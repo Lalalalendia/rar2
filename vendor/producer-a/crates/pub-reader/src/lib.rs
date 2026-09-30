@@ -333,6 +333,10 @@ pub struct PubLegacyOleSource {
 pub struct PubNodePayload {
     pub contents_seq_num: u32,
     pub officeart_shape_type: Option<u16>,
+    #[serde(
+        default,
+        skip_serializing_if = "PubOfficeArtAdjustValueSource::is_unsupported"
+    )]
     pub officeart_adjust_value: PubOfficeArtAdjustValueSource,
     pub officeart_spid: Option<u32>,
     /// Exact one-based OfficeArt BStore identity from non-complex fBid pib.
@@ -358,12 +362,19 @@ pub struct PubNodePayload {
     pub table: Option<PubTableSource>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PubOfficeArtAdjustValueSource {
     Absent,
     Scalar(u32),
+    #[default]
     Unsupported,
+}
+
+impl PubOfficeArtAdjustValueSource {
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Unsupported)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2784,7 +2795,13 @@ pub fn build_mature_0x2c_from_streams(
                 payload: PubNodePayload {
                     contents_seq_num: seq_num,
                     officeart_shape_type: shape.fsp.as_ref().map(|fsp| fsp.shape_type),
-                    officeart_adjust_value: bounded_officeart_adjust_value(shape),
+                    officeart_adjust_value: if shape.fsp.as_ref().map(|fsp| fsp.shape_type)
+                        == Some(0x0002)
+                    {
+                        bounded_officeart_adjust_value(shape)
+                    } else {
+                        PubOfficeArtAdjustValueSource::Unsupported
+                    },
                     officeart_spid: shape.fsp.as_ref().map(|fsp| fsp.spid),
                     image_slot,
                     legacy_ole: None,
