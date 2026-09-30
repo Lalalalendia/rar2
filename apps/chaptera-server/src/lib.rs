@@ -51,6 +51,7 @@ pub mod source_validation_job;
 pub mod sqlite_blob_metadata;
 pub mod sqlite_store;
 pub mod state;
+pub mod untrusted_pub_worker;
 pub mod upload_admission;
 pub mod worker;
 pub mod worker_runtime;
