@@ -136,6 +136,69 @@ test("shared resolved text paint plan preserves server line breaks", () => {
   );
 });
 
+test("mixed-size resolved text preserves per-line height and per-span paint metrics", () => {
+  const plan = resolvedTextLinePaintPlan({
+    bounds: { x: 100, y: 200, width: 1000, height: 700 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 120,
+      line_height_emu: 150,
+      lines: [
+        {
+          line_index: 0,
+          text: "big small",
+          measured_width_emu: 500,
+          line_height_emu: 180,
+          spans: [
+            {
+              scalar_start: 0,
+              scalar_end: 3,
+              text: "big",
+              x_offset_emu: 0,
+              measured_width_emu: 260,
+              font_size_emu: 160
+            },
+            {
+              scalar_start: 3,
+              scalar_end: 9,
+              text: " small",
+              x_offset_emu: 260,
+              measured_width_emu: 240,
+              font_size_emu: 90
+            }
+          ]
+        },
+        {
+          line_index: 1,
+          text: "tail",
+          measured_width_emu: 220,
+          line_height_emu: 120,
+          spans: [
+            {
+              scalar_start: 9,
+              scalar_end: 13,
+              text: "tail",
+              x_offset_emu: 0,
+              measured_width_emu: 220,
+              font_size_emu: 100
+            }
+          ]
+        }
+      ]
+    }
+  });
+
+  assert.deepEqual(
+    plan.lines.map((line) => [line.line_index, line.y, line.line_height_emu]),
+    [[0, 200, 180], [1, 380, 120]]
+  );
+  assert.deepEqual(
+    plan.lines[0].spans.map((span) => [span.text, span.x_offset_emu, span.font_size_emu]),
+    [["big", 0, 160], [" small", 260, 90]]
+  );
+});
+
 test("shared text plan refuses invalid frame or font metrics", () => {
   assert.equal(
     resolvedTextLinePaintPlan({
