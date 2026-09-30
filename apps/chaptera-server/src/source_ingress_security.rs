@@ -149,7 +149,7 @@ impl StructuralScanRunner for IsolatedPubWorkerRunner {
             .arg("--clear-environment")
             .arg("--")
             .arg(&config.worker_binary)
-            .arg("inspect")
+            .arg("untrusted-pub-inspect")
             .arg("--max-file-bytes")
             .arg(max_file_bytes)
             .arg("--max-cfb-entries")
