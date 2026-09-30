@@ -110,7 +110,8 @@ pub use resolve::{
     PubResolvedNodePayload, PubResolvedStoryFrame, resolve_pub_source_graph,
 };
 pub use salvage::{
-    READER_SALVAGE_PROBE_SCHEMA_V1, ReaderSalvageEligibility, ReaderSalvageProbe,
+    READER_SALVAGE_PROBE_SCHEMA_V1, ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility,
+    ReaderSalvageProbe,
     ReaderSalvageStreamState, ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
     probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
 };

@@ -3,6 +3,8 @@ use crate::failure_intake::{
 };
 use crate::family_classifier::classify_pub_family;
 use pub_contents::ContentsFamily;
+use pub_core::StreamPath;
+use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -23,6 +25,13 @@ const ESCHER_DELAY_STREAM: &str = "/Escher/EscherDelayStm";
 pub enum ReaderSalvageTrigger {
     IntakeOnly,
     ProvenStructuralCorruption,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderSalvageCorruptionEvidence {
+    QuillDescriptorNodeTruncated,
+    QuillStrsServiceSpanOutOfBounds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +114,8 @@ pub struct ReaderSalvageProbe {
     pub schema_version: String,
     pub source_sha256: String,
     pub trigger: ReaderSalvageTrigger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corruption_evidence: Option<ReaderSalvageCorruptionEvidence>,
     pub eligibility: ReaderSalvageEligibility,
     pub intake: FailureIntakeClassification,
     pub reader_route: String,
@@ -132,13 +143,27 @@ pub fn probe_reader_salvage_candidate_with_trigger(
     let source_sha256 = source_sha256(bytes);
     let intake = classify_failure_candidate(bytes);
     let family = classify_pub_family(bytes);
-    let eligibility = salvage_eligibility(bytes.len(), intake.class, trigger);
+    let corruption_evidence = if bytes.len() <= READER_SALVAGE_MAX_INPUT_BYTES
+        && intake.class == FailureIntakeClass::PubHighValue
+        && trigger == ReaderSalvageTrigger::IntakeOnly
+    {
+        detect_known_structural_corruption(bytes)
+    } else {
+        None
+    };
+    let effective_trigger = if corruption_evidence.is_some() {
+        ReaderSalvageTrigger::ProvenStructuralCorruption
+    } else {
+        trigger
+    };
+    let eligibility = salvage_eligibility(bytes.len(), intake.class, effective_trigger);
 
     if !eligibility.is_eligible() {
         return ReaderSalvageProbe {
             schema_version: READER_SALVAGE_PROBE_SCHEMA_V1.to_owned(),
             source_sha256: source_sha256.clone(),
-            trigger,
+            trigger: effective_trigger,
+            corruption_evidence,
             eligibility,
             intake,
             reader_route: family.route.as_str().to_owned(),
@@ -223,6 +248,43 @@ pub fn probe_reader_salvage_candidate_with_trigger(
     }
 }
 
+fn detect_known_structural_corruption(
+    bytes: &[u8],
+) -> Option<ReaderSalvageCorruptionEvidence> {
+    let inventory = pub_cfb::inspect_reader(Cursor::new(bytes)).ok()?;
+    let entry = inventory
+        .entries
+        .iter()
+        .find(|entry| entry.path == QUILL_STREAM)?;
+    if entry.len > READER_SALVAGE_MAX_STREAM_BYTES {
+        return None;
+    }
+
+    let quill = pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM).ok()?;
+    let quill_len = u64::try_from(quill.len()).ok()?;
+    if quill_len > READER_SALVAGE_MAX_STREAM_BYTES {
+        return None;
+    }
+
+    let error =
+        parse_confirmed_story_catalog(StreamPath(QUILL_STREAM.into()), &quill).err()?;
+    known_quill_corruption_evidence(&error)
+}
+
+fn known_quill_corruption_evidence(
+    error: &QuillStoryReadError,
+) -> Option<ReaderSalvageCorruptionEvidence> {
+    match error {
+        QuillStoryReadError::DescriptorNodeTruncated { .. } => {
+            Some(ReaderSalvageCorruptionEvidence::QuillDescriptorNodeTruncated)
+        }
+        QuillStoryReadError::StrsServiceSpanOutOfBounds { .. } => Some(
+            ReaderSalvageCorruptionEvidence::QuillStrsServiceSpanOutOfBounds,
+        ),
+        _ => None,
+    }
+}
+
 fn salvage_eligibility(
     byte_len: usize,
     class: FailureIntakeClass,
@@ -299,7 +361,9 @@ mod tests {
     fn synthetic_pub_cfb() -> Vec<u8> {
         let mut compound =
             cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
-        compound.create_storage("/Objects").expect("Objects storage");
+        compound
+            .create_storage("/Objects")
+            .expect("Objects storage");
         compound
             .create_stream("/Objects/Damaged")
             .expect("small mini stream")
@@ -346,6 +410,34 @@ mod tests {
         assert!(probe.has_surviving_evidence());
         assert_eq!(probe.source_sha256, source_sha256(&bytes));
         assert!(!probe.source_modified);
+    }
+
+    #[test]
+    fn known_quill_corruption_mapping_is_narrow() {
+        assert_eq!(
+            known_quill_corruption_evidence(&QuillStoryReadError::DescriptorNodeTruncated {
+                offset: 0x200,
+                declared_count: 19_489,
+                requested: 467_736,
+                available: 504,
+            }),
+            Some(ReaderSalvageCorruptionEvidence::QuillDescriptorNodeTruncated)
+        );
+        assert_eq!(
+            known_quill_corruption_evidence(&QuillStoryReadError::StrsServiceSpanOutOfBounds {
+                service_span: u32::MAX,
+                chunk_length: 30,
+            }),
+            Some(ReaderSalvageCorruptionEvidence::QuillStrsServiceSpanOutOfBounds)
+        );
+        assert_eq!(
+            known_quill_corruption_evidence(&QuillStoryReadError::TooShort {
+                offset: 8,
+                requested: usize::MAX / 2,
+                available: 12,
+            }),
+            None
+        );
     }
 
     #[test]
