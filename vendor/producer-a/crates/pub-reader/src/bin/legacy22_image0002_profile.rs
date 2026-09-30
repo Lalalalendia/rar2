@@ -715,6 +715,11 @@ fn font_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         .iter()
         .find(|(function, _)| *function == META_CREATEFONTINDIRECT_FUNCTION)
         .map(|(_, params)| font_payload_profile(params));
+    let all_font_records = records
+        .iter()
+        .filter(|(function, _)| *function == META_CREATEFONTINDIRECT_FUNCTION)
+        .map(|(_, params)| font_payload_profile(params))
+        .collect::<Vec<_>>();
 
     let mut objects = Vec::<Option<(u16, usize)>>::new();
     let mut first_font_record_index = None;
@@ -818,6 +823,7 @@ fn font_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     json!({
         "kind": "createfontindirect",
         "font_record": first_font,
+        "all_font_records": all_font_records,
         "lifecycle": {
             "first_font_record_index": first_font_record_index,
             "font_creation_count": font_creation_count,
@@ -1096,6 +1102,23 @@ fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     })
 }
 
+fn dib_pattern_brush_blocker_profile(params: &[u8]) -> Value {
+    json!({
+        "kind": "dib_pattern_brush",
+        "param_len": params.len(),
+        "style": read_u16(params, 0),
+        "color_usage": read_u16(params, 2),
+        "header_size": read_u32(params, 4),
+        "width": read_i32(params, 8),
+        "height": read_i32(params, 12),
+        "planes": read_u16(params, 16),
+        "bit_count": read_u16(params, 18),
+        "compression": read_u32(params, 20),
+        "image_size": read_u32(params, 24),
+        "colors_used": read_u32(params, 36),
+    })
+}
+
 fn creator_style_profile(function: u16, params: &[u8]) -> Value {
     match function {
         META_CREATEPENINDIRECT_FUNCTION => json!({
@@ -1335,13 +1358,20 @@ fn wmf_blocker_profile(wmf: &[u8], detail: &str) -> Value {
         | "realize_palette_unavailable"
         | "delete_selected_palette"
         | "palette_dependent_colorref" => palette_blocker_profile(&records),
-        "record_function_0x02fb" => font_blocker_profile(&records),
+        "record_function_0x02fb"
+        | "generated:unsupported WMF Font compatibility profile" => font_blocker_profile(&records),
         "record_function_0x0418" => ellipse_blocker_profile(&records),
-        "record_function_0x0f43" => records
+        "record_function_0x0f43"
+        | "generated:unsupported WMF STRETCHDIB profile" => records
             .iter()
             .find(|(function, _)| *function == META_STRETCHDIB_FUNCTION)
             .map(|(_, params)| stretchdib_blocker_profile(params))
             .unwrap_or_else(|| json!({"kind": "stretchdib", "record": "missing"})),
+        "generated:unsupported WMF DIB pattern brush payload length" => records
+            .iter()
+            .find(|(function, _)| *function == META_DIBCREATEPATTERNBRUSH_FUNCTION)
+            .map(|(_, params)| dib_pattern_brush_blocker_profile(params))
+            .unwrap_or_else(|| json!({"kind": "dib_pattern_brush", "record": "missing"})),
         "escape_function_0x0026" => records
             .iter()
             .find(|(function, params)| {
