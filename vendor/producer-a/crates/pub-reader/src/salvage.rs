@@ -171,6 +171,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
 
             ReaderSalvageProbe {
                 schema_version: READER_SALVAGE_PROBE_SCHEMA_V1.to_owned(),
+                source_sha256: source_sha256.clone(),
                 trigger,
                 eligibility,
                 intake,
@@ -208,6 +209,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
 
             ReaderSalvageProbe {
                 schema_version: READER_SALVAGE_PROBE_SCHEMA_V1.to_owned(),
+                source_sha256: source_sha256.clone(),
                 trigger,
                 eligibility,
                 intake,
