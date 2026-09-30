@@ -852,7 +852,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeMap, HashMap, HashSet},
         env, fs,
     };
 
@@ -897,6 +897,80 @@ mod tests {
             ),
             Err(error) => println!("CLOUD_READER_SCENE_PROJECTION_PROBE projection_error={error}"),
         }
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly pinned external PUB path"]
+    fn real_reference_text_layout_fallback_census_probe() {
+        let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
+            .expect("CHAPTERA_READER_SCENE_PROBE_PUB must name an exact pinned PUB");
+        let expected_sha256 = env::var("CHAPTERA_READER_SCENE_PROBE_SHA256")
+            .expect("CHAPTERA_READER_SCENE_PROBE_SHA256 must pin source identity");
+        let bytes = fs::read(&path).expect("probe source must be readable");
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(
+            actual_sha256, expected_sha256,
+            "probe source identity drift"
+        );
+
+        let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
+            .expect("shared Viewer bundle must open the probe source");
+        let font = shared_text_font_resource();
+
+        let mut text_nodes = 0_usize;
+        let mut shared_frames = 0_usize;
+        let mut shared_lines = 0_usize;
+        let mut shared_nonempty_lines = 0_usize;
+        let mut layout_none = 0_usize;
+        let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+
+        for page_index in 0..bundle.geometry.document.pages.len() {
+            let plan = build_page_render_plan_with_text_layout_v1(
+                &bundle.geometry,
+                page_index,
+                &font,
+            )
+            .expect("exact reference render plan must build");
+
+            for node in plan.nodes {
+                let Some(text) = node.text else {
+                    continue;
+                };
+                text_nodes += 1;
+                let Some(layout) = text.layout else {
+                    layout_none += 1;
+                    continue;
+                };
+                match layout.disposition {
+                    RenderTextLayoutDispositionV1::SharedResolved { .. } => {
+                        shared_frames += 1;
+                        shared_lines += layout.lines.len();
+                        shared_nonempty_lines += layout
+                            .lines
+                            .iter()
+                            .filter(|line| !line.text.trim().is_empty())
+                            .count();
+                    }
+                    RenderTextLayoutDispositionV1::BackendFallback { reason } => {
+                        *backend_fallbacks.entry(reason.code()).or_default() += 1;
+                    }
+                }
+            }
+        }
+
+        let backend_fallbacks_json =
+            serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
+        println!(
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={}",
+            actual_sha256,
+            bundle.geometry.document.pages.len(),
+            text_nodes,
+            shared_frames,
+            shared_lines,
+            shared_nonempty_lines,
+            layout_none,
+            backend_fallbacks_json,
+        );
     }
 
     #[test]
