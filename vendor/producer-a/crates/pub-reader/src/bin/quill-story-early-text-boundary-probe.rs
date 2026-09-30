@@ -381,6 +381,34 @@ struct WitnessRow {
     btec_candidates: Vec<BtePlcCandidate>,
 }
 
+#[derive(Debug, Serialize)]
+struct SiblingScanDetails {
+    contents_serialization_revision: u16,
+    grounded_story_count: u32,
+    descriptor_count: usize,
+    syid_descriptor_length: u32,
+    syid_declared_count: Option<u32>,
+    syid_chunk_all_ff: bool,
+    syid_length_matches_grounded_count: bool,
+    strs_descriptor_length: u32,
+    strs_declared_count: Option<u32>,
+    strs_chunk_all_ff: bool,
+    strs_length_matches_grounded_count: bool,
+    text_descriptor_length: u32,
+    text_utf16_units: u64,
+    fdpp_descriptor_lengths: Vec<u32>,
+    fdpp_first_stored_count: Option<u16>,
+    descriptor_topology: BTreeMap<String, Vec<u32>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SiblingScanRow {
+    source_sha256: String,
+    byte_len: usize,
+    admitted: bool,
+    details: Option<SiblingScanDetails>,
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -2484,6 +2512,66 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
     })
 }
 
+fn diagnose_sibling_scan(bytes: &[u8]) -> SiblingScanRow {
+    let source_sha256 = sha256_hex(bytes);
+    let byte_len = bytes.len();
+    let details = (|| -> Result<SiblingScanDetails> {
+        let contents = pub_cfb::read_stream_reader(Cursor::new(bytes), CONTENTS_STREAM)
+            .context("read Contents stream")?;
+        let quill = pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM)
+            .context("read Quill stream")?;
+
+        let (revision, story_catalog) = grounded_contents_story_catalog(&contents)?;
+        let grounded_story_count = story_catalog.declared_count;
+        let descriptors = parse_descriptor_directory(&quill)?;
+        let syid = unique_descriptor(&descriptors, *b"SYID")?;
+        let strs = unique_descriptor(&descriptors, *b"STRS")?;
+        let text = unique_descriptor(&descriptors, *b"TEXT")?;
+        let fdpp = descriptors_named(&descriptors, *b"FDPP");
+
+        let syid_payload = descriptor_range(&quill, syid)?;
+        let strs_payload = descriptor_range(&quill, strs)?;
+        descriptor_range(&quill, text)?;
+
+        let fdpp_first_stored_count = if let Some(first) = fdpp.first() {
+            let payload = descriptor_range(&quill, first)?;
+            u16_at(payload, 0)
+        } else {
+            None
+        };
+
+        let expected_syid_len = 8u64 + 4u64 * u64::from(grounded_story_count);
+        let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_story_count);
+
+        Ok(SiblingScanDetails {
+            contents_serialization_revision: revision,
+            grounded_story_count,
+            descriptor_count: descriptors.len(),
+            syid_descriptor_length: syid.data_length,
+            syid_declared_count: u32_at(syid_payload, 4),
+            syid_chunk_all_ff: syid_payload.iter().all(|byte| *byte == 0xff),
+            syid_length_matches_grounded_count: u64::from(syid.data_length) == expected_syid_len,
+            strs_descriptor_length: strs.data_length,
+            strs_declared_count: u32_at(strs_payload, 0),
+            strs_chunk_all_ff: strs_payload.iter().all(|byte| *byte == 0xff),
+            strs_length_matches_grounded_count: u64::from(strs.data_length) == expected_strs_len,
+            text_descriptor_length: text.data_length,
+            text_utf16_units: u64::from(text.data_length) / 2,
+            fdpp_descriptor_lengths: descriptor_lengths(&fdpp),
+            fdpp_first_stored_count,
+            descriptor_topology: descriptor_topology(&descriptors),
+        })
+    })()
+    .ok();
+
+    SiblingScanRow {
+        source_sha256,
+        byte_len,
+        admitted: details.is_some(),
+        details,
+    }
+}
+
 fn pub_paths(root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = fs::read_dir(root)
         .with_context(|| format!("read witness dir {}", root.display()))?
@@ -2499,20 +2587,53 @@ fn pub_paths(root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn main() -> Result<()> {
-    let mut args = env::args_os().skip(1);
-    let root = PathBuf::from(
-        args.next()
-            .context("usage: quill-story-early-text-boundary-probe WITNESS_DIR OUTPUT.json")?,
-    );
-    let output = PathBuf::from(
-        args.next()
-            .context("usage: quill-story-early-text-boundary-probe WITNESS_DIR OUTPUT.json")?,
-    );
-    if args.next().is_some() {
-        bail!("expected exactly WITNESS_DIR OUTPUT.json");
-    }
+    let args = env::args_os().skip(1).collect::<Vec<_>>();
+    let sibling_mode = args
+        .first()
+        .is_some_and(|arg| arg.to_string_lossy() == "--siblings");
+
+    let (root, output) = if sibling_mode {
+        if args.len() != 3 {
+            bail!(
+                "usage: quill-story-early-text-boundary-probe --siblings WITNESS_DIR OUTPUT.json"
+            );
+        }
+        (PathBuf::from(&args[1]), PathBuf::from(&args[2]))
+    } else {
+        if args.len() != 2 {
+            bail!("usage: quill-story-early-text-boundary-probe WITNESS_DIR OUTPUT.json");
+        }
+        (PathBuf::from(&args[0]), PathBuf::from(&args[1]))
+    };
 
     let paths = pub_paths(&root)?;
+
+    if sibling_mode {
+        let mut rows = Vec::with_capacity(paths.len());
+        for path in paths {
+            let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            rows.push(diagnose_sibling_scan(&bytes));
+        }
+        rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
+        let admitted_count = rows.iter().filter(|row| row.admitted).count();
+
+        let report = serde_json::json!({
+            "schema": "chaptera.quill-story-sibling-census.v1",
+            "witness_count": rows.len(),
+            "admitted_count": admitted_count,
+            "skipped_count": rows.len().saturating_sub(admitted_count),
+            "rows": rows,
+            "evidence_boundary": "SHA-addressed same-source sibling census; source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
+        });
+
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&output, serde_json::to_vec_pretty(&report)?)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
     if paths.len() != 7 {
         bail!("expected exactly 7 witness PUBs, found {}", paths.len());
     }
