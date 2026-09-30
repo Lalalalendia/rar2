@@ -2549,8 +2549,7 @@ pub fn build_mature_0x2c_from_streams(
             _ => None,
         };
         let image_slot = exact_image_slot(shape, seq_num, &mut diagnostics);
-        let exact_grouped_image_identity =
-            raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
+        let exact_grouped_image_identity = raw_type == Some(RAW_TYPE_SHAPE) && image_slot.is_some();
         let grouped_projection = if direct_page.is_none()
             && references.get(&parent_seq).and_then(single_raw_type) == Some(RAW_TYPE_GROUP)
             && (exact_story_identity.is_some() || exact_grouped_image_identity)
