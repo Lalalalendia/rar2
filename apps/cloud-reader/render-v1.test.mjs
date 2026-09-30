@@ -6,7 +6,6 @@ import {
   imagePaintGeometry,
   imageResourcePaintPlan,
   resolvedTextLinePaintPlan,
-  paintsGenericNodeContainer,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
 
@@ -87,32 +86,6 @@ test("renderer input rejects parser/private source carriers recursively", () => 
   );
 });
 
-
-test("semantic table suppresses generic owner container fill", () => {
-  assert.equal(
-    paintsGenericNodeContainer({
-      kind: "table",
-      table: { rows: 1, columns: 1, cells: [] },
-      paint: { fill_rgb: [91, 155, 213] }
-    }),
-    false
-  );
-  assert.equal(
-    paintsGenericNodeContainer({
-      kind: "unknown",
-      paint: { fill_rgb: [91, 155, 213] }
-    }),
-    true
-  );
-  assert.equal(
-    paintsGenericNodeContainer({
-      kind: "table",
-      table: null,
-      paint: { fill_rgb: [91, 155, 213] }
-    }),
-    true
-  );
-});
 
 test("table cell geometry preserves authoritative page-space bounds", () => {
   assert.deepEqual(

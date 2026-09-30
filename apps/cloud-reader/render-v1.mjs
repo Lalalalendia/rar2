@@ -295,10 +295,6 @@ function appendText(group, defs, node, fonts, index) {
   }
 }
 
-export function paintsGenericNodeContainer(node) {
-  return !(node?.kind === "table" && node?.table);
-}
-
 export function tableCellPaintGeometry(cell) {
   const bounds = cell?.bounds;
   if (!bounds) return null;
@@ -387,8 +383,7 @@ function renderNode(svg, defs, node, resources, fonts, index) {
   const transform = nodeTransform(node);
   if (transform) group.setAttribute("transform", transform);
 
-  const paintContainer = paintsGenericNodeContainer(node);
-  const fill = paintContainer ? rgb(node.paint?.fill_rgb) : null;
+  const fill = rgb(node.paint?.fill_rgb);
   if (fill) {
     group.appendChild(svgNode("rect", {
       x: bounds.x,

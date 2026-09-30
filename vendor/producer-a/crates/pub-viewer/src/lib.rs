@@ -497,6 +497,22 @@ pub struct ViewerSolidLine {
     pub width_emu: i64,
 }
 
+/// A semantic TABLE is not an ordinary Shape paint surface.
+///
+/// The generic OfficeArt owner fill is preserved upstream as source evidence,
+/// but it is not authority for TABLE cell/background paint. Keep the line for
+/// now; dedicated per-cell fill/border semantics remain owned by the TABLE
+/// paint path.
+fn fence_semantic_table_container_fill(
+    is_semantic_table: bool,
+    mut paint: ViewerNodePaint,
+) -> ViewerNodePaint {
+    if is_semantic_table {
+        paint.solid_fill_rgb = None;
+    }
+    paint
+}
+
 fn bridge_effective_authority(
     authority: PubEffectivePaintAuthority,
 ) -> PubEffectivePaintAuthorityV1 {
@@ -560,13 +576,18 @@ fn viewer_node_paint_from_canonical_bridge(
             },
         };
         return Ok(
-            project_effective_source_paint_to_viewer_v1(&source).map(|paint| ViewerNodePaint {
-                node_id: node.header.id,
-                solid_fill_rgb: paint.solid_fill_rgb,
-                solid_line: paint.solid_line.map(|line| ViewerSolidLine {
-                    rgb: line.rgb,
-                    width_emu: line.width_emu,
-                }),
+            project_effective_source_paint_to_viewer_v1(&source).map(|paint| {
+                fence_semantic_table_container_fill(
+                    node.payload.table.is_some(),
+                    ViewerNodePaint {
+                        node_id: node.header.id,
+                        solid_fill_rgb: paint.solid_fill_rgb,
+                        solid_line: paint.solid_line.map(|line| ViewerSolidLine {
+                            rgb: line.rgb,
+                            width_emu: line.width_emu,
+                        }),
+                    },
+                )
             }),
         );
     }
@@ -613,13 +634,18 @@ fn viewer_node_paint_from_canonical_bridge(
     let projected = project_explicit_source_paint_to_viewer_v1(&source, provenance)
         .map_err(|error| anyhow!("canonical paint bridge rejected Viewer node paint: {error:?}"))?;
 
-    Ok(projected.map(|paint| ViewerNodePaint {
-        node_id: node.header.id,
-        solid_fill_rgb: paint.solid_fill_rgb,
-        solid_line: paint.solid_line.map(|line| ViewerSolidLine {
-            rgb: line.rgb,
-            width_emu: line.width_emu,
-        }),
+    Ok(projected.map(|paint| {
+        fence_semantic_table_container_fill(
+            node.payload.table.is_some(),
+            ViewerNodePaint {
+                node_id: node.header.id,
+                solid_fill_rgb: paint.solid_fill_rgb,
+                solid_line: paint.solid_line.map(|line| ViewerSolidLine {
+                    rgb: line.rgb,
+                    width_emu: line.width_emu,
+                }),
+            },
+        )
     }))
 }
 
@@ -3316,6 +3342,35 @@ mod tests {
 
     fn id(byte: u8) -> CanonicalId {
         CanonicalId::from_bytes([byte; 16])
+    }
+
+    #[test]
+    fn semantic_table_fences_generic_owner_fill_but_preserves_line() {
+        let line = ViewerSolidLine {
+            rgb: [1, 2, 3],
+            width_emu: 42,
+        };
+        let table_paint = fence_semantic_table_container_fill(
+            true,
+            ViewerNodePaint {
+                node_id: NodeId::from_canonical(id(90)),
+                solid_fill_rgb: Some([91, 155, 213]),
+                solid_line: Some(line.clone()),
+            },
+        );
+        assert_eq!(table_paint.solid_fill_rgb, None);
+        assert_eq!(table_paint.solid_line, Some(line.clone()));
+
+        let shape_paint = fence_semantic_table_container_fill(
+            false,
+            ViewerNodePaint {
+                node_id: NodeId::from_canonical(id(91)),
+                solid_fill_rgb: Some([91, 155, 213]),
+                solid_line: Some(line.clone()),
+            },
+        );
+        assert_eq!(shape_paint.solid_fill_rgb, Some([91, 155, 213]));
+        assert_eq!(shape_paint.solid_line, Some(line));
     }
 
     fn resolved_graph_fixture() -> PubResolvedGraph {

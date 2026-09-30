@@ -67,9 +67,27 @@ pub struct RenderTableCellV1 {
     pub id: TableCellId,
     pub row: u32,
     pub column: u32,
+    #[serde(
+        default = "default_render_table_span",
+        skip_serializing_if = "render_table_span_is_one"
+    )]
+    pub row_span: u32,
+    #[serde(
+        default = "default_render_table_span",
+        skip_serializing_if = "render_table_span_is_one"
+    )]
+    pub column_span: u32,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
+}
+
+fn default_render_table_span() -> u32 {
+    1
+}
+
+fn render_table_span_is_one(value: &u32) -> bool {
+    *value == 1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -489,6 +507,8 @@ pub fn build_page_render_plan_v1(
                             id: cell.id,
                             row: cell.address.row,
                             column: cell.address.column,
+                            row_span: cell.row_span,
+                            column_span: cell.column_span,
                             text: cell.text.clone(),
                             bounds: cell.bounds,
                         })
@@ -1421,6 +1441,8 @@ mod tests {
         assert_eq!(table.cells[0].id, cell_id);
         assert_eq!(table.cells[0].row, 0);
         assert_eq!(table.cells[0].column, 0);
+        assert_eq!(table.cells[0].row_span, 1);
+        assert_eq!(table.cells[0].column_span, 1);
         assert_eq!(table.cells[0].text, "cell");
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
     }
