@@ -3531,6 +3531,10 @@ pub fn resolve_bounded_effective_officeart_paint(
 fn shape_has_explicit_filled_without_fill_color(
     shape: &pub_escher::SpContainerObservation,
 ) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(0x0002) {
+        return false;
+    }
+
     let fill_color = paint_scalar_from_records(
         &shape.fopts,
         OFFICE_ART_FILL_COLOR,
@@ -4722,17 +4726,24 @@ mod tests {
 
     #[test]
     fn effective_officeart_paint_keeps_sparse_explicit_fill_on_normative_color() {
-        let shape = crop_test_shape(vec![crop_test_property(
+        let mut shape = crop_test_shape(vec![crop_test_property(
             OFFICE_ART_FILL_BOOLEANS,
             FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
         )]);
+        shape.fsp = Some(pub_escher::FspRecord {
+            spid: 1,
+            flags: 0,
+            shape_type: 0x0002,
+            source: crop_test_span(0, 8),
+            trailing_source: None,
+        });
         let dgg = dgg_test_defaults(
             vec![crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF)],
             Vec::new(),
         );
 
         let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
-            .expect("sparse explicit fill remains bounded");
+            .expect("sparse RoundRectangle fill remains bounded");
 
         let fill_color = paint.fill.color_rgb.expect("normative fill color");
         assert_eq!(fill_color.value, [0xFF, 0xFF, 0xFF]);
@@ -4741,6 +4752,14 @@ mod tests {
             PubEffectivePaintAuthority::NormativeDefault
         );
         assert!(paint.fill.visible.expect("explicit visibility").value);
+
+        shape.fsp.as_mut().expect("fsp").shape_type = 0x0001;
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("other shape keeps existing DGG fallback");
+        assert_eq!(
+            paint.fill.color_rgb.expect("DGG fill color").authority,
+            PubEffectivePaintAuthority::DrawingGroupPrimary
+        );
     }
 
     #[test]
