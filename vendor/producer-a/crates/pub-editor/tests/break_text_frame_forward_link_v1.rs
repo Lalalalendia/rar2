@@ -82,7 +82,6 @@ fn text_frame(
         payload: PubResolvedNodePayload {
             contents_seq_num: 100 + ordinal,
             officeart_shape_type: Some(202),
-           officeart_adjust_value: PubOfficeArtAdjustValueSource::Unsupported,
             officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
             officeart_spid: Some(100 + ordinal),
             image_slot: None,
