@@ -1379,6 +1379,63 @@ fn postscript_ignore_blocker_profile(params: &[u8]) -> Value {
     })
 }
 
+fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
+    let Some((record_index, (_, params))) = records.iter().enumerate().find(|(_, (function, params))| {
+        *function == META_ESCAPE_FUNCTION && read_u16(params, 0) == Some(0x0025)
+    }) else {
+        return json!({"kind": "postscript_data", "record": "missing"});
+    };
+
+    let byte_count = read_u16(params, 2).map(usize::from);
+    let payload = params.get(4..).unwrap_or(&[]);
+    let declared_payload = byte_count
+        .and_then(|count| payload.get(..count))
+        .unwrap_or(&[]);
+    let printable_ascii_count = declared_payload
+        .iter()
+        .filter(|byte| matches!(**byte, 0x20..=0x7e | b'\n' | b'\r' | b'\t'))
+        .count();
+    let high_bit_count = declared_payload.iter().filter(|byte| **byte >= 0x80).count();
+    let nul_count = declared_payload.iter().filter(|byte| **byte == 0).count();
+    let lowercase = declared_payload
+        .iter()
+        .map(|byte| byte.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let has_token = |needle: &[u8]| lowercase.windows(needle.len()).any(|window| window == needle);
+
+    let previous_function = record_index
+        .checked_sub(1)
+        .and_then(|index| records.get(index))
+        .map(|(function, _)| format!("0x{function:04x}"));
+    let next_function = records
+        .get(record_index + 1)
+        .map(|(function, _)| format!("0x{function:04x}"));
+
+    json!({
+        "kind": "postscript_data",
+        "record_index": record_index,
+        "param_len": params.len(),
+        "escape_function": read_u16(params, 0).map(|value| format!("0x{value:04x}")),
+        "byte_count": byte_count,
+        "payload_len": payload.len(),
+        "byte_count_matches_payload": byte_count == Some(payload.len()),
+        "declared_payload_sha256": (!declared_payload.is_empty()).then(|| sha256_hex(declared_payload)),
+        "printable_ascii_count": printable_ascii_count,
+        "high_bit_count": high_bit_count,
+        "nul_count": nul_count,
+        "starts_percent_bang": declared_payload.starts_with(b"%!"),
+        "contains_image_operator": has_token(b"image"),
+        "contains_imagemask_operator": has_token(b"imagemask"),
+        "contains_show_operator": has_token(b"show"),
+        "contains_stroke_operator": has_token(b"stroke"),
+        "contains_fill_operator": has_token(b"fill"),
+        "contains_moveto_operator": has_token(b"moveto"),
+        "contains_lineto_operator": has_token(b"lineto"),
+        "previous_function": previous_function,
+        "next_function": next_function,
+    })
+}
+
 fn allocate_probe_object(objects: &mut Vec<Option<(u16, usize)>>, object: (u16, usize)) -> usize {
     if let Some((index, slot)) = objects
         .iter_mut()
@@ -1480,6 +1537,7 @@ fn wmf_blocker_profile(wmf: &[u8], detail: &str) -> Value {
             })
             .map(|(_, params)| postscript_ignore_blocker_profile(params))
             .unwrap_or_else(|| json!({"kind": "postscript_ignore", "record": "missing"})),
+        "escape_function_0x0025" => postscript_data_blocker_profile(&records),
         "select_unsupported_object" => selected_unsupported_blocker_profile(&records),
         _ => json!({"kind": "other", "detail": detail}),
     }
