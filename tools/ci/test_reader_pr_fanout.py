@@ -11,13 +11,59 @@ assert spec and spec.loader
 spec.loader.exec_module(mod)
 
 
-def assert_scope(paths, **expected):
-    actual = mod.classify(paths)
+def assert_scope(paths, *, evidence_only_paths=None, **expected):
+    actual = mod.classify(paths, evidence_only_paths)
     for key, value in expected.items():
         assert actual[key] is value, (paths, key, actual)
 
 
 def main():
+    base_source = """fn production() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn probe() {}
+}
+"""
+    head_source = """fn production() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn probe() {
+        eprintln!("evidence");
+    }
+}
+"""
+    old_marker = mod.cfg_test_module_line(base_source)
+    new_marker = mod.cfg_test_module_line(head_source)
+    assert old_marker is not None and new_marker is not None
+    assert mod.diff_hunks_within_test_region(
+        "@@ -6,1 +6,3 @@\n-    fn probe() {}\n+    fn probe() {\n+        eprintln!(\"evidence\");\n+    }\n",
+        old_test_line=old_marker,
+        new_test_line=new_marker,
+    )
+    assert not mod.diff_hunks_within_test_region(
+        "@@ -1,1 +1,1 @@\n-fn production() {}\n+fn production() { eprintln!(\"runtime\"); }\n",
+        old_test_line=old_marker,
+        new_test_line=new_marker,
+    )
+    assert_scope(
+        ["apps/chaptera-server/src/reader_scene_v1.rs"],
+        evidence_only_paths={"apps/chaptera-server/src/reader_scene_v1.rs"},
+        local_portable=False,
+        tier_a=False,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        typography_golden=False,
+        android_core=False,
+        android=False,
+        web=False,
+    )
+
     assert_scope(
         ["vendor/producer-a/crates/pub-contents/src/palette.rs"],
         tier_a=True,

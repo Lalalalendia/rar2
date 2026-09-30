@@ -6,6 +6,7 @@ import fnmatch
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from typing import Iterable
 
@@ -13,6 +14,15 @@ from typing import Iterable
 EVIDENCE_ONLY_PATHS = {
     "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs",
 }
+
+TEST_REGION_EVIDENCE_CANDIDATES = {
+    "apps/chaptera-server/src/reader_scene_v1.rs",
+}
+
+HUNK_HEADER = re.compile(
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@",
+    re.MULTILINE,
+)
 
 SCOPES = (
     "tier_a",
@@ -50,6 +60,77 @@ def matches(path: str, patterns: Iterable[str]) -> bool:
         if fnmatch.fnmatchcase(path, pattern):
             return True
     return False
+
+
+def cfg_test_module_line(source: str) -> int | None:
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != "#[cfg(test)]":
+            continue
+        for following in lines[index + 1 :]:
+            stripped = following.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("mod tests {"):
+                return index + 1
+            break
+    return None
+
+
+def diff_hunks_within_test_region(
+    diff_text: str,
+    *,
+    old_test_line: int,
+    new_test_line: int,
+) -> bool:
+    hunks = list(HUNK_HEADER.finditer(diff_text))
+    if not hunks:
+        return False
+    for hunk in hunks:
+        old_start = int(hunk.group(1))
+        old_count = int(hunk.group(2) or "1")
+        new_start = int(hunk.group(3))
+        new_count = int(hunk.group(4) or "1")
+        if old_count and old_start <= old_test_line:
+            return False
+        if new_count and new_start <= new_test_line:
+            return False
+    return True
+
+
+def test_region_evidence_only_paths(
+    base: str,
+    head: str,
+    paths: list[str],
+) -> set[str]:
+    evidence_only: set[str] = set()
+    for path in paths:
+        if path not in TEST_REGION_EVIDENCE_CANDIDATES:
+            continue
+        try:
+            base_source = subprocess.check_output(
+                ["git", "show", f"{base}:{path}"], text=True
+            )
+            head_source = subprocess.check_output(
+                ["git", "show", f"{head}:{path}"], text=True
+            )
+            diff_text = subprocess.check_output(
+                ["git", "diff", "--unified=0", f"{base}...{head}", "--", path],
+                text=True,
+            )
+        except subprocess.CalledProcessError:
+            continue
+        old_test_line = cfg_test_module_line(base_source)
+        new_test_line = cfg_test_module_line(head_source)
+        if old_test_line is None or new_test_line is None:
+            continue
+        if diff_hunks_within_test_region(
+            diff_text,
+            old_test_line=old_test_line,
+            new_test_line=new_test_line,
+        ):
+            evidence_only.add(path)
+    return evidence_only
 
 
 READER_SHARED = (
@@ -235,8 +316,12 @@ SHARED_DESKTOP_FILES = {
 }
 
 
-def classify(paths: list[str]) -> dict[str, bool]:
-    semantic_paths = [path for path in paths if path not in EVIDENCE_ONLY_PATHS]
+def classify(
+    paths: list[str],
+    dynamic_evidence_only_paths: set[str] | None = None,
+) -> dict[str, bool]:
+    evidence_only = EVIDENCE_ONLY_PATHS | (dynamic_evidence_only_paths or set())
+    semantic_paths = [path for path in paths if path not in evidence_only]
     mapping = {
         "tier_a": TIER_A,
         "reader_windows_smoke": READER_WINDOWS_SMOKE,
@@ -281,12 +366,16 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = changed_paths(args.base, args.head)
-    scopes = classify(paths)
+    dynamic_evidence_only = test_region_evidence_only_paths(args.base, args.head, paths)
+    scopes = classify(paths, dynamic_evidence_only)
     receipt = {
         "schema": "chaptera.reader-pr-fanout.v1",
         "base_sha": args.base,
         "head_sha": args.head,
         "changed_paths": paths,
+        "evidence_only_paths": sorted(
+            (EVIDENCE_ONLY_PATHS & set(paths)) | dynamic_evidence_only
+        ),
         "scopes": scopes,
     }
 
