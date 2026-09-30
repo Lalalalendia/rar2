@@ -1,5 +1,8 @@
 use super::*;
-use pub_contents::{CONTENTS_RAW_TYPE_CELLS, MatureCellCoordinates, parse_confirmed_mature_cells};
+use pub_contents::{
+    CONTENTS_RAW_TYPE_CELLS, ContentsCursor, MatureCellCoordinates, parse_confirmed_block,
+    parse_confirmed_mature_cells,
+};
 use pub_model::{
     RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId,
 };
@@ -9,6 +12,10 @@ pub const RAW_TYPE_TABLE: u16 = 0x10;
 pub const TABLE_NUM_ROWS_ID: u16 = 0x66;
 pub const TABLE_NUM_COLUMNS_ID: u16 = 0x67;
 pub const TABLE_CELLS_SEQ_NUM_ID: u16 = 0x6B;
+pub const TABLE_WIDTH_ID: u16 = 0x68;
+pub const TABLE_HEIGHT_ID: u16 = 0x69;
+pub const TABLE_ROWCOL_ARRAY_ID: u16 = 0x6D;
+pub const TABLE_ROWCOL_SIZE_ID: u16 = 0x02;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellSource {
@@ -288,6 +295,7 @@ pub(crate) struct TableBridgeContext<'a> {
     pub story_by_syid: &'a BTreeMap<u32, StoryId>,
     pub story_layout_keys: &'a BTreeMap<u32, (u32, RawSpan)>,
     pub mcld: Option<&'a QuillMcldChunk>,
+    pub table_bounds: &'a RectEmu,
 }
 
 pub(crate) fn build_table_story_ownership_source(
