@@ -731,11 +731,13 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
         .entries
         .iter()
         .enumerate()
-        .map(|(document_ordinal, entry)| PubDocumentPageListEntryObservation {
-            document_ordinal,
-            contents_seq_num: entry.handle,
-            raw_type: references.get(&entry.handle).and_then(single_raw_type),
-        })
+        .map(
+            |(document_ordinal, entry)| PubDocumentPageListEntryObservation {
+                document_ordinal,
+                contents_seq_num: entry.handle,
+                raw_type: references.get(&entry.handle).and_then(single_raw_type),
+            },
+        )
         .collect::<Vec<_>>();
 
     let mut pages = Vec::new();
@@ -821,10 +823,8 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
                 .map(|item| item.contents_seq_num),
             previous_document_entry_raw_type: previous_document_entry
                 .and_then(|item| item.raw_type),
-            next_document_entry_seq_num: next_document_entry
-                .map(|item| item.contents_seq_num),
-            next_document_entry_raw_type: next_document_entry
-                .and_then(|item| item.raw_type),
+            next_document_entry_seq_num: next_document_entry.map(|item| item.contents_seq_num),
+            next_document_entry_raw_type: next_document_entry.and_then(|item| item.raw_type),
             shape_child_count: child_raw_type_counts
                 .get(&RAW_TYPE_SHAPE)
                 .copied()
