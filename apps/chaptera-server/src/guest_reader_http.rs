@@ -16,7 +16,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use chaptera_failure_intake_protocol::FailureClassificationV1;
+use chaptera_failure_intake_protocol::{
+    ClusterDispositionV1, ExactByteDispositionV1, FailureClassificationV1, INTAKE_RECEIPT_V1,
+    IntakeConsentRequestV1, IntakeReceiptV1, RETENTION_POLICY_V1, ServerIntakeEvidenceV1,
+};
 use futures_util::StreamExt;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
@@ -29,7 +32,7 @@ use sqlx::{
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    blob_store::{BlobStoreError, BlobStoreService},
+    blob_store::{BlobStoreError, BlobStoreService, CreateBindingRequest, ResourceKind},
     edge::ClientIp,
     guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
     public_rate_limit::{
@@ -46,6 +49,11 @@ use crate::{
 pub const GUEST_SERVICE_TENANT_ID: &str = "tenant:cloud-reader-guest-service";
 pub const GUEST_SERVICE_PRINCIPAL_ID: &str = "principal:cloud-reader-guest-service";
 pub const GUEST_TOKEN_HEADER: &str = "x-chaptera-reader-session";
+pub const CONTRIBUTION_TOKEN_HEADER: &str = "x-chaptera-reader-contribution";
+pub const RESEARCH_INTAKE_TENANT_ID: &str = "tenant:cloud-reader-research-intake";
+const CONTRIBUTION_CAPABILITY_TTL: Duration = Duration::from_secs(5 * 60);
+const CONTRIBUTION_CAPABILITY_PROTOCOL_V1: &str =
+    "chaptera.reader-contribution-capability.v1";
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const CLEANUP_BATCH: i64 = 16;
 const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
@@ -122,6 +130,14 @@ pub fn router(state: GuestReaderHttpState) -> Router {
             "/v1/reader/guest-sessions/{session_id}/scene",
             get(get_scene),
         )
+        .route(
+            "/v1/reader/guest-sessions/{session_id}/contribution-capability",
+            post(issue_contribution_capability),
+        )
+        .route(
+            "/v1/reader/guest-sessions/{session_id}/contribute",
+            post(contribute_session),
+        )
         .with_state(state)
 }
 
@@ -181,6 +197,15 @@ struct GuestSceneResponse {
     failure_classification: Option<FailureClassificationV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     scene: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct ContributionCapabilityResponse {
+    protocol_version: &'static str,
+    submission_id: String,
+    capability_token: String,
+    expires_at_ms: i64,
+    retention_policy: &'static str,
 }
 
 const GUEST_PROTOCOL_V1: &str = "chaptera.reader-guest-session.v1";
