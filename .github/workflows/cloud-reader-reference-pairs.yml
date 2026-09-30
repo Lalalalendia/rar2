@@ -10,6 +10,7 @@ on:
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
@@ -24,6 +25,7 @@ on:
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
@@ -99,6 +101,12 @@ jobs:
           if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
             cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
           fi
+
+      - name: Census exact Carlton TABLE cell paint join
+        env:
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/carlton-pair/March-2026.pub
+          CHAPTERA_TABLE_CELL_PAINT_RECEIPT: target/cloud-reader-reference-pairs/carlton-table-cell-paint-join.json
+        run: cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
 
       - name: Build exact reference fixture manifest
         run: |
