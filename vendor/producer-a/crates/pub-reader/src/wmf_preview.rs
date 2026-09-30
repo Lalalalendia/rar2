@@ -67,6 +67,7 @@ const BS_PATTERN: u16 = 3;
 const BS_DIBPATTERNPT: u16 = 5;
 const DIB_RGB_COLORS: u16 = 0;
 const BI_RGB: u32 = 0;
+const SRCAND: u32 = 0x0088_00c6;
 const SRCCOPY: u32 = 0x00cc_0020;
 const LEGACY_PATTERN_DIB_BYTES: usize = 96;
 const LEGACY_PATTERN_SIDE: usize = 8;
@@ -265,6 +266,31 @@ impl Canvas {
         self.rgba[index..index + 4].copy_from_slice(&[color.r, color.g, color.b, 255]);
     }
 
+    fn src_and(&mut self, clip: RectPx, x: i32, y: i32, color: Color) {
+        if !clip.contains(x, y) || x < 0 || y < 0 {
+            return;
+        }
+        let Ok(x) = u32::try_from(x) else {
+            return;
+        };
+        let Ok(y) = u32::try_from(y) else {
+            return;
+        };
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        let index = (u64::from(y) * u64::from(self.width) + u64::from(x)) * 4;
+        let Ok(index) = usize::try_from(index) else {
+            return;
+        };
+        if self.rgba[index + 3] == 0 {
+            return;
+        }
+        self.rgba[index] &= color.r;
+        self.rgba[index + 1] &= color.g;
+        self.rgba[index + 2] &= color.b;
+    }
+
     fn span_brush(&mut self, clip: RectPx, y: i32, x0: i32, x1: i32, brush: Brush) -> Result<()> {
         if y < clip.top || y >= clip.bottom || y < 0 || y >= self.height as i32 {
             return Ok(());
@@ -414,6 +440,10 @@ fn proven_stretchdib_profile(width: i32, height: i32, bit_count: u16) -> bool {
     )
 }
 
+fn proven_srcand_stretchdib_profile(width: i32, height: i32, bit_count: u16) -> bool {
+    matches!((width, height, bit_count), (163, 117, 1) | (149, 148, 1))
+}
+
 fn rasterize_bounded_stretchdib(
     params: &[u8],
     state: &PlaybackState,
@@ -460,8 +490,14 @@ fn rasterize_bounded_stretchdib(
     let colors_used =
         read_u32(dib, 32).ok_or_else(|| anyhow!("WMF STRETCHDIB color count is truncated"))?;
 
-    if raster_operation != SRCCOPY
-        || color_usage != DIB_RGB_COLORS
+    let srccopy_profile = raster_operation == SRCCOPY
+        && proven_stretchdib_profile(width, height, bit_count)
+        && matches!((bit_count, colors_used), (8, 256) | (24, 0));
+    let srcand_profile = raster_operation == SRCAND
+        && proven_srcand_stretchdib_profile(width, height, bit_count)
+        && colors_used == 0;
+
+    if color_usage != DIB_RGB_COLORS
         || src_x != 0
         || src_y != 0
         || dest_x != 0
@@ -475,8 +511,7 @@ fn rasterize_bounded_stretchdib(
         || compression != BI_RGB
         || width != i32::from(src_width)
         || height != i32::from(src_height)
-        || !proven_stretchdib_profile(width, height, bit_count)
-        || !matches!((bit_count, colors_used), (8, 256) | (24, 0))
+        || !(srccopy_profile || srcand_profile)
     {
         bail!("unsupported WMF STRETCHDIB profile");
     }
@@ -500,7 +535,11 @@ fn rasterize_bounded_stretchdib(
         bail!("unsupported WMF STRETCHDIB image size");
     }
 
-    let palette_entries = if bit_count == 8 { 256usize } else { 0usize };
+    let palette_entries = match bit_count {
+        1 => 2usize,
+        8 => 256usize,
+        _ => 0usize,
+    };
     let palette_bytes = palette_entries
         .checked_mul(RGBQUAD_BYTES)
         .ok_or_else(|| anyhow!("WMF STRETCHDIB palette size overflow"))?;
@@ -514,7 +553,7 @@ fn rasterize_bounded_stretchdib(
         bail!("unsupported WMF STRETCHDIB DIB length");
     }
 
-    let palette = if bit_count == 8 {
+    let palette = if matches!(bit_count, 1 | 8) {
         let mut colors = Vec::with_capacity(palette_entries);
         for index in 0..palette_entries {
             colors.push(rgb_quad(
@@ -578,34 +617,54 @@ fn rasterize_bounded_stretchdib(
                     .map_err(|_| anyhow!("WMF STRETCHDIB source x is out of bounds"))?
                     .min(width_usize - 1);
 
-            let color = if bit_count == 8 {
-                let index = usize::from(
-                    *dib.get(row_offset + source_x)
-                        .ok_or_else(|| anyhow!("WMF STRETCHDIB indexed pixel is truncated"))?,
-                );
-                palette
-                    .as_ref()
-                    .and_then(|colors| colors.get(index))
-                    .copied()
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))?
-            } else {
-                let pixel = row_offset
-                    .checked_add(
-                        source_x
-                            .checked_mul(3)
-                            .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?,
-                    )
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?;
-                let raw = dib
-                    .get(pixel..pixel + 3)
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB RGB pixel is truncated"))?;
-                Color {
-                    r: raw[2],
-                    g: raw[1],
-                    b: raw[0],
+            let color = match bit_count {
+                1 => {
+                    let byte = *dib
+                        .get(row_offset + source_x / 8)
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB monochrome pixel is truncated"))?;
+                    let bit = 7 - (source_x % 8);
+                    let index = usize::from((byte >> bit) & 1);
+                    palette
+                        .as_ref()
+                        .and_then(|colors| colors.get(index))
+                        .copied()
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))?
                 }
+                8 => {
+                    let index = usize::from(
+                        *dib.get(row_offset + source_x)
+                            .ok_or_else(|| anyhow!("WMF STRETCHDIB indexed pixel is truncated"))?,
+                    );
+                    palette
+                        .as_ref()
+                        .and_then(|colors| colors.get(index))
+                        .copied()
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))?
+                }
+                24 => {
+                    let pixel = row_offset
+                        .checked_add(
+                            source_x
+                                .checked_mul(3)
+                                .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?,
+                        )
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?;
+                    let raw = dib
+                        .get(pixel..pixel + 3)
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB RGB pixel is truncated"))?;
+                    Color {
+                        r: raw[2],
+                        g: raw[1],
+                        b: raw[0],
+                    }
+                }
+                _ => bail!("unsupported WMF STRETCHDIB bit depth"),
             };
-            canvas.set(state.clip, x, y, color);
+            if raster_operation == SRCAND {
+                canvas.src_and(state.clip, x, y, color);
+            } else {
+                canvas.set(state.clip, x, y, color);
+            }
         }
     }
 
@@ -2031,6 +2090,95 @@ mod tests {
         bytes.extend_from_slice(&0_u16.to_le_bytes());
         bytes.extend(records);
         bytes
+    }
+
+    fn synthetic_srcand_stretchdib(paint_destination: bool) -> Vec<u8> {
+        const WIDTH: usize = 163;
+        const HEIGHT: usize = 117;
+        let mut records = Vec::<u8>::new();
+
+        let mut window = Vec::new();
+        window.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+        window.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+        records.extend(record(META_SETWINDOWEXT, &window));
+
+        if paint_destination {
+            let mut brush = Vec::new();
+            brush.extend_from_slice(&BS_SOLID.to_le_bytes());
+            brush.extend_from_slice(&0x00aa_ccf0_u32.to_le_bytes());
+            brush.extend_from_slice(&0_u16.to_le_bytes());
+            records.extend(record(META_CREATEBRUSHINDIRECT, &brush));
+            records.extend(record(META_SELECTOBJECT, &0_u16.to_le_bytes()));
+
+            let mut rectangle = Vec::new();
+            rectangle.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+            rectangle.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+            rectangle.extend_from_slice(&0_i16.to_le_bytes());
+            rectangle.extend_from_slice(&0_i16.to_le_bytes());
+            records.extend(record(META_RECTANGLE, &rectangle));
+        }
+
+        let row_stride = WIDTH.div_ceil(32) * 4;
+        let image_size = row_stride * HEIGHT;
+        let mut dib = Vec::new();
+        dib.extend_from_slice(&40_u32.to_le_bytes());
+        dib.extend_from_slice(&(WIDTH as i32).to_le_bytes());
+        dib.extend_from_slice(&(HEIGHT as i32).to_le_bytes());
+        dib.extend_from_slice(&1_u16.to_le_bytes());
+        dib.extend_from_slice(&1_u16.to_le_bytes());
+        dib.extend_from_slice(&BI_RGB.to_le_bytes());
+        dib.extend_from_slice(&u32::try_from(image_size).unwrap().to_le_bytes());
+        dib.extend_from_slice(&0_i32.to_le_bytes());
+        dib.extend_from_slice(&0_i32.to_le_bytes());
+        dib.extend_from_slice(&0_u32.to_le_bytes());
+        dib.extend_from_slice(&0_u32.to_le_bytes());
+        dib.extend_from_slice(&[0, 0, 0, 0]);
+        dib.extend_from_slice(&[0xff, 0xf0, 0x0f, 0]);
+        dib.extend(std::iter::repeat_n(0xff_u8, image_size));
+
+        let mut stretch = Vec::new();
+        stretch.extend_from_slice(&SRCAND.to_le_bytes());
+        stretch.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        stretch.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+        stretch.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+        stretch.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&dib);
+        records.extend(record(META_STRETCHDIB, &stretch));
+        records.extend(record(META_EOF, &[]));
+
+        let total_len = 18 + records.len();
+        let max_record_words = u32::try_from((6 + stretch.len()) / 2).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&(if paint_destination { 1_u16 } else { 0 }).to_le_bytes());
+        bytes.extend_from_slice(&max_record_words.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
+    #[test]
+    fn srcand_preserves_transparent_destination() {
+        let image = rasterize_wmf_preview(&synthetic_srcand_stretchdib(false), 163, 117)
+            .expect("bounded SRCAND over transparent destination");
+        let center = ((58 * 163 + 81) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn srcand_composites_nontrivial_opaque_destination_rgb() {
+        let image = rasterize_wmf_preview(&synthetic_srcand_stretchdib(true), 163, 117)
+            .expect("bounded SRCAND over painted destination");
+        let center = ((58 * 163 + 81) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[0x00, 0xc0, 0xaa, 255]);
     }
 
     #[test]
