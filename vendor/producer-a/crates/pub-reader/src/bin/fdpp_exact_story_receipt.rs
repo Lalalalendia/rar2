@@ -1,6 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_model::Sha256Digest;
-use pub_reader::{PubBridgeDiagnostic, build_mature_0x2c_source_graph};
+use pub_reader::{build_mature_0x2c_source_graph, PubBridgeDiagnostic};
 use std::io::Cursor;
 use std::path::PathBuf;
 
@@ -18,7 +18,9 @@ fn fallback_counts(build: &pub_reader::PubSourceGraphBuild) -> Vec<usize> {
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(args.next().context("missing PUB path")?);
-    let mode = args.next().context("missing expected Story count or --reject")?;
+    let mode = args
+        .next()
+        .context("missing expected Story count or --reject")?;
     if args.next().is_some() {
         bail!("unexpected extra arguments");
     }
