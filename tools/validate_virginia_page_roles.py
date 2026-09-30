@@ -152,6 +152,41 @@ def main() -> int:
             reference_pages = document.page_count
 
         projected_count = scenario.get("projected_page_count")
+        pages = sorted(
+            observation["pages"], key=lambda page: page["document_ordinal"]
+        )
+        positive_shape_nonzero_oid = [
+            page["contents_seq_num"]
+            for page in pages
+            if (page.get("shape_child_count", 0) + page.get("group_child_count", 0) > 0)
+            and (page.get("oid_dword0", 0) != 0 or page.get("oid_dword1", 0) != 0)
+        ]
+        content_oid_or_table = [
+            page["contents_seq_num"]
+            for page in pages
+            if (
+                (
+                    page.get("shape_child_count", 0)
+                    + page.get("group_child_count", 0)
+                    > 0
+                )
+                and (
+                    page.get("oid_dword0", 0) != 0
+                    or page.get("oid_dword1", 0) != 0
+                )
+            )
+            or page.get("child_raw_type_counts", {}).get("16", 0) > 0
+        ]
+        zero_oid_table_pages = [
+            {
+                "contents_seq_num": page["contents_seq_num"],
+                "table_child_count": page.get("child_raw_type_counts", {}).get("16", 0),
+            }
+            for page in pages
+            if page.get("oid_dword0", 0) == 0
+            and page.get("oid_dword1", 0) == 0
+            and page.get("child_raw_type_counts", {}).get("16", 0) > 0
+        ]
         rows.append(
             {
                 "pair_id": spec["id"],
@@ -176,6 +211,22 @@ def main() -> int:
                     if scenario["authority_state"] == "resolved_current_scenario"
                     else None
                 ),
+                "discovery_only": {
+                    "positive_shape_nonzero_oid_seq_nums": positive_shape_nonzero_oid,
+                    "positive_shape_nonzero_oid_count": len(
+                        positive_shape_nonzero_oid
+                    ),
+                    "positive_shape_nonzero_oid_count_matches_reference": (
+                        len(positive_shape_nonzero_oid) == reference_pages
+                    ),
+                    "content_oid_or_table_seq_nums": content_oid_or_table,
+                    "content_oid_or_table_count": len(content_oid_or_table),
+                    "content_oid_or_table_count_matches_reference": (
+                        len(content_oid_or_table) == reference_pages
+                    ),
+                    "zero_oid_table_pages": zero_oid_table_pages,
+                    "promoted_to_authority": False,
+                },
             }
         )
 
