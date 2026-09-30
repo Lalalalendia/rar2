@@ -171,9 +171,19 @@ pub struct PubPageRoleObservationReceipt {
     pub document_page_list_entry_count: usize,
     pub confirmed_page_count: usize,
     pub special_entry_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub document_entries: Vec<PubDocumentPageListEntryObservation>,
     pub pages: Vec<PubPageRoleObservation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controlling: Vec<PubControllingObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubDocumentPageListEntryObservation {
+    pub document_ordinal: usize,
+    pub contents_seq_num: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_type: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,7 +197,17 @@ pub struct PubPageRoleObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_master_seq_num: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_master_raw_type: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pgt_type: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_document_entry_seq_num: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_document_entry_raw_type: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_document_entry_seq_num: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_document_entry_raw_type: Option<u16>,
     pub child_raw_type_counts: BTreeMap<u16, usize>,
     pub shape_child_count: usize,
     pub group_child_count: usize,
@@ -707,6 +727,19 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
     let page_list = parse_confirmed_document_page_list(&contents, page_list_block)
         .context("parse DOCUMENT PageList for PAGE-role observation")?;
 
+    let document_entries = page_list
+        .entries
+        .iter()
+        .enumerate()
+        .map(
+            |(document_ordinal, entry)| PubDocumentPageListEntryObservation {
+                document_ordinal,
+                contents_seq_num: entry.handle,
+                raw_type: references.get(&entry.handle).and_then(single_raw_type),
+            },
+        )
+        .collect::<Vec<_>>();
+
     let mut pages = Vec::new();
     let mut special_entry_count = 0_usize;
 
@@ -770,13 +803,28 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             }
         }
 
+        let applied_master_raw_type = applied_master_seq_num
+            .and_then(|seq_num| references.get(&seq_num))
+            .and_then(single_raw_type);
+        let previous_document_entry = document_ordinal
+            .checked_sub(1)
+            .and_then(|ordinal| document_entries.get(ordinal));
+        let next_document_entry = document_entries.get(document_ordinal + 1);
+
         pages.push(PubPageRoleObservation {
             document_ordinal,
             contents_seq_num: entry.handle,
             oid_dword0: oid.map(|value| value.0),
             oid_dword1: oid.map(|value| value.1),
             applied_master_seq_num,
+            applied_master_raw_type,
             pgt_type,
+            previous_document_entry_seq_num: previous_document_entry
+                .map(|item| item.contents_seq_num),
+            previous_document_entry_raw_type: previous_document_entry
+                .and_then(|item| item.raw_type),
+            next_document_entry_seq_num: next_document_entry.map(|item| item.contents_seq_num),
+            next_document_entry_raw_type: next_document_entry.and_then(|item| item.raw_type),
             shape_child_count: child_raw_type_counts
                 .get(&RAW_TYPE_SHAPE)
                 .copied()
@@ -845,6 +893,7 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
         document_page_list_entry_count: page_list.entries.len(),
         confirmed_page_count: pages.len(),
         special_entry_count,
+        document_entries,
         pages,
         controlling,
     })
