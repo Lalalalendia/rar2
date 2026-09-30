@@ -48,6 +48,12 @@
       "items": {
         "$ref": "#/$defs/typographyRun"
       }
+    },
+    "script_font_maps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/scriptFontMap"
+      }
     }
   },
   "$defs": {
@@ -634,6 +640,69 @@
         },
         "size_inherited": {
           "type": "boolean"
+        },
+        "source_story_text_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "scriptFontEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "script_slot",
+        "source_font_index",
+        "disposition"
+      ],
+      "properties": {
+        "script_slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "source_font_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_font_name": {
+          "type": "string"
+        },
+        "disposition": {
+          "enum": [
+            "resolved",
+            "unresolved_sentinel",
+            "invalid_font_ordinal"
+          ]
+        }
+      }
+    },
+    "scriptFontMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "story_id",
+        "scalar_start",
+        "scalar_end",
+        "entries",
+        "source_story_text_sha256"
+      ],
+      "properties": {
+        "story_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scalar_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scalar_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scriptFontEntry"
+          }
         },
         "source_story_text_sha256": {
           "$ref": "#/$defs/sha256"
