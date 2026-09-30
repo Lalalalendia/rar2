@@ -3361,10 +3361,14 @@ const OFFICE_ART_LINE_COLOR: u16 = 0x01C0;
 const OFFICE_ART_LINE_WIDTH: u16 = 0x01CB;
 const OFFICE_ART_LINE_BOOLEANS: u16 = 0x01FF;
 
-const FILL_USE_FILLED_BIT: u32 = 1 << 11;
-const FILL_FILLED_BIT: u32 = 1 << 27;
-const LINE_USE_LINE_BIT: u32 = 1 << 12;
-const LINE_LINE_BIT: u32 = 1 << 28;
+// OfficeArt boolean property sets persist each use/value pair in mirrored
+// high-word/low-word bit positions. Publisher corpus controls preserve the
+// exact negative/positive pairs 0x00100000/0x00100010 for fill and
+// 0x00080000/0x00080008 for line.
+const FILL_USE_FILLED_BIT: u32 = 1 << 20;
+const FILL_FILLED_BIT: u32 = 1 << 4;
+const LINE_USE_LINE_BIT: u32 = 1 << 19;
+const LINE_LINE_BIT: u32 = 1 << 3;
 const OFFICEART_FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
 const OFFICEART_SHAPE_TYPE_LINE: u16 = 0x0014;
@@ -4700,30 +4704,46 @@ mod tests {
     }
 
     #[test]
-    fn officeart_visibility_masks_require_use_bits() {
-        let fill_without_use = FILL_FILLED_BIT;
-        let fill_with_use = FILL_USE_FILLED_BIT | FILL_FILLED_BIT;
-        let line_without_use = LINE_LINE_BIT;
-        let line_with_use = LINE_USE_LINE_BIT | LINE_LINE_BIT;
+    fn officeart_visibility_masks_match_publisher_activation_pairs() {
+        let fill_disabled = 0x0010_0000;
+        let fill_enabled = 0x0010_0010;
+        let fill_value_without_use = 0x0000_0010;
+        let line_disabled = 0x0008_0000;
+        let line_enabled = 0x0008_0008;
+        let line_value_without_use = 0x0000_0008;
+
+        assert_eq!(FILL_USE_FILLED_BIT, 0x0010_0000);
+        assert_eq!(FILL_FILLED_BIT, 0x0000_0010);
+        assert_eq!(LINE_USE_LINE_BIT, 0x0008_0000);
+        assert_eq!(LINE_LINE_BIT, 0x0000_0008);
 
         assert_eq!(
-            (fill_without_use & FILL_USE_FILLED_BIT != 0)
-                .then_some(fill_without_use & FILL_FILLED_BIT != 0),
-            None
+            (fill_disabled & FILL_USE_FILLED_BIT != 0)
+                .then_some(fill_disabled & FILL_FILLED_BIT != 0),
+            Some(false)
         );
         assert_eq!(
-            (fill_with_use & FILL_USE_FILLED_BIT != 0)
-                .then_some(fill_with_use & FILL_FILLED_BIT != 0),
+            (fill_enabled & FILL_USE_FILLED_BIT != 0)
+                .then_some(fill_enabled & FILL_FILLED_BIT != 0),
             Some(true)
         );
         assert_eq!(
-            (line_without_use & LINE_USE_LINE_BIT != 0)
-                .then_some(line_without_use & LINE_LINE_BIT != 0),
+            (fill_value_without_use & FILL_USE_FILLED_BIT != 0)
+                .then_some(fill_value_without_use & FILL_FILLED_BIT != 0),
             None
         );
         assert_eq!(
-            (line_with_use & LINE_USE_LINE_BIT != 0).then_some(line_with_use & LINE_LINE_BIT != 0),
+            (line_disabled & LINE_USE_LINE_BIT != 0).then_some(line_disabled & LINE_LINE_BIT != 0),
+            Some(false)
+        );
+        assert_eq!(
+            (line_enabled & LINE_USE_LINE_BIT != 0).then_some(line_enabled & LINE_LINE_BIT != 0),
             Some(true)
+        );
+        assert_eq!(
+            (line_value_without_use & LINE_USE_LINE_BIT != 0)
+                .then_some(line_value_without_use & LINE_LINE_BIT != 0),
+            None
         );
     }
 
