@@ -988,6 +988,7 @@ mod tests {
         let mut shared_nonempty_lines = 0_usize;
         let mut layout_none = 0_usize;
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+        let mut full_extent_transform_profiles = BTreeMap::<String, usize>::new();
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
@@ -1015,6 +1016,57 @@ mod tests {
                     }
                     RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                         *backend_fallbacks.entry(reason.code()).or_default() += 1;
+                        if reason.code() == "story_extent_mismatch" {
+                            let story = bundle
+                                .geometry
+                                .document
+                                .stories
+                                .iter()
+                                .find(|story| story.id == text.story_id);
+                            if let Some(story) = story {
+                                let story_len = u32::try_from(story.text.chars().count())
+                                    .expect("story scalar count fits u32");
+                                let fragment_len = u32::try_from(text.text.chars().count())
+                                    .expect("fragment scalar count fits u32");
+                                if text.scalar_start == 0
+                                    && text.scalar_end == story_len
+                                    && fragment_len == story_len
+                                    && text.text != story.text
+                                {
+                                    let mut differences = 0_usize;
+                                    let mut object_marker_to_zero_width = 0_usize;
+                                    let mut other_differences = 0_usize;
+                                    for (source, rendered) in
+                                        story.text.chars().zip(text.text.chars())
+                                    {
+                                        if source == rendered {
+                                            continue;
+                                        }
+                                        differences += 1;
+                                        if source == '\u{FFFC}' && rendered == '\u{200B}' {
+                                            object_marker_to_zero_width += 1;
+                                        } else {
+                                            other_differences += 1;
+                                        }
+                                    }
+                                    let class = if differences > 0
+                                        && object_marker_to_zero_width == differences
+                                        && other_differences == 0
+                                    {
+                                        "object_marker_to_zero_width_only"
+                                    } else {
+                                        "same_extent_other"
+                                    };
+                                    let profile = format!(
+                                        "page{}:{}:diffs={}",
+                                        page_index + 1,
+                                        class,
+                                        differences
+                                    );
+                                    *full_extent_transform_profiles.entry(profile).or_default() += 1;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1022,8 +1074,11 @@ mod tests {
 
         let backend_fallbacks_json =
             serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
+        let full_extent_transform_profiles_json =
+            serde_json::to_string(&full_extent_transform_profiles)
+                .expect("serialize full-extent transform profiles");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} full_extent_transform_profiles={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1032,6 +1087,7 @@ mod tests {
             shared_nonempty_lines,
             layout_none,
             backend_fallbacks_json,
+            full_extent_transform_profiles_json,
         );
     }
 
