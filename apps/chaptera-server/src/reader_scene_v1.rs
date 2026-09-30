@@ -913,6 +913,38 @@ mod tests {
 
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
+        let mut source_effective_line_any = 0_usize;
+        let mut source_effective_line_complete_visible = 0_usize;
+        let mut source_effective_line_complete_hidden = 0_usize;
+        let mut source_effective_line_incomplete = 0_usize;
+        for node in bundle.resolved_graph.nodes.values() {
+            let Some(effective) = node.payload.effective_paint.as_ref() else {
+                continue;
+            };
+            let line = &effective.line;
+            let has_any =
+                line.color_rgb.is_some() || line.width_emu.is_some() || line.visible.is_some();
+            if !has_any {
+                continue;
+            }
+            source_effective_line_any += 1;
+            match (
+                line.color_rgb.as_ref(),
+                line.width_emu.as_ref(),
+                line.visible.as_ref(),
+            ) {
+                (Some(_), Some(width), Some(visible)) if width.value > 0 && visible.value => {
+                    source_effective_line_complete_visible += 1;
+                }
+                (Some(_), Some(width), Some(visible)) if width.value > 0 && !visible.value => {
+                    source_effective_line_complete_hidden += 1;
+                }
+                _ => {
+                    source_effective_line_incomplete += 1;
+                }
+            }
+        }
+
         let viewer_line_paints = bundle
             .geometry
             .paints
@@ -985,11 +1017,15 @@ mod tests {
                     .collect::<Vec<_>>();
 
                 println!(
-                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
                     scene.fidelity.state,
                     scene.stacking_fidelity,
                     scene.pages.len(),
                     scene.nodes.len(),
+                    source_effective_line_any,
+                    source_effective_line_complete_visible,
+                    source_effective_line_complete_hidden,
+                    source_effective_line_incomplete,
                     viewer_line_paints,
                     viewer_line_only_paints,
                     viewer_black_lines,
