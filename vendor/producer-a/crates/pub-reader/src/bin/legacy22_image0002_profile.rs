@@ -1380,9 +1380,11 @@ fn postscript_ignore_blocker_profile(params: &[u8]) -> Value {
 }
 
 fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
-    let Some((record_index, (_, params))) = records.iter().enumerate().find(|(_, (function, params))| {
-        *function == META_ESCAPE_FUNCTION && read_u16(params, 0) == Some(0x0025)
-    }) else {
+    let Some((record_index, (_, params))) =
+        records.iter().enumerate().find(|(_, (function, params))| {
+            *function == META_ESCAPE_FUNCTION && read_u16(params, 0) == Some(0x0025)
+        })
+    else {
         return json!({"kind": "postscript_data", "record": "missing"});
     };
 
@@ -1395,13 +1397,20 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         .iter()
         .filter(|byte| matches!(**byte, 0x20..=0x7e | b'\n' | b'\r' | b'\t'))
         .count();
-    let high_bit_count = declared_payload.iter().filter(|byte| **byte >= 0x80).count();
+    let high_bit_count = declared_payload
+        .iter()
+        .filter(|byte| **byte >= 0x80)
+        .count();
     let nul_count = declared_payload.iter().filter(|byte| **byte == 0).count();
     let lowercase = declared_payload
         .iter()
         .map(|byte| byte.to_ascii_lowercase())
         .collect::<Vec<_>>();
-    let has_token = |needle: &[u8]| lowercase.windows(needle.len()).any(|window| window == needle);
+    let has_token = |needle: &[u8]| {
+        lowercase
+            .windows(needle.len())
+            .any(|window| window == needle)
+    };
 
     let previous_function = record_index
         .checked_sub(1)
