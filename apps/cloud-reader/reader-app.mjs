@@ -23,8 +23,11 @@ let pending = null;
 let pageIndex = 0;
 let contributionContext = null;
 let contributionExpiry = null;
+let openingFocusTarget = null;
 
 function clearContribution() {
+  const dialog = $("#contribution-dialog");
+  const restoreFocus = dialog.open && dialog.contains(document.activeElement);
   clearTimeout(contributionExpiry);
   contributionExpiry = null;
   contributionContext?.controller?.abort();
@@ -35,7 +38,12 @@ function clearContribution() {
   $("#contribution-status").textContent = "";
   $("#send-contribution").disabled = false;
   $("#cancel-contribution").disabled = false;
-  if ($("#contribution-dialog").open) $("#contribution-dialog").close();
+  if (dialog.open) dialog.close();
+  if (restoreFocus) {
+    const target = fileButton.disabled ? fileInput : fileButton;
+    if (!target.disabled) target.focus();
+    else if (!$("#cancel-open").hidden) $("#cancel-open").focus();
+  }
 }
 
 function offerContribution(opened, file, sessionId, accessToken) {
@@ -83,10 +91,21 @@ function message(text, isError = false) {
 }
 
 function busy(value) {
+  const cancel = $("#cancel-open");
+  const active = document.activeElement;
+  const moveToCancel = value && [fileButton, fileInput, documentButton].includes(active);
+  const restoreFocus = !value && active === cancel;
+  if (moveToCancel) openingFocusTarget = active;
   fileButton.disabled = value || !fileInput.files?.length;
   fileInput.disabled = value;
   documentButton.disabled = value;
-  $("#cancel-open").hidden = !value;
+  cancel.hidden = !value;
+  if (moveToCancel) cancel.focus();
+  else if (restoreFocus) {
+    const target = openingFocusTarget && !openingFocusTarget.disabled
+      ? openingFocusTarget : fileInput;
+    target.focus();
+  }
 }
 
 function clearReader() {
@@ -329,7 +348,9 @@ async function contributeCurrentFile() {
   context.controller = new AbortController();
   const signal = context.controller.signal;
   const send = $("#send-contribution");
+  const moveToCancel = document.activeElement === send;
   send.disabled = true;
+  if (moveToCancel) $("#cancel-contribution").focus();
   $("#contribution-status").textContent = "Preparing a private one-time contribution…";
   let contributionToken = null;
   try {

@@ -121,6 +121,7 @@ let browser;
 const passed = [];
 const browserErrors = [];
 const unexpectedRequests = [];
+const stateScreenshots = [];
 async function open(page, scenario = {}, name = "private-name.pub", bytes = original) {
   nextScenario = scenario;
   await page.locator("#pub-file").setInputFiles({ name, mimeType: "application/octet-stream", buffer: bytes });
@@ -130,6 +131,27 @@ async function status(page, pattern) {
   await page.waitForFunction((source) => new RegExp(source).test(document.querySelector("#status").textContent), pattern.source);
 }
 async function check(name, run) { await run(); passed.push(name); console.log("ok - " + name); }
+
+async function captureState(page, state, dialog = false) {
+  const viewport = page.viewportSize();
+  for (const [label, size] of [["desktop", { width: 1280, height: 900 }], ["mobile", { width: 320, height: 568 }]]) {
+    await page.setViewportSize(size);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    if (dialog) {
+      const geometry = await page.locator("#contribution-dialog").evaluate((element) => ({
+        width: element.clientWidth, scrollWidth: element.scrollWidth,
+        height: element.getBoundingClientRect().height, viewportHeight: innerHeight
+      }));
+      assert.ok(geometry.scrollWidth <= geometry.width + 1, "Consent must fit horizontally");
+      assert.ok(geometry.height <= geometry.viewportHeight - 28 + 1);
+      await page.locator("#contribution-dialog").evaluate((element) => { element.scrollTop = 0; });
+    }
+    const filename = state + "-" + label + ".png";
+    await page.screenshot({ path: join(output, filename), fullPage: !dialog });
+    stateScreenshots.push({ state, viewport: size, filename });
+  }
+  await page.setViewportSize(viewport);
+}
 
 try {
   await mkdir(output, { recursive: true });
@@ -150,6 +172,13 @@ try {
   const page = await context.newPage();
   page.on("pageerror", (error) => browserErrors.push(error.message));
   await page.goto(origin);
+
+  await check("empty desktop and narrow landing are readable before any upload", async () => {
+    assert.equal(await page.locator("#open-file").isDisabled(), true);
+    assert.equal(await page.locator("#reader").isVisible(), false);
+    assert.equal(requests.length, 0);
+    await captureState(page, "empty");
+  });
 
   await check("private raw upload and atomic scene publication", async () => {
     await open(page);
@@ -224,6 +253,7 @@ try {
     await page.locator("#text-panel > summary").click();
     await page.locator("#reader").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, "desktop.png"), fullPage: true });
+    await captureState(page, "partial");
   });
 
   await check("mobile chrome fits and portrait pages keep their aspect ratio", async () => {
@@ -246,6 +276,7 @@ try {
       await status(page, /Choose another|Choose a \.PUB|Keep the original/);
       assert.equal(await page.locator("#reader").isVisible(), false);
       assert.equal(await page.locator("#pages svg").count(), 0);
+      if (classification === "unsupported") await captureState(page, "error");
     }
     for (const [code, expected] of [[413, /too large/], [429, /busy/], [403, /Access/], [410, /no longer available/], [503, /temporarily unavailable/]]) {
       await open(page, { issueStatus: code });
@@ -290,6 +321,7 @@ try {
 
     await page.locator("#send-contribution").click();
     await status(page, /Contribution received/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
     const contribution = requests
       .slice(before)
       .filter((request) => request.path.includes("contribut"));
@@ -343,6 +375,27 @@ try {
     }
   };
 
+  await check("long local filenames fit consent and Escape restores keyboard focus", async () => {
+    const name = "a".repeat(240) + ".pub";
+    const before = requests.length;
+    await open(page, { open: eligible }, name);
+    await status(page, /not supported yet/);
+    await page.locator("#open-contribution").focus();
+    await page.keyboard.press("Enter");
+    assert.equal(await page.locator("#contribution-filename").textContent(), name);
+    await captureState(page, "consent", true);
+    await page.locator("#cancel-contribution").focus();
+    await page.keyboard.press("Escape");
+    await status(page, /Contribution cancelled/);
+    assert.equal(await page.locator("#contribution-dialog").evaluate((element) => element.open), false);
+    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
+    assert.equal(requests.slice(before).filter((request) => request.path.includes("contribut")).length, 0);
+    for (const request of requests.slice(before)) {
+      assert.ok(!request.path.includes(name));
+      assert.ok(!request.body.includes(Buffer.from(name)));
+    }
+  });
+
   await check("cancel before consent sends nothing and clears contribution access", async () => {
     await open(page, { open: eligible });
     await status(page, /not supported yet/);
@@ -353,6 +406,7 @@ try {
     assert.equal(await page.locator("#contribution-panel").isVisible(), false);
     assert.equal(await page.locator("#contribution-filename").textContent(), "");
     assert.equal(requests.length, before);
+    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
   });
 
   await check("expiry clears eligibility and blocks retention after an expired capability", async () => {
@@ -463,8 +517,12 @@ try {
     const wait = new Promise((resolve) => { release = resolve; });
     await open(page, { wait, open: { scene: fixture("Old cancelled document") } });
     await status(page, /Scanning and opening/);
-    await page.locator("#cancel-open").click();
+    assert.equal(await page.evaluate(() => document.activeElement.id), "cancel-open");
+    await captureState(page, "loading");
+    await page.keyboard.press("Enter");
     await status(page, /cancelled/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
+    await captureState(page, "cancelled");
     await open(page, { open: { scene: fixture("Current document") } });
     await status(page, /Opened with/);
     release();
@@ -517,7 +575,8 @@ try {
     protocol: "chaptera.cloud-reader-ui-acceptance.v1",
     scope: "synthetic UI only; excludes real-PUB visual fidelity and live service/deployment acceptance",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted",
-    browser: await browser.version(), passed, unexpected_requests: unexpectedRequests, browser_errors: browserErrors
+    browser: await browser.version(), passed, state_screenshots: stateScreenshots,
+    unexpected_requests: unexpectedRequests, browser_errors: browserErrors
   };
   await writeFile(join(output, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
   console.log(JSON.stringify({ passed: passed.length, receipt: join(output, "receipt.json") }));
