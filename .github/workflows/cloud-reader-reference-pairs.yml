@@ -64,33 +64,9 @@ jobs:
           python tools/acquire_carlton_march_pair.py "$RUNNER_TEMP/carlton-pair"
           python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install pinned browser acceptance runtime
-        run: |
-          npm install --no-save playwright@1.55.0
-          npx playwright install --with-deps chromium
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
-
-      - name: Build canonical guest Scene producer
-        run: cargo build -p chaptera-server --bin chaptera --jobs 2
-
-      - name: Diagnose exact Carlton Scene adapter boundary
-        env:
-          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/carlton-pair/March-2026.pub
-          CHAPTERA_READER_SCENE_PROBE_SHA256: bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3
-        run: cargo test -p chaptera-server real_reference_scene_projection_probe -- --ignored --nocapture
-
-      - name: Diagnose exact Devinettes text-layout fallback reasons
-        env:
-          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
-          CHAPTERA_READER_SCENE_PROBE_SHA256: 077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e
-        run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
 
       - name: Census exact reference fill state
         run: |
@@ -107,6 +83,30 @@ jobs:
           CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/carlton-pair/March-2026.pub
           CHAPTERA_TABLE_CELL_PAINT_RECEIPT: target/cloud-reader-reference-pairs/carlton-table-cell-paint-join.json
         run: cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned browser acceptance runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Build canonical guest Scene producer
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Diagnose exact Carlton Scene adapter boundary
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/carlton-pair/March-2026.pub
+          CHAPTERA_READER_SCENE_PROBE_SHA256: bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3
+        run: cargo test -p chaptera-server real_reference_scene_projection_probe -- --ignored --nocapture
+
+      - name: Diagnose exact Devinettes text-layout fallback reasons
+        env:
+          CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
+          CHAPTERA_READER_SCENE_PROBE_SHA256: 077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e
+        run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
 
       - name: Build exact reference fixture manifest
         run: |
