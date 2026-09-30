@@ -3399,6 +3399,7 @@ const LINE_USE_LINE_BIT: u32 = 1 << 19;
 const LINE_LINE_BIT: u32 = 1 << 3;
 const OFFICEART_FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
+const OFFICEART_SHAPE_TYPE_ROUND_RECTANGLE: u16 = 0x0002;
 const OFFICEART_SHAPE_TYPE_LINE: u16 = 0x0014;
 
 // MS-ODRAW normative property defaults for the bounded solid 2-D paint surface.
@@ -3465,6 +3466,43 @@ fn explicit_officeart_paint(
     }
 }
 
+fn sparse_roundrect_uses_normative_fill_color_ab(
+    shape: &pub_escher::SpContainerObservation,
+) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(OFFICEART_SHAPE_TYPE_ROUND_RECTANGLE) {
+        return false;
+    }
+
+    if !matches!(
+        paint_scalar_from_records(
+            &shape.fopts,
+            OFFICE_ART_FILL_TYPE,
+            PubEffectivePaintAuthority::ShapeLocal,
+        ),
+        PaintScalarLayer::Absent
+    ) || !matches!(
+        paint_scalar_from_records(
+            &shape.fopts,
+            OFFICE_ART_FILL_COLOR,
+            PubEffectivePaintAuthority::ShapeLocal,
+        ),
+        PaintScalarLayer::Absent
+    ) {
+        return false;
+    }
+
+    matches!(
+        paint_scalar_from_records(
+            &shape.fopts,
+            OFFICE_ART_FILL_BOOLEANS,
+            PubEffectivePaintAuthority::ShapeLocal,
+        ),
+        PaintScalarLayer::Value(value)
+            if value.value & FILL_USE_FILLED_BIT != 0
+                && value.value & FILL_FILLED_BIT != 0
+    )
+}
+
 /// Resolves only the bounded solid-paint subset of the MS-ODRAW effective
 /// property hierarchy. The caller must admit the shape as a 2-D shape before
 /// enabling normative 2-D visibility defaults.
@@ -3486,12 +3524,20 @@ pub fn resolve_bounded_effective_officeart_paint(
     )
     .and_then(|value| (value.value == 0).then(|| value.map(|_| true)));
 
-    let fill_color = resolve_effective_officeart_scalar(
-        shape,
-        dgg_defaults,
-        OFFICE_ART_FILL_COLOR,
-        NORMATIVE_FILL_COLOR,
-    )
+    let fill_color = if sparse_roundrect_uses_normative_fill_color_ab(shape) {
+        Some(PubEffectivePaintValue {
+            value: NORMATIVE_FILL_COLOR,
+            authority: PubEffectivePaintAuthority::NormativeDefault,
+            source: None,
+        })
+    } else {
+        resolve_effective_officeart_scalar(
+            shape,
+            dgg_defaults,
+            OFFICE_ART_FILL_COLOR,
+            NORMATIVE_FILL_COLOR,
+        )
+    }
     .and_then(|value| {
         bounded_officeart_rgb(value.value, color_scheme).map(|rgb| value.map(|_| rgb))
     });
@@ -4698,6 +4744,36 @@ mod tests {
             Some(PubEffectivePaintAuthority::NormativeDefault)
         );
         assert!(paint.line.width_emu.as_ref().unwrap().source.is_none());
+    }
+
+    #[test]
+    fn sparse_roundrect_fill_ab_uses_normative_color_instead_of_dgg_color() {
+        let mut shape = crop_test_shape(vec![crop_test_property(
+            OFFICE_ART_FILL_BOOLEANS,
+            FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+        )]);
+        shape.fsp = Some(pub_escher::FspRecord {
+            spid: 7,
+            flags: 0,
+            shape_type: OFFICEART_SHAPE_TYPE_ROUND_RECTANGLE,
+            source: crop_test_span(0, 8),
+            trailing_source: None,
+        });
+        let dgg = dgg_test_defaults(
+            vec![crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF)],
+            Vec::new(),
+        );
+
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("bounded sparse RoundRectangle paint");
+
+        let fill_color = paint.fill.color_rgb.expect("fill color");
+        assert_eq!(fill_color.value, [0xFF, 0xFF, 0xFF]);
+        assert_eq!(
+            fill_color.authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+        assert!(paint.fill.visible.expect("fill visibility").value);
     }
 
     #[test]
