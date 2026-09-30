@@ -49,13 +49,13 @@ def main() -> int:
 
         assert before["state"] == "pending"
         assert before["current_version"] == 0
-        expected_versions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
-        assert before["target_version"] == 17
+        expected_versions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        assert before["target_version"] == 18
         assert before["pending_versions"] == expected_versions
 
         assert up["state"] == "current"
-        assert up["target_version"] == 17
-        assert up["current_version"] == 17
+        assert up["target_version"] == 18
+        assert up["current_version"] == 18
         assert up["applied_versions"] == expected_versions
         assert current == up
 

@@ -16,6 +16,7 @@ pub-reader = { path = "../../vendor/producer-a/crates/pub-reader" }
 pub-viewer = { path = "../../vendor/producer-a/crates/pub-viewer" }
 chaptera-cdm-model = { package = "pub-model", path = "../../crates/pub-model" }
 chaptera-untrusted-pub-scan = { path = "../../crates/chaptera-untrusted-pub-scan" }
+chaptera-failure-intake-protocol = { path = "../../crates/chaptera-failure-intake-protocol" }
 chaptera-viewer-render-plan = { path = "../../crates/chaptera-viewer-render-plan" }
 chaptera-desktop-fallback-font-resource = { path = "../../crates/chaptera-desktop-fallback-font-resource" }
 aws-config = "=1.12.0"
@@ -28,6 +29,7 @@ async-trait = "=0.1.89"
 axum = { version = "=0.8.9", features = ["http1", "json", "tokio"] }
 axum-extra = { version = "=0.12.6", features = ["cookie"] }
 clap = { version = "=4.6.7", features = ["derive"] }
+cfb.workspace = true
 sqlx = { version = "=0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
 idna_adapter = "=1.1.0"
 openidconnect = "=4.0.1"
@@ -39,6 +41,7 @@ tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "pr
 toml = "=1.1.6+spec-1.1.0"
 url = "=2.5.8"
 zeroize = "=1.9.0"
+zip = { workspace = true, features = ["flate2", "deflate-flate2"] }
 
 [dev-dependencies]
 tower = { version = "=0.5.3", features = ["util"] }
