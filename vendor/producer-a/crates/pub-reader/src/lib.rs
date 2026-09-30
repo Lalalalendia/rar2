@@ -2093,12 +2093,8 @@ pub fn build_mature_0x2c_from_streams(
                     source: entry.text_id_source.clone(),
                 })
                 .collect::<Vec<_>>();
-            match parse_bounded_fdpp_exact_story_catalog(
-                quill_stream.clone(),
-                quill,
-                &identities,
-            )
-            .context("parse bounded exact-FDPP Story fallback")?
+            match parse_bounded_fdpp_exact_story_catalog(quill_stream.clone(), quill, &identities)
+                .context("parse bounded exact-FDPP Story fallback")?
             {
                 Some(catalog) => {
                     diagnostics.push(PubBridgeDiagnostic::FdppExactStoryFallback {
