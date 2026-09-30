@@ -107,6 +107,15 @@ try {
     await page.waitForFunction(() => document.querySelectorAll("#pages svg.page").length > 0);
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.locator("#pages svg.page").count(), fixture.pages);
+    if (scene.stacking_fidelity === "source_back_to_front") {
+      const domNodeIds = await page.locator("[data-node-id]").evaluateAll((nodes) => nodes.map((node) => node.dataset.nodeId));
+      assert.deepEqual(domNodeIds, scene.nodes.map((node) => node.node_id),
+        "browser DOM order must preserve server source-backed paint order exactly");
+      assert.equal(scene.fidelity.reasons.includes("stacking_order_unavailable"), false);
+    } else {
+      assert.equal(scene.stacking_fidelity, "unknown");
+      assert.equal(scene.fidelity.reasons.includes("stacking_order_unavailable"), scene.nodes.length > 0);
+    }
     const expectedLines = scene.nodes.flatMap((node) => node.text_layout?.disposition === "shared_resolved"
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
@@ -135,14 +144,16 @@ try {
     }
     const nonempty = painted.filter((line) => line.text.trim());
     results.push({ fixture: fixture.name, source_sha256: fixture.sha256, source_byte_len: fixture.bytes,
-      classification: receipt.classification, fidelity: scene.fidelity, pages: fixture.pages, nodes: scene.nodes.length,
-      stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
+      classification: receipt.classification, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
+      pages: fixture.pages, nodes: scene.nodes.length, stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
       shared_line_height_px: { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) },
       worker_receipt_sha256: sha256(receiptBytes), filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
     console.log(JSON.stringify({ fixture: fixture.name, pages: fixture.pages, readable_shared_lines: nonempty.length }));
   }
   assert.deepEqual(errors, []);
   assert.deepEqual(foreign, []);
+  assert.ok(results.some((result) => result.stacking_fidelity === "source_back_to_front"),
+    "pinned real PUB set must contain at least one fully grounded source stacking witness");
   await writeFile(join(output, "receipt.json"), JSON.stringify({ protocol: "chaptera.cloud-reader-real-scene-browser.v1",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(),
     scope: "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",
