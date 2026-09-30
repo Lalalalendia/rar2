@@ -1,6 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_model::Sha256Digest;
-use pub_reader::{PubBridgeDiagnostic, build_mature_0x2c_source_graph};
+use pub_reader::{build_mature_0x2c_source_graph, PubBridgeDiagnostic};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
