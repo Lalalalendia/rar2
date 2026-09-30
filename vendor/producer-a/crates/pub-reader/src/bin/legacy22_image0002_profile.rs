@@ -1482,6 +1482,153 @@ fn postscript_known_operator_counts(payload: &[u8]) -> BTreeMap<String, usize> {
     counts
 }
 
+fn postscript_executable_name_profile(payload: &[u8]) -> Value {
+    const STANDARD_OPERATORS: &[&str] = &[
+        "abs", "add", "aload", "and", "arc", "arcn", "arct", "array", "ashow",
+        "astore", "atan", "awidthshow", "begin", "bind", "bitshift", "bytesavailable",
+        "ceiling", "charpath", "clear", "cleartomark", "clip", "closefile", "closepath",
+        "concat", "concatmatrix", "copy", "copypage", "cos", "count", "countdictstack",
+        "countexecstack", "counttomark", "currentcmykcolor", "currentdash", "currentdict",
+        "currentfile", "currentflat", "currentfont", "currentgray", "currenthsbcolor",
+        "currentlinecap", "currentlinejoin", "currentlinewidth", "currentmatrix",
+        "currentmiterlimit", "currentpoint", "currentrgbcolor", "cvi", "cvlit", "cvn",
+        "cvr", "cvrs", "cvs", "cvx", "def", "defaultmatrix", "dict", "div", "dup",
+        "echo", "end", "eoclip", "eofill", "eq", "erasepage", "errordict", "exch",
+        "exec", "execform", "execstack", "executeonly", "exit", "exp", "false", "file",
+        "fill", "findfont", "flattenpath", "floor", "flush", "flushfile", "for", "forall",
+        "ge", "get", "getinterval", "grestore", "grestoreall", "gsave", "gt", "idiv",
+        "idtransform", "if", "ifelse", "image", "imagemask", "index", "initclip",
+        "initgraphics", "initmatrix", "itransform", "kshow", "le", "length", "lineto",
+        "ln", "load", "log", "loop", "lt", "makefont", "mark", "matrix", "maxlength",
+        "mod", "moveto", "mul", "ne", "neg", "newpath", "noaccess", "not", "null",
+        "or", "packedarray", "pathbbox", "pathforall", "pop", "print", "product", "put",
+        "putinterval", "quit", "rand", "rcheck", "rcurveto", "read", "readhexstring",
+        "readline", "readonly", "readstring", "rectclip", "rectfill", "rectstroke",
+        "repeat", "resetfile", "restore", "revision", "rlineto", "rmoveto", "roll",
+        "rotate", "round", "rrand", "save", "scale", "scalefont", "search",
+        "selectfont", "serialnumber", "setblackgeneration", "setcachedevice",
+        "setcachedevice2", "setcharwidth", "setcmykcolor", "setcolorscreen", "setdash",
+        "setflat", "setfont", "setgray", "sethsbcolor", "setlinecap", "setlinejoin",
+        "setlinewidth", "setmatrix", "setmiterlimit", "setpagedevice", "setrgbcolor",
+        "setscreen", "settransfer", "show", "showpage", "sin", "sqrt", "srand", "status",
+        "statusdict", "stop", "stopped", "store", "string", "stringwidth", "stroke",
+        "strokepath", "sub", "systemdict", "token", "transform", "translate", "true",
+        "truncate", "type", "userdict", "version", "vmstatus", "wcheck", "where", "widthshow",
+        "write", "writehexstring", "writestring", "xcheck", "xor",
+    ];
+
+    let mut standard_counts = BTreeMap::<String, usize>::new();
+    let mut unknown_executable_name_count = 0usize;
+    let mut literal_name_count = 0usize;
+    let mut numeric_token_count = 0usize;
+    let mut procedure_delimiter_count = 0usize;
+    let mut index = 0usize;
+    let mut string_depth = 0usize;
+    let mut escaped = false;
+    let mut comment = false;
+    let mut literal_next = false;
+
+    while index < payload.len() {
+        let byte = payload[index];
+
+        if comment {
+            if matches!(byte, b'\n' | b'\r') {
+                comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if string_depth > 0 {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'(' {
+                string_depth += 1;
+            } else if byte == b')' {
+                string_depth -= 1;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'%' {
+            comment = true;
+            index += 1;
+            continue;
+        }
+        if byte == b'(' {
+            string_depth = 1;
+            index += 1;
+            continue;
+        }
+        if byte == b'/' {
+            literal_next = true;
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'{' | b'}') {
+            procedure_delimiter_count += 1;
+            literal_next = false;
+            index += 1;
+            continue;
+        }
+        if byte.is_ascii_whitespace() || matches!(byte, b'[' | b']' | b'<' | b'>') {
+            literal_next = false;
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        while index < payload.len()
+            && !payload[index].is_ascii_whitespace()
+            && !matches!(payload[index], b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+        {
+            index += 1;
+        }
+        if start == index {
+            index += 1;
+            continue;
+        }
+        let token = &payload[start..index];
+
+        if literal_next {
+            literal_name_count += 1;
+            literal_next = false;
+            continue;
+        }
+
+        if token
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'+' | b'-' | b'.'))
+            && token.iter().any(|byte| byte.is_ascii_digit())
+        {
+            numeric_token_count += 1;
+            continue;
+        }
+
+        let lower = token
+            .iter()
+            .map(|byte| byte.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        if let Some(operator) = STANDARD_OPERATORS
+            .iter()
+            .find(|operator| lower.as_slice() == operator.as_bytes())
+        {
+            *standard_counts.entry((*operator).to_owned()).or_default() += 1;
+        } else if lower != b"true" && lower != b"false" && lower != b"null" {
+            unknown_executable_name_count += 1;
+        }
+    }
+
+    json!({
+        "standard_operator_counts": standard_counts,
+        "unknown_executable_name_count": unknown_executable_name_count,
+        "literal_name_count": literal_name_count,
+        "numeric_token_count": numeric_token_count,
+        "procedure_delimiter_count": procedure_delimiter_count,
+    })
+}
+
 fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     let Some((record_index, (_, params))) =
         records.iter().enumerate().find(|(_, (function, params))| {
@@ -1506,6 +1653,7 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         .count();
     let nul_count = declared_payload.iter().filter(|byte| **byte == 0).count();
     let known_operator_counts = postscript_known_operator_counts(declared_payload);
+    let executable_name_profile = postscript_executable_name_profile(declared_payload);
 
     let previous_function = record_index
         .checked_sub(1)
@@ -1529,6 +1677,7 @@ fn postscript_data_blocker_profile(records: &[(u16, &[u8])]) -> Value {
         "nul_count": nul_count,
         "starts_percent_bang": declared_payload.starts_with(b"%!"),
         "known_operator_counts": known_operator_counts,
+        "executable_name_profile": executable_name_profile,
         "previous_function": previous_function,
         "next_function": next_function,
     })
