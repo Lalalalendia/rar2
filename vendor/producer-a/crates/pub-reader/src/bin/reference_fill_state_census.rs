@@ -429,7 +429,11 @@ fn main() -> Result<()> {
             None => counts.table_explicit_fill_visible_unspecified += 1,
         }
 
-        let effective_fill = node.payload.effective_paint.as_ref().map(|paint| &paint.fill);
+        let effective_fill = node
+            .payload
+            .effective_paint
+            .as_ref()
+            .map(|paint| &paint.fill);
         match effective_fill.and_then(|fill| fill.solid.as_ref()) {
             Some(value) => bump(
                 &mut histograms.table_effective_fill_solid_authority,
