@@ -187,10 +187,10 @@ mod tests {
         assert_eq!(manifest["asset_count"], 5);
         let files = manifest["files"].as_array().unwrap();
         assert_eq!(files.len(), 5);
-        assert!(
-            files
-                .iter()
-                .all(|file| file["sha256"].as_str().is_some_and(|value| value.len() == 64))
-        );
+        assert!(files.iter().all(|file| {
+            file["sha256"]
+                .as_str()
+                .is_some_and(|value| value.len() == 64)
+        }));
     }
 }
