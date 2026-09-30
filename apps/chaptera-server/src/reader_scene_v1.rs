@@ -185,6 +185,24 @@ pub struct ReaderDiagnosticV1 {
     pub message: String,
 }
 
+fn bind_visible_paint(
+    paint_by_node: &mut HashMap<String, ReaderPaintV1>,
+    visible_node_ids: &HashSet<String>,
+    node_id: String,
+    paint: ReaderPaintV1,
+) -> Result<(), String> {
+    if !visible_node_ids.contains(&node_id) {
+        return Ok(());
+    }
+    if paint.fill_rgb.is_none() && paint.line.is_none() {
+        return Ok(());
+    }
+    if paint_by_node.insert(node_id.clone(), paint).is_some() {
+        return Err(format!("duplicate paint binding for node {node_id}"));
+    }
+    Ok(())
+}
+
 pub fn from_viewer_geometry(
     document_id: String,
     source_hash: String,
@@ -372,9 +390,6 @@ pub fn from_viewer_geometry(
     let mut paint_by_node = HashMap::new();
     for paint in &geometry.paints {
         let node_id = serialized_string(&paint.node_id, "paint node id")?;
-        if !node_ids.contains(&node_id) {
-            return Err(format!("paint references unknown node {node_id}"));
-        }
         let mapped = ReaderPaintV1 {
             fill_rgb: paint.solid_fill_rgb,
             line: paint.solid_line.as_ref().map(|line| ReaderLineV1 {
@@ -382,12 +397,7 @@ pub fn from_viewer_geometry(
                 width_emu: line.width_emu,
             }),
         };
-        if mapped.fill_rgb.is_none() && mapped.line.is_none() {
-            continue;
-        }
-        if paint_by_node.insert(node_id.clone(), mapped).is_some() {
-            return Err(format!("duplicate paint binding for node {node_id}"));
-        }
+        bind_visible_paint(&mut paint_by_node, &node_ids, node_id, mapped)?;
     }
 
     let mut fragments_by_node: HashMap<String, Vec<(u32, u32, String)>> = HashMap::new();
@@ -828,7 +838,54 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_INLINE_IMAGE_TOTAL_BYTES, base64_encode, inline_image_data_url};
+    use std::collections::{HashMap, HashSet};
+
+    use super::{
+        MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderPaintV1, base64_encode, bind_visible_paint,
+        inline_image_data_url,
+    };
+
+    #[test]
+    fn non_visible_viewer_paint_is_ignored_but_visible_duplicates_fail_closed() {
+        let visible_node_ids = HashSet::from(["visible".to_owned()]);
+        let mut paint_by_node = HashMap::new();
+
+        bind_visible_paint(
+            &mut paint_by_node,
+            &visible_node_ids,
+            "hidden-carrier".to_owned(),
+            ReaderPaintV1 {
+                fill_rgb: Some([1, 2, 3]),
+                line: None,
+            },
+        )
+        .expect("hidden paint must not block visible Scene projection");
+        assert!(paint_by_node.is_empty());
+
+        bind_visible_paint(
+            &mut paint_by_node,
+            &visible_node_ids,
+            "visible".to_owned(),
+            ReaderPaintV1 {
+                fill_rgb: Some([4, 5, 6]),
+                line: None,
+            },
+        )
+        .expect("visible paint should bind");
+        assert_eq!(paint_by_node.len(), 1);
+
+        let duplicate = bind_visible_paint(
+            &mut paint_by_node,
+            &visible_node_ids,
+            "visible".to_owned(),
+            ReaderPaintV1 {
+                fill_rgb: Some([7, 8, 9]),
+                line: None,
+            },
+        )
+        .expect_err("visible duplicate paint must remain fail-closed");
+        assert!(duplicate.contains("duplicate paint binding"));
+    }
 
     #[test]
     fn base64_encoding_matches_rfc_4648_vectors() {
