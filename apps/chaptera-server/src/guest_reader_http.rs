@@ -5,7 +5,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use chaptera_failure_intake_protocol::FailureClassificationV1;
 use axum::{
     Json, Router,
     body::Body,
@@ -17,6 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
+use chaptera_failure_intake_protocol::FailureClassificationV1;
 use futures_util::StreamExt;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
