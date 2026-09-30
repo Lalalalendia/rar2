@@ -173,6 +173,7 @@ jobs:
       - name: Render exact PUB pairs through isolated Cloud Reader consumer
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/cloud-reader-reference-rust/debug/chaptera
           READER_REAL_MANIFEST: ${{ runner.temp }}/cloud-reader-reference-fixtures.json
           READER_REAL_OUTPUT: ${{ runner.temp }}/cloud-reader-reference-real
           READER_REFERENCE_RASTER_DPI: "144"
