@@ -3362,6 +3362,7 @@ mod tests {
                         explicit_image_crop: None,
                         explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                         effective_paint: None,
+                        officeart_adjust_value: None,
                         story_frame: Some(PubResolvedStoryFrame {
                             story_id: Some(story_id),
                             ordinal: 0,
@@ -3927,6 +3928,7 @@ mod tests {
                 explicit_image_crop: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                 effective_paint: None,
+                officeart_adjust_value: None,
                 story_frame: Some(PubResolvedStoryFrame {
                     story_id: Some(story_id),
                     ordinal: 0,
