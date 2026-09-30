@@ -12,6 +12,7 @@ pub const QUILL_DESCRIPTOR_SIZE: usize = 24;
 const TEXT: [u8; 4] = *b"TEXT";
 const SYID: [u8; 4] = *b"SYID";
 const STRS: [u8; 4] = *b"STRS";
+const FDPP: [u8; 4] = *b"FDPP";
 const TCD: [u8; 4] = *b"TCD ";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +102,40 @@ pub struct QuillStoryCatalog {
     pub tokn: Vec<QuillToknChunk>,
 }
 
+/// Cross-stream identity supplied by a separately grounded Publisher Story catalog.
+///
+/// The identity source is intentionally not named SYID: this recovery path is
+/// admitted only when the ordinary Quill SYID/STRS service plane is physically
+/// all-0xFF, so Story identity must come from an external authoritative source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillFdppStoryIdentity {
+    pub text_id: u32,
+    pub source: RawSpan,
+}
+
+/// Exact Story slice recovered from persisted FDPP boundaries.
+///
+/// This is a narrow recovery representation rather than an ordinary Story
+/// slice: no synthetic SYID or STRS source is created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillFdppStorySlice {
+    pub index: u32,
+    pub text_id: u32,
+    pub identity_source: RawSpan,
+    pub utf16_code_units: u32,
+    pub boundary_source: RawSpan,
+    pub text_source: RawSpan,
+    pub utf16le: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillFdppStoryCatalog {
+    pub descriptor_nodes: Vec<QuillDescriptorListNode>,
+    pub text: QuillTextChunk,
+    pub fdpp_source: RawSpan,
+    pub stories: Vec<QuillFdppStorySlice>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuillStoryReadError {
     TooShort {
@@ -142,6 +177,46 @@ pub enum QuillStoryReadError {
     TextLengthMismatch {
         expected_bytes: u64,
         actual_bytes: u32,
+    },
+    EmptyGroundedStoryCatalog,
+    DuplicateGroundedStoryIdentity {
+        text_id: u32,
+    },
+    SentinelChunkLengthMismatch {
+        name: [u8; 4],
+        expected: u64,
+        actual: u32,
+    },
+    SentinelChunkNotAllFf {
+        name: [u8; 4],
+    },
+    FdppStoryCountMismatch {
+        fdpp_count: u16,
+        grounded_story_count: usize,
+    },
+    FdppTableOutOfBounds {
+        required: usize,
+        available: usize,
+    },
+    FdppBoundaryNotStrictlyIncreasing {
+        index: usize,
+        previous: u32,
+        next: u32,
+    },
+    FdppBoundaryOutsideText {
+        index: usize,
+        boundary: u32,
+        text_start: u32,
+        text_end: u32,
+    },
+    FdppBoundaryNotUtf16Aligned {
+        index: usize,
+        boundary: u32,
+        text_start: u32,
+    },
+    FdppTerminalBoundaryMismatch {
+        boundary: u32,
+        text_end: u32,
     },
     TcdStoryOrdinalOutOfBounds {
         story_ordinal: u16,
@@ -271,6 +346,201 @@ pub fn parse_confirmed_story_catalog(
         stories,
         tcd,
         tokn,
+    })
+}
+
+/// Recovers Story slices only for the proven all-0xFF Quill service-plane
+/// sentinel with exact FDPP Story cardinality.
+///
+/// Admission is intentionally strict:
+/// - grounded Story identities/order are supplied by the caller;
+/// - SYID and STRS must exist at the exact sentinel spans for that cardinality
+///   and every byte in both spans must be 0xFF;
+/// - TEXT and FDPP must be unique and bounded;
+/// - FDPP count must equal Story count;
+/// - every FDPP boundary must be strictly increasing, UTF-16 aligned, and
+///   inside TEXT;
+/// - the terminal FDPP boundary must close TEXT exactly.
+///
+/// No CR scanning, count clamping, equal splitting, or synthesized Story
+/// identity is performed.
+pub fn parse_bounded_ff_story_catalog_from_fdpp(
+    stream: StreamPath,
+    bytes: &[u8],
+    identities: &[QuillFdppStoryIdentity],
+) -> Result<QuillFdppStoryCatalog, QuillStoryReadError> {
+    if identities.is_empty() {
+        return Err(QuillStoryReadError::EmptyGroundedStoryCatalog);
+    }
+
+    let mut seen = BTreeSet::new();
+    for identity in identities {
+        if !seen.insert(identity.text_id) {
+            return Err(QuillStoryReadError::DuplicateGroundedStoryIdentity {
+                text_id: identity.text_id,
+            });
+        }
+    }
+
+    let descriptor_nodes = parse_descriptor_nodes(stream.clone(), bytes)?;
+    let descriptors = descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .collect::<Vec<_>>();
+    let syid_descriptor = required_descriptor(&descriptors, SYID)?;
+    let strs_descriptor = required_descriptor(&descriptors, STRS)?;
+    let text_descriptor = required_descriptor(&descriptors, TEXT)?;
+    let fdpp_descriptor = required_descriptor(&descriptors, FDPP)?;
+
+    let story_count =
+        u64::try_from(identities.len()).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+    let expected_syid = 8_u64
+        .checked_add(
+            story_count
+                .checked_mul(4)
+                .ok_or(QuillStoryReadError::TextLengthOverflow)?,
+        )
+        .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+    let expected_strs = 22_u64
+        .checked_add(
+            story_count
+                .checked_mul(8)
+                .ok_or(QuillStoryReadError::TextLengthOverflow)?,
+        )
+        .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+
+    for (descriptor, expected) in [
+        (syid_descriptor, expected_syid),
+        (strs_descriptor, expected_strs),
+    ] {
+        if u64::from(descriptor.data_length.value) != expected {
+            return Err(QuillStoryReadError::SentinelChunkLengthMismatch {
+                name: descriptor.name.value,
+                expected,
+                actual: descriptor.data_length.value,
+            });
+        }
+        let (start, len) = chunk_range(bytes, descriptor)?;
+        if !bytes[start..start + len].iter().all(|byte| *byte == 0xff) {
+            return Err(QuillStoryReadError::SentinelChunkNotAllFf {
+                name: descriptor.name.value,
+            });
+        }
+    }
+
+    let text = parse_text(stream.clone(), bytes, text_descriptor)?;
+    if text.bytes.len() % 2 != 0 {
+        return Err(QuillStoryReadError::TextLengthMismatch {
+            expected_bytes: u64::from(text_descriptor.data_length.value) + 1,
+            actual_bytes: text_descriptor.data_length.value,
+        });
+    }
+
+    let (fdpp_start, fdpp_len) = chunk_range(bytes, fdpp_descriptor)?;
+    let mut fdpp = Cursor::bounded(stream.clone(), bytes, fdpp_start, fdpp_len)?;
+    let fdpp_count = fdpp.u16()?;
+    if usize::from(fdpp_count.value) != identities.len() {
+        return Err(QuillStoryReadError::FdppStoryCountMismatch {
+            fdpp_count: fdpp_count.value,
+            grounded_story_count: identities.len(),
+        });
+    }
+
+    fdpp.take(6)?;
+    let boundary_bytes = identities
+        .len()
+        .checked_mul(4)
+        .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+    let style_offset_bytes = identities
+        .len()
+        .checked_mul(2)
+        .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+    let required_tables = boundary_bytes
+        .checked_add(style_offset_bytes)
+        .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+    if fdpp.remaining() < required_tables {
+        return Err(QuillStoryReadError::FdppTableOutOfBounds {
+            required: required_tables,
+            available: fdpp.remaining(),
+        });
+    }
+
+    let text_start = text_descriptor.data_offset.value;
+    let text_end = text_start
+        .checked_add(text_descriptor.data_length.value)
+        .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+    let mut previous = text_start;
+    let mut boundaries = Vec::with_capacity(identities.len());
+
+    for index in 0..identities.len() {
+        let boundary = fdpp.u32()?;
+        if boundary.value <= previous {
+            return Err(QuillStoryReadError::FdppBoundaryNotStrictlyIncreasing {
+                index,
+                previous,
+                next: boundary.value,
+            });
+        }
+        if boundary.value > text_end {
+            return Err(QuillStoryReadError::FdppBoundaryOutsideText {
+                index,
+                boundary: boundary.value,
+                text_start,
+                text_end,
+            });
+        }
+        if (boundary.value - text_start) % 2 != 0 {
+            return Err(QuillStoryReadError::FdppBoundaryNotUtf16Aligned {
+                index,
+                boundary: boundary.value,
+                text_start,
+            });
+        }
+        previous = boundary.value;
+        boundaries.push(boundary);
+    }
+
+    if previous != text_end {
+        return Err(QuillStoryReadError::FdppTerminalBoundaryMismatch {
+            boundary: previous,
+            text_end,
+        });
+    }
+
+    let mut stories = Vec::with_capacity(identities.len());
+    let mut start = text_start;
+    for (index, (identity, boundary)) in identities.iter().zip(boundaries).enumerate() {
+        let start_usize =
+            usize::try_from(start).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+        let end_usize = usize::try_from(boundary.value)
+            .map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+        let byte_len = end_usize
+            .checked_sub(start_usize)
+            .ok_or(QuillStoryReadError::TextLengthOverflow)?;
+        let utf16_code_units =
+            u32::try_from(byte_len / 2).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+        let utf16le = bytes
+            .get(start_usize..end_usize)
+            .ok_or(QuillStoryReadError::TextLengthOverflow)?
+            .to_vec();
+
+        stories.push(QuillFdppStorySlice {
+            index: u32::try_from(index).map_err(|_| QuillStoryReadError::TextLengthOverflow)?,
+            text_id: identity.text_id,
+            identity_source: identity.source.clone(),
+            utf16_code_units,
+            boundary_source: boundary.source,
+            text_source: span(stream.clone(), start_usize, byte_len),
+            utf16le,
+        });
+        start = boundary.value;
+    }
+
+    Ok(QuillFdppStoryCatalog {
+        descriptor_nodes,
+        text,
+        fdpp_source: span(stream, fdpp_start, fdpp_len),
+        stories,
     })
 }
 
@@ -777,6 +1047,104 @@ mod tests {
         }
 
         output
+    }
+
+    fn ff_fdpp_fixture() -> (StreamPath, Vec<u8>, Vec<QuillFdppStoryIdentity>) {
+        let stream = StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let mut bytes = vec![0; 0x220];
+
+        w16(&mut bytes, 0x18, 0x18);
+        w16(&mut bytes, 0x1a, 4);
+        w32(&mut bytes, 0x1c, QUILL_DESCRIPTOR_LIST_END);
+        descriptor(&mut bytes, 0x20, SYID, 1, 0, 0x100, 16);
+        descriptor(&mut bytes, 0x38, STRS, 1, 0, 0x120, 38);
+        descriptor(&mut bytes, 0x50, TEXT, 1, 0, 0x160, 6);
+        descriptor(&mut bytes, 0x68, FDPP, 1, 0, 0x180, 32);
+
+        bytes[0x100..0x110].fill(0xff);
+        bytes[0x120..0x146].fill(0xff);
+        bytes[0x160..0x166].copy_from_slice(&[b'A', 0, b'B', 0, b'C', 0]);
+
+        w16(&mut bytes, 0x180, 2);
+        w32(&mut bytes, 0x188, 0x164);
+        w32(&mut bytes, 0x18c, 0x166);
+
+        let identities = vec![
+            QuillFdppStoryIdentity {
+                text_id: 11,
+                source: RawSpan {
+                    stream: StreamPath("/Contents".into()),
+                    offset: 0x40,
+                    len: 4,
+                },
+            },
+            QuillFdppStoryIdentity {
+                text_id: 22,
+                source: RawSpan {
+                    stream: StreamPath("/Contents".into()),
+                    offset: 0x80,
+                    len: 4,
+                },
+            },
+        ];
+        (stream, bytes, identities)
+    }
+
+    #[test]
+    fn ff_fdpp_exact_cardinality_recovers_grounded_story_slices() {
+        let (stream, bytes, identities) = ff_fdpp_fixture();
+        let parsed =
+            parse_bounded_ff_story_catalog_from_fdpp(stream.clone(), &bytes, &identities).unwrap();
+
+        assert_eq!(parsed.stories.len(), 2);
+        assert_eq!(parsed.stories[0].text_id, 11);
+        assert_eq!(parsed.stories[0].utf16_code_units, 2);
+        assert_eq!(parsed.stories[0].utf16le, vec![b'A', 0, b'B', 0]);
+        assert_eq!(parsed.stories[1].text_id, 22);
+        assert_eq!(parsed.stories[1].utf16_code_units, 1);
+        assert_eq!(parsed.stories[1].utf16le, vec![b'C', 0]);
+        assert_eq!(parsed.stories[0].identity_source, identities[0].source);
+        assert_eq!(
+            parsed.stories[0].boundary_source,
+            RawSpan {
+                stream: stream.clone(),
+                offset: 0x188,
+                len: 4,
+            }
+        );
+        assert_eq!(
+            parsed.stories[1].text_source,
+            RawSpan {
+                stream,
+                offset: 0x164,
+                len: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn ff_fdpp_recovery_rejects_superset_boundaries() {
+        let (stream, mut bytes, identities) = ff_fdpp_fixture();
+        w16(&mut bytes, 0x180, 3);
+
+        assert_eq!(
+            parse_bounded_ff_story_catalog_from_fdpp(stream, &bytes, &identities),
+            Err(QuillStoryReadError::FdppStoryCountMismatch {
+                fdpp_count: 3,
+                grounded_story_count: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn ff_fdpp_recovery_requires_all_ff_service_chunks() {
+        let (stream, mut bytes, identities) = ff_fdpp_fixture();
+        bytes[0x100] = 0;
+
+        assert_eq!(
+            parse_bounded_ff_story_catalog_from_fdpp(stream, &bytes, &identities),
+            Err(QuillStoryReadError::SentinelChunkNotAllFf { name: SYID })
+        );
     }
 
     #[test]
