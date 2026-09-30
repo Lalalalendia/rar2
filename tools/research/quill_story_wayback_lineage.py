@@ -48,7 +48,7 @@ def cdx_rows(url: str) -> list[dict[str, str]]:
             "collapse": "digest",
         }
     )
-    raw = get_bytes("https://web.archive.org/cdx/search/cdx?" + params, timeout=60)
+    raw = get_bytes("https://web.archive.org/cdx/search/cdx?" + params, timeout=20)
     parsed = json.loads(raw)
     if not parsed:
         return []
@@ -91,66 +91,35 @@ def main() -> int:
             report_rows.append(item)
             continue
 
-        seen_downloaded_sha = set()
-        non_source_sha = set()
-        # collapse=digest should already be small. Bound defensively.
-        for row in rows[:32]:
-            timestamp = row.get("timestamp", "")
-            original = row.get("original", target["url"])
-            if not timestamp:
-                continue
-            replay = (
-                "https://web.archive.org/web/"
-                + timestamp
-                + "id_/"
-                + original
+        archive_digests = set()
+        for row in rows:
+            digest = row.get("digest")
+            if digest:
+                archive_digests.add(digest)
+            item["captures"].append(
+                {
+                    "timestamp": row.get("timestamp"),
+                    "archive_digest": digest,
+                    "archive_length": row.get("length"),
+                    "mimetype": row.get("mimetype"),
+                }
             )
-            capture = {
-                "timestamp": timestamp,
-                "archive_digest": row.get("digest"),
-                "archive_length": row.get("length"),
-                "mimetype": row.get("mimetype"),
-                "download_status": "unattempted",
-            }
-            try:
-                payload = get_bytes(replay, timeout=90)
-                capture["download_status"] = "ok"
-                capture["byte_len"] = len(payload)
-                capture["cfb_magic"] = payload.startswith(CFB_MAGIC)
-                digest = hashlib.sha256(payload).hexdigest()
-                capture["sha256"] = digest
-                capture["same_as_source"] = digest == target["source_sha256"]
-                seen_downloaded_sha.add(digest)
-                if payload.startswith(CFB_MAGIC):
-                    item["downloaded_cfb_count"] += 1
-                    if digest != target["source_sha256"]:
-                        non_source_sha.add(digest)
-                        if digest not in saved_sha:
-                            saved_sha.add(digest)
-                            path = variants_dir / f"{digest}.pub"
-                            path.write_bytes(payload)
-                            capture["saved_variant"] = path.name
-            except Exception as exc:
-                capture["download_status"] = "error"
-                capture["download_error_class"] = type(exc).__name__
-            item["captures"].append(capture)
-            time.sleep(0.25)
-
-        item["distinct_downloaded_sha256_count"] = len(seen_downloaded_sha)
-        item["distinct_non_source_variant_count"] = len(non_source_sha)
+        item["distinct_archive_digest_count"] = len(archive_digests)
+        item["has_multiple_archive_digests"] = len(archive_digests) > 1
         report_rows.append(item)
 
     report = {
         "schema": "chaptera.quill-story-wayback-lineage.v1",
         "target_count": len(TARGETS),
         "targets": report_rows,
-        "total_non_source_variant_count": sum(
-            row["distinct_non_source_variant_count"] for row in report_rows
+        "targets_with_multiple_archive_digests": sum(
+            bool(row.get("has_multiple_archive_digests")) for row in report_rows
         ),
         "evidence_boundary": (
             "exact four public helenhudspith.com source URLs only; Wayback CDX is queried "
-            "with digest collapse; only CFB-valid non-source variants are retained; report "
-            "contains timestamps, digests, hashes, sizes and status only, never document text"
+            "with digest collapse; this discovery pass records only archive metadata and "
+            "does not materialize archived document bytes; report contains timestamps, digests, "
+            "reported sizes and status only, never document text"
         ),
     }
     out_dir.mkdir(parents=True, exist_ok=True)
