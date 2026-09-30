@@ -116,9 +116,17 @@ pub struct ReaderTableCellV1 {
     pub cell_id: String,
     pub row: u32,
     pub column: u32,
+    #[serde(skip_serializing_if = "table_span_is_one")]
+    pub row_span: u32,
+    #[serde(skip_serializing_if = "table_span_is_one")]
+    pub column_span: u32,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<ReaderRectV1>,
+}
+
+fn table_span_is_one(value: &u32) -> bool {
+    *value == 1
 }
 
 #[derive(Debug, Serialize)]
@@ -376,6 +384,8 @@ pub fn from_viewer_geometry(
                 cell_id: serialized_string(&cell.id, "table cell id")?,
                 row: cell.address.row,
                 column: cell.address.column,
+                row_span: cell.row_span,
+                column_span: cell.column_span,
                 text: cell.text.clone(),
                 bounds,
             });
