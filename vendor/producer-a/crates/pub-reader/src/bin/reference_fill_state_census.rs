@@ -123,10 +123,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn main() -> Result<()> {
     let mut args = env::args_os().skip(1);
     let source = PathBuf::from(
-        args.next().context("usage: reference_fill_state_census SOURCE.pub OUTPUT.json")?,
+        args.next()
+            .context("usage: reference_fill_state_census SOURCE.pub OUTPUT.json")?,
     );
     let output = PathBuf::from(
-        args.next().context("usage: reference_fill_state_census SOURCE.pub OUTPUT.json")?,
+        args.next()
+            .context("usage: reference_fill_state_census SOURCE.pub OUTPUT.json")?,
     );
     if args.next().is_some() {
         bail!("reference_fill_state_census accepts exactly SOURCE.pub OUTPUT.json");
