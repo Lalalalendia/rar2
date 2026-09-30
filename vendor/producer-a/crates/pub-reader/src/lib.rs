@@ -3486,15 +3486,53 @@ pub fn resolve_bounded_effective_officeart_paint(
     )
     .and_then(|value| (value.value == 0).then(|| value.map(|_| true)));
 
-    let fill_color = resolve_effective_officeart_scalar(
-        shape,
-        dgg_defaults,
-        OFFICE_ART_FILL_COLOR,
-        NORMATIVE_FILL_COLOR,
-    )
-    .and_then(|value| {
-        bounded_officeart_rgb(value.value, color_scheme).map(|rgb| value.map(|_| rgb))
-    });
+    // Publisher sparse-solid A/B: exact Virginia RoundRectangle evidence has
+    // a participating local fFilled=true but no local fillType/fillColor.
+    // libmspub likewise does not synthesize a solid fill when shape-local
+    // fillColor is absent. Keep this bounded to that exact structural profile
+    // while reference-pair CI measures whether DGG fill-color inheritance is
+    // appropriate for Publisher RoundRectangle card bodies.
+    let suppress_dgg_fill_color = shape.fsp.as_ref().map(|fsp| fsp.shape_type) == Some(0x0002)
+        && matches!(
+            paint_scalar_from_records(
+                &shape.fopts,
+                OFFICE_ART_FILL_TYPE,
+                PubEffectivePaintAuthority::ShapeLocal,
+            ),
+            PaintScalarLayer::Absent
+        )
+        && matches!(
+            paint_scalar_from_records(
+                &shape.fopts,
+                OFFICE_ART_FILL_COLOR,
+                PubEffectivePaintAuthority::ShapeLocal,
+            ),
+            PaintScalarLayer::Absent
+        )
+        && matches!(
+            paint_scalar_from_records(
+                &shape.fopts,
+                OFFICE_ART_FILL_BOOLEANS,
+                PubEffectivePaintAuthority::ShapeLocal,
+            ),
+            PaintScalarLayer::Value(ref value)
+                if value.value & FILL_USE_FILLED_BIT != 0
+                    && value.value & FILL_FILLED_BIT != 0
+        );
+
+    let fill_color = if suppress_dgg_fill_color {
+        None
+    } else {
+        resolve_effective_officeart_scalar(
+            shape,
+            dgg_defaults,
+            OFFICE_ART_FILL_COLOR,
+            NORMATIVE_FILL_COLOR,
+        )
+        .and_then(|value| {
+            bounded_officeart_rgb(value.value, color_scheme).map(|rgb| value.map(|_| rgb))
+        })
+    };
 
     let fill_visible = resolve_effective_officeart_boolean(
         shape,
@@ -4502,6 +4540,20 @@ mod tests {
         }
     }
 
+    fn roundrect_test_shape(
+        properties: Vec<pub_escher::Fopte>,
+    ) -> pub_escher::SpContainerObservation {
+        let mut shape = crop_test_shape(properties);
+        shape.fsp = Some(pub_escher::FspRecord {
+            spid: 7,
+            flags: 0,
+            shape_type: 0x0002,
+            source: crop_test_span(0, 8),
+            trailing_source: None,
+        });
+        shape
+    }
+
     #[test]
     fn bounded_image_crop_preserves_unique_raw_scalars_and_marks_ambiguity() {
         let shape = crop_test_shape(vec![
@@ -4743,6 +4795,32 @@ mod tests {
         assert_eq!(line_width.value, 30_000);
         assert_eq!(line_width.authority, PubEffectivePaintAuthority::ShapeLocal);
         assert!(paint.line.visible.unwrap().value);
+    }
+
+    #[test]
+    fn sparse_roundrect_local_fill_activation_does_not_inherit_dgg_fill_color_ab() {
+        let shape = roundrect_test_shape(vec![crop_test_property(
+            OFFICE_ART_FILL_BOOLEANS,
+            FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+        )]);
+        let dgg = dgg_test_defaults(
+            vec![
+                crop_test_property(OFFICE_ART_FILL_TYPE, 0),
+                crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF),
+                crop_test_property(
+                    OFFICE_ART_FILL_BOOLEANS,
+                    FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+                ),
+            ],
+            Vec::new(),
+        );
+
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("effective paint");
+
+        assert_eq!(paint.fill.solid.as_ref().map(|value| value.value), Some(true));
+        assert_eq!(paint.fill.visible.as_ref().map(|value| value.value), Some(true));
+        assert_eq!(paint.fill.color_rgb, None);
     }
 
     #[test]
