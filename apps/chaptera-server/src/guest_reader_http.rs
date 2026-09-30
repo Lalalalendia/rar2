@@ -52,8 +52,7 @@ pub const GUEST_TOKEN_HEADER: &str = "x-chaptera-reader-session";
 pub const CONTRIBUTION_TOKEN_HEADER: &str = "x-chaptera-reader-contribution";
 pub const RESEARCH_INTAKE_TENANT_ID: &str = "tenant:cloud-reader-research-intake";
 const CONTRIBUTION_CAPABILITY_TTL: Duration = Duration::from_secs(5 * 60);
-const CONTRIBUTION_CAPABILITY_PROTOCOL_V1: &str =
-    "chaptera.reader-contribution-capability.v1";
+const CONTRIBUTION_CAPABILITY_PROTOCOL_V1: &str = "chaptera.reader-contribution-capability.v1";
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const CLEANUP_BATCH: i64 = 16;
 const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
@@ -117,10 +116,9 @@ async fn issue_contribution_capability(
         ));
     }
 
-    let classification = decode_failure_classification(
-        session.failure_classification_json.as_deref(),
-    )?
-    .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
+    let classification =
+        decode_failure_classification(session.failure_classification_json.as_deref())?
+            .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
     let failure_code = session
         .terminal_code
         .clone()
@@ -129,15 +127,13 @@ async fn issue_contribution_capability(
         classification: classification.clone(),
         failure_code: failure_code.clone(),
     };
-    evidence
-        .validate_and_authorize(&consent)
-        .map_err(|error| {
-            if error.code == "intake_class_ineligible" {
-                GuestReaderError::unprocessable("guest_contribution_ineligible")
-            } else {
-                GuestReaderError::bad_request("guest_contribution_consent_invalid")
-            }
-        })?;
+    evidence.validate_and_authorize(&consent).map_err(|error| {
+        if error.code == "intake_class_ineligible" {
+            GuestReaderError::unprocessable("guest_contribution_ineligible")
+        } else {
+            GuestReaderError::bad_request("guest_contribution_consent_invalid")
+        }
+    })?;
 
     let failure_classification_json = serde_json::to_vec(&classification)
         .map_err(|_| GuestReaderError::internal("guest_failure_classification_serialize_failed"))?;
@@ -354,7 +350,6 @@ async fn retain_contribution(
     let _ = state.delete_quarantine(session, now_ms).await;
     Ok(receipt)
 }
-
 
 impl GuestReaderHttpState {
     pub fn new(
@@ -1296,10 +1291,7 @@ impl SqliteGuestReaderSessionStore {
         })
     }
 
-    async fn reset_research_submission(
-        &self,
-        submission_id: &str,
-    ) -> Result<(), GuestReaderError> {
+    async fn reset_research_submission(&self, submission_id: &str) -> Result<(), GuestReaderError> {
         sqlx::query(
             "UPDATE reader_research_submissions SET state='issued' WHERE submission_id=? AND state='consuming'",
         )
