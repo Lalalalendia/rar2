@@ -2465,9 +2465,17 @@ fn viewer_tables_from_resolved(
 ) -> (Vec<ViewerTable>, Vec<ViewerDiagnostic>) {
     let mut tables = Vec::new();
     let mut diagnostics = Vec::new();
+    let visible_node_ids = projection
+        .node_geometry
+        .iter()
+        .map(|geometry| geometry.origin)
+        .collect::<BTreeSet<_>>();
 
     for node in graph.nodes.values() {
         let node_id = node.header.id;
+        if !visible_node_ids.contains(&node_id) {
+            continue;
+        }
         let Some(source) = node.payload.table.as_ref() else {
             continue;
         };
