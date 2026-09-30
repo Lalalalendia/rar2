@@ -143,6 +143,7 @@ fn graph() -> PubResolvedGraph {
                 payload: PubResolvedNodePayload {
                     contents_seq_num: 123,
                     officeart_shape_type: None,
+                    officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
                     officeart_spid: None,
                     image_slot: None,
                     legacy_ole: None,
