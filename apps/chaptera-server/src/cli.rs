@@ -33,6 +33,15 @@ pub enum Command {
     },
     /// Run read-only startup/operator diagnostics.
     Doctor,
+    #[command(name = "untrusted-pub-inspect", hide = true)]
+    UntrustedPubInspect {
+        #[arg(long)]
+        max_file_bytes: u64,
+        #[arg(long)]
+        max_cfb_entries: u64,
+        #[arg(long)]
+        max_declared_stream_bytes: u64,
+    },
     #[command(hide = true)]
     SourceBaseline {
         #[arg(long)]
@@ -80,6 +89,21 @@ mod tests {
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "doctor"]).unwrap().command,
             Command::Doctor
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "untrusted-pub-inspect",
+                "--max-file-bytes",
+                "1024",
+                "--max-cfb-entries",
+                "32",
+                "--max-declared-stream-bytes",
+                "2048",
+            ])
+            .unwrap()
+            .command,
+            Command::UntrustedPubInspect { .. }
         ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "migrate", "status"])
