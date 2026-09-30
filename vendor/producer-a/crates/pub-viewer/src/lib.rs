@@ -65,9 +65,8 @@ use pub_reader::{
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_table_cells,
-    rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
-    select_unambiguous_legacy_ole_cached_presentation,
+    rasterize_wmf_preview, read_legacy_0x22_image_wmfs, resolve_pub_source_graph,
+    scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
