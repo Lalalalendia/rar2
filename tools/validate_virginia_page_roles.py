@@ -187,6 +187,44 @@ def main() -> int:
             and page.get("oid_dword1", 0) == 0
             and page.get("child_raw_type_counts", {}).get("16", 0) > 0
         ]
+
+        discovery_selected = set(positive_shape_nonzero_oid)
+        auxiliary_profiles = []
+        customer_candidate_profiles = []
+        for page in pages:
+            profile = {
+                "document_ordinal": page["document_ordinal"],
+                "contents_seq_num": page["contents_seq_num"],
+                "oid": [
+                    page.get("oid_dword0", 0),
+                    page.get("oid_dword1", 0),
+                ],
+                "pgt_type": page.get("pgt_type"),
+                "applied_master_seq_num": page.get("applied_master_seq_num"),
+                "applied_master_raw_type": page.get("applied_master_raw_type"),
+                "previous_document_entry_raw_type": page.get(
+                    "previous_document_entry_raw_type"
+                ),
+                "next_document_entry_raw_type": page.get(
+                    "next_document_entry_raw_type"
+                ),
+                "adjacent_to_page_list_special_0x59": (
+                    page.get("previous_document_entry_raw_type") == 0x59
+                    or page.get("next_document_entry_raw_type") == 0x59
+                ),
+                "shape_child_count": page.get("shape_child_count", 0),
+                "group_child_count": page.get("group_child_count", 0),
+                "child_raw_type_counts": page.get("child_raw_type_counts", {}),
+            }
+            if page["contents_seq_num"] in discovery_selected:
+                customer_candidate_profiles.append(profile)
+            else:
+                auxiliary_profiles.append(profile)
+
+        document_entry_raw_types = [
+            entry.get("raw_type")
+            for entry in observation.get("document_entries", [])
+        ]
         rows.append(
             {
                 "pair_id": spec["id"],
@@ -225,6 +263,22 @@ def main() -> int:
                         len(content_oid_or_table) == reference_pages
                     ),
                     "zero_oid_table_pages": zero_oid_table_pages,
+                    "document_page_list_raw_types": document_entry_raw_types,
+                    "customer_candidate_profiles": customer_candidate_profiles,
+                    "auxiliary_profiles": auxiliary_profiles,
+                    "auxiliary_page_count": len(auxiliary_profiles),
+                    "auxiliary_all_zero_oid": all(
+                        profile["oid"] == [0, 0]
+                        for profile in auxiliary_profiles
+                    ),
+                    "auxiliary_adjacent_0x59_count": sum(
+                        profile["adjacent_to_page_list_special_0x59"]
+                        for profile in auxiliary_profiles
+                    ),
+                    "customer_candidate_adjacent_0x59_count": sum(
+                        profile["adjacent_to_page_list_special_0x59"]
+                        for profile in customer_candidate_profiles
+                    ),
                     "promoted_to_authority": False,
                 },
             }
@@ -239,6 +293,7 @@ def main() -> int:
             "pdf_page_count_is_not_page_role_authority": True,
             "libmspub_magic_constants_used": False,
             "cloud_specific_page_filter_used": False,
+            "service_role_profiles_are_discovery_only": True,
             "raw_pub_bytes_emitted": False,
             "raw_story_text_emitted": False,
         },
