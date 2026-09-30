@@ -1763,7 +1763,10 @@ mod tests {
         assert!(spans[1].x_offset_emu > 0);
         assert_eq!(
             layout.lines[0].measured_width_emu,
-            spans.iter().map(|span| span.measured_width_emu).sum::<i64>()
+            spans
+                .iter()
+                .map(|span| span.measured_width_emu)
+                .sum::<i64>()
         );
     }
 }
