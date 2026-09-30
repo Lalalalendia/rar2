@@ -1061,18 +1061,25 @@ fn validate_font_compatibility_object(params: &[u8]) -> Result<()> {
         read_i16(params, 6).ok_or_else(|| anyhow!("WMF Font orientation is truncated"))?;
     let weight = read_u16(params, 8).ok_or_else(|| anyhow!("WMF Font weight is truncated"))?;
 
-    let scalar_profile_matches = matches!((height, width), (16, 7) | (20, 9))
-        && escapement == 0
-        && orientation == 0
-        && weight == 700
+    let shared_profile = weight == 700
         && params[10] == 0
         && params[11] == 0
         && params[12] == 0
         && params[13] == 0
-        && params[14] == 1
-        && params[15] == 2
         && params[16] == 2
         && params[17] == 34;
+    let scalar_profile_matches = shared_profile
+        && ((matches!((height, width), (16, 7) | (20, 9))
+            && escapement == 0
+            && orientation == 0
+            && params[14] == 1
+            && params[15] == 2)
+            || (height == 16
+                && width == 7
+                && escapement == 900
+                && orientation == 900
+                && params[14] == 7
+                && params[15] == 18));
     if !scalar_profile_matches {
         bail!("unsupported WMF Font compatibility profile");
     }
@@ -2182,6 +2189,13 @@ mod tests {
     fn validates_only_observed_short_font_compatibility_profiles() {
         assert!(validate_font_compatibility_object(&font_compatibility_params(16, 7)).is_ok());
         assert!(validate_font_compatibility_object(&font_compatibility_params(20, 9)).is_ok());
+
+        let mut rotated = font_compatibility_params(16, 7);
+        rotated[4..6].copy_from_slice(&900_i16.to_le_bytes());
+        rotated[6..8].copy_from_slice(&900_i16.to_le_bytes());
+        rotated[14] = 7;
+        rotated[15] = 18;
+        assert!(validate_font_compatibility_object(&rotated).is_ok());
 
         let mut unobserved = font_compatibility_params(16, 7);
         unobserved[8..10].copy_from_slice(&400_u16.to_le_bytes());
