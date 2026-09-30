@@ -1,0 +1,61 @@
+name: Quill Story read-only oracle research
+
+on:
+  push:
+    branches:
+      - research/quill-story-readonly-oracle-01
+    paths:
+      - ".github/workflows/quill-story-readonly-oracle.yml"
+      - "tools/windows/pub-runtime/run_story_readonly_oracle.ps1"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
+  pull_request:
+    paths:
+      - ".github/workflows/quill-story-readonly-oracle.yml"
+      - "tools/windows/pub-runtime/run_story_readonly_oracle.ps1"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  static-and-resolver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Parse PowerShell oracle harness
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "tools/windows/pub-runtime/run_story_readonly_oracle.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Rustfmt resolver
+        run: |
+          cargo fmt             --manifest-path vendor/producer-a/Cargo.toml             --all             -- --check
+
+      - name: Test resolver
+        run: |
+          cargo test             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-readonly-oracle-resolver
+
+      - name: Clippy resolver
+        run: |
+          cargo clippy             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-readonly-oracle-resolver             -- -D warnings
