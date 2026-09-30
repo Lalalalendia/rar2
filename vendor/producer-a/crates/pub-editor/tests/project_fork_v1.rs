@@ -85,7 +85,6 @@ fn graph() -> PubResolvedGraph {
                 payload: PubResolvedNodePayload {
                     contents_seq_num: 1,
                     officeart_shape_type: Some(1),
-                   officeart_adjust_value: PubOfficeArtAdjustValueSource::Unsupported,
                     officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
                     officeart_spid: Some(1),
                     image_slot: None,
