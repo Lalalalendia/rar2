@@ -552,8 +552,20 @@ def compare_viewer_and_adapter_scene(
     # Baseline acceptance therefore requires exact source-neutral Scene equality,
     # not merely count/target-node parity.
     if viewer_scene != adapter_scene:
+        component_state: dict[str, dict[str, Any]] = {}
+        for key in ("surfaces", "nodes", "origin_mapping", "diagnostics"):
+            viewer_value = viewer_scene.get(key)
+            adapter_value = adapter_scene.get(key)
+            component_state[key] = {
+                "equal": viewer_value == adapter_value,
+                "viewer_count": len(viewer_value) if isinstance(viewer_value, list) else None,
+                "adapter_count": len(adapter_value) if isinstance(adapter_value, list) else None,
+                "viewer_hash": hash_id(viewer_value),
+                "adapter_hash": hash_id(adapter_value),
+            }
         raise ResolvedGraphSceneError(
-            "real Viewer Scene differs from reusable resolved-graph adapter Scene"
+            "real Viewer Scene differs from reusable resolved-graph adapter Scene: "
+            + json.dumps(component_state, sort_keys=True, separators=(",", ":"))
         )
 
     return {
