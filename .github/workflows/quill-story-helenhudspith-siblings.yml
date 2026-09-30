@@ -8,6 +8,7 @@ on:
       - ".github/workflows/quill-story-helenhudspith-siblings.yml"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-early-text-boundary-probe.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-fdpc-boundary-probe.rs"
+      - "tools/research/quill_story_wayback_lineage.py"
   workflow_dispatch:
 
 permissions:
@@ -319,6 +320,12 @@ jobs:
           print(json.dumps(result, indent=2, sort_keys=True))
           PY
 
+      - name: Query exact-four Wayback lineage variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/research/quill_story_wayback_lineage.py out
+
       - name: Guard known seven and summarize sibling families
         shell: bash
         run: |
@@ -413,5 +420,7 @@ jobs:
             out/quill-story-helenhudspith-siblings-summary.json
             out/quill-story-fdpc-boundary.json
             out/quill-story-raw-strs-residue.json
+            out/quill-story-wayback-lineage.json
+            out/wayback-variants/*.pub
           if-no-files-found: error
           retention-days: 30
