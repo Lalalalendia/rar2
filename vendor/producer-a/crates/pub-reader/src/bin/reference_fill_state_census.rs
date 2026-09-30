@@ -15,8 +15,10 @@ const LINE_OPACITY: u16 = 0x01C1;
 const LINE_WIDTH: u16 = 0x01CB;
 const LINE_BOOLEANS: u16 = 0x01FF;
 const ADJUST_VALUE: u16 = 0x0147;
+const HSP_MASTER: u16 = 0x0301;
 const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
+const FSP_HAVE_MASTER_BIT: u32 = 1 << 5;
 const FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
 const SHAPE_TYPE_ROUND_RECTANGLE: u16 = 0x0002;
@@ -41,6 +43,15 @@ struct Counts {
     roundrect_adjust_value_scalar_shapes: usize,
     roundrect_adjust_value_absent_shapes: usize,
     roundrect_adjust_value_unsupported_shapes: usize,
+    roundrect_have_master_shapes: usize,
+    roundrect_hsp_master_scalar_shapes: usize,
+    roundrect_hsp_master_absent_shapes: usize,
+    roundrect_hsp_master_unsupported_shapes: usize,
+    roundrect_master_joined_shapes: usize,
+    roundrect_master_unjoined_shapes: usize,
+    roundrect_unique_joined_masters: usize,
+    roundrect_master_explicit_fill_color_shapes: usize,
+    roundrect_master_explicit_fill_boolean_shapes: usize,
     scheme_fill_client_textbox_shapes: usize,
     scheme_fill_non_client_textbox_shapes: usize,
     line_color_observations: usize,
@@ -73,6 +84,11 @@ struct Histograms {
     shape_type_with_scheme_fill: BTreeMap<String, usize>,
     roundrect_adjust_value_raw_hex: BTreeMap<String, usize>,
     roundrect_adjust_value_form: BTreeMap<String, usize>,
+    roundrect_master_shape_type_hex: BTreeMap<String, usize>,
+    roundrect_master_fill_color_class: BTreeMap<String, usize>,
+    roundrect_master_fill_scheme_ordinal: BTreeMap<String, usize>,
+    roundrect_master_fill_boolean_raw_hex: BTreeMap<String, usize>,
+    roundrect_master_fill_profile: BTreeMap<String, usize>,
     shape_profile: BTreeMap<String, usize>,
     cooccurrence: BTreeMap<String, usize>,
     dgg_fill_type_raw_hex: BTreeMap<String, usize>,
@@ -190,6 +206,14 @@ fn main() -> Result<()> {
         ..Counts::default()
     };
     let mut histograms = Histograms::default();
+    let mut shapes_by_spid =
+        BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
+    for candidate in &shapes.shapes {
+        if let Some(fsp) = candidate.fsp.as_ref() {
+            shapes_by_spid.entry(fsp.spid).or_default().push(candidate);
+        }
+    }
+    let mut joined_roundrect_master_spids = std::collections::BTreeSet::new();
 
     for shape in &shapes.shapes {
         let mut fill_type = None;
@@ -240,6 +264,93 @@ fn main() -> Result<()> {
                         &mut histograms.roundrect_adjust_value_form,
                         "duplicate_or_mixed",
                     );
+                }
+            }
+
+            if shape
+                .fsp
+                .as_ref()
+                .is_some_and(|fsp| fsp.flags & FSP_HAVE_MASTER_BIT != 0)
+            {
+                counts.roundrect_have_master_shapes += 1;
+                let master_entries = shape
+                    .fopts
+                    .iter()
+                    .flat_map(|record| record.properties.iter())
+                    .filter(|entry| entry.property_id() == HSP_MASTER)
+                    .collect::<Vec<_>>();
+                match master_entries.as_slice() {
+                    [] => counts.roundrect_hsp_master_absent_shapes += 1,
+                    [entry] if !entry.f_bid() && !entry.f_complex() => {
+                        counts.roundrect_hsp_master_scalar_shapes += 1;
+                        let master_spid = entry.op;
+                        match shapes_by_spid.get(&master_spid).map(Vec::as_slice) {
+                            Some([master]) => {
+                                counts.roundrect_master_joined_shapes += 1;
+                                joined_roundrect_master_spids.insert(master_spid);
+
+                                if let Some(master_type) =
+                                    master.fsp.as_ref().map(|fsp| fsp.shape_type)
+                                {
+                                    bump(
+                                        &mut histograms.roundrect_master_shape_type_hex,
+                                        format!("0x{master_type:04X}"),
+                                    );
+                                }
+
+                                let fill_color_bucket = match unique_scalar(master, FILL_COLOR) {
+                                    Some(Some(raw)) => {
+                                        counts.roundrect_master_explicit_fill_color_shapes += 1;
+                                        bump(
+                                            &mut histograms.roundrect_master_fill_color_class,
+                                            color_class(raw),
+                                        );
+                                        if (raw >> 24) as u8 == 0x08 {
+                                            bump(
+                                                &mut histograms
+                                                    .roundrect_master_fill_scheme_ordinal,
+                                                (raw & 0x00FF_FFFF).to_string(),
+                                            );
+                                        }
+                                        format!(
+                                            "fill_color_{}",
+                                            color_class(raw)
+                                        )
+                                    }
+                                    Some(None) => "fill_color_absent".to_owned(),
+                                    None => "fill_color_ambiguous".to_owned(),
+                                };
+
+                                let fill_boolean_bucket =
+                                    match unique_scalar(master, FILL_BOOLEANS) {
+                                        Some(Some(raw)) => {
+                                            counts
+                                                .roundrect_master_explicit_fill_boolean_shapes += 1;
+                                            bump(
+                                                &mut histograms
+                                                    .roundrect_master_fill_boolean_raw_hex,
+                                                format!("0x{raw:08X}"),
+                                            );
+                                            if raw & FILL_USE_FILLED_BIT == 0 {
+                                                "filled_use0"
+                                            } else if raw & FILL_FILLED_BIT == 0 {
+                                                "filled_false"
+                                            } else {
+                                                "filled_true"
+                                            }
+                                        }
+                                        Some(None) => "filled_absent",
+                                        None => "filled_ambiguous",
+                                    };
+                                bump(
+                                    &mut histograms.roundrect_master_fill_profile,
+                                    format!("{fill_color_bucket}|{fill_boolean_bucket}"),
+                                );
+                            }
+                            _ => counts.roundrect_master_unjoined_shapes += 1,
+                        }
+                    }
+                    _ => counts.roundrect_hsp_master_unsupported_shapes += 1,
                 }
             }
         }
@@ -428,6 +539,8 @@ fn main() -> Result<()> {
         }
     }
 
+    counts.roundrect_unique_joined_masters = joined_roundrect_master_spids.len();
+
     let receipt = Receipt {
         schema: "chaptera.reference-fill-state-census.v2",
         source_sha256: sha256_hex(&pub_bytes),
@@ -440,6 +553,7 @@ fn main() -> Result<()> {
             "Raw fillOpacity/lineOpacity values are observations only; no opacity/transparency semantics are inferred here.",
             "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
             "RoundRectangle adjustment evidence records only property 0x0147 form/raw scalar counts; absent adjustment is not converted into a PDF-derived radius.",
+            "RoundRectangle master-shape evidence records only aggregate fHaveMaster/hspMaster join and master fill-property profiles; master inheritance is not promoted by this receipt.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
@@ -451,13 +565,16 @@ fn main() -> Result<()> {
     .with_context(|| format!("write {}", output.display()))?;
 
     println!(
-        "REFERENCE_FILL_STATE_CENSUS sha={} shapes={} roundrect={} roundrect_adjust_scalar={} roundrect_adjust_absent={} roundrect_adjust_unsupported={} solid_visible={} solid_hidden={} non_solid={} unresolved={} fill_types={} fill_booleans={}",
+        "REFERENCE_FILL_STATE_CENSUS sha={} shapes={} roundrect={} roundrect_adjust_scalar={} roundrect_adjust_absent={} roundrect_adjust_unsupported={} roundrect_have_master={} roundrect_master_joined={} roundrect_unique_masters={} solid_visible={} solid_hidden={} non_solid={} unresolved={} fill_types={} fill_booleans={}",
         receipt.source_sha256,
         receipt.counts.shape_containers,
         receipt.counts.roundrect_shapes,
         receipt.counts.roundrect_adjust_value_scalar_shapes,
         receipt.counts.roundrect_adjust_value_absent_shapes,
         receipt.counts.roundrect_adjust_value_unsupported_shapes,
+        receipt.counts.roundrect_have_master_shapes,
+        receipt.counts.roundrect_master_joined_shapes,
+        receipt.counts.roundrect_unique_joined_masters,
         receipt.counts.effective_solid_visible,
         receipt.counts.effective_solid_hidden,
         receipt.counts.effective_non_solid,
