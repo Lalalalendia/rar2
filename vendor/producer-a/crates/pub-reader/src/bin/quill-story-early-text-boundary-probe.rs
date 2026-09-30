@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
 use pub_contents::{
-    BlockReadError, CONTENTS_RAW_TYPE_STORY_CATALOG, Contents0x2cChunk, ContentsCursor,
-    MatureStoryCatalog, RawContentsBlock, RawContentsBlockBody, decode_packed_field_tag,
-    parse_0x2c_header, parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
-    parse_confirmed_block, parse_confirmed_chunk_reference, parse_confirmed_mature_story_catalog,
+    decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_block, parse_confirmed_chunk_reference,
+    parse_confirmed_mature_story_catalog, BlockReadError, Contents0x2cChunk, ContentsCursor,
+    MatureStoryCatalog, RawContentsBlock, RawContentsBlockBody, CONTENTS_RAW_TYPE_STORY_CATALOG,
 };
 use pub_core::StreamPath;
 use serde::Serialize;
@@ -438,8 +438,7 @@ fn descriptor_metadata_profile(
 ) -> DescriptorMetadataProfile {
     DescriptorMetadataProfile {
         opt_a_is_zero: descriptor.opt_a == 0,
-        opt_a_equals_grounded_story_count:
-            u32::from(descriptor.opt_a) == grounded_story_count,
+        opt_a_equals_grounded_story_count: u32::from(descriptor.opt_a) == grounded_story_count,
         opt_b_is_one: descriptor.opt_b == 1,
         opt_c_is_zero: descriptor.opt_c == 0,
         bit_type_all_zero: descriptor.bit_type.iter().all(|byte| *byte == 0),
@@ -451,7 +450,9 @@ fn descriptor_metadata_profile(
 fn descriptor_range<'a>(bytes: &'a [u8], descriptor: &Descriptor) -> Result<&'a [u8]> {
     let start = usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
     let len = usize::try_from(descriptor.data_length).context("descriptor length too large")?;
-    let end = start.checked_add(len).context("descriptor range overflow")?;
+    let end = start
+        .checked_add(len)
+        .context("descriptor range overflow")?;
     bytes
         .get(start..end)
         .with_context(|| format!("descriptor {:?} range outside Quill", descriptor.name))
@@ -467,9 +468,8 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
             bail!("descriptor list cycle");
         }
         let start = usize::try_from(current).context("descriptor node offset too large")?;
-        let count = usize::from(
-            u16_at(bytes, start + 2).context("descriptor node header is truncated")?,
-        );
+        let count =
+            usize::from(u16_at(bytes, start + 2).context("descriptor node header is truncated")?);
         let next = u32_at(bytes, start + 4).context("descriptor node next is truncated")?;
         let array_start = start.checked_add(8).context("descriptor array overflow")?;
         let array_len = count
@@ -536,10 +536,7 @@ fn unique_descriptor<'a>(descriptors: &'a [Descriptor], name: [u8; 4]) -> Result
     Ok(first)
 }
 
-fn descriptors_named<'a>(
-    descriptors: &'a [Descriptor],
-    name: [u8; 4],
-) -> Vec<&'a Descriptor> {
+fn descriptors_named<'a>(descriptors: &'a [Descriptor], name: [u8; 4]) -> Vec<&'a Descriptor> {
     descriptors
         .iter()
         .filter(|item| item.name == name)
@@ -561,9 +558,7 @@ fn scalar_u64_block(field: &RawContentsBlock) -> Option<u64> {
     }
 }
 
-fn parse_story_frame_block(
-    cursor: &mut ContentsCursor<'_>,
-) -> Result<RawContentsBlock> {
+fn parse_story_frame_block(cursor: &mut ContentsCursor<'_>) -> Result<RawContentsBlock> {
     let original = cursor.clone();
     match parse_confirmed_block(cursor) {
         Ok(block) => return Ok(block),
@@ -675,7 +670,10 @@ fn strict_contents_chunk_by_raw_type(
         }
     }
     if found.len() != 1 {
-        bail!("expected exactly one strict {label} reference, found {}", found.len());
+        bail!(
+            "expected exactly one strict {label} reference, found {}",
+            found.len()
+        );
     }
 
     parse_confirmed_0x2c_chunk(stream, contents, found[0].chunk_offsets[0].value)
@@ -704,8 +702,7 @@ fn fdpp_boundary_sets(
 
     for index in 0..count {
         let boundary = u64::from(
-            u32_at(payload, offsets_start + index * 4)
-                .context("FDPP boundary word truncated")?,
+            u32_at(payload, offsets_start + index * 4).context("FDPP boundary word truncated")?,
         );
         absolute.insert(boundary);
         if let Some(delta) = boundary.checked_sub(text_start) {
@@ -719,7 +716,6 @@ fn fdpp_boundary_sets(
     Ok((absolute, relative_bytes, utf16_units))
 }
 
-
 fn profile_story_shapes(
     contents: &[u8],
     story_catalog: &MatureStoryCatalog,
@@ -729,8 +725,8 @@ fn profile_story_shapes(
     text: &Descriptor,
 ) -> Result<StoryShapeProfile> {
     let stream = StreamPath(CONTENTS_STREAM.into());
-    let header =
-        parse_0x2c_header(stream.clone(), contents).context("parse mature Contents for Story SHAPE probe")?;
+    let header = parse_0x2c_header(stream.clone(), contents)
+        .context("parse mature Contents for Story SHAPE probe")?;
     let trailer = parse_confirmed_0x2c_trailer_root(contents, &header)
         .context("parse mature Contents trailer for Story SHAPE probe")?;
 
@@ -759,8 +755,9 @@ fn profile_story_shapes(
         let Ok(seq_num) = usize::try_from(shape_ref) else {
             continue;
         };
-        let Some(reference) = parse_confirmed_chunk_reference(contents, &trailer.directory, seq_num)
-            .with_context(|| format!("parse Story SHAPE reference seq {seq_num}"))?
+        let Some(reference) =
+            parse_confirmed_chunk_reference(contents, &trailer.directory, seq_num)
+                .with_context(|| format!("parse Story SHAPE reference seq {seq_num}"))?
         else {
             continue;
         };
@@ -773,12 +770,9 @@ fn profile_story_shapes(
         }
         shape_raw_type_match_count += 1;
 
-        let chunk = parse_confirmed_0x2c_chunk(
-            stream.clone(),
-            contents,
-            reference.chunk_offsets[0].value,
-        )
-        .with_context(|| format!("parse Story SHAPE chunk seq {seq_num}"))?;
+        let chunk =
+            parse_confirmed_0x2c_chunk(stream.clone(), contents, reference.chunk_offsets[0].value)
+                .with_context(|| format!("parse Story SHAPE chunk seq {seq_num}"))?;
 
         let story_matches = chunk
             .fields
@@ -845,15 +839,16 @@ fn profile_story_shapes(
             }
         }
 
-        let all_stories_present_once_scalar =
-            shape_entries.len() == story_catalog.entries.len()
-                && present_story_count == shape_entries.len()
-                && scalar_story_count == shape_entries.len()
-                && duplicate_story_count == 0;
+        let all_stories_present_once_scalar = shape_entries.len() == story_catalog.entries.len()
+            && present_story_count == shape_entries.len()
+            && scalar_story_count == shape_entries.len()
+            && duplicate_story_count == 0;
         if all_stories_present_once_scalar {
             complete_scalar_vectors.insert(field_id, values.clone());
         }
-        let last = all_stories_present_once_scalar.then(|| values.last().copied()).flatten();
+        let last = all_stories_present_once_scalar
+            .then(|| values.last().copied())
+            .flatten();
 
         scalar_field_profiles.push(StoryShapeScalarFieldProfile {
             field_id,
@@ -863,20 +858,21 @@ fn profile_story_shapes(
             wire_types: wire_types.into_iter().collect(),
             all_stories_present_once_scalar,
             distinct_value_count: values.iter().copied().collect::<BTreeSet<_>>().len(),
-            monotonic_non_decreasing_in_story_order:
-                all_stories_present_once_scalar && values.windows(2).all(|pair| pair[0] <= pair[1]),
-            all_values_match_fdpp_absolute_quill_offsets:
-                all_stories_present_once_scalar && values.iter().all(|value| fdpp_absolute.contains(value)),
-            all_values_match_fdpp_relative_bytes:
-                all_stories_present_once_scalar && values.iter().all(|value| fdpp_relative_bytes.contains(value)),
-            all_values_match_fdpp_utf16_units:
-                all_stories_present_once_scalar && values.iter().all(|value| fdpp_utf16_units.contains(value)),
-            last_equals_text_end_absolute_quill_offset:
-                all_stories_present_once_scalar && last == Some(text_end),
-            last_equals_text_bytes:
-                all_stories_present_once_scalar && last == Some(text_bytes),
-            last_equals_text_utf16_units:
-                all_stories_present_once_scalar && last == Some(text_utf16_units),
+            monotonic_non_decreasing_in_story_order: all_stories_present_once_scalar
+                && values.windows(2).all(|pair| pair[0] <= pair[1]),
+            all_values_match_fdpp_absolute_quill_offsets: all_stories_present_once_scalar
+                && values.iter().all(|value| fdpp_absolute.contains(value)),
+            all_values_match_fdpp_relative_bytes: all_stories_present_once_scalar
+                && values
+                    .iter()
+                    .all(|value| fdpp_relative_bytes.contains(value)),
+            all_values_match_fdpp_utf16_units: all_stories_present_once_scalar
+                && values.iter().all(|value| fdpp_utf16_units.contains(value)),
+            last_equals_text_end_absolute_quill_offset: all_stories_present_once_scalar
+                && last == Some(text_end),
+            last_equals_text_bytes: all_stories_present_once_scalar && last == Some(text_bytes),
+            last_equals_text_utf16_units: all_stories_present_once_scalar
+                && last == Some(text_utf16_units),
         });
     }
 
@@ -906,18 +902,24 @@ fn profile_story_shapes(
                 outer_span_equals_text_utf16_units,
                 outer_span_equals_text_bytes,
                 first_start_is_zero,
-                all_starts_match_fdpp_absolute_quill_offsets:
-                    starts.iter().all(|value| fdpp_absolute.contains(value)),
-                all_ends_match_fdpp_absolute_quill_offsets:
-                    ends.iter().all(|value| fdpp_absolute.contains(value)),
-                all_starts_match_fdpp_relative_bytes:
-                    starts.iter().all(|value| fdpp_relative_bytes.contains(value)),
-                all_ends_match_fdpp_relative_bytes:
-                    ends.iter().all(|value| fdpp_relative_bytes.contains(value)),
-                all_starts_match_fdpp_utf16_units:
-                    starts.iter().all(|value| fdpp_utf16_units.contains(value)),
-                all_ends_match_fdpp_utf16_units:
-                    ends.iter().all(|value| fdpp_utf16_units.contains(value)),
+                all_starts_match_fdpp_absolute_quill_offsets: starts
+                    .iter()
+                    .all(|value| fdpp_absolute.contains(value)),
+                all_ends_match_fdpp_absolute_quill_offsets: ends
+                    .iter()
+                    .all(|value| fdpp_absolute.contains(value)),
+                all_starts_match_fdpp_relative_bytes: starts
+                    .iter()
+                    .all(|value| fdpp_relative_bytes.contains(value)),
+                all_ends_match_fdpp_relative_bytes: ends
+                    .iter()
+                    .all(|value| fdpp_relative_bytes.contains(value)),
+                all_starts_match_fdpp_utf16_units: starts
+                    .iter()
+                    .all(|value| fdpp_utf16_units.contains(value)),
+                all_ends_match_fdpp_utf16_units: ends
+                    .iter()
+                    .all(|value| fdpp_utf16_units.contains(value)),
             });
         }
     }
@@ -962,11 +964,10 @@ fn profile_story_shapes(
             continue;
         }
 
-        let all_stories_present_once_fixed8 =
-            shape_entries.len() == story_catalog.entries.len()
-                && present_story_count == shape_entries.len()
-                && fixed8_story_count == shape_entries.len()
-                && duplicate_story_count == 0;
+        let all_stories_present_once_fixed8 = shape_entries.len() == story_catalog.entries.len()
+            && present_story_count == shape_entries.len()
+            && fixed8_story_count == shape_entries.len()
+            && duplicate_story_count == 0;
         let (
             all_second_ge_first,
             contiguous,
@@ -988,10 +989,10 @@ fn profile_story_shapes(
             duplicate_story_count,
             wire_types: wire_types.into_iter().collect(),
             all_stories_present_once_fixed8,
-            first_words_monotonic:
-                all_stories_present_once_fixed8 && first_words.windows(2).all(|pair| pair[0] <= pair[1]),
-            second_words_monotonic:
-                all_stories_present_once_fixed8 && second_words.windows(2).all(|pair| pair[0] <= pair[1]),
+            first_words_monotonic: all_stories_present_once_fixed8
+                && first_words.windows(2).all(|pair| pair[0] <= pair[1]),
+            second_words_monotonic: all_stories_present_once_fixed8
+                && second_words.windows(2).all(|pair| pair[0] <= pair[1]),
             all_second_ge_first,
             contiguous,
             sum_deltas_equals_text_utf16_units,
@@ -999,18 +1000,30 @@ fn profile_story_shapes(
             outer_span_equals_text_utf16_units,
             outer_span_equals_text_bytes,
             first_start_is_zero,
-            all_first_words_match_fdpp_absolute_quill_offsets:
-                all_stories_present_once_fixed8 && first_words.iter().all(|value| fdpp_absolute.contains(value)),
-            all_second_words_match_fdpp_absolute_quill_offsets:
-                all_stories_present_once_fixed8 && second_words.iter().all(|value| fdpp_absolute.contains(value)),
-            all_first_words_match_fdpp_relative_bytes:
-                all_stories_present_once_fixed8 && first_words.iter().all(|value| fdpp_relative_bytes.contains(value)),
-            all_second_words_match_fdpp_relative_bytes:
-                all_stories_present_once_fixed8 && second_words.iter().all(|value| fdpp_relative_bytes.contains(value)),
-            all_first_words_match_fdpp_utf16_units:
-                all_stories_present_once_fixed8 && first_words.iter().all(|value| fdpp_utf16_units.contains(value)),
-            all_second_words_match_fdpp_utf16_units:
-                all_stories_present_once_fixed8 && second_words.iter().all(|value| fdpp_utf16_units.contains(value)),
+            all_first_words_match_fdpp_absolute_quill_offsets: all_stories_present_once_fixed8
+                && first_words
+                    .iter()
+                    .all(|value| fdpp_absolute.contains(value)),
+            all_second_words_match_fdpp_absolute_quill_offsets: all_stories_present_once_fixed8
+                && second_words
+                    .iter()
+                    .all(|value| fdpp_absolute.contains(value)),
+            all_first_words_match_fdpp_relative_bytes: all_stories_present_once_fixed8
+                && first_words
+                    .iter()
+                    .all(|value| fdpp_relative_bytes.contains(value)),
+            all_second_words_match_fdpp_relative_bytes: all_stories_present_once_fixed8
+                && second_words
+                    .iter()
+                    .all(|value| fdpp_relative_bytes.contains(value)),
+            all_first_words_match_fdpp_utf16_units: all_stories_present_once_fixed8
+                && first_words
+                    .iter()
+                    .all(|value| fdpp_utf16_units.contains(value)),
+            all_second_words_match_fdpp_utf16_units: all_stories_present_once_fixed8
+                && second_words
+                    .iter()
+                    .all(|value| fdpp_utf16_units.contains(value)),
         });
     }
 
@@ -1085,8 +1098,7 @@ fn profile_story_frame_index(
             bail!("StoryFrame index entry is not a container");
         };
 
-        let (fields, unsupported_tail) =
-            blocks_in_span_story_frame(contents, &entry_source, true)?;
+        let (fields, unsupported_tail) = blocks_in_span_story_frame(contents, &entry_source, true)?;
         let text_matches = fields
             .iter()
             .filter(|field| field.id == STORY_FRAME_ENTRY_TEXT_ID)
@@ -1117,7 +1129,10 @@ fn profile_story_frame_index(
         .iter()
         .map(|entry| entry.text_id)
         .collect::<BTreeSet<_>>();
-    let entries_with_text_id = entries.iter().filter(|entry| entry.text_id.is_some()).count();
+    let entries_with_text_id = entries
+        .iter()
+        .filter(|entry| entry.text_id.is_some())
+        .count();
     let all_entry_text_ids_grounded = entries.iter().all(|entry| {
         entry
             .text_id
@@ -1127,19 +1142,18 @@ fn profile_story_frame_index(
     let grounded_stories_with_frames = story_catalog
         .entries
         .iter()
-        .filter(|story| entries.iter().any(|entry| entry.text_id == Some(story.text_id)))
+        .filter(|story| {
+            entries
+                .iter()
+                .any(|entry| entry.text_id == Some(story.text_id))
+        })
         .count();
-    let grounded_stories_without_frames =
-        story_catalog.entries.len().saturating_sub(grounded_stories_with_frames);
+    let grounded_stories_without_frames = story_catalog
+        .entries
+        .len()
+        .saturating_sub(grounded_stories_with_frames);
 
-    let shape_profile = profile_story_shapes(
-        contents,
-        story_catalog,
-        &entries,
-        quill,
-        fdpp,
-        text,
-    )?;
+    let shape_profile = profile_story_shapes(contents, story_catalog, &entries, quill, fdpp, text)?;
 
     let mut distinct_entry_field_ids = BTreeSet::new();
     for entry in &entries {
@@ -1234,24 +1248,20 @@ fn profile_story_frame_index(
 
         let all_grounded_stories_have_constant_scalar =
             story_values.len() == story_catalog.entries.len();
-        let monotonic_non_decreasing_in_story_order =
-            all_grounded_stories_have_constant_scalar
-                && story_values.windows(2).all(|pair| pair[0] <= pair[1]);
-        let all_values_match_fdpp_absolute_quill_offsets =
-            all_grounded_stories_have_constant_scalar
-                && story_values
-                    .iter()
-                    .all(|value| fdpp_absolute.contains(value));
-        let all_values_match_fdpp_relative_bytes =
-            all_grounded_stories_have_constant_scalar
-                && story_values
-                    .iter()
-                    .all(|value| fdpp_relative_bytes.contains(value));
-        let all_values_match_fdpp_utf16_units =
-            all_grounded_stories_have_constant_scalar
-                && story_values
-                    .iter()
-                    .all(|value| fdpp_utf16_units.contains(value));
+        let monotonic_non_decreasing_in_story_order = all_grounded_stories_have_constant_scalar
+            && story_values.windows(2).all(|pair| pair[0] <= pair[1]);
+        let all_values_match_fdpp_absolute_quill_offsets = all_grounded_stories_have_constant_scalar
+            && story_values
+                .iter()
+                .all(|value| fdpp_absolute.contains(value));
+        let all_values_match_fdpp_relative_bytes = all_grounded_stories_have_constant_scalar
+            && story_values
+                .iter()
+                .all(|value| fdpp_relative_bytes.contains(value));
+        let all_values_match_fdpp_utf16_units = all_grounded_stories_have_constant_scalar
+            && story_values
+                .iter()
+                .all(|value| fdpp_utf16_units.contains(value));
         let last = story_values.last().copied();
 
         scalar_field_profiles.push(StoryFrameScalarFieldProfile {
@@ -1266,23 +1276,26 @@ fn profile_story_frame_index(
             all_values_match_fdpp_absolute_quill_offsets,
             all_values_match_fdpp_relative_bytes,
             all_values_match_fdpp_utf16_units,
-            last_equals_text_end_absolute_quill_offset:
-                all_grounded_stories_have_constant_scalar && last == Some(text_end),
-            last_equals_text_bytes:
-                all_grounded_stories_have_constant_scalar && last == Some(text_bytes),
-            last_equals_text_utf16_units:
-                all_grounded_stories_have_constant_scalar && last == Some(text_utf16_units),
+            last_equals_text_end_absolute_quill_offset: all_grounded_stories_have_constant_scalar
+                && last == Some(text_end),
+            last_equals_text_bytes: all_grounded_stories_have_constant_scalar
+                && last == Some(text_bytes),
+            last_equals_text_utf16_units: all_grounded_stories_have_constant_scalar
+                && last == Some(text_utf16_units),
         });
     }
 
     Ok(StoryFrameIndexProfile {
         declared_count,
         entry_count: entries.len(),
-        declared_count_matches_entry_count:
-            declared_count.and_then(|value| usize::try_from(value).ok()) == Some(entries.len()),
+        declared_count_matches_entry_count: declared_count
+            .and_then(|value| usize::try_from(value).ok())
+            == Some(entries.len()),
         top_level_unsupported_tail: chunk.unsupported_tail.is_some(),
-        entries_with_unsupported_tail:
-            entries.iter().filter(|entry| entry.unsupported_tail).count(),
+        entries_with_unsupported_tail: entries
+            .iter()
+            .filter(|entry| entry.unsupported_tail)
+            .count(),
         entries_with_text_id,
         all_entry_text_ids_grounded,
         grounded_stories_with_frames,
@@ -1324,12 +1337,8 @@ fn grounded_contents_story_catalog(contents: &[u8]) -> Result<(u16, MatureStoryC
     }
 
     let reference = &story_refs[0];
-    let chunk = parse_confirmed_0x2c_chunk(
-        stream,
-        contents,
-        reference.chunk_offsets[0].value,
-    )
-    .context("parse Story catalog chunk")?;
+    let chunk = parse_confirmed_0x2c_chunk(stream, contents, reference.chunk_offsets[0].value)
+        .context("parse Story catalog chunk")?;
     let catalog = parse_confirmed_mature_story_catalog(contents, &chunk)
         .context("parse grounded Story catalog")?;
     Ok((header.preamble.serialization_revision, catalog))
@@ -1384,10 +1393,9 @@ fn story_catalog_scalar_profiles(
                 }
             }
 
-            let all_entries_present_once_scalar =
-                present_entry_count == catalog.entries.len()
-                    && scalar_entry_count == catalog.entries.len()
-                    && duplicate_entry_count == 0;
+            let all_entries_present_once_scalar = present_entry_count == catalog.entries.len()
+                && scalar_entry_count == catalog.entries.len()
+                && duplicate_entry_count == 0;
             let sum = if all_entries_present_once_scalar {
                 values
                     .iter()
@@ -1395,8 +1403,8 @@ fn story_catalog_scalar_profiles(
             } else {
                 None
             };
-            let monotonic_non_decreasing = all_entries_present_once_scalar
-                && values.windows(2).all(|pair| pair[0] <= pair[1]);
+            let monotonic_non_decreasing =
+                all_entries_present_once_scalar && values.windows(2).all(|pair| pair[0] <= pair[1]);
             let last = if all_entries_present_once_scalar {
                 values.last().copied()
             } else {
@@ -1584,10 +1592,9 @@ fn story_catalog_fixed8_pair_profiles(
             continue;
         }
 
-        let all_entries_present_once_fixed8 =
-            present_entry_count == catalog.entries.len()
-                && fixed8_entry_count == catalog.entries.len()
-                && duplicate_entry_count == 0;
+        let all_entries_present_once_fixed8 = present_entry_count == catalog.entries.len()
+            && fixed8_entry_count == catalog.entries.len()
+            && duplicate_entry_count == 0;
         let first_words_monotonic = all_entries_present_once_fixed8
             && first_words.windows(2).all(|pair| pair[0] <= pair[1]);
         let second_words_monotonic = all_entries_present_once_fixed8
@@ -1629,7 +1636,9 @@ fn story_catalog_fixed8_pair_profiles(
 }
 
 fn checked_range<'a>(bytes: &'a [u8], start: usize, len: usize, label: &str) -> Result<&'a [u8]> {
-    let end = start.checked_add(len).with_context(|| format!("{label} range overflow"))?;
+    let end = start
+        .checked_add(len)
+        .with_context(|| format!("{label} range overflow"))?;
     bytes
         .get(start..end)
         .with_context(|| format!("{label} range outside payload"))
@@ -1651,9 +1660,7 @@ fn parse_mcld_record_spans(payload: &[u8]) -> Result<(u32, u32, Vec<u32>, Vec<(u
 
     let mut record_ids = Vec::with_capacity(record_id_count_usize);
     for index in 0..record_id_count_usize {
-        record_ids.push(
-            u32_at(payload, 8 + index * 4).context("MCLD record id truncated")?,
-        );
+        record_ids.push(u32_at(payload, 8 + index * 4).context("MCLD record id truncated")?);
     }
     if record_ids.iter().copied().collect::<BTreeSet<_>>().len() != record_ids.len() {
         bail!("MCLD duplicate record id");
@@ -1665,10 +1672,9 @@ fn parse_mcld_record_spans(payload: &[u8]) -> Result<(u32, u32, Vec<u32>, Vec<(u
     let mut spans = Vec::with_capacity(record_id_count_usize);
     for _ in 0..record_id_count_usize {
         let record_start = cursor;
-        let header_size = usize::try_from(
-            u32_at(payload, cursor).context("MCLD record header size truncated")?,
-        )
-        .context("MCLD record header size too large")?;
+        let header_size =
+            usize::try_from(u32_at(payload, cursor).context("MCLD record header size truncated")?)
+                .context("MCLD record header size too large")?;
         if header_size < 4 {
             bail!("MCLD record header size below minimum");
         }
@@ -1680,12 +1686,13 @@ fn parse_mcld_record_spans(payload: &[u8]) -> Result<(u32, u32, Vec<u32>, Vec<(u
         let child_count =
             usize::try_from(u32_at(payload, cursor).context("MCLD child_count truncated")?)
                 .context("MCLD child_count too large")?;
-        cursor = cursor.checked_add(4).context("MCLD child_count end overflow")?;
+        cursor = cursor
+            .checked_add(4)
+            .context("MCLD child_count end overflow")?;
         for _ in 0..child_count {
-            let child_size = usize::try_from(
-                u32_at(payload, cursor).context("MCLD child size truncated")?,
-            )
-            .context("MCLD child size too large")?;
+            let child_size =
+                usize::try_from(u32_at(payload, cursor).context("MCLD child size truncated")?)
+                    .context("MCLD child size too large")?;
             if child_size < 4 {
                 bail!("MCLD child size below minimum");
             }
@@ -1742,8 +1749,7 @@ fn mcld_scalar_candidates(
             let sum_equals_text_bytes = sum == Some(text_bytes);
             let last_equals_text_utf16_units =
                 monotonic_non_decreasing && last == Some(text_utf16_units);
-            let last_equals_text_bytes =
-                monotonic_non_decreasing && last == Some(text_bytes);
+            let last_equals_text_bytes = monotonic_non_decreasing && last == Some(text_bytes);
 
             if sum_equals_text_utf16_units
                 || sum_equals_text_bytes
@@ -1821,8 +1827,7 @@ fn profile_mcld(
     let mut story_order_record_lengths = Vec::new();
     let mut scalar_candidates = Vec::new();
 
-    if let Ok((record_count, record_id_count, record_ids, spans)) =
-        parse_mcld_record_spans(payload)
+    if let Ok((record_count, record_id_count, record_ids, spans)) = parse_mcld_record_spans(payload)
     {
         modern_framing_admitted = true;
         record_count_matches_grounded_story_count =
@@ -1832,8 +1837,7 @@ fn profile_mcld(
 
         let layout_key_set = layout_keys.iter().copied().collect::<BTreeSet<_>>();
         let record_id_set = record_ids.iter().copied().collect::<BTreeSet<_>>();
-        let set_matches =
-            all_story_entries_have_layout_key && layout_key_set == record_id_set;
+        let set_matches = all_story_entries_have_layout_key && layout_key_set == record_id_set;
         layout_key_set_matches_record_ids = Some(set_matches);
 
         record_body_lengths = spans
@@ -1878,8 +1882,7 @@ fn profile_mcld(
         story_order_record_lengths,
         scalar_candidates,
         fixed_tail_record_width,
-        fixed_tail_record_count_matches_grounded_story_count:
-            fixed_tail_record_width.is_some(),
+        fixed_tail_record_count_matches_grounded_story_count: fixed_tail_record_width.is_some(),
         fixed_tail_all_ff_record_count,
         fixed_tail_unique_record_hash_count: fixed_tail_hashes.len(),
     })
@@ -1925,10 +1928,9 @@ fn fdpp_style_structure(
     payload: &[u8],
     style_start: usize,
 ) -> Result<(usize, String, usize, usize)> {
-    let style_len = usize::try_from(
-        u32_at(payload, style_start).context("FDPP style length truncated")?,
-    )
-    .context("FDPP style length too large")?;
+    let style_len =
+        usize::try_from(u32_at(payload, style_start).context("FDPP style length truncated")?)
+            .context("FDPP style length too large")?;
     if style_len < 4 {
         bail!("FDPP style length below minimum");
     }
@@ -2080,17 +2082,17 @@ fn profile_fdpp(
         .iter()
         .filter(|value| **value >= text_start && **value <= text_end)
         .count();
-    let terminal_boundary_closes_text =
-        boundaries.last().copied() == Some(text_end);
+    let terminal_boundary_closes_text = boundaries.last().copied() == Some(text_end);
     let first_boundary_after_text_start = boundaries
         .first()
         .is_some_and(|value| *value > text_start && *value <= text_end);
-    let all_boundaries_utf16_aligned = boundaries
-        .iter()
-        .all(|value| value.checked_sub(text_start).is_some_and(|delta| delta % 2 == 0));
+    let all_boundaries_utf16_aligned = boundaries.iter().all(|value| {
+        value
+            .checked_sub(text_start)
+            .is_some_and(|delta| delta % 2 == 0)
+    });
 
-    let distinct_style_offset_count =
-        style_offsets.iter().copied().collect::<BTreeSet<_>>().len();
+    let distinct_style_offset_count = style_offsets.iter().copied().collect::<BTreeSet<_>>().len();
     let distinct_style_length_count = boundary_structures
         .iter()
         .map(|item| item.style_len)
@@ -2113,8 +2115,7 @@ fn profile_fdpp(
     Ok(FdppProfile {
         descriptor_length: descriptor.data_length,
         stored_count,
-        stored_count_matches_grounded_story_count:
-            u32::from(count_u16) == grounded_story_count,
+        stored_count_matches_grounded_story_count: u32::from(count_u16) == grounded_story_count,
         tables_fit,
         boundary_count,
         distinct_boundary_count,
@@ -2245,9 +2246,7 @@ fn scan_bte_plc_candidates(
                 continue;
             };
 
-            let Some(position_bytes) = count
-                .checked_add(1)
-                .and_then(|value| value.checked_mul(4))
+            let Some(position_bytes) = count.checked_add(1).and_then(|value| value.checked_mul(4))
             else {
                 continue;
             };
@@ -2274,11 +2273,7 @@ fn scan_bte_plc_candidates(
                     positions.clear();
                     break;
                 };
-                positions.push(if raw == 0 {
-                    text_start
-                } else {
-                    u64::from(raw)
-                });
+                positions.push(if raw == 0 { text_start } else { u64::from(raw) });
             }
             if positions.len() != count + 1 {
                 continue;
@@ -2333,7 +2328,10 @@ fn scan_bte_plc_candidates(
 }
 
 fn descriptor_lengths(descriptors: &[&Descriptor]) -> Vec<u32> {
-    descriptors.iter().map(|descriptor| descriptor.data_length).collect()
+    descriptors
+        .iter()
+        .map(|descriptor| descriptor.data_length)
+        .collect()
 }
 
 fn descriptor_topology(descriptors: &[Descriptor]) -> BTreeMap<String, Vec<u32>> {
@@ -2412,8 +2410,7 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         story_catalog_scalar_pair_profiles(&story_catalog, text_utf16_units, text_bytes);
     let story_catalog_fixed8_pair_profiles =
         story_catalog_fixed8_pair_profiles(&story_catalog, text_utf16_units, text_bytes);
-    let mcld_profile =
-        profile_mcld(&quill, mcld, &story_catalog, text_utf16_units, text_bytes)?;
+    let mcld_profile = profile_mcld(&quill, mcld, &story_catalog, text_utf16_units, text_bytes)?;
     let fdpp_profile = profile_fdpp(&quill, fdpp[0], text, grounded_story_count)?;
     let story_frame_index_profile = profile_story_frame_index(
         &contents,
@@ -2452,10 +2449,9 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         mcld_profile,
         fdpp_profile,
         story_frame_index_profile,
-        syid_strs_text_opt_a_all_equal:
-            syid.opt_a == strs.opt_a && strs.opt_a == text.opt_a,
-        syid_strs_text_bit_type_all_equal:
-            syid.bit_type == strs.bit_type && strs.bit_type == text.bit_type,
+        syid_strs_text_opt_a_all_equal: syid.opt_a == strs.opt_a && strs.opt_a == text.opt_a,
+        syid_strs_text_bit_type_all_equal: syid.bit_type == strs.bit_type
+            && strs.bit_type == text.bit_type,
         story_catalog_entries_with_unsupported_tail,
         story_catalog_scalar_profiles,
         story_catalog_scalar_pair_profiles,
@@ -2468,8 +2464,10 @@ fn diagnose(bytes: &[u8]) -> Result<WitnessRow> {
         strs_descriptor_length: strs.data_length,
         strs_length_matches_observed_22_plus_8n: u64::from(strs.data_length) == expected_strs_len,
         strs_chunk_all_ff: strs_payload.iter().all(|byte| *byte == 0xff),
-        strs_direct_generic_plc_candidate_count:
-            scan_direct_generic_plc_count(strs_payload, grounded_story_count),
+        strs_direct_generic_plc_candidate_count: scan_direct_generic_plc_count(
+            strs_payload,
+            grounded_story_count,
+        ),
 
         text_descriptor_length: text.data_length,
         text_utf16_units,
