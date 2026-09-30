@@ -938,8 +938,7 @@ fn validate_palette_compatibility_object(params: &[u8]) -> Result<()> {
             params.len()
         );
     }
-    let start =
-        read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
+    let start = read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
     let entry_count =
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF Palette entry count is truncated"))?;
     if start != 0x0300 || usize::from(entry_count) != ENTRY_COUNT {
@@ -1985,8 +1984,7 @@ mod tests {
         );
         insert_record_before_function(&mut bytes, META_POLYGON, record(META_REALIZEPALETTE, &[]));
 
-        let with_palette =
-            rasterize_wmf_preview(&bytes, 100, 100).expect("palette compatibility");
+        let with_palette = rasterize_wmf_preview(&bytes, 100, 100).expect("palette compatibility");
         assert_eq!(with_palette, baseline);
     }
 
