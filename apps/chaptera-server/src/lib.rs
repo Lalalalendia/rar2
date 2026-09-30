@@ -8,6 +8,7 @@ pub mod blob_runtime;
 pub mod blob_store;
 pub mod build_info;
 pub mod cli;
+pub mod cloud_reader_assets;
 pub mod config;
 pub mod db;
 pub mod derived_artifacts;
