@@ -2150,8 +2150,7 @@ mod tests {
         let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
             .await
             .unwrap();
-        let token =
-            token_hash(b"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        let token = token_hash(b"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
         store
             .insert_research_submission(
                 "submission:33333333333333333333333333333333",
