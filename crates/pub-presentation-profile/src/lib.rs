@@ -114,10 +114,8 @@ pub struct ReferenceFixturePresentationSelectionV1 {
     pub customer_page_seq_nums: Vec<u32>,
 }
 
-pub const AUX4_PRESENTATION_INPUT_SCHEMA_V1: &str =
-    "chaptera.aux4-presentation-profile-input.v1";
-pub const AUX4_PRESENTATION_PROFILE_ID_V1: &str =
-    "publisher-mature-0x2c/aux4-structural/v1";
+pub const AUX4_PRESENTATION_INPUT_SCHEMA_V1: &str = "chaptera.aux4-presentation-profile-input.v1";
+pub const AUX4_PRESENTATION_PROFILE_ID_V1: &str = "publisher-mature-0x2c/aux4-structural/v1";
 const AUX4_TRAILING_AUXILIARY_PAGE_COUNT_V1: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
