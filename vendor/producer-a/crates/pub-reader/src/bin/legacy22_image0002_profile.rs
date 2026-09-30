@@ -34,8 +34,12 @@ const WMF_PLACEABLE_HEADER_BYTES: usize = 22;
 const WMF_META_HEADER_BYTES: usize = 18;
 const WMF_MAX_RECORDS: usize = 1_000_000;
 const META_EOF_FUNCTION: u16 = 0x0000;
+const META_REALIZEPALETTE_FUNCTION: u16 = 0x0035;
+const META_SETPALENTRIES_FUNCTION: u16 = 0x0037;
 const META_CREATEPALETTE_FUNCTION: u16 = 0x00f7;
+const META_RESIZEPALETTE_FUNCTION: u16 = 0x0139;
 const META_SELECTOBJECT_FUNCTION: u16 = 0x012d;
+const META_SELECTPALETTE_FUNCTION: u16 = 0x0234;
 const META_DIBCREATEPATTERNBRUSH_FUNCTION: u16 = 0x0142;
 const META_CREATEPATTERNBRUSH_FUNCTION: u16 = 0x01f9;
 const META_DELETEOBJECT_FUNCTION: u16 = 0x01f0;
@@ -43,6 +47,8 @@ const META_CREATEPENINDIRECT_FUNCTION: u16 = 0x02fa;
 const META_CREATEFONTINDIRECT_FUNCTION: u16 = 0x02fb;
 const META_CREATEBRUSHINDIRECT_FUNCTION: u16 = 0x02fc;
 const META_CREATEBITMAPINDIRECT_FUNCTION: u16 = 0x02fd;
+const META_ELLIPSE_FUNCTION: u16 = 0x0418;
+const META_ANIMATEPALETTE_FUNCTION: u16 = 0x0436;
 const META_TEXTOUT_FUNCTION: u16 = 0x0521;
 const META_ESCAPE_FUNCTION: u16 = 0x0626;
 const META_CREATEBITMAP_FUNCTION: u16 = 0x06fe;
@@ -768,6 +774,281 @@ fn font_blocker_profile(records: &[(u16, &[u8])]) -> Value {
     })
 }
 
+
+fn palette_payload_profile(params: &[u8]) -> Value {
+    let start = read_u16(params, 0);
+    let entry_count = read_u16(params, 2).map(usize::from);
+    let expected_len = entry_count.and_then(|count| count.checked_mul(4)?.checked_add(4));
+    let entry_flags_nonzero_count = entry_count
+        .filter(|_| expected_len == Some(params.len()))
+        .map(|count| {
+            (0..count)
+                .filter(|index| {
+                    params
+                        .get(4 + index * 4 + 3)
+                        .is_some_and(|flags| *flags != 0)
+                })
+                .count()
+        });
+
+    json!({
+        "param_len": params.len(),
+        "start": start.map(|value| format!("0x{value:04x}")),
+        "entry_count": entry_count,
+        "expected_len": expected_len,
+        "exact_length": expected_len == Some(params.len()),
+        "entry_flags_nonzero_count": entry_flags_nonzero_count,
+    })
+}
+
+fn palette_blocker_profile(records: &[(u16, &[u8])]) -> Value {
+    let first_palette = records
+        .iter()
+        .find(|(function, _)| *function == META_CREATEPALETTE_FUNCTION)
+        .map(|(_, params)| palette_payload_profile(params));
+
+    let mut objects = Vec::<Option<(u16, usize)>>::new();
+    let mut first_palette_record_index = None;
+    let mut palette_creation_count = 0usize;
+    let mut palette_select_count = 0usize;
+    let mut palette_delete_count = 0usize;
+    let mut palette_delete_while_selected_count = 0usize;
+    let mut palette_slot_reuse_count = 0usize;
+    let mut selected_palette_slot = None::<usize>;
+    let mut palette_slots = BTreeSet::<usize>::new();
+    let mut deleted_palette_slots = BTreeSet::<usize>::new();
+    let mut reused_palette_slots = BTreeSet::<usize>::new();
+    let mut immediate_after_palette_create_counts = BTreeMap::<String, usize>::new();
+    let mut immediate_after_palette_select_counts = BTreeMap::<String, usize>::new();
+    let mut selected_palette_function_counts = BTreeMap::<String, usize>::new();
+    let mut palette_slot_reuse_creator_counts = BTreeMap::<String, usize>::new();
+    let mut realize_palette_count = 0usize;
+    let mut set_palette_entries_count = 0usize;
+    let mut resize_palette_count = 0usize;
+    let mut animate_palette_count = 0usize;
+    let mut unknown_select_palette_count = 0usize;
+    let mut unknown_delete_count = 0usize;
+
+    for (record_index, (function, params)) in records.iter().enumerate() {
+        if selected_palette_slot.is_some()
+            && !matches!(
+                *function,
+                META_CREATEPALETTE_FUNCTION | META_SELECTPALETTE_FUNCTION | META_EOF_FUNCTION
+            )
+        {
+            bump_function(&mut selected_palette_function_counts, *function);
+        }
+
+        if object_creator(*function) {
+            let slot = allocate_probe_object(&mut objects, (*function, record_index));
+            if deleted_palette_slots.remove(&slot) {
+                palette_slot_reuse_count += 1;
+                reused_palette_slots.insert(slot);
+                bump_function(&mut palette_slot_reuse_creator_counts, *function);
+            }
+            if *function == META_CREATEPALETTE_FUNCTION {
+                first_palette_record_index.get_or_insert(record_index);
+                palette_creation_count += 1;
+                palette_slots.insert(slot);
+                if let Some((next_function, _)) = records.get(record_index + 1) {
+                    bump_function(&mut immediate_after_palette_create_counts, *next_function);
+                }
+            }
+        }
+
+        match *function {
+            META_SELECTPALETTE_FUNCTION => {
+                let Some(slot) = read_u16(params, 0).map(usize::from) else {
+                    unknown_select_palette_count += 1;
+                    continue;
+                };
+                match objects.get(slot).and_then(|entry| *entry) {
+                    Some((META_CREATEPALETTE_FUNCTION, _)) => {
+                        palette_select_count += 1;
+                        selected_palette_slot = Some(slot);
+                        if let Some((next_function, _)) = records.get(record_index + 1) {
+                            bump_function(&mut immediate_after_palette_select_counts, *next_function);
+                        }
+                    }
+                    Some(_) | None => unknown_select_palette_count += 1,
+                }
+            }
+            META_DELETEOBJECT_FUNCTION => {
+                let Some(slot) = read_u16(params, 0).map(usize::from) else {
+                    unknown_delete_count += 1;
+                    continue;
+                };
+                let Some(entry) = objects.get_mut(slot) else {
+                    unknown_delete_count += 1;
+                    continue;
+                };
+                match *entry {
+                    Some((META_CREATEPALETTE_FUNCTION, _)) => {
+                        palette_delete_count += 1;
+                        if selected_palette_slot == Some(slot) {
+                            palette_delete_while_selected_count += 1;
+                            selected_palette_slot = None;
+                        }
+                        deleted_palette_slots.insert(slot);
+                        *entry = None;
+                    }
+                    Some(_) => *entry = None,
+                    None => unknown_delete_count += 1,
+                }
+            }
+            META_REALIZEPALETTE_FUNCTION if selected_palette_slot.is_some() => {
+                realize_palette_count += 1;
+            }
+            META_SETPALENTRIES_FUNCTION if selected_palette_slot.is_some() => {
+                set_palette_entries_count += 1;
+            }
+            META_RESIZEPALETTE_FUNCTION if selected_palette_slot.is_some() => {
+                resize_palette_count += 1;
+            }
+            META_ANIMATEPALETTE_FUNCTION if selected_palette_slot.is_some() => {
+                animate_palette_count += 1;
+            }
+            _ => {}
+        }
+    }
+
+    json!({
+        "kind": "createpalette",
+        "palette_record": first_palette,
+        "lifecycle": {
+            "first_palette_record_index": first_palette_record_index,
+            "palette_creation_count": palette_creation_count,
+            "palette_slots": palette_slots,
+            "palette_select_count": palette_select_count,
+            "palette_delete_count": palette_delete_count,
+            "palette_delete_while_selected_count": palette_delete_while_selected_count,
+            "palette_slot_reuse_count": palette_slot_reuse_count,
+            "reused_palette_slots": reused_palette_slots,
+            "palette_slot_reuse_creator_counts": palette_slot_reuse_creator_counts,
+            "realize_palette_count": realize_palette_count,
+            "set_palette_entries_count": set_palette_entries_count,
+            "resize_palette_count": resize_palette_count,
+            "animate_palette_count": animate_palette_count,
+            "immediate_after_palette_create_counts": immediate_after_palette_create_counts,
+            "immediate_after_palette_select_counts": immediate_after_palette_select_counts,
+            "selected_palette_function_counts": selected_palette_function_counts,
+            "unknown_select_palette_count": unknown_select_palette_count,
+            "unknown_delete_count": unknown_delete_count,
+        }
+    })
+}
+
+fn creator_style_profile(function: u16, params: &[u8]) -> Value {
+    match function {
+        META_CREATEPENINDIRECT_FUNCTION => json!({
+            "creator": "pen",
+            "style": read_u16(params, 0),
+            "width_x_sign": sign_i16(read_i16(params, 2)),
+            "param_len": params.len(),
+        }),
+        META_CREATEBRUSHINDIRECT_FUNCTION => json!({
+            "creator": "brush",
+            "style": read_u16(params, 0),
+            "param_len": params.len(),
+        }),
+        META_DIBCREATEPATTERNBRUSH_FUNCTION => json!({
+            "creator": "dib_pattern_brush",
+            "param_len": params.len(),
+        }),
+        other => json!({
+            "creator_function": format!("0x{other:04x}"),
+            "param_len": params.len(),
+        }),
+    }
+}
+
+fn ellipse_blocker_profile(records: &[(u16, &[u8])]) -> Value {
+    let mut objects = Vec::<Option<(u16, usize)>>::new();
+    let mut active_pen = None::<(u16, usize)>;
+    let mut active_brush = None::<(u16, usize)>;
+    let mut clip_intersection_count = 0usize;
+
+    for (record_index, (function, params)) in records.iter().enumerate() {
+        if object_creator(*function) {
+            allocate_probe_object(&mut objects, (*function, record_index));
+        }
+
+        match *function {
+            META_DELETEOBJECT_FUNCTION => {
+                if let Some(slot) = read_u16(params, 0).map(usize::from) {
+                    if let Some(entry) = objects.get_mut(slot) {
+                        *entry = None;
+                    }
+                }
+            }
+            META_SELECTOBJECT_FUNCTION => {
+                let Some(slot) = read_u16(params, 0).map(usize::from) else {
+                    continue;
+                };
+                let Some((creator, creator_index)) = objects.get(slot).and_then(|entry| *entry)
+                else {
+                    continue;
+                };
+                if creator == META_CREATEPENINDIRECT_FUNCTION {
+                    active_pen = Some((creator, creator_index));
+                } else if matches!(
+                    creator,
+                    META_CREATEBRUSHINDIRECT_FUNCTION
+                        | META_DIBCREATEPATTERNBRUSH_FUNCTION
+                        | META_CREATEPATTERNBRUSH_FUNCTION
+                ) {
+                    active_brush = Some((creator, creator_index));
+                }
+            }
+            0x0416 => {
+                clip_intersection_count += 1;
+            }
+            META_ELLIPSE_FUNCTION => {
+                let bottom = read_i16(params, 0);
+                let right = read_i16(params, 2);
+                let top = read_i16(params, 4);
+                let left = read_i16(params, 6);
+                let width_sign = match (right, left) {
+                    (Some(r), Some(l)) => sign_i32(Some(i32::from(r) - i32::from(l))),
+                    _ => "missing",
+                };
+                let height_sign = match (bottom, top) {
+                    (Some(b), Some(t)) => sign_i32(Some(i32::from(b) - i32::from(t))),
+                    _ => "missing",
+                };
+                let pen = active_pen.and_then(|(creator, creator_index)| {
+                    records
+                        .get(creator_index)
+                        .map(|(_, creator_params)| creator_style_profile(creator, creator_params))
+                });
+                let brush = active_brush.and_then(|(creator, creator_index)| {
+                    records
+                        .get(creator_index)
+                        .map(|(_, creator_params)| creator_style_profile(creator, creator_params))
+                });
+                return json!({
+                    "kind": "ellipse",
+                    "record_index": record_index,
+                    "param_len": params.len(),
+                    "width_sign": width_sign,
+                    "height_sign": height_sign,
+                    "nondegenerate": !matches!(width_sign, "zero" | "missing")
+                        && !matches!(height_sign, "zero" | "missing"),
+                    "active_pen": pen.unwrap_or_else(|| json!({"creator": "stock"})),
+                    "active_brush": brush.unwrap_or_else(|| json!({"creator": "stock"})),
+                    "clip_intersection_count_before": clip_intersection_count,
+                    "next_function": records
+                        .get(record_index + 1)
+                        .map(|(next, _)| format!("0x{next:04x}")),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    json!({"kind": "ellipse", "record": "missing"})
+}
+
 fn stretchdib_blocker_profile(params: &[u8]) -> Value {
     const FIXED_BYTES: usize = 22;
     let dib = params.get(FIXED_BYTES..).unwrap_or(&[]);
@@ -884,7 +1165,9 @@ fn wmf_blocker_profile(wmf: &[u8], detail: &str) -> Value {
         return json!({"kind": "record_walk_failed"});
     };
     match detail {
+        "record_function_0x00f7" => palette_blocker_profile(&records),
         "record_function_0x02fb" => font_blocker_profile(&records),
+        "record_function_0x0418" => ellipse_blocker_profile(&records),
         "record_function_0x0f43" => records
             .iter()
             .find(|(function, _)| *function == META_STRETCHDIB_FUNCTION)
@@ -1198,6 +1481,61 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_lifecycle_tracks_select_realize_delete_and_reuse() {
+        let palette = [0x00_u8, 0x03, 0x01, 0x00, 10, 20, 30, 0];
+        let select_zero = 0_u16.to_le_bytes();
+        let delete_zero = 0_u16.to_le_bytes();
+        let records = vec![
+            (META_CREATEPALETTE_FUNCTION, palette.as_slice()),
+            (META_SELECTPALETTE_FUNCTION, select_zero.as_slice()),
+            (META_REALIZEPALETTE_FUNCTION, &[][..]),
+            (META_DELETEOBJECT_FUNCTION, delete_zero.as_slice()),
+            (META_CREATEPENINDIRECT_FUNCTION, &[][..]),
+            (META_EOF_FUNCTION, &[][..]),
+        ];
+        let profile = palette_blocker_profile(&records);
+        assert_eq!(profile["palette_record"]["start"], "0x0300");
+        assert_eq!(profile["palette_record"]["entry_count"], 1);
+        assert_eq!(profile["palette_record"]["exact_length"], true);
+        assert_eq!(profile["lifecycle"]["palette_creation_count"], 1);
+        assert_eq!(profile["lifecycle"]["palette_select_count"], 1);
+        assert_eq!(profile["lifecycle"]["realize_palette_count"], 1);
+        assert_eq!(profile["lifecycle"]["palette_delete_count"], 1);
+        assert_eq!(profile["lifecycle"]["palette_slot_reuse_count"], 1);
+    }
+
+    #[test]
+    fn ellipse_profile_tracks_bounded_geometry_and_selected_objects() {
+        let mut pen = [0_u8; 10];
+        pen[0..2].copy_from_slice(&0_u16.to_le_bytes());
+        pen[2..4].copy_from_slice(&1_i16.to_le_bytes());
+        let mut brush = [0_u8; 8];
+        brush[0..2].copy_from_slice(&0_u16.to_le_bytes());
+        let select_zero = 0_u16.to_le_bytes();
+        let select_one = 1_u16.to_le_bytes();
+        let mut ellipse = [0_u8; 8];
+        ellipse[0..2].copy_from_slice(&80_i16.to_le_bytes());
+        ellipse[2..4].copy_from_slice(&90_i16.to_le_bytes());
+        ellipse[4..6].copy_from_slice(&20_i16.to_le_bytes());
+        ellipse[6..8].copy_from_slice(&10_i16.to_le_bytes());
+        let records = vec![
+            (META_CREATEPENINDIRECT_FUNCTION, pen.as_slice()),
+            (META_CREATEBRUSHINDIRECT_FUNCTION, brush.as_slice()),
+            (META_SELECTOBJECT_FUNCTION, select_zero.as_slice()),
+            (META_SELECTOBJECT_FUNCTION, select_one.as_slice()),
+            (META_ELLIPSE_FUNCTION, ellipse.as_slice()),
+            (META_EOF_FUNCTION, &[][..]),
+        ];
+        let profile = ellipse_blocker_profile(&records);
+        assert_eq!(profile["param_len"], 8);
+        assert_eq!(profile["width_sign"], "positive");
+        assert_eq!(profile["height_sign"], "positive");
+        assert_eq!(profile["nondegenerate"], true);
+        assert_eq!(profile["active_pen"]["creator"], "pen");
+        assert_eq!(profile["active_brush"]["creator"], "brush");
+    }
 
     #[test]
     fn font_lifecycle_tracks_slot_select_delete_reuse_and_text() {
