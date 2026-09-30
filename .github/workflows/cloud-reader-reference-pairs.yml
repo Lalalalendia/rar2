@@ -57,32 +57,41 @@ jobs:
           python -m pip install --disable-pip-version-check --no-cache-dir             "requests==2.32.5" "PyMuPDF==1.24.14"
           python -m py_compile             tools/acquire_carlton_march_pair.py             tools/acquire_virginia_pub_pdf_pairs.py             tools/pdf_reference_diff_v1.py             tools/cloud_reader_reference_pdf_raster_v1.py
 
-      - name: Reacquire exact public PUB-PDF pairs
+      - name: Reacquire exact Carlton PUB-PDF pair
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/carlton-pair" "$RUNNER_TEMP/virginia-pairs"
+          mkdir -p "$RUNNER_TEMP/carlton-pair"
           python tools/acquire_carlton_march_pair.py "$RUNNER_TEMP/carlton-pair"
-          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
 
-      - name: Census exact reference fill state
+      - name: Census exact Carlton fill state
         run: |
           set -euo pipefail
           mkdir -p target/cloud-reader-reference-pairs
           cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
-          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
-          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
-            cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
-          fi
 
       - name: Census exact Carlton TABLE cell paint join
         env:
           CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/carlton-pair/March-2026.pub
           CHAPTERA_TABLE_CELL_PAINT_RECEIPT: target/cloud-reader-reference-pairs/carlton-table-cell-paint-join.json
         run: cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+
+      - name: Reacquire exact Virginia PUB-PDF pairs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+
+      - name: Census exact Virginia fill state
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
+          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
+            cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
+          fi
 
       - uses: actions/setup-node@v4
         with:
