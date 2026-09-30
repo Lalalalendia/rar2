@@ -119,7 +119,7 @@ pub use structural_base::{
 pub use table_bridge::{
     PubMaterializedTableCell, PubTableCellCoordinates, PubTableCellSource,
     PubTableLayoutMetricsSource, PubTableSource, PubTableStoryOwnershipSource, PubTableTextError,
-    RAW_TYPE_TABLE, materialize_bounded_simple_table_cells,
+    RAW_TYPE_TABLE, materialize_bounded_simple_table_cells, materialize_bounded_table_cells,
 };
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
 pub use wmf_preview::{
