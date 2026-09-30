@@ -46,6 +46,7 @@ impl From<MatureCellCoordinates> for PubTableCellCoordinates {
 pub struct PubMaterializedTableCell {
     pub id: TableCellId,
     pub address: TableCellAddress,
+    pub coordinates: PubTableCellCoordinates,
     pub text: String,
     pub bounds: Option<RectEmu>,
 }
@@ -73,6 +74,19 @@ pub enum PubTableTextError {
     InvalidUtf16 {
         id: TableCellId,
     },
+    MissingCoordinates {
+        id: TableCellId,
+    },
+    CoordinatesOutOfRange {
+        id: TableCellId,
+        coordinates: PubTableCellCoordinates,
+        rows: u32,
+        columns: u32,
+    },
+    OverlappingCoordinates {
+        left: TableCellId,
+        right: TableCellId,
+    },
 }
 
 pub fn materialize_bounded_simple_table_cells(
@@ -83,7 +97,34 @@ pub fn materialize_bounded_simple_table_cells(
         .simple_table
         .as_ref()
         .ok_or(PubTableTextError::NotSimpleRectangular)?;
+    let materialized = materialize_bounded_table_cells(table, story)?;
 
+    let mut semantic_cells = simple.cells.clone();
+    semantic_cells.sort_by_key(|cell| (cell.address.row, cell.address.column, cell.id));
+
+    semantic_cells
+        .into_iter()
+        .map(|semantic| {
+            let cell = materialized
+                .iter()
+                .find(|cell| cell.id == semantic.id)
+                .ok_or(PubTableTextError::MissingSourceCell { id: semantic.id })?;
+            if cell.coordinates.start_row != semantic.address.row
+                || cell.coordinates.end_row != semantic.address.row
+                || cell.coordinates.start_column != semantic.address.column
+                || cell.coordinates.end_column != semantic.address.column
+            {
+                return Err(PubTableTextError::NotSimpleRectangular);
+            }
+            Ok(cell.clone())
+        })
+        .collect()
+}
+
+pub fn materialize_bounded_table_cells(
+    table: &PubTableSource,
+    story: &Story,
+) -> Result<Vec<PubMaterializedTableCell>, PubTableTextError> {
     if table.story_id != Some(story.id) {
         return Err(PubTableTextError::StoryMismatch {
             expected: table.story_id,
@@ -91,22 +132,49 @@ pub fn materialize_bounded_simple_table_cells(
         });
     }
 
+    let mut coordinates = Vec::<(TableCellId, PubTableCellCoordinates)>::new();
+    for source in &table.cells {
+        let current = source
+            .coordinates
+            .ok_or(PubTableTextError::MissingCoordinates { id: source.id })?;
+        if current.start_row > current.end_row
+            || current.start_column > current.end_column
+            || current.end_row >= table.rows
+            || current.end_column >= table.columns
+        {
+            return Err(PubTableTextError::CoordinatesOutOfRange {
+                id: source.id,
+                coordinates: current,
+                rows: table.rows,
+                columns: table.columns,
+            });
+        }
+        for (other_id, other) in &coordinates {
+            let rows_overlap =
+                current.start_row <= other.end_row && other.start_row <= current.end_row;
+            let columns_overlap = current.start_column <= other.end_column
+                && other.start_column <= current.end_column;
+            if rows_overlap && columns_overlap {
+                return Err(PubTableTextError::OverlappingCoordinates {
+                    left: *other_id,
+                    right: source.id,
+                });
+            }
+        }
+        coordinates.push((source.id, current));
+    }
+
     let story_utf16 = story.text.encode_utf16().collect::<Vec<_>>();
-    let mut semantic_cells = simple.cells.clone();
-    semantic_cells.sort_by_key(|cell| (cell.address.row, cell.address.column, cell.id));
-
-    semantic_cells
-        .into_iter()
-        .map(|semantic| {
-            let source = table
-                .cells
-                .iter()
-                .find(|cell| cell.id == semantic.id)
-                .ok_or(PubTableTextError::MissingSourceCell { id: semantic.id })?;
-
+    table
+        .cells
+        .iter()
+        .map(|source| {
+            let coordinates = source
+                .coordinates
+                .ok_or(PubTableTextError::MissingCoordinates { id: source.id })?;
             let start = usize::try_from(source.utf16_start).map_err(|_| {
                 PubTableTextError::InvalidRange {
-                    id: semantic.id,
+                    id: source.id,
                     start: source.utf16_start,
                     end: source.utf16_end,
                     story_len_utf16: story_utf16.len(),
@@ -114,14 +182,14 @@ pub fn materialize_bounded_simple_table_cells(
             })?;
             let end =
                 usize::try_from(source.utf16_end).map_err(|_| PubTableTextError::InvalidRange {
-                    id: semantic.id,
+                    id: source.id,
                     start: source.utf16_start,
                     end: source.utf16_end,
                     story_len_utf16: story_utf16.len(),
                 })?;
             if start > end || end > story_utf16.len() {
                 return Err(PubTableTextError::InvalidRange {
-                    id: semantic.id,
+                    id: source.id,
                     start: source.utf16_start,
                     end: source.utf16_end,
                     story_len_utf16: story_utf16.len(),
@@ -130,23 +198,15 @@ pub fn materialize_bounded_simple_table_cells(
 
             let mut cell_start = start;
             let mut cell_end = end;
-
-            // The grounded Publisher TCD convention used by our mature bridge
-            // leaves the inter-cell CR at the start of every cell after the
-            // first source slice. The table structure itself represents that
-            // boundary, so it must not become cell content.
             if start > 0 {
                 if story_utf16.get(start) != Some(&0x000D) {
                     return Err(PubTableTextError::MissingLeadingCellSeparator {
-                        id: semantic.id,
+                        id: source.id,
                         start: source.utf16_start,
                     });
                 }
                 cell_start += 1;
             }
-
-            // The final Quill Story paragraph terminator is not table-cell
-            // content. Internal CRs are preserved for multi-paragraph cells.
             if end == story_utf16.len()
                 && cell_end > cell_start
                 && story_utf16.get(cell_end - 1) == Some(&0x000D)
@@ -155,11 +215,15 @@ pub fn materialize_bounded_simple_table_cells(
             }
 
             let text = String::from_utf16(&story_utf16[cell_start..cell_end])
-                .map_err(|_| PubTableTextError::InvalidUtf16 { id: semantic.id })?;
+                .map_err(|_| PubTableTextError::InvalidUtf16 { id: source.id })?;
 
             Ok(PubMaterializedTableCell {
-                id: semantic.id,
-                address: semantic.address,
+                id: source.id,
+                address: TableCellAddress {
+                    row: coordinates.start_row,
+                    column: coordinates.start_column,
+                },
+                coordinates,
                 text,
                 bounds: source.bounds,
             })
