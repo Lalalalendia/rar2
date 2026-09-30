@@ -817,6 +817,18 @@ def main() -> int:
         )
         certificate_sha256 = wait_tls(caddy_https_port, caddy_process, caddy_log_path)
 
+        index_path = work / "index.html"
+        index_status, index_raw = curl_request(
+            https_port=caddy_https_port,
+            method="GET",
+            path="/",
+            output=index_path,
+        )
+        if index_status != 200:
+            raise AssertionError(f"embedded Cloud Reader root returned HTTP {index_status}")
+        if b"Chaptera <span>Cloud Reader</span>" not in index_raw:
+            raise AssertionError("HTTPS root did not serve the embedded Cloud Reader UI")
+
         response_path = work / "response.json"
         header_path = work / "headers.txt"
         issued_at_ms = int(time.time() * 1000)
@@ -973,6 +985,8 @@ def main() -> int:
                 "security_headers_present": True,
                 "server_header_absent": True,
                 "application_listener_loopback": True,
+                "embedded_reader_root_status": index_status,
+                "embedded_reader_marker_present": True,
             },
             "service_path": {
                 "issue_status": status,
