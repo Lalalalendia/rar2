@@ -218,7 +218,6 @@ struct StoryFrameEntryProbe {
 #[derive(Debug, Clone)]
 struct StoryShapeEntryProbe {
     fields: Vec<RawContentsBlock>,
-    unsupported_tail: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -525,7 +524,7 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
     Ok(out)
 }
 
-fn unique_descriptor<'a>(descriptors: &'a [Descriptor], name: [u8; 4]) -> Result<&'a Descriptor> {
+fn unique_descriptor(descriptors: &[Descriptor], name: [u8; 4]) -> Result<&Descriptor> {
     let mut found = descriptors.iter().filter(|item| item.name == name);
     let first = found
         .next()
@@ -536,7 +535,7 @@ fn unique_descriptor<'a>(descriptors: &'a [Descriptor], name: [u8; 4]) -> Result
     Ok(first)
 }
 
-fn descriptors_named<'a>(descriptors: &'a [Descriptor], name: [u8; 4]) -> Vec<&'a Descriptor> {
+fn descriptors_named(descriptors: &[Descriptor], name: [u8; 4]) -> Vec<&Descriptor> {
     descriptors
         .iter()
         .filter(|item| item.name == name)
@@ -788,7 +787,6 @@ fn profile_story_shapes(
         }
         shape_entries.push(StoryShapeEntryProbe {
             fields: chunk.fields,
-            unsupported_tail: chunk.unsupported_tail.is_some(),
         });
     }
 
@@ -1644,7 +1642,9 @@ fn checked_range<'a>(bytes: &'a [u8], start: usize, len: usize, label: &str) -> 
         .with_context(|| format!("{label} range outside payload"))
 }
 
-fn parse_mcld_record_spans(payload: &[u8]) -> Result<(u32, u32, Vec<u32>, Vec<(usize, usize)>)> {
+type McldRecordSpans = (u32, u32, Vec<u32>, Vec<(usize, usize)>);
+
+fn parse_mcld_record_spans(payload: &[u8]) -> Result<McldRecordSpans> {
     let record_count = u32_at(payload, 0).context("MCLD record_count truncated")?;
     let record_id_count = u32_at(payload, 4).context("MCLD record_id_count truncated")?;
     if record_count != record_id_count {
