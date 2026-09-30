@@ -189,11 +189,47 @@ jobs:
                   entry["hashes"].add(hashlib.sha256(candidate).hexdigest())
               return vectors
 
+          def bare_strs_vectors(data, story_count, text_units, fdpp):
+              n = int(story_count)
+              if n <= 0:
+                  return {}
+              byte_len = 4 * n
+              if byte_len > len(data):
+                  return {}
+              vectors = {}
+              for start in range(0, len(data) - byte_len + 1):
+                  first = u32(data, start)
+                  if first is None or first == 0 or first not in fdpp:
+                      continue
+                  cumulative = 0
+                  endpoints = []
+                  ok = True
+                  for index in range(n):
+                      length = u32(data, start + 4 * index)
+                      if length is None or length == 0:
+                          ok = False
+                          break
+                      cumulative += length
+                      if cumulative > text_units or cumulative not in fdpp:
+                          ok = False
+                          break
+                      endpoints.append(cumulative)
+                  if not ok or cumulative != text_units:
+                      continue
+                  key = tuple(endpoints)
+                  candidate = data[start:start + byte_len]
+                  entry = vectors.setdefault(key, {"occurrences": 0, "hashes": set()})
+                  entry["occurrences"] += 1
+                  entry["hashes"].add(hashlib.sha256(candidate).hexdigest())
+              return vectors
+
           rows = []
           ordinary_count = 0
           ordinary_frame_law_count = 0
           ordinary_true_vector_recovered_count = 0
           ordinary_unique_true_vector_count = 0
+          ordinary_bare_true_vector_recovered_count = 0
+          ordinary_bare_unique_true_vector_count = 0
 
           for path in sorted(root.glob("*.pub")):
               sha = path.stem
@@ -206,6 +242,7 @@ jobs:
               fdpp_order = [int(x) for x in details["fdpp_utf16_boundaries"]]
               fdpp = set(fdpp_order)
               vectors = strict_strs_vectors(data, n, text_units, fdpp)
+              bare_vectors = bare_strs_vectors(data, n, text_units, fdpp)
 
               if details["ordinary_story_catalog_admitted"]:
                   ordinary_count += 1
@@ -220,12 +257,24 @@ jobs:
                       ordinary_true_vector_recovered_count += 1
                   if len(vectors) == 1 and true_vector in vectors:
                       ordinary_unique_true_vector_count += 1
+                  if true_vector in bare_vectors:
+                      ordinary_bare_true_vector_recovered_count += 1
+                  if len(bare_vectors) == 1 and true_vector in bare_vectors:
+                      ordinary_bare_unique_true_vector_count += 1
 
               if sha in unresolved:
                   vector_rows = []
                   for endpoints, info in sorted(vectors.items()):
                       ordinals = [fdpp_order.index(endpoint) for endpoint in endpoints]
                       vector_rows.append({
+                          "endpoint_fdpp_ordinals_zero_based": ordinals,
+                          "raw_occurrence_count": info["occurrences"],
+                          "distinct_candidate_hash_count": len(info["hashes"]),
+                      })
+                  bare_vector_rows = []
+                  for endpoints, info in sorted(bare_vectors.items()):
+                      ordinals = [fdpp_order.index(endpoint) for endpoint in endpoints]
+                      bare_vector_rows.append({
                           "endpoint_fdpp_ordinals_zero_based": ordinals,
                           "raw_occurrence_count": info["occurrences"],
                           "distinct_candidate_hash_count": len(info["hashes"]),
@@ -238,22 +287,28 @@ jobs:
                       "strict_raw_strs_endpoint_vector_count": len(vectors),
                       "strict_raw_strs_hit_count": sum(v["occurrences"] for v in vectors.values()),
                       "strict_raw_strs_unique_endpoint_vector": len(vectors) == 1,
-                      "vectors": vector_rows,
+                      "strict_vectors": vector_rows,
+                      "bare_raw_strs_endpoint_vector_count": len(bare_vectors),
+                      "bare_raw_strs_hit_count": sum(v["occurrences"] for v in bare_vectors.values()),
+                      "bare_raw_strs_unique_endpoint_vector": len(bare_vectors) == 1,
+                      "bare_vectors": bare_vector_rows,
                   })
 
           rows.sort(key=lambda row: row["source_sha256"])
           assert {row["source_sha256"] for row in rows} == unresolved
 
           result = {
-              "schema": "chaptera.quill-story-raw-strs-residue.v1",
+              "schema": "chaptera.quill-story-raw-strs-residue.v2",
               "ordinary_story_catalog_admitted_count": ordinary_count,
               "ordinary_exact_frame_law_count": ordinary_frame_law_count,
               "ordinary_true_vector_recovered_from_raw_count": ordinary_true_vector_recovered_count,
               "ordinary_unique_true_vector_from_raw_count": ordinary_unique_true_vector_count,
+              "ordinary_bare_true_vector_recovered_from_raw_count": ordinary_bare_true_vector_recovered_count,
+              "ordinary_bare_unique_true_vector_from_raw_count": ordinary_bare_unique_true_vector_count,
               "unresolved_witness_count": len(rows),
               "rows": rows,
               "evidence_boundary": (
-                  "exact same-source 28 only; whole-file raw scan for strict ordinary STRS framing; "
+                  "exact same-source 28 only; whole-file raw scan for strict ordinary STRS framing and bare Nxu32 length vectors; "
                   "output contains SHA, counts and FDPP ordinals only; no filenames, text, Story IDs, "
                   "raw candidate bytes or physical byte offsets; candidates are recovery evidence only"
               ),
