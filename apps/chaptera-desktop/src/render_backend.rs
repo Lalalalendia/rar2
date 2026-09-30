@@ -361,6 +361,13 @@ fn paint_shared_resolved_text(
     {
         return None;
     }
+    if lines.iter().any(|line| !line.spans.is_empty()) {
+        // Mixed-size SharedResolved lines are authoritative for line breaking,
+        // but this egui path does not execute per-span resolved paint yet.
+        // Fall back to the existing source-typography section painter instead
+        // of flattening authored sizes into the disposition-wide font size.
+        return None;
+    }
 
     let font_size_px = (font_size_emu as f32 * scene_scale).clamp(4.0, 512.0);
     let line_height_px = line_height_emu as f32 * scene_scale;
