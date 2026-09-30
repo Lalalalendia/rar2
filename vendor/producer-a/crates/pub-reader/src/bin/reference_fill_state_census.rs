@@ -206,8 +206,7 @@ fn main() -> Result<()> {
         ..Counts::default()
     };
     let mut histograms = Histograms::default();
-    let mut shapes_by_spid =
-        BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
+    let mut shapes_by_spid = BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
     for candidate in &shapes.shapes {
         if let Some(fsp) = candidate.fsp.as_ref() {
             shapes_by_spid.entry(fsp.spid).or_default().push(candidate);
@@ -312,36 +311,31 @@ fn main() -> Result<()> {
                                                 (raw & 0x00FF_FFFF).to_string(),
                                             );
                                         }
-                                        format!(
-                                            "fill_color_{}",
-                                            color_class(raw)
-                                        )
+                                        format!("fill_color_{}", color_class(raw))
                                     }
                                     Some(None) => "fill_color_absent".to_owned(),
                                     None => "fill_color_ambiguous".to_owned(),
                                 };
 
-                                let fill_boolean_bucket =
-                                    match unique_scalar(master, FILL_BOOLEANS) {
-                                        Some(Some(raw)) => {
-                                            counts
-                                                .roundrect_master_explicit_fill_boolean_shapes += 1;
-                                            bump(
-                                                &mut histograms
-                                                    .roundrect_master_fill_boolean_raw_hex,
-                                                format!("0x{raw:08X}"),
-                                            );
-                                            if raw & FILL_USE_FILLED_BIT == 0 {
-                                                "filled_use0"
-                                            } else if raw & FILL_FILLED_BIT == 0 {
-                                                "filled_false"
-                                            } else {
-                                                "filled_true"
-                                            }
+                                let fill_boolean_bucket = match unique_scalar(master, FILL_BOOLEANS)
+                                {
+                                    Some(Some(raw)) => {
+                                        counts.roundrect_master_explicit_fill_boolean_shapes += 1;
+                                        bump(
+                                            &mut histograms.roundrect_master_fill_boolean_raw_hex,
+                                            format!("0x{raw:08X}"),
+                                        );
+                                        if raw & FILL_USE_FILLED_BIT == 0 {
+                                            "filled_use0"
+                                        } else if raw & FILL_FILLED_BIT == 0 {
+                                            "filled_false"
+                                        } else {
+                                            "filled_true"
                                         }
-                                        Some(None) => "filled_absent",
-                                        None => "filled_ambiguous",
-                                    };
+                                    }
+                                    Some(None) => "filled_absent",
+                                    None => "filled_ambiguous",
+                                };
                                 bump(
                                     &mut histograms.roundrect_master_fill_profile,
                                     format!("{fill_color_bucket}|{fill_boolean_bucket}"),
