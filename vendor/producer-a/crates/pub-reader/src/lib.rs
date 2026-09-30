@@ -815,8 +815,9 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
                     RawContentsBlockBody::Empty => (None, None, None),
                     RawContentsBlockBody::U16 { value, .. } => (Some(*value), None, None),
                     RawContentsBlockBody::U32 { value, .. } => (None, Some(*value), None),
-                    RawContentsBlockBody::Fixed8 { .. }
-                    | RawContentsBlockBody::Fixed16 { .. } => (None, None, None),
+                    RawContentsBlockBody::Fixed8 { .. } | RawContentsBlockBody::Fixed16 { .. } => {
+                        (None, None, None)
+                    }
                     RawContentsBlockBody::Container {
                         declared_length, ..
                     } => (None, None, Some(*declared_length)),
