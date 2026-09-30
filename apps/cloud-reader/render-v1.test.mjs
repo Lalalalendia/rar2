@@ -5,6 +5,7 @@ import {
   assertReaderSceneSourceNeutral,
   imagePaintGeometry,
   imageResourcePaintPlan,
+  presetShapePaintGeometry,
   resolvedTextLinePaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
@@ -219,5 +220,26 @@ test("shared text plan refuses invalid frame or font metrics", () => {
       }
     }),
     null
+  );
+});
+
+
+test("default RoundRectangle preset uses bounded short-side radius", () => {
+  assert.deepEqual(
+    presetShapePaintGeometry({
+      bounds: { x: 100, y: 200, width: 600000, height: 300000 },
+      paint: { preset_shape: "round_rect" }
+    }),
+    {
+      tag: "rect",
+      attrs: { x: 100, y: 200, width: 600000, height: 300000, rx: 50001, ry: 50001 }
+    }
+  );
+  assert.deepEqual(
+    presetShapePaintGeometry({
+      bounds: { x: 1, y: 2, width: 30, height: 40 },
+      paint: {}
+    }),
+    { tag: "rect", attrs: { x: 1, y: 2, width: 30, height: 40 } }
   );
 });
