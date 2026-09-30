@@ -140,6 +140,18 @@ pub struct ReaderTextLineV1 {
     pub text: String,
     pub measured_width_emu: i64,
     pub line_height_emu: i64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spans: Vec<ReaderTextSpanV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTextSpanV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub text: String,
+    pub x_offset_emu: i64,
+    pub measured_width_emu: i64,
+    pub font_size_emu: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -449,6 +461,11 @@ pub fn from_viewer_geometry(
                 text_layout_partial = true;
                 continue;
             };
+            if layout.lines.iter().any(|line| !line.spans.is_empty()) {
+                // Mixed-size layout is deterministic and shared, but paragraph-level
+                // vertical metrics are not yet Publisher-exact. Keep the document Partial.
+                text_layout_partial = true;
+            }
             let node_id = serialized_string(&node.node_id, "text layout node id")?;
             let mapped = ReaderTextLayoutV1 {
                 disposition: "shared_resolved",
@@ -467,6 +484,18 @@ pub fn from_viewer_geometry(
                         text: line.text,
                         measured_width_emu: line.measured_width_emu,
                         line_height_emu: line.line_height_emu,
+                        spans: line
+                            .spans
+                            .into_iter()
+                            .map(|span| ReaderTextSpanV1 {
+                                scalar_start: span.scalar_start,
+                                scalar_end: span.scalar_end,
+                                text: span.text,
+                                x_offset_emu: span.x_offset_emu,
+                                measured_width_emu: span.measured_width_emu,
+                                font_size_emu: span.font_size_emu,
+                            })
+                            .collect(),
                     })
                     .collect(),
             };
