@@ -1,0 +1,61 @@
+name: Viewer Virginia page-role validation
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - "tools/validate_virginia_page_roles.py"
+      - ".github/workflows/viewer-page-role-virginia.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  page-role:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned public-pair validation dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir             "requests==2.32.5" "PyMuPDF==1.24.14"
+          python -m py_compile             tools/acquire_virginia_pub_pdf_pairs.py             tools/validate_virginia_page_roles.py
+
+      - name: Reacquire exact Virginia PUB-PDF pairs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes-reference.pdf"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf"
+
+      - name: Resolve current scenario page authority
+        run: |
+          python tools/validate_virginia_page_roles.py             --pair-dir "$RUNNER_TEMP/virginia-pairs"             --out target/viewer-page-role-virginia
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: viewer-page-role-virginia
+          path: target/viewer-page-role-virginia/
+          if-no-files-found: error
+          retention-days: 30
