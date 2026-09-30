@@ -92,6 +92,8 @@ pub struct ReaderTransformV1 {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReaderPaintV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset_shape: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fill_rgb: Option<[u8; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<ReaderLineV1>,
@@ -206,7 +208,7 @@ fn bind_visible_paint(
     if !visible_node_ids.contains(&node_id) {
         return Ok(());
     }
-    if paint.fill_rgb.is_none() && paint.line.is_none() {
+    if paint.preset_shape.is_none() && paint.fill_rgb.is_none() && paint.line.is_none() {
         return Ok(());
     }
     if paint_by_node.insert(node_id.clone(), paint).is_some() {
@@ -396,6 +398,9 @@ pub fn from_viewer_geometry(
     for paint in &geometry.paints {
         let node_id = serialized_string(&paint.node_id, "paint node id")?;
         let mapped = ReaderPaintV1 {
+            preset_shape: paint.preset_shape.map(|shape| match shape {
+                pub_viewer::ViewerPresetShape::RoundRect => "round_rect",
+            }),
             fill_rgb: paint.solid_fill_rgb,
             line: paint.solid_line.as_ref().map(|line| ReaderLineV1 {
                 rgb: line.rgb,
