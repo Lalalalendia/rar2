@@ -851,12 +851,53 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        env, fs,
+    };
+
+    use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+    use sha2::{Digest, Sha256};
 
     use super::{
         MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderPaintV1, base64_encode, bind_visible_paint,
-        inline_image_data_url, reader_image_resource,
+        from_viewer_geometry, inline_image_data_url, reader_image_resource,
     };
+
+    #[test]
+    #[ignore = "requires an explicitly pinned external PUB path"]
+    fn real_reference_scene_projection_probe() {
+        let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
+            .expect("CHAPTERA_READER_SCENE_PROBE_PUB must name an exact pinned PUB");
+        let expected_sha256 = env::var("CHAPTERA_READER_SCENE_PROBE_SHA256")
+            .expect("CHAPTERA_READER_SCENE_PROBE_SHA256 must pin source identity");
+        let bytes = fs::read(&path).expect("probe source must be readable");
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(
+            actual_sha256, expected_sha256,
+            "probe source identity drift"
+        );
+
+        let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
+            .expect("shared Viewer bundle must open the probe source");
+        match from_viewer_geometry(
+            "probe:document".to_owned(),
+            actual_sha256,
+            "probe:source".to_owned(),
+            &bundle.geometry,
+            &bundle.source_page_paint_orders,
+        ) {
+            Ok(scene) => println!(
+                "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} reasons={:?}",
+                scene.fidelity.state,
+                scene.stacking_fidelity,
+                scene.pages.len(),
+                scene.nodes.len(),
+                scene.fidelity.reasons
+            ),
+            Err(error) => println!("CLOUD_READER_SCENE_PROJECTION_PROBE projection_error={error}"),
+        }
+    }
 
     #[test]
     fn non_visible_viewer_paint_is_ignored_but_visible_duplicates_fail_closed() {
