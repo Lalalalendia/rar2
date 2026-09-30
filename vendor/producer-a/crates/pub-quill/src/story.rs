@@ -383,8 +383,8 @@ pub fn parse_bounded_fdpp_exact_story_catalog(
     let mut previous = text_start;
     let mut stories = Vec::with_capacity(stored_count);
     for (index, (identity, boundary)) in identities.iter().zip(boundaries).enumerate() {
-        let end = usize::try_from(boundary.value)
-            .map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+        let end =
+            usize::try_from(boundary.value).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
         if end < previous || end < text_start || end > text_end {
             return Ok(None);
         }
@@ -392,8 +392,8 @@ pub fn parse_bounded_fdpp_exact_story_catalog(
         if (end - text_start) % 2 != 0 {
             return Ok(None);
         }
-        let utf16_code_units = u32::try_from(byte_len / 2)
-            .map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
+        let utf16_code_units =
+            u32::try_from(byte_len / 2).map_err(|_| QuillStoryReadError::TextLengthOverflow)?;
         stories.push(QuillFdppStorySlice {
             index: u32::try_from(index).map_err(|_| QuillStoryReadError::TextLengthOverflow)?,
             syid: identity.syid,
