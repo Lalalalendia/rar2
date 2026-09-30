@@ -1025,12 +1025,8 @@ fn record_is_truecolor_palette_compatible(function: u16, params: &[u8]) -> bool 
         META_SETBKCOLOR | META_SETTEXTCOLOR => {
             colorref_is_truecolor_palette_compatible(read_u32(params, 0))
         }
-        META_CREATEPENINDIRECT => {
-            colorref_is_truecolor_palette_compatible(read_u32(params, 6))
-        }
-        META_CREATEBRUSHINDIRECT => {
-            colorref_is_truecolor_palette_compatible(read_u32(params, 2))
-        }
+        META_CREATEPENINDIRECT => colorref_is_truecolor_palette_compatible(read_u32(params, 6)),
+        META_CREATEBRUSHINDIRECT => colorref_is_truecolor_palette_compatible(read_u32(params, 2)),
         META_DIBCREATEPATTERNBRUSH => read_u16(params, 2) == Some(DIB_RGB_COLORS),
         META_STRETCHDIB => read_u16(params, 4) == Some(DIB_RGB_COLORS),
         _ => true,
@@ -1047,8 +1043,7 @@ fn validate_palette_compatibility_object(params: &[u8]) -> Result<()> {
             params.len()
         );
     }
-    let start =
-        read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
+    let start = read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
     let entry_count =
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF Palette entry count is truncated"))?;
     if start != 0x0300 || usize::from(entry_count) != ENTRY_COUNT {
