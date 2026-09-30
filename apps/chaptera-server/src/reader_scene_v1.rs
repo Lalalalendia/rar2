@@ -925,12 +925,9 @@ mod tests {
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
 
         for page_index in 0..bundle.geometry.document.pages.len() {
-            let plan = build_page_render_plan_with_text_layout_v1(
-                &bundle.geometry,
-                page_index,
-                &font,
-            )
-            .expect("exact reference render plan must build");
+            let plan =
+                build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
+                    .expect("exact reference render plan must build");
 
             for node in plan.nodes {
                 let Some(text) = node.text else {
