@@ -1358,11 +1358,11 @@ fn wmf_blocker_profile(wmf: &[u8], detail: &str) -> Value {
         | "realize_palette_unavailable"
         | "delete_selected_palette"
         | "palette_dependent_colorref" => palette_blocker_profile(&records),
-        "record_function_0x02fb"
-        | "generated:unsupported WMF Font compatibility profile" => font_blocker_profile(&records),
+        "record_function_0x02fb" | "generated:unsupported WMF Font compatibility profile" => {
+            font_blocker_profile(&records)
+        }
         "record_function_0x0418" => ellipse_blocker_profile(&records),
-        "record_function_0x0f43"
-        | "generated:unsupported WMF STRETCHDIB profile" => records
+        "record_function_0x0f43" | "generated:unsupported WMF STRETCHDIB profile" => records
             .iter()
             .find(|(function, _)| *function == META_STRETCHDIB_FUNCTION)
             .map(|(_, params)| stretchdib_blocker_profile(params))
