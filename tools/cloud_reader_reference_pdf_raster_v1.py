@@ -40,6 +40,57 @@ def render_png(path: Path) -> dict:
     }
 
 
+def crop_raster(raster: dict, width: int, height: int) -> dict:
+    if width <= 0 or height <= 0 or width > raster["width"] or height > raster["height"]:
+        raise ValueError("invalid raster crop")
+    if width == raster["width"] and height == raster["height"]:
+        return raster
+    row_bytes = width * 3
+    samples = b"".join(
+        raster["samples"][row * raster["stride"] : row * raster["stride"] + row_bytes]
+        for row in range(height)
+    )
+    return {
+        "width": width,
+        "height": height,
+        "stride": row_bytes,
+        "samples": samples,
+        "raster_sha256": sha256_bytes(samples),
+    }
+
+
+def normalize_physical_rounding(candidate: dict, reference: dict, physical: dict) -> tuple[dict, dict, dict]:
+    before = {
+        "candidate": [candidate["width"], candidate["height"]],
+        "reference": [reference["width"], reference["height"]],
+    }
+    if (candidate["width"], candidate["height"]) == (reference["width"], reference["height"]):
+        return candidate, reference, {"mode": "none", "before": before, "after": before}
+
+    width_delta = abs(candidate["width"] - reference["width"])
+    height_delta = abs(candidate["height"] - reference["height"])
+    if (
+        physical["matches_within_tolerance"]
+        and width_delta <= 1
+        and height_delta <= 1
+    ):
+        width = min(candidate["width"], reference["width"])
+        height = min(candidate["height"], reference["height"])
+        candidate = crop_raster(candidate, width, height)
+        reference = crop_raster(reference, width, height)
+        after = {
+            "candidate": [candidate["width"], candidate["height"]],
+            "reference": [reference["width"], reference["height"]],
+        }
+        return candidate, reference, {
+            "mode": "physical-size-rounding-crop-v1",
+            "before": before,
+            "after": after,
+        }
+
+    return candidate, reference, {"mode": "none", "before": before, "after": before}
+
+
 def physical_size_comparison(page_geometry: dict, reference_box: dict) -> dict:
     expected_width = page_geometry["width_emu"] / EMU_PER_POINT
     expected_height = page_geometry["height_emu"] / EMU_PER_POINT
@@ -156,8 +207,11 @@ def compare_cloud_rasters(
         reference_page = reference.load_page(index)
         reference_box = page_boxes(reference_page)
         reference_raster = render_page(reference_page)
-        diff = compare_rasters(candidate, reference_raster)
         physical = physical_size_comparison(page_geometry, reference_box)
+        candidate, reference_raster, raster_normalization = normalize_physical_rounding(
+            candidate, reference_raster, physical
+        )
+        diff = compare_rasters(candidate, reference_raster)
         compared.append(
             {
                 "page_index": index,
@@ -181,6 +235,7 @@ def compare_cloud_rasters(
                     "width_px": physical["width_delta_px"],
                     "height_px": physical["height_delta_px"],
                 },
+                "raster_normalization": raster_normalization,
                 "diff": diff,
             }
         )
