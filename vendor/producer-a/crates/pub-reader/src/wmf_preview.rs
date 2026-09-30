@@ -13,6 +13,8 @@ const MAX_RASTER_WORK_UNITS: u64 = 64 * 1024 * 1024;
 
 const META_EOF: u16 = 0x0000;
 const META_SAVEDC: u16 = 0x001e;
+const META_REALIZEPALETTE: u16 = 0x0035;
+const META_CREATEPALETTE: u16 = 0x00f7;
 const META_SETBKMODE: u16 = 0x0102;
 const META_SETMAPMODE: u16 = 0x0103;
 const META_SETROP2: u16 = 0x0104;
@@ -29,6 +31,7 @@ const META_SETBKCOLOR: u16 = 0x0201;
 const META_SETTEXTCOLOR: u16 = 0x0209;
 const META_SETWINDOWORG: u16 = 0x020b;
 const META_SETWINDOWEXT: u16 = 0x020c;
+const META_SELECTPALETTE: u16 = 0x0234;
 const META_CREATEPENINDIRECT: u16 = 0x02fa;
 const META_CREATEFONTINDIRECT: u16 = 0x02fb;
 const META_CREATEBRUSHINDIRECT: u16 = 0x02fc;
@@ -123,6 +126,7 @@ enum GdiObject {
     Pen(Pen),
     Brush(Brush),
     FontCompatibility,
+    PaletteCompatibility,
     RegionCompatibility,
 }
 
@@ -166,6 +170,7 @@ struct PlaybackState {
     window_ext_y: i32,
     clip: RectPx,
     polygon_fill_mode: u16,
+    selected_palette: Option<usize>,
     pen: Pen,
     brush: Brush,
 }
@@ -179,6 +184,7 @@ impl PlaybackState {
             window_ext_y: i32::try_from(height).unwrap_or(1).max(1),
             clip: RectPx::full(width, height),
             polygon_fill_mode: ALTERNATE,
+            selected_palette: None,
             pen: Pen {
                 style: PS_SOLID,
                 width_x: 1,
@@ -1010,6 +1016,44 @@ fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32
     Ok(())
 }
 
+fn colorref_is_truecolor_palette_compatible(value: Option<u32>) -> bool {
+    value.is_some_and(|value| matches!(value & 0xff00_0000, 0 | 0x0200_0000))
+}
+
+fn record_is_truecolor_palette_compatible(function: u16, params: &[u8]) -> bool {
+    match function {
+        META_SETBKCOLOR | META_SETTEXTCOLOR => {
+            colorref_is_truecolor_palette_compatible(read_u32(params, 0))
+        }
+        META_CREATEPENINDIRECT => colorref_is_truecolor_palette_compatible(read_u32(params, 6)),
+        META_CREATEBRUSHINDIRECT => colorref_is_truecolor_palette_compatible(read_u32(params, 2)),
+        META_DIBCREATEPATTERNBRUSH => read_u16(params, 2) == Some(DIB_RGB_COLORS),
+        META_STRETCHDIB => read_u16(params, 4) == Some(DIB_RGB_COLORS),
+        _ => true,
+    }
+}
+
+fn validate_palette_compatibility_object(params: &[u8]) -> Result<()> {
+    const ENTRY_COUNT: usize = 256;
+    const PALETTE_BYTES: usize = 4 + ENTRY_COUNT * 4;
+
+    if params.len() != PALETTE_BYTES {
+        bail!(
+            "unsupported WMF Palette compatibility payload length {}",
+            params.len()
+        );
+    }
+    let start = read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
+    let entry_count =
+        read_u16(params, 2).ok_or_else(|| anyhow!("WMF Palette entry count is truncated"))?;
+    if start != 0x0300 || usize::from(entry_count) != ENTRY_COUNT {
+        bail!(
+            "unsupported WMF Palette compatibility profile start=0x{start:04x} entries={entry_count}"
+        );
+    }
+    Ok(())
+}
+
 fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Result<()> {
     let Some(slot) = objects.iter_mut().find(|slot| slot.is_none()) else {
         bail!("WMF object table is full");
@@ -1298,6 +1342,8 @@ pub fn rasterize_wmf_preview(
     let mut records = 0usize;
     let mut eof_seen = false;
     let mut pending_region_compat_cliprect = false;
+    let mut palette_compatibility_seen = false;
+    let mut palette_truecolor_safe_so_far = true;
 
     while offset < declared_len {
         records += 1;
@@ -1328,6 +1374,13 @@ pub fn rasterize_wmf_preview(
         }
         let params = &bytes[offset + 6..next];
 
+        if !record_is_truecolor_palette_compatible(function, params) {
+            palette_truecolor_safe_so_far = false;
+            if palette_compatibility_seen {
+                bail!("WMF Palette compatibility encountered palette-dependent color semantics");
+            }
+        }
+
         if pending_region_compat_cliprect {
             if function != META_INTERSECTCLIPRECT {
                 bail!(
@@ -1355,6 +1408,14 @@ pub fn rasterize_wmf_preview(
                 state = state_stack
                     .pop()
                     .ok_or_else(|| anyhow!("WMF RESTOREDC without matching SAVEDC"))?;
+                if let Some(index) = state.selected_palette {
+                    if !matches!(
+                        objects.get(index).and_then(|object| *object),
+                        Some(GdiObject::PaletteCompatibility)
+                    ) {
+                        bail!("WMF RESTOREDC restores a missing Palette compatibility object");
+                    }
+                }
             }
             META_SETBKMODE => {
                 read_u16(params, 0).ok_or_else(|| anyhow!("WMF SETBKMODE is truncated"))?;
@@ -1457,6 +1518,14 @@ pub fn rasterize_wmf_preview(
                     bottom: y0.max(y1),
                 });
             }
+            META_CREATEPALETTE => {
+                if !palette_truecolor_safe_so_far {
+                    bail!("WMF Palette compatibility follows palette-dependent color semantics");
+                }
+                validate_palette_compatibility_object(params)?;
+                allocate_object(&mut objects, GdiObject::PaletteCompatibility)?;
+                palette_compatibility_seen = true;
+            }
             META_CREATEPENINDIRECT => {
                 if params.len() < 10 {
                     bail!("WMF CREATEPENINDIRECT is truncated");
@@ -1503,10 +1572,40 @@ pub fn rasterize_wmf_preview(
                 let index = usize::from(
                     read_u16(params, 0).ok_or_else(|| anyhow!("WMF DELETEOBJECT is truncated"))?,
                 );
+                if state.selected_palette == Some(index) {
+                    bail!("WMF DELETEOBJECT targets the selected Palette compatibility object");
+                }
                 let slot = objects
                     .get_mut(index)
                     .ok_or_else(|| anyhow!("WMF DELETEOBJECT index is out of bounds"))?;
                 *slot = None;
+            }
+            META_SELECTPALETTE => {
+                if params.len() != 2 {
+                    bail!("WMF SELECTPALETTE has unsupported payload length");
+                }
+                let index = usize::from(
+                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SELECTPALETTE is truncated"))?,
+                );
+                match objects.get(index).and_then(|object| *object) {
+                    Some(GdiObject::PaletteCompatibility) => state.selected_palette = Some(index),
+                    Some(_) => bail!("WMF SELECTPALETTE refers to a non-Palette object"),
+                    None => bail!("WMF SELECTPALETTE refers to an empty or invalid slot"),
+                }
+            }
+            META_REALIZEPALETTE => {
+                if !params.is_empty() {
+                    bail!("WMF REALIZEPALETTE has unsupported payload length");
+                }
+                let index = state
+                    .selected_palette
+                    .ok_or_else(|| anyhow!("WMF REALIZEPALETTE without selected Palette"))?;
+                if !matches!(
+                    objects.get(index).and_then(|object| *object),
+                    Some(GdiObject::PaletteCompatibility)
+                ) {
+                    bail!("WMF REALIZEPALETTE selected Palette is unavailable");
+                }
             }
             META_SELECTOBJECT => {
                 let index = usize::from(
@@ -1520,6 +1619,9 @@ pub fn rasterize_wmf_preview(
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
                     GdiObject::FontCompatibility => {}
+                    GdiObject::PaletteCompatibility => {
+                        bail!("WMF Palette requires META_SELECTPALETTE");
+                    }
                     GdiObject::RegionCompatibility => {
                         pending_region_compat_cliprect = true;
                     }
@@ -1678,6 +1780,37 @@ mod tests {
         if extra_words > max_record_words {
             bytes[12..16].copy_from_slice(&extra_words.to_le_bytes());
         }
+    }
+
+    fn palette_compatibility_params() -> Vec<u8> {
+        let mut params = Vec::new();
+        params.extend_from_slice(&0x0300_u16.to_le_bytes());
+        params.extend_from_slice(&256_u16.to_le_bytes());
+        for index in 0..256_u16 {
+            params.push((index & 0xff) as u8);
+            params.push((index.wrapping_mul(3) & 0xff) as u8);
+            params.push((index.wrapping_mul(7) & 0xff) as u8);
+            params.push(0);
+        }
+        assert_eq!(params.len(), 1028);
+        params
+    }
+
+    fn synthetic_palette_polygon() -> Vec<u8> {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEPALETTE, &palette_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTPALETTE, &2_u16.to_le_bytes()),
+        );
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_REALIZEPALETTE, &[]));
+        bytes
     }
 
     fn font_compatibility_params(height: i16, width: i16) -> Vec<u8> {
@@ -2030,6 +2163,60 @@ mod tests {
         params[20..24].copy_from_slice(&BI_RGB.to_le_bytes());
         params[36..40].copy_from_slice(&2_u32.to_le_bytes());
         assert!(parse_legacy_pattern_brush(&params).is_err());
+    }
+
+    #[test]
+    fn validates_exact_palette_compatibility_profile() {
+        let params = palette_compatibility_params();
+        assert!(validate_palette_compatibility_object(&params).is_ok());
+
+        let mut wrong_start = params.clone();
+        wrong_start[0..2].copy_from_slice(&0_u16.to_le_bytes());
+        assert!(validate_palette_compatibility_object(&wrong_start).is_err());
+
+        let mut short = params;
+        short.truncate(1024);
+        assert!(validate_palette_compatibility_object(&short).is_err());
+    }
+
+    #[test]
+    fn palette_relative_rgb_is_true_color_but_palette_index_is_not() {
+        assert!(colorref_is_truecolor_palette_compatible(Some(0x0203_0201)));
+        assert!(!colorref_is_truecolor_palette_compatible(Some(0x0103_0201)));
+    }
+
+    #[test]
+    fn selected_palette_lifecycle_is_inert_for_true_color_raster() {
+        let baseline = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("baseline");
+        let with_palette =
+            rasterize_wmf_preview(&synthetic_palette_polygon(), 100, 100).expect("palette");
+        assert_eq!(with_palette, baseline);
+    }
+
+    #[test]
+    fn deleting_selected_palette_fails_closed() {
+        let mut bytes = synthetic_palette_polygon();
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_DELETEOBJECT, &2_u16.to_le_bytes()),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn palette_index_after_palette_creation_fails_closed() {
+        let mut bytes = synthetic_palette_polygon();
+        let mut brush = Vec::new();
+        brush.extend_from_slice(&BS_SOLID.to_le_bytes());
+        brush.extend_from_slice(&0x0100_0001_u32.to_le_bytes());
+        brush.extend_from_slice(&0_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_CREATEBRUSHINDIRECT, &brush),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
