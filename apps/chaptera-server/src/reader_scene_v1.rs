@@ -913,6 +913,30 @@ mod tests {
 
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
+        let viewer_line_paints = bundle
+            .geometry
+            .paints
+            .iter()
+            .filter(|paint| paint.solid_line.is_some())
+            .count();
+        let viewer_line_only_paints = bundle
+            .geometry
+            .paints
+            .iter()
+            .filter(|paint| paint.solid_line.is_some() && paint.solid_fill_rgb.is_none())
+            .count();
+        let viewer_black_lines = bundle
+            .geometry
+            .paints
+            .iter()
+            .filter(|paint| {
+                paint
+                    .solid_line
+                    .as_ref()
+                    .is_some_and(|line| line.rgb == [0, 0, 0])
+            })
+            .count();
+
         match from_viewer_geometry(
             "probe:document".to_owned(),
             actual_sha256,
@@ -920,14 +944,62 @@ mod tests {
             &bundle.geometry,
             &bundle.source_page_paint_orders,
         ) {
-            Ok(scene) => println!(
-                "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} reasons={:?}",
-                scene.fidelity.state,
-                scene.stacking_fidelity,
-                scene.pages.len(),
-                scene.nodes.len(),
-                scene.fidelity.reasons
-            ),
+            Ok(scene) => {
+                let scene_line_nodes = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| node.paint.as_ref().and_then(|paint| paint.line.as_ref()).is_some())
+                    .count();
+                let scene_line_only_nodes = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        node.paint.as_ref().is_some_and(|paint| {
+                            paint.line.is_some() && paint.fill_rgb.is_none()
+                        })
+                    })
+                    .count();
+                let scene_black_lines = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        node.paint
+                            .as_ref()
+                            .and_then(|paint| paint.line.as_ref())
+                            .is_some_and(|line| line.rgb == [0, 0, 0])
+                    })
+                    .count();
+                let page_line_nodes = scene
+                    .pages
+                    .iter()
+                    .map(|page| {
+                        scene
+                            .nodes
+                            .iter()
+                            .filter(|node| {
+                                node.page_id == page.page_id
+                                    && node.paint.as_ref().and_then(|paint| paint.line.as_ref()).is_some()
+                            })
+                            .count()
+                    })
+                    .collect::<Vec<_>>();
+
+                println!(
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
+                    scene.fidelity.state,
+                    scene.stacking_fidelity,
+                    scene.pages.len(),
+                    scene.nodes.len(),
+                    viewer_line_paints,
+                    viewer_line_only_paints,
+                    viewer_black_lines,
+                    scene_line_nodes,
+                    scene_line_only_nodes,
+                    scene_black_lines,
+                    page_line_nodes,
+                    scene.fidelity.reasons
+                );
+            }
             Err(error) => println!("CLOUD_READER_SCENE_PROJECTION_PROBE projection_error={error}"),
         }
     }
