@@ -1018,6 +1018,7 @@ mod tests {
             &visible_node_ids,
             "hidden-carrier".to_owned(),
             ReaderPaintV1 {
+                preset_shape: None,
                 fill_rgb: Some([1, 2, 3]),
                 line: None,
             },
@@ -1030,6 +1031,7 @@ mod tests {
             &visible_node_ids,
             "visible".to_owned(),
             ReaderPaintV1 {
+                preset_shape: None,
                 fill_rgb: Some([4, 5, 6]),
                 line: None,
             },
@@ -1042,6 +1044,7 @@ mod tests {
             &visible_node_ids,
             "visible".to_owned(),
             ReaderPaintV1 {
+                preset_shape: None,
                 fill_rgb: Some([7, 8, 9]),
                 line: None,
             },
