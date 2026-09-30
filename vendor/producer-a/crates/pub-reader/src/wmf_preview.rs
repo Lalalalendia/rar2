@@ -1032,10 +1032,7 @@ fn validate_palette_compatibility_object(params: &[u8]) -> Result<()> {
     let start = read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
     let entry_count =
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF Palette entry count is truncated"))?;
-    let observed_profile = matches!(
-        (params.len(), entry_count),
-        (1028, 256) | (84, 20)
-    );
+    let observed_profile = matches!((params.len(), entry_count), (1028, 256) | (84, 20));
     if start != 0x0300 || !observed_profile {
         bail!(
             "unsupported WMF Palette compatibility profile start=0x{start:04x} entries={entry_count} len={}",
