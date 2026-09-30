@@ -115,6 +115,155 @@ jobs:
             "_siblings/lalamu/pub-corpus/corpus/native/unclassified" \
             "out/quill-story-fdpc-boundary.json"
 
+      - name: Scan raw CFB bytes for strict ordinary STRS residue
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("_siblings/lalamu/pub-corpus/corpus/native/unclassified")
+          report = json.loads(Path("out/quill-story-helenhudspith-siblings.json").read_text())
+          by_sha = {
+              row["source_sha256"]: row["details"]
+              for row in report["rows"]
+              if row["admitted"] and row["details"] is not None
+          }
+
+          unresolved = {
+              "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
+              "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a",
+              "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569",
+              "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff",
+          }
+
+          def u32(data, offset):
+              if offset < 0 or offset + 4 > len(data):
+                  return None
+              return int.from_bytes(data[offset:offset + 4], "little")
+
+          def strict_strs_vectors(data, story_count, text_units, fdpp):
+              # Observed ordinary physical shape:
+              # chunk_len = 22 + 8*N
+              # service_span = 18 + 4*N
+              # lengths begin at 4 + service_span = 22 + 4*N.
+              n = int(story_count)
+              if n <= 0:
+                  return {}
+              chunk_len = 22 + 8 * n
+              service_span = 18 + 4 * n
+              lengths_rel = 22 + 4 * n
+              count_bytes = n.to_bytes(4, "little")
+              vectors = {}
+              cursor = 0
+              while True:
+                  start = data.find(count_bytes, cursor)
+                  if start < 0:
+                      break
+                  cursor = start + 1
+                  if start + chunk_len > len(data):
+                      continue
+                  if u32(data, start + 4) != service_span:
+                      continue
+                  cumulative = 0
+                  endpoints = []
+                  ok = True
+                  for index in range(n):
+                      length = u32(data, start + lengths_rel + 4 * index)
+                      if length is None or length == 0:
+                          ok = False
+                          break
+                      cumulative += length
+                      if cumulative > text_units or cumulative not in fdpp:
+                          ok = False
+                          break
+                      endpoints.append(cumulative)
+                  if not ok or cumulative != text_units:
+                      continue
+                  key = tuple(endpoints)
+                  candidate = data[start:start + chunk_len]
+                  entry = vectors.setdefault(key, {"occurrences": 0, "hashes": set()})
+                  entry["occurrences"] += 1
+                  entry["hashes"].add(hashlib.sha256(candidate).hexdigest())
+              return vectors
+
+          rows = []
+          ordinary_count = 0
+          ordinary_frame_law_count = 0
+          ordinary_true_vector_recovered_count = 0
+          ordinary_unique_true_vector_count = 0
+
+          for path in sorted(root.glob("*.pub")):
+              sha = path.stem
+              details = by_sha.get(sha)
+              if details is None:
+                  continue
+              data = path.read_bytes()
+              n = int(details["grounded_story_count"])
+              text_units = int(details["text_utf16_units"])
+              fdpp_order = [int(x) for x in details["fdpp_utf16_boundaries"]]
+              fdpp = set(fdpp_order)
+              vectors = strict_strs_vectors(data, n, text_units, fdpp)
+
+              if details["ordinary_story_catalog_admitted"]:
+                  ordinary_count += 1
+                  frame_law = (
+                      details["strs_declared_count"] == n
+                      and details["strs_service_span"] == 18 + 4 * n
+                      and details["strs_descriptor_length"] == 22 + 8 * n
+                  )
+                  ordinary_frame_law_count += int(frame_law)
+                  true_vector = tuple(int(x) for x in details["ordinary_story_end_utf16"])
+                  if true_vector in vectors:
+                      ordinary_true_vector_recovered_count += 1
+                  if len(vectors) == 1 and true_vector in vectors:
+                      ordinary_unique_true_vector_count += 1
+
+              if sha in unresolved:
+                  vector_rows = []
+                  for endpoints, info in sorted(vectors.items()):
+                      ordinals = [fdpp_order.index(endpoint) for endpoint in endpoints]
+                      vector_rows.append({
+                          "endpoint_fdpp_ordinals_zero_based": ordinals,
+                          "raw_occurrence_count": info["occurrences"],
+                          "distinct_candidate_hash_count": len(info["hashes"]),
+                      })
+                  rows.append({
+                      "source_sha256": sha,
+                      "story_count": n,
+                      "text_utf16_units": text_units,
+                      "fdpp_boundary_count": len(fdpp_order),
+                      "strict_raw_strs_endpoint_vector_count": len(vectors),
+                      "strict_raw_strs_hit_count": sum(v["occurrences"] for v in vectors.values()),
+                      "strict_raw_strs_unique_endpoint_vector": len(vectors) == 1,
+                      "vectors": vector_rows,
+                  })
+
+          rows.sort(key=lambda row: row["source_sha256"])
+          assert {row["source_sha256"] for row in rows} == unresolved
+
+          result = {
+              "schema": "chaptera.quill-story-raw-strs-residue.v1",
+              "ordinary_story_catalog_admitted_count": ordinary_count,
+              "ordinary_exact_frame_law_count": ordinary_frame_law_count,
+              "ordinary_true_vector_recovered_from_raw_count": ordinary_true_vector_recovered_count,
+              "ordinary_unique_true_vector_from_raw_count": ordinary_unique_true_vector_count,
+              "unresolved_witness_count": len(rows),
+              "rows": rows,
+              "evidence_boundary": (
+                  "exact same-source 28 only; whole-file raw scan for strict ordinary STRS framing; "
+                  "output contains SHA, counts and FDPP ordinals only; no filenames, text, Story IDs, "
+                  "raw candidate bytes or physical byte offsets; candidates are recovery evidence only"
+              ),
+          }
+          Path("out/quill-story-raw-strs-residue.json").write_text(
+              json.dumps(result, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+
       - name: Guard known seven and summarize sibling families
         shell: bash
         run: |
@@ -208,5 +357,6 @@ jobs:
             out/quill-story-helenhudspith-siblings.json
             out/quill-story-helenhudspith-siblings-summary.json
             out/quill-story-fdpc-boundary.json
+            out/quill-story-raw-strs-residue.json
           if-no-files-found: error
           retention-days: 30
