@@ -17,6 +17,8 @@ const LINE_BOOLEANS: u16 = 0x01FF;
 const ADJUST_VALUE: u16 = 0x0147;
 const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
+const LINE_USE_LINE_BIT: u32 = 1 << 19;
+const LINE_LINE_BIT: u32 = 1 << 3;
 const FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
 const SHAPE_TYPE_ROUND_RECTANGLE: u16 = 0x0002;
@@ -73,6 +75,11 @@ struct Histograms {
     shape_type_with_scheme_fill: BTreeMap<String, usize>,
     roundrect_adjust_value_raw_hex: BTreeMap<String, usize>,
     roundrect_adjust_value_form: BTreeMap<String, usize>,
+    roundrect_line_color_class: BTreeMap<String, usize>,
+    roundrect_line_scheme_ordinal: BTreeMap<String, usize>,
+    roundrect_line_width_raw_hex: BTreeMap<String, usize>,
+    roundrect_line_boolean_raw_hex: BTreeMap<String, usize>,
+    roundrect_line_visibility: BTreeMap<String, usize>,
     shape_profile: BTreeMap<String, usize>,
     cooccurrence: BTreeMap<String, usize>,
     dgg_fill_type_raw_hex: BTreeMap<String, usize>,
@@ -316,6 +323,45 @@ fn main() -> Result<()> {
             }
         }
 
+        if shape_type == Some(SHAPE_TYPE_ROUND_RECTANGLE) {
+            match line_color {
+                Some(raw) => {
+                    bump(&mut histograms.roundrect_line_color_class, color_class(raw));
+                    if (raw >> 24) as u8 == 0x08 {
+                        bump(
+                            &mut histograms.roundrect_line_scheme_ordinal,
+                            (raw & 0x00FF_FFFF).to_string(),
+                        );
+                    }
+                }
+                None => bump(&mut histograms.roundrect_line_color_class, "absent"),
+            }
+            match line_width {
+                Some(raw) => bump(
+                    &mut histograms.roundrect_line_width_raw_hex,
+                    format!("0x{raw:08X}"),
+                ),
+                None => bump(&mut histograms.roundrect_line_width_raw_hex, "absent"),
+            }
+            match line_bool {
+                Some(raw) => {
+                    bump(
+                        &mut histograms.roundrect_line_boolean_raw_hex,
+                        format!("0x{raw:08X}"),
+                    );
+                    let bucket = if raw & LINE_USE_LINE_BIT == 0 {
+                        "use0"
+                    } else if raw & LINE_LINE_BIT == 0 {
+                        "used_false"
+                    } else {
+                        "used_true"
+                    };
+                    bump(&mut histograms.roundrect_line_visibility, bucket);
+                }
+                None => bump(&mut histograms.roundrect_line_visibility, "absent"),
+            }
+        }
+
         if fill_color.is_some_and(|raw| (raw >> 24) as u8 == 0x08) {
             if has_client_textbox {
                 counts.scheme_fill_client_textbox_shapes += 1;
@@ -440,6 +486,7 @@ fn main() -> Result<()> {
             "Raw fillOpacity/lineOpacity values are observations only; no opacity/transparency semantics are inferred here.",
             "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
             "RoundRectangle adjustment evidence records only property 0x0147 form/raw scalar counts; absent adjustment is not converted into a PDF-derived radius.",
+            "RoundRectangle line evidence is aggregate raw/property participation only; it does not infer an outline from PDF pixels.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
