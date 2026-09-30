@@ -197,7 +197,8 @@ pub fn probe_reader_salvage_candidate_with_trigger(
             ReaderSalvageProbe {
                 schema_version: READER_SALVAGE_PROBE_SCHEMA_V1.to_owned(),
                 source_sha256: source_sha256.clone(),
-                trigger,
+                trigger: effective_trigger,
+                corruption_evidence,
                 eligibility,
                 intake,
                 reader_route: family.route.as_str().to_owned(),
@@ -235,7 +236,8 @@ pub fn probe_reader_salvage_candidate_with_trigger(
             ReaderSalvageProbe {
                 schema_version: READER_SALVAGE_PROBE_SCHEMA_V1.to_owned(),
                 source_sha256: source_sha256.clone(),
-                trigger,
+                trigger: effective_trigger,
+                corruption_evidence,
                 eligibility,
                 intake,
                 reader_route: family.route.as_str().to_owned(),
@@ -248,9 +250,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
     }
 }
 
-fn detect_known_structural_corruption(
-    bytes: &[u8],
-) -> Option<ReaderSalvageCorruptionEvidence> {
+fn detect_known_structural_corruption(bytes: &[u8]) -> Option<ReaderSalvageCorruptionEvidence> {
     let inventory = pub_cfb::inspect_reader(Cursor::new(bytes)).ok()?;
     let entry = inventory
         .entries
@@ -266,8 +266,7 @@ fn detect_known_structural_corruption(
         return None;
     }
 
-    let error =
-        parse_confirmed_story_catalog(StreamPath(QUILL_STREAM.into()), &quill).err()?;
+    let error = parse_confirmed_story_catalog(StreamPath(QUILL_STREAM.into()), &quill).err()?;
     known_quill_corruption_evidence(&error)
 }
 
