@@ -226,7 +226,7 @@ fn exact_table_cell_officeart_geometry_join_probe() {
                             .entry(format!("{}:0x{raw:08X}", color_class(raw)))
                             .or_default() += 1;
                     }
-                    for raw in fill_booleans.iter().copied() {
+                    for raw in fill_booleans {
                         *fill_boolean_histogram
                             .entry(format!("0x{raw:08X}"))
                             .or_default() += 1;
