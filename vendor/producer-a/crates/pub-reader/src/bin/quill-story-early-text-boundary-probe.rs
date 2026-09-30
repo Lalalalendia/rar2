@@ -813,14 +813,6 @@ fn profile_story_shapes(
         .collect::<BTreeSet<_>>();
 
     let mut complete_scalar_vectors = BTreeMap::<u16, Vec<u64>>::new();
-    let shape_profile = profile_story_shapes(
-        contents,
-        story_catalog,
-        &entries,
-        quill,
-        fdpp,
-        text,
-    )?;
 
     let mut scalar_field_profiles = Vec::new();
     for field_id in distinct_shape_field_ids.iter().copied() {
@@ -1139,6 +1131,15 @@ fn profile_story_frame_index(
         .count();
     let grounded_stories_without_frames =
         story_catalog.entries.len().saturating_sub(grounded_stories_with_frames);
+
+    let shape_profile = profile_story_shapes(
+        contents,
+        story_catalog,
+        &entries,
+        quill,
+        fdpp,
+        text,
+    )?;
 
     let mut distinct_entry_field_ids = BTreeSet::new();
     for entry in &entries {
