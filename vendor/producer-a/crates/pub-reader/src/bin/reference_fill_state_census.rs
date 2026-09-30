@@ -14,10 +14,12 @@ const LINE_COLOR: u16 = 0x01C0;
 const LINE_OPACITY: u16 = 0x01C1;
 const LINE_WIDTH: u16 = 0x01CB;
 const LINE_BOOLEANS: u16 = 0x01FF;
+const ADJUST_VALUE: u16 = 0x0147;
 const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
 const FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
+const SHAPE_TYPE_ROUND_RECTANGLE: u16 = 0x0002;
 const SHAPE_TYPE_LINE: u16 = 0x0014;
 
 #[derive(Debug, Default, Serialize)]
@@ -35,6 +37,10 @@ struct Counts {
     fill_boolean_used_false: usize,
     fill_boolean_used_true: usize,
     client_textbox_shapes: usize,
+    roundrect_shapes: usize,
+    roundrect_adjust_value_scalar_shapes: usize,
+    roundrect_adjust_value_absent_shapes: usize,
+    roundrect_adjust_value_unsupported_shapes: usize,
     scheme_fill_client_textbox_shapes: usize,
     scheme_fill_non_client_textbox_shapes: usize,
     line_color_observations: usize,
@@ -65,6 +71,8 @@ struct Histograms {
     shape_type_hex: BTreeMap<String, usize>,
     shape_type_with_client_textbox: BTreeMap<String, usize>,
     shape_type_with_scheme_fill: BTreeMap<String, usize>,
+    roundrect_adjust_value_raw_hex: BTreeMap<String, usize>,
+    roundrect_adjust_value_form: BTreeMap<String, usize>,
     shape_profile: BTreeMap<String, usize>,
     cooccurrence: BTreeMap<String, usize>,
     dgg_fill_type_raw_hex: BTreeMap<String, usize>,
@@ -196,6 +204,41 @@ fn main() -> Result<()> {
         let shape_type = shape.fsp.as_ref().map(|fsp| fsp.shape_type);
         if has_client_textbox {
             counts.client_textbox_shapes += 1;
+        }
+        if shape_type == Some(SHAPE_TYPE_ROUND_RECTANGLE) {
+            counts.roundrect_shapes += 1;
+            let adjustment_entries = shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|entry| entry.property_id() == ADJUST_VALUE)
+                .collect::<Vec<_>>();
+            match adjustment_entries.as_slice() {
+                [] => {
+                    counts.roundrect_adjust_value_absent_shapes += 1;
+                    bump(&mut histograms.roundrect_adjust_value_form, "absent");
+                }
+                [entry] if !entry.f_bid() && !entry.f_complex() => {
+                    counts.roundrect_adjust_value_scalar_shapes += 1;
+                    bump(&mut histograms.roundrect_adjust_value_form, "scalar");
+                    bump(
+                        &mut histograms.roundrect_adjust_value_raw_hex,
+                        format!("0x{:08X}", entry.op),
+                    );
+                }
+                [entry] if entry.f_complex() => {
+                    counts.roundrect_adjust_value_unsupported_shapes += 1;
+                    bump(&mut histograms.roundrect_adjust_value_form, "complex");
+                }
+                [entry] if entry.f_bid() => {
+                    counts.roundrect_adjust_value_unsupported_shapes += 1;
+                    bump(&mut histograms.roundrect_adjust_value_form, "bid");
+                }
+                _ => {
+                    counts.roundrect_adjust_value_unsupported_shapes += 1;
+                    bump(&mut histograms.roundrect_adjust_value_form, "duplicate_or_mixed");
+                }
+            }
         }
         if let Some(shape_type) = shape_type {
             bump(
@@ -383,7 +426,7 @@ fn main() -> Result<()> {
     }
 
     let receipt = Receipt {
-        schema: "chaptera.reference-fill-state-census.v1",
+        schema: "chaptera.reference-fill-state-census.v2",
         source_sha256: sha256_hex(&pub_bytes),
         byte_len: pub_bytes.len(),
         counts,
@@ -393,6 +436,7 @@ fn main() -> Result<()> {
             "The effective-state bucket mirrors only the current bounded solid/visibility admission law.",
             "Raw fillOpacity/lineOpacity values are observations only; no opacity/transparency semantics are inferred here.",
             "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
+            "RoundRectangle adjustment evidence records only property 0x0147 form/raw scalar counts; absent adjustment is not converted into a PDF-derived radius.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
@@ -404,9 +448,13 @@ fn main() -> Result<()> {
     .with_context(|| format!("write {}", output.display()))?;
 
     println!(
-        "REFERENCE_FILL_STATE_CENSUS sha={} shapes={} solid_visible={} solid_hidden={} non_solid={} unresolved={} fill_types={} fill_booleans={}",
+        "REFERENCE_FILL_STATE_CENSUS sha={} shapes={} roundrect={} roundrect_adjust_scalar={} roundrect_adjust_absent={} roundrect_adjust_unsupported={} solid_visible={} solid_hidden={} non_solid={} unresolved={} fill_types={} fill_booleans={}",
         receipt.source_sha256,
         receipt.counts.shape_containers,
+        receipt.counts.roundrect_shapes,
+        receipt.counts.roundrect_adjust_value_scalar_shapes,
+        receipt.counts.roundrect_adjust_value_absent_shapes,
+        receipt.counts.roundrect_adjust_value_unsupported_shapes,
         receipt.counts.effective_solid_visible,
         receipt.counts.effective_solid_hidden,
         receipt.counts.effective_non_solid,
