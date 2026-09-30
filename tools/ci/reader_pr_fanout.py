@@ -67,12 +67,15 @@ def cfg_test_module_line(source: str) -> int | None:
     for index, line in enumerate(lines):
         if line.strip() != "#[cfg(test)]":
             continue
-        for following in lines[index + 1 :]:
+        for following_index, following in enumerate(
+            lines[index + 1 :],
+            start=index + 1,
+        ):
             stripped = following.strip()
             if not stripped:
                 continue
             if stripped.startswith("mod tests {"):
-                return index + 1
+                return following_index + 1
             break
     return None
 

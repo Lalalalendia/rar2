@@ -38,7 +38,12 @@ mod tests {
 """
     old_marker = mod.cfg_test_module_line(base_source)
     new_marker = mod.cfg_test_module_line(head_source)
-    assert old_marker is not None and new_marker is not None
+    assert old_marker == 4 and new_marker == 4
+    assert not mod.diff_hunks_within_test_region(
+        "@@ -4,1 +4,1 @@\n-mod tests {\n+mod tests { // evidence marker change\n",
+        old_test_line=old_marker,
+        new_test_line=new_marker,
+    )
     assert mod.diff_hunks_within_test_region(
         "@@ -6,1 +6,3 @@\n-    fn probe() {}\n+    fn probe() {\n+        eprintln!(\"evidence\");\n+    }\n",
         old_test_line=old_marker,
