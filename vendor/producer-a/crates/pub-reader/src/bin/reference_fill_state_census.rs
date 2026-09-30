@@ -2,9 +2,11 @@ use anyhow::{bail, Context, Result};
 use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
 use pub_escher::{inspect_dgg_default_options, inspect_sp_containers, Fopte};
+use pub_model::Sha256Digest;
+use pub_reader::{build_mature_0x2c_source_graph, PubEffectivePaintAuthority};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, env, fs, path::PathBuf};
+use std::{collections::BTreeMap, env, fs, io::Cursor, path::PathBuf};
 
 const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
@@ -55,6 +57,11 @@ struct Counts {
     dgg_fill_boolean_observations: usize,
     dgg_fill_opacity_observations: usize,
     dgg_line_opacity_observations: usize,
+    table_nodes: usize,
+    table_explicit_fill_color_rgb: usize,
+    table_explicit_fill_visible_true: usize,
+    table_explicit_fill_visible_false: usize,
+    table_explicit_fill_visible_unspecified: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -80,6 +87,9 @@ struct Histograms {
     dgg_fill_boolean_raw_hex: BTreeMap<String, usize>,
     dgg_fill_opacity_raw_hex: BTreeMap<String, usize>,
     dgg_line_opacity_raw_hex: BTreeMap<String, usize>,
+    table_effective_fill_solid_authority: BTreeMap<String, usize>,
+    table_effective_fill_color_authority: BTreeMap<String, usize>,
+    table_effective_fill_visible_authority: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +116,15 @@ fn color_class(raw: u32) -> &'static str {
         0x08 => "scheme",
         0x10 => "system_or_extended",
         _ => "other_flagged",
+    }
+}
+
+fn paint_authority_bucket(authority: PubEffectivePaintAuthority) -> &'static str {
+    match authority {
+        PubEffectivePaintAuthority::ShapeLocal => "shape_local",
+        PubEffectivePaintAuthority::DrawingGroupPrimary => "drawing_group_primary",
+        PubEffectivePaintAuthority::DrawingGroupTertiary => "drawing_group_tertiary",
+        PubEffectivePaintAuthority::NormativeDefault => "normative_default",
     }
 }
 
@@ -385,6 +404,53 @@ fn main() -> Result<()> {
         }
     }
 
+    let digest = Sha256::digest(&pub_bytes);
+    let mut source_hash_bytes = [0_u8; 32];
+    source_hash_bytes.copy_from_slice(&digest);
+    let source_graph = build_mature_0x2c_source_graph(
+        Cursor::new(pub_bytes.as_slice()),
+        Sha256Digest::from_bytes(source_hash_bytes),
+    )
+    .context("build source graph for TABLE paint census")?;
+
+    for node in source_graph.graph.nodes.values() {
+        if node.payload.table.is_none() {
+            continue;
+        }
+        counts.table_nodes += 1;
+
+        let explicit_fill = &node.payload.explicit_paint.fill;
+        if explicit_fill.color_rgb.is_some() {
+            counts.table_explicit_fill_color_rgb += 1;
+        }
+        match explicit_fill.visible {
+            Some(true) => counts.table_explicit_fill_visible_true += 1,
+            Some(false) => counts.table_explicit_fill_visible_false += 1,
+            None => counts.table_explicit_fill_visible_unspecified += 1,
+        }
+
+        let effective_fill = node.payload.effective_paint.as_ref().map(|paint| &paint.fill);
+        for (map, value) in [
+            (
+                &mut histograms.table_effective_fill_solid_authority,
+                effective_fill.and_then(|fill| fill.solid.as_ref()),
+            ),
+            (
+                &mut histograms.table_effective_fill_color_authority,
+                effective_fill.and_then(|fill| fill.color_rgb.as_ref()),
+            ),
+            (
+                &mut histograms.table_effective_fill_visible_authority,
+                effective_fill.and_then(|fill| fill.visible.as_ref()),
+            ),
+        ] {
+            match value {
+                Some(value) => bump(map, paint_authority_bucket(value.authority)),
+                None => bump(map, "absent"),
+            }
+        }
+    }
+
     for drawing_group in &dgg.drawing_groups {
         for fopt in drawing_group
             .primary_options
@@ -440,6 +506,7 @@ fn main() -> Result<()> {
             "Raw fillOpacity/lineOpacity values are observations only; no opacity/transparency semantics are inferred here.",
             "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
             "RoundRectangle adjustment evidence records only property 0x0147 form/raw scalar counts; absent adjustment is not converted into a PDF-derived radius.",
+            "TABLE paint authority is reported only as aggregate source-graph counts; no object identity or document text is emitted.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
