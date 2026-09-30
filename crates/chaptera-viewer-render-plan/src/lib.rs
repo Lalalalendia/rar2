@@ -1765,5 +1765,5 @@ mod tests {
             layout.lines[0].measured_width_emu,
             spans.iter().map(|span| span.measured_width_emu).sum()
         );
-       }
+     }
 }
