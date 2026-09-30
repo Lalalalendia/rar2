@@ -608,7 +608,7 @@ pub fn from_viewer_geometry(
 }
 
 fn apply_source_page_paint_order(
-    nodes: &mut Vec<ReaderNodeV1>,
+    nodes: &mut [ReaderNodeV1],
     pages: &[ReaderPageV1],
     source_orders: &[ViewerPagePaintOrderV1],
 ) -> Result<bool, String> {
