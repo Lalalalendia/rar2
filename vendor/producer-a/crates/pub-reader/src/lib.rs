@@ -230,8 +230,7 @@ pub struct PubEffectivePageProjection {
     pub scenario_evidence_list_count: usize,
 }
 
-pub const PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1: &str =
-    "chaptera.pub-source-page-paint-order.v1";
+pub const PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1: &str = "chaptera.pub-source-page-paint-order.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubSourcePagePaintOrderV1 {
