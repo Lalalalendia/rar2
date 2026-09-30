@@ -53,6 +53,7 @@ fn payload() -> PubResolvedNodePayload {
     PubResolvedNodePayload {
         contents_seq_num: 7,
         officeart_shape_type: Some(1),
+        officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
         officeart_spid: Some(7),
         image_slot: None,
         legacy_ole: None,
