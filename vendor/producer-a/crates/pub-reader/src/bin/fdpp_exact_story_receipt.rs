@@ -50,7 +50,7 @@ fn main() -> Result<()> {
         let labels = story
             .source_refs
             .iter()
-            .filter_map(|source_ref| source_ref.semantic_label.as_deref())
+            .filter_map(|source_ref| source_ref.path.as_deref())
             .collect::<Vec<_>>();
         if !labels.contains(&"Contents/0x65/textId")
             || !labels.contains(&"FDPP/storyEnd")
