@@ -256,6 +256,12 @@ pub struct CreateBindingRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateBindingOutcome {
+    pub binding: ResourceBinding,
+    pub reused_existing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectUploadGrant {
     pub tenant_id: String,
     pub upload_id: String,
@@ -314,6 +320,17 @@ impl BlobStoreService {
         request: CreateBindingRequest,
         input: &mut (dyn AsyncRead + Unpin + Send),
     ) -> Result<ResourceBinding, BlobStoreError> {
+        Ok(self
+            .create_canonical_binding_with_outcome(request, input)
+            .await?
+            .binding)
+    }
+
+    pub async fn create_canonical_binding_with_outcome(
+        &self,
+        request: CreateBindingRequest,
+        input: &mut (dyn AsyncRead + Unpin + Send),
+    ) -> Result<CreateBindingOutcome, BlobStoreError> {
         validate_create_request(&request)?;
 
         if let Some(existing) = self
@@ -326,7 +343,11 @@ impl BlobStoreService {
             .await?
         {
             self.verify_physical_exact(&existing).await?;
-            return self.bind_existing(&request, &existing).await;
+            let binding = self.bind_existing(&request, &existing).await?;
+            return Ok(CreateBindingOutcome {
+                binding,
+                reused_existing: true,
+            });
         }
 
         let physical_blob_id = self.ids.next_physical_blob_id()?;
@@ -425,9 +446,14 @@ impl BlobStoreService {
             retired_at_ms: None,
         };
 
-        self.repo
+        let binding = self
+            .repo
             .commit_physical_and_binding(physical, binding)
-            .await
+            .await?;
+        Ok(CreateBindingOutcome {
+            binding,
+            reused_existing: false,
+        })
     }
 
     pub async fn stream_binding_verified(

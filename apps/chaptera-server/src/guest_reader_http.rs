@@ -16,7 +16,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use chaptera_failure_intake_protocol::FailureClassificationV1;
+use chaptera_failure_intake_protocol::{
+    ClusterDispositionV1, ExactByteDispositionV1, FailureClassificationV1, INTAKE_RECEIPT_V1,
+    IntakeConsentRequestV1, IntakeReceiptV1, RETENTION_POLICY_V1, ServerIntakeEvidenceV1,
+};
 use futures_util::StreamExt;
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
@@ -29,7 +32,7 @@ use sqlx::{
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    blob_store::{BlobStoreError, BlobStoreService},
+    blob_store::{BlobStoreError, BlobStoreService, CreateBindingRequest, ResourceKind},
     edge::ClientIp,
     guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
     public_rate_limit::{
@@ -46,6 +49,10 @@ use crate::{
 pub const GUEST_SERVICE_TENANT_ID: &str = "tenant:cloud-reader-guest-service";
 pub const GUEST_SERVICE_PRINCIPAL_ID: &str = "principal:cloud-reader-guest-service";
 pub const GUEST_TOKEN_HEADER: &str = "x-chaptera-reader-session";
+pub const CONTRIBUTION_TOKEN_HEADER: &str = "x-chaptera-reader-contribution";
+pub const RESEARCH_INTAKE_TENANT_ID: &str = "tenant:cloud-reader-research-intake";
+const CONTRIBUTION_CAPABILITY_TTL: Duration = Duration::from_secs(5 * 60);
+const CONTRIBUTION_CAPABILITY_PROTOCOL_V1: &str = "chaptera.reader-contribution-capability.v1";
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const CLEANUP_BATCH: i64 = 16;
 const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
@@ -82,6 +89,266 @@ pub struct GuestReaderHttpState {
     scanner: Arc<ProductionSourceSecurityScanner>,
     scene_worker: IsolatedGuestSceneProducer,
     config: GuestReaderHttpConfig,
+}
+
+async fn issue_contribution_capability(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(consent): Json<IntakeConsentRequestV1>,
+) -> Result<GuestJson<ContributionCapabilityResponse>, GuestReaderError> {
+    let now_ms = now_ms()?;
+    state.cleanup_expired(now_ms).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now_ms)
+        .await?;
+
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms)
+        .await?;
+    if session.state != GuestSessionState::Opened
+        || session.classification.as_deref() != Some("unsupported")
+        || session.quarantine_deleted_at_ms.is_some()
+    {
+        return Err(GuestReaderError::unprocessable(
+            "guest_contribution_ineligible",
+        ));
+    }
+
+    let classification =
+        decode_failure_classification(session.failure_classification_json.as_deref())?
+            .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
+    let failure_code = session
+        .terminal_code
+        .clone()
+        .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
+    let evidence = ServerIntakeEvidenceV1 {
+        classification: classification.clone(),
+        failure_code: failure_code.clone(),
+    };
+    evidence.validate_and_authorize(&consent).map_err(|error| {
+        if error.code == "intake_class_ineligible" {
+            GuestReaderError::unprocessable("guest_contribution_ineligible")
+        } else {
+            GuestReaderError::bad_request("guest_contribution_consent_invalid")
+        }
+    })?;
+
+    let failure_classification_json = serde_json::to_vec(&classification)
+        .map_err(|_| GuestReaderError::internal("guest_failure_classification_serialize_failed"))?;
+    let submission_id = random_id("submission")?;
+    let capability_token = random_token()?;
+    let capability_token_hash = token_hash(capability_token.as_bytes());
+    let capability_deadline = add_duration(now_ms, CONTRIBUTION_CAPABILITY_TTL)?;
+    let expires_at_ms = capability_deadline.min(session.expires_at_ms);
+    if expires_at_ms <= now_ms {
+        return Err(GuestReaderError::gone("guest_session_expired"));
+    }
+
+    state
+        .sessions
+        .insert_research_submission(
+            &submission_id,
+            &session.session_id,
+            &capability_token_hash,
+            &consent.consent_version,
+            &failure_classification_json,
+            &failure_code,
+            now_ms,
+            expires_at_ms,
+        )
+        .await?;
+
+    Ok(GuestJson(ContributionCapabilityResponse {
+        protocol_version: CONTRIBUTION_CAPABILITY_PROTOCOL_V1,
+        submission_id,
+        capability_token,
+        expires_at_ms,
+        retention_policy: RETENTION_POLICY_V1,
+    }))
+}
+
+async fn contribute_session(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<GuestJson<IntakeReceiptV1>, GuestReaderError> {
+    let now_ms = now_ms()?;
+    state.cleanup_expired(now_ms).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now_ms)
+        .await?;
+
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms)
+        .await?;
+    if session.state != GuestSessionState::Opened
+        || session.classification.as_deref() != Some("unsupported")
+        || session.quarantine_deleted_at_ms.is_some()
+    {
+        return Err(GuestReaderError::unprocessable(
+            "guest_contribution_ineligible",
+        ));
+    }
+
+    let capability_token = headers
+        .get(CONTRIBUTION_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| GuestReaderError::unauthorized("guest_contribution_token_required"))?;
+    let capability_token_hash = token_hash(capability_token.as_bytes());
+    let submission = state
+        .sessions
+        .claim_research_submission(&session.session_id, &capability_token_hash, now_ms)
+        .await?;
+
+    let result = retain_contribution(&state, &session, &submission, now_ms).await;
+    match result {
+        Ok(receipt) => Ok(GuestJson(receipt)),
+        Err(error) => {
+            let _ = state
+                .sessions
+                .reset_research_submission(&submission.submission_id)
+                .await;
+            Err(error)
+        }
+    }
+}
+
+async fn retain_contribution(
+    state: &GuestReaderHttpState,
+    session: &GuestReaderSession,
+    submission: &ResearchSubmission,
+    now_ms: i64,
+) -> Result<IntakeReceiptV1, GuestReaderError> {
+    if submission.session_id != session.session_id || submission.expires_at_ms <= now_ms {
+        return Err(GuestReaderError::conflict(
+            "guest_contribution_capability_invalid",
+        ));
+    }
+    let current_failure = session
+        .failure_classification_json
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
+    if current_failure != submission.failure_classification_json.as_slice()
+        || session.terminal_code.as_deref() != Some(submission.failure_code.as_str())
+    {
+        return Err(GuestReaderError::conflict(
+            "guest_contribution_evidence_changed",
+        ));
+    }
+
+    let generation = session
+        .storage_generation
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("guest_storage_identity_missing"))?;
+    let etag = session
+        .object_etag
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("guest_storage_identity_missing"))?;
+    let observed = session
+        .observed_byte_len
+        .ok_or_else(|| GuestReaderError::internal("guest_storage_identity_missing"))?;
+    let server_sha256 = session
+        .source_sha256
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("guest_source_identity_missing"))?;
+
+    let scan_input = state
+        .blob_store
+        .open_quarantine_exact(
+            GUEST_SERVICE_TENANT_ID,
+            &session.upload_id,
+            generation,
+            etag,
+            observed,
+        )
+        .await
+        .map_err(map_contribution_blob_error)?;
+    let mut scan_input = scan_input;
+    match state
+        .scanner
+        .scan(&mut *scan_input)
+        .await
+        .map_err(|_| GuestReaderError::unprocessable("guest_contribution_scan_failed"))?
+    {
+        SourceSecurityScanOutcome::Accepted(_) => {}
+        SourceSecurityScanOutcome::Rejected { .. } => {
+            return Err(GuestReaderError::unprocessable(
+                "guest_contribution_scan_rejected",
+            ));
+        }
+    }
+
+    let mut durable_input = state
+        .blob_store
+        .open_quarantine_exact(
+            GUEST_SERVICE_TENANT_ID,
+            &session.upload_id,
+            generation,
+            etag,
+            observed,
+        )
+        .await
+        .map_err(map_contribution_blob_error)?;
+    let outcome = state
+        .blob_store
+        .create_canonical_binding_with_outcome(
+            CreateBindingRequest {
+                tenant_id: RESEARCH_INTAKE_TENANT_ID.to_owned(),
+                project_id: None,
+                document_id: None,
+                content_sha256: server_sha256.to_owned(),
+                byte_len: observed,
+                canonical_mime: None,
+                resource_kind: ResourceKind::PubSource,
+                validation_profile: "chaptera-reader-research-intake-v1".to_owned(),
+                now_ms: u64::try_from(now_ms)
+                    .map_err(|_| GuestReaderError::internal("clock_out_of_range"))?,
+            },
+            &mut *durable_input,
+        )
+        .await
+        .map_err(map_contribution_blob_error)?;
+
+    let (exact_byte_disposition, exact_byte_token) = if outcome.reused_existing {
+        (
+            ExactByteDispositionV1::DuplicateExactBytes,
+            "duplicate_exact_bytes",
+        )
+    } else {
+        (ExactByteDispositionV1::NewExactBytes, "new_exact_bytes")
+    };
+    let receipt = IntakeReceiptV1 {
+        protocol_version: INTAKE_RECEIPT_V1.to_owned(),
+        submission_id: submission.submission_id.clone(),
+        server_sha256: server_sha256.to_owned(),
+        exact_byte_disposition,
+        cluster_disposition: ClusterDispositionV1::Deferred,
+        retention_policy: RETENTION_POLICY_V1.to_owned(),
+    };
+    receipt
+        .validate()
+        .map_err(|_| GuestReaderError::internal("guest_contribution_receipt_invalid"))?;
+
+    state
+        .sessions
+        .finish_research_submission(
+            &submission.submission_id,
+            &outcome.binding.binding_id,
+            server_sha256,
+            exact_byte_token,
+            now_ms,
+        )
+        .await?;
+
+    // The retained binding is now independent from the short guest lifetime.
+    // Best-effort removal minimizes duplicate service storage; the normal TTL
+    // cleanup remains authoritative if this exact delete cannot complete now.
+    let _ = state.delete_quarantine(session, now_ms).await;
+    Ok(receipt)
 }
 
 impl GuestReaderHttpState {
@@ -121,6 +388,14 @@ pub fn router(state: GuestReaderHttpState) -> Router {
         .route(
             "/v1/reader/guest-sessions/{session_id}/scene",
             get(get_scene),
+        )
+        .route(
+            "/v1/reader/guest-sessions/{session_id}/contribution-capability",
+            post(issue_contribution_capability),
+        )
+        .route(
+            "/v1/reader/guest-sessions/{session_id}/contribute",
+            post(contribute_session),
         )
         .with_state(state)
 }
@@ -181,6 +456,15 @@ struct GuestSceneResponse {
     failure_classification: Option<FailureClassificationV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     scene: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct ContributionCapabilityResponse {
+    protocol_version: &'static str,
+    submission_id: String,
+    capability_token: String,
+    expires_at_ms: i64,
+    retention_policy: &'static str,
 }
 
 const GUEST_PROTOCOL_V1: &str = "chaptera.reader-guest-session.v1";
@@ -720,6 +1004,9 @@ impl GuestReaderHttpState {
     }
 
     async fn cleanup_expired(&self, now_ms: i64) -> Result<(), GuestReaderError> {
+        self.sessions
+            .cleanup_expired_research_capabilities(now_ms)
+            .await?;
         let expired = self.sessions.expired_pending(now_ms, CLEANUP_BATCH).await?;
         for session in expired {
             self.cleanup_one(session, now_ms).await?;
@@ -785,6 +1072,15 @@ struct GuestReaderSession {
     quarantine_deleted_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone)]
+struct ResearchSubmission {
+    submission_id: String,
+    session_id: String,
+    failure_classification_json: Vec<u8>,
+    failure_code: String,
+    expires_at_ms: i64,
+}
+
 #[derive(Clone)]
 pub struct SqliteGuestReaderSessionStore {
     path: PathBuf,
@@ -837,12 +1133,17 @@ impl SqliteGuestReaderSessionStore {
 
     async fn require_schema(&self) -> Result<(), GuestReaderError> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reader_guest_sessions'",
+            r#"
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type='table'
+              AND name IN ('reader_guest_sessions', 'reader_research_submissions')
+            "#,
         )
         .fetch_one(&self.pool)
         .await
         .map_err(sqlite_error)?;
-        if count != 1 {
+        if count != 2 {
             return Err(GuestReaderError::internal("guest_session_schema_missing"));
         }
         Ok(())
@@ -895,6 +1196,160 @@ impl SqliteGuestReaderSessionStore {
         .await
         .map_err(sqlite_error)?;
         row.as_ref().map(session_from_row).transpose()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_research_submission(
+        &self,
+        submission_id: &str,
+        session_id: &str,
+        capability_token_hash: &[u8; 32],
+        consent_version: &str,
+        failure_classification_json: &[u8],
+        failure_code: &str,
+        issued_at_ms: i64,
+        expires_at_ms: i64,
+    ) -> Result<(), GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO reader_research_submissions (
+                submission_id, session_id, capability_token_hash,
+                consent_version, retention_policy, failure_classification_json,
+                failure_code, state, issued_at_ms, expires_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?)
+            "#,
+        )
+        .bind(submission_id.as_bytes())
+        .bind(session_id.as_bytes())
+        .bind(capability_token_hash.as_slice())
+        .bind(consent_version)
+        .bind(RETENTION_POLICY_V1)
+        .bind(failure_classification_json)
+        .bind(failure_code)
+        .bind(issued_at_ms)
+        .bind(expires_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::internal(
+                "guest_contribution_capability_insert_failed",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn claim_research_submission(
+        &self,
+        session_id: &str,
+        capability_token_hash: &[u8; 32],
+        now_ms: i64,
+    ) -> Result<ResearchSubmission, GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE reader_research_submissions
+            SET state='consuming'
+            WHERE session_id=?
+              AND capability_token_hash=?
+              AND state='issued'
+              AND expires_at_ms>?
+            "#,
+        )
+        .bind(session_id.as_bytes())
+        .bind(capability_token_hash.as_slice())
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::conflict(
+                "guest_contribution_capability_invalid",
+            ));
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT submission_id, session_id, failure_classification_json,
+                   failure_code, expires_at_ms
+            FROM reader_research_submissions
+            WHERE capability_token_hash=? AND state='consuming'
+            "#,
+        )
+        .bind(capability_token_hash.as_slice())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+
+        Ok(ResearchSubmission {
+            submission_id: bytes_string(row.try_get("submission_id").map_err(sqlite_error)?)?,
+            session_id: bytes_string(row.try_get("session_id").map_err(sqlite_error)?)?,
+            failure_classification_json: row
+                .try_get("failure_classification_json")
+                .map_err(sqlite_error)?,
+            failure_code: row.try_get("failure_code").map_err(sqlite_error)?,
+            expires_at_ms: row.try_get("expires_at_ms").map_err(sqlite_error)?,
+        })
+    }
+
+    async fn reset_research_submission(&self, submission_id: &str) -> Result<(), GuestReaderError> {
+        sqlx::query(
+            "UPDATE reader_research_submissions SET state='issued' WHERE submission_id=? AND state='consuming'",
+        )
+        .bind(submission_id.as_bytes())
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        Ok(())
+    }
+
+    async fn finish_research_submission(
+        &self,
+        submission_id: &str,
+        binding_id: &str,
+        server_sha256: &str,
+        exact_byte_disposition: &'static str,
+        now_ms: i64,
+    ) -> Result<(), GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE reader_research_submissions
+            SET state='retained',
+                consumed_at_ms=?,
+                binding_id=?,
+                server_sha256=?,
+                exact_byte_disposition=?,
+                cluster_disposition='deferred'
+            WHERE submission_id=? AND state='consuming'
+            "#,
+        )
+        .bind(now_ms)
+        .bind(binding_id.as_bytes())
+        .bind(server_sha256.as_bytes())
+        .bind(exact_byte_disposition)
+        .bind(submission_id.as_bytes())
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::conflict(
+                "guest_contribution_state_conflict",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn cleanup_expired_research_capabilities(
+        &self,
+        now_ms: i64,
+    ) -> Result<(), GuestReaderError> {
+        sqlx::query(
+            "DELETE FROM reader_research_submissions WHERE state='issued' AND expires_at_ms<=?",
+        )
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        Ok(())
     }
 
     async fn mark_stored(
@@ -1327,6 +1782,10 @@ fn map_admission_error(error: UploadAdmissionError) -> GuestReaderError {
     }
 }
 
+fn map_contribution_blob_error(_error: BlobStoreError) -> GuestReaderError {
+    GuestReaderError::internal("guest_contribution_storage_failed")
+}
+
 fn map_blob_error(error: BlobStoreError) -> GuestReaderError {
     match error.code {
         "invalid_upload_size" | "blob_input_overflow" | "blob_input_length_mismatch" => {
@@ -1596,6 +2055,127 @@ mod tests {
             GuestSessionState::Opening
         );
         assert!(store.claim_open(&session.session_id, 1_003).await.is_err());
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn research_capability_is_one_shot_and_submission_records_stay_independent() {
+        let path = migrated_path("research-capability").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let first_token =
+            token_hash(b"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+        let second_token =
+            token_hash(b"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+        let evidence = br#"{"protocol_version":"chaptera.failure-classifier.v1","class":"PUB_DAMAGED","confidence":"high","reason_flags":["cfb_parse_failed"]}"#;
+        let session_id = "guest:0123456789abcdef0123456789abcdef";
+
+        store
+            .insert_research_submission(
+                "submission:11111111111111111111111111111111",
+                session_id,
+                &first_token,
+                "chaptera-intake-consent-v1",
+                evidence,
+                "reader_scene_open_failed",
+                1_000,
+                2_000,
+            )
+            .await
+            .unwrap();
+        let claimed = store
+            .claim_research_submission(session_id, &first_token, 1_100)
+            .await
+            .unwrap();
+        assert_eq!(
+            claimed.submission_id,
+            "submission:11111111111111111111111111111111"
+        );
+        assert!(
+            store
+                .claim_research_submission(session_id, &first_token, 1_101)
+                .await
+                .is_err()
+        );
+        store
+            .finish_research_submission(
+                &claimed.submission_id,
+                "binding:1111111111111111",
+                &"a".repeat(64),
+                "new_exact_bytes",
+                1_200,
+            )
+            .await
+            .unwrap();
+
+        store
+            .insert_research_submission(
+                "submission:22222222222222222222222222222222",
+                session_id,
+                &second_token,
+                "chaptera-intake-consent-v1",
+                evidence,
+                "reader_scene_open_failed",
+                1_300,
+                2_300,
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .claim_research_submission(session_id, &second_token, 1_400)
+                .await
+                .is_ok()
+        );
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM reader_research_submissions WHERE session_id=?",
+        )
+        .bind(session_id.as_bytes())
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 2);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn expired_unconsumed_research_capability_is_removed() {
+        let path = migrated_path("research-expiry").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let token = token_hash(b"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        store
+            .insert_research_submission(
+                "submission:33333333333333333333333333333333",
+                "guest:0123456789abcdef0123456789abcdef",
+                &token,
+                "chaptera-intake-consent-v1",
+                br#"{"protocol_version":"chaptera.failure-classifier.v1"}"#,
+                "reader_scene_open_failed",
+                1_000,
+                1_100,
+            )
+            .await
+            .unwrap();
+        store
+            .cleanup_expired_research_capabilities(1_100)
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM reader_research_submissions WHERE submission_id=?",
+        )
+        .bind(b"submission:33333333333333333333333333333333".as_slice())
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
 
         store.close().await;
         let _ = fs::remove_file(path);
