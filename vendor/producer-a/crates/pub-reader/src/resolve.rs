@@ -122,6 +122,7 @@ fn resolve_node_payload(
     PubResolvedNodePayload {
         contents_seq_num: payload.contents_seq_num,
         officeart_shape_type: payload.officeart_shape_type,
+        officeart_adjust_value: payload.officeart_adjust_value.clone(),
         officeart_spid: payload.officeart_spid,
         image_slot: payload.image_slot,
         legacy_ole: payload.legacy_ole.clone(),
@@ -156,6 +157,7 @@ mod tests {
         let payload = PubNodePayload {
             contents_seq_num: 315,
             officeart_shape_type: Some(75),
+            officeart_adjust_value: PubOfficeArtAdjustValueSource::Absent,
             officeart_spid: Some(315),
             image_slot: Some(1),
             legacy_ole: Some(legacy_ole.clone()),
