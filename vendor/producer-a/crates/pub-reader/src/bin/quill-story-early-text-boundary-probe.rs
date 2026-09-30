@@ -2571,8 +2571,8 @@ fn diagnose_sibling_scan(bytes: &[u8]) -> SiblingScanRow {
             && ordinary_story_ends
                 .iter()
                 .all(|value| fdpp_utf16_units.contains(value));
-        let ordinary_story_end_set_equals_fdpp = ordinary_story_catalog.is_some()
-            && ordinary_story_ends == fdpp_utf16_units;
+        let ordinary_story_end_set_equals_fdpp =
+            ordinary_story_catalog.is_some() && ordinary_story_ends == fdpp_utf16_units;
 
         Ok(SiblingScanDetails {
             contents_serialization_revision: revision,
