@@ -67,7 +67,7 @@ jobs:
           from pathlib import Path
           p = Path(".web-v0/resolved-graph.json")
           digest = hashlib.sha256(p.read_bytes()).hexdigest()
-          expected = "c38959cd843af978d743a929c7bb813c3a383400c4ad57ebf30b89d032ec9216"
+          expected = "a98aebab2713064575474ad23d76e1528fd6cdb01bb0f350e0ad0100211aa9f0"
           print({"resolved_graph_sha256": digest, "bytes": p.stat().st_size})
           assert digest == expected, (digest, expected)
           PY
@@ -90,7 +90,7 @@ jobs:
               -- python tools/run_sample_newsletter_resolved_scene_bridge.py \
                 --resolved-graph .web-v0/resolved-graph.json \
                 --viewer-receipt apps/web/acceptance/receipts/viewer-geometry.real.json \
-                --expected-resolved-graph-sha256 c38959cd843af978d743a929c7bb813c3a383400c4ad57ebf30b89d032ec9216 \
+                --expected-resolved-graph-sha256 a98aebab2713064575474ad23d76e1528fd6cdb01bb0f350e0ad0100211aa9f0 \
                 --target-node-id 007d9898-568b-5125-b519-8d88243aabfb \
                 --target-page-id 58ffa2e0-896e-5a40-806c-bd0184ea9c85 \
                 --after-x-emu 653710 \
