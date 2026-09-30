@@ -53,8 +53,8 @@ fn graph() -> PubResolvedGraph {
         story_id: Some(story_id),
         rows: 1,
         columns: 2,
-        cells_seq_num: 88,
-        tcd_story_ordinal: 0,
+        cells_seq_num: Some(88),
+        tcd_story_ordinal: Some(0),
         cells: vec![
             PubTableCellSource {
                 id: cell0,
