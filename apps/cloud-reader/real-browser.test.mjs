@@ -30,7 +30,7 @@ for (const fixture of fixtures) {
   assert.match(fixture.name, /^[A-Za-z0-9._-]+$/, "fixture name must be path-safe");
   assert.match(fixture.sha256, /^[0-9a-f]{64}$/, "fixture SHA-256 must be canonical");
   assert.ok(Number.isSafeInteger(fixture.bytes) && fixture.bytes > 0, "fixture byte length must be positive");
-  if (fixturePages != null) assert.ok(Number.isSafeInteger(fixturePages) && fixturePages > 0, "fixture page count must be positive");
+  if (fixture.pages != null) assert.ok(Number.isSafeInteger(fixture.pages) && fixture.pages > 0, "fixture page count must be positive");
 }
 const referenceRasterDpi = Number(process.env.READER_REFERENCE_RASTER_DPI ?? "0");
 assert.ok(
@@ -133,7 +133,7 @@ try {
     }
     const scene = receipt.scene;
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
-    if (fixturePages != null) assert.equal(scene.pages.length, fixturePages);
+    if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
     const fixturePages = scene.pages.length;
     active = { fixture, receipt };
     await page.goto(origin);
