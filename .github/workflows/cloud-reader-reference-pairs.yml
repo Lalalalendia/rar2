@@ -76,7 +76,7 @@ jobs:
       - name: Census exact Carlton TABLE cell paint join
         env:
           CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/carlton-pair/March-2026.pub
-          CHAPTERA_TABLE_CELL_PAINT_RECEIPT: target/cloud-reader-reference-pairs/carlton-table-cell-paint-join.json
+          CHAPTERA_TABLE_CELL_PAINT_RECEIPT: ${{ github.workspace }}/target/cloud-reader-reference-pairs/carlton-table-cell-paint-join.json
         run: cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
 
       - name: Reacquire exact Virginia PUB-PDF pairs
