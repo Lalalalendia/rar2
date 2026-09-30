@@ -373,7 +373,10 @@ pub fn from_viewer_geometry(
     for paint in &geometry.paints {
         let node_id = serialized_string(&paint.node_id, "paint node id")?;
         if !node_ids.contains(&node_id) {
-            return Err(format!("paint references unknown node {node_id}"));
+            // Viewer paint records are resolved-graph-global while the Cloud
+            // Reader Scene is page-selected. Non-visible paint has no browser
+            // target and must not make the selected Scene unprojectable.
+            continue;
         }
         let mapped = ReaderPaintV1 {
             fill_rgb: paint.solid_fill_rgb,
