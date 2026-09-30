@@ -325,13 +325,17 @@ fn populate_exact_table_cell_bounds(
         .map_err(|_| anyhow!("TABLE row/column array offset does not fit usize"))?;
     let len = usize::try_from(content_source.len)
         .map_err(|_| anyhow!("TABLE row/column array length does not fit usize"))?;
-    let mut cursor = ContentsCursor::bounded(content_source.stream.clone(), context.contents, start, len)?;
+    let mut cursor =
+        ContentsCursor::bounded(content_source.stream.clone(), context.contents, start, len)?;
     let mut sizes = Vec::new();
 
     while cursor.remaining() > 0 {
         let item = parse_confirmed_block(&mut cursor)?;
         if item.id != 0 {
-            bail!("TABLE row/column array item has nonzero id 0x{:02X}", item.id);
+            bail!(
+                "TABLE row/column array item has nonzero id 0x{:02X}",
+                item.id
+            );
         }
         let RawContentsBlockBody::Container {
             content_source: item_source,
@@ -344,8 +348,12 @@ fn populate_exact_table_cell_bounds(
             .map_err(|_| anyhow!("TABLE row/column item offset does not fit usize"))?;
         let item_len = usize::try_from(item_source.len)
             .map_err(|_| anyhow!("TABLE row/column item length does not fit usize"))?;
-        let mut item_cursor =
-            ContentsCursor::bounded(item_source.stream.clone(), context.contents, item_start, item_len)?;
+        let mut item_cursor = ContentsCursor::bounded(
+            item_source.stream.clone(),
+            context.contents,
+            item_start,
+            item_len,
+        )?;
         let mut size = None;
         while item_cursor.remaining() > 0 {
             let field = parse_confirmed_block(&mut item_cursor)?;
@@ -368,7 +376,11 @@ fn populate_exact_table_cell_bounds(
 
     let expected = usize::try_from(columns)
         .ok()
-        .and_then(|columns| usize::try_from(rows).ok().and_then(|rows| columns.checked_add(rows)))
+        .and_then(|columns| {
+            usize::try_from(rows)
+                .ok()
+                .and_then(|rows| columns.checked_add(rows))
+        })
         .context("TABLE row/column count overflows usize")?;
     if sizes.len() != expected {
         bail!(
@@ -455,7 +467,8 @@ fn populate_exact_table_cell_bounds(
             .context("TABLE column index overflow")?
             .checked_add(1)
             .context("TABLE column end overflow")?;
-        let start_row = usize::try_from(coordinates.start_row).context("TABLE row index overflow")?;
+        let start_row =
+            usize::try_from(coordinates.start_row).context("TABLE row index overflow")?;
         let end_row = usize::try_from(coordinates.end_row)
             .context("TABLE row index overflow")?
             .checked_add(1)
