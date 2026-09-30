@@ -64,7 +64,7 @@ jobs:
 
   reading-ui:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -78,10 +78,26 @@ jobs:
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node apps/cloud-reader/reader-browser.test.mjs
+      - name: Measure preview and TABLE text scale in real SVG user units
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node apps/cloud-reader/render-browser.test.mjs
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - name: Build the existing canonical guest Scene producer
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Measure pinned real PUB scenes in the same browser consumer
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node apps/cloud-reader/real-browser.test.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: cloud-reader-ui-synthetic
-          path: target/cloud-reader-ui/
+          path: |
+            target/cloud-reader-ui/
+            target/cloud-reader-render/
+            target/cloud-reader-real/
           if-no-files-found: warn
           retention-days: 14
