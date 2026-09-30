@@ -10,7 +10,10 @@ const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
 const FILL_OPACITY: u16 = 0x0182;
 const FILL_BOOLEANS: u16 = 0x01BF;
+const LINE_COLOR: u16 = 0x01C0;
 const LINE_OPACITY: u16 = 0x01C1;
+const LINE_WIDTH: u16 = 0x01CB;
+const LINE_BOOLEANS: u16 = 0x01FF;
 const FILL_USE_FILLED_BIT: u32 = 1 << 11;
 const FILL_FILLED_BIT: u32 = 1 << 27;
 const FSP_CONNECTOR_BIT: u32 = 1 << 8;
@@ -31,6 +34,12 @@ struct Counts {
     fill_boolean_use_one: usize,
     fill_boolean_used_false: usize,
     fill_boolean_used_true: usize,
+    client_textbox_shapes: usize,
+    scheme_fill_client_textbox_shapes: usize,
+    scheme_fill_non_client_textbox_shapes: usize,
+    line_color_observations: usize,
+    line_width_observations: usize,
+    line_boolean_observations: usize,
     effective_solid_visible: usize,
     effective_solid_hidden: usize,
     effective_non_solid: usize,
@@ -50,6 +59,13 @@ struct Histograms {
     fill_boolean_raw_hex: BTreeMap<String, usize>,
     fill_opacity_raw_hex: BTreeMap<String, usize>,
     line_opacity_raw_hex: BTreeMap<String, usize>,
+    line_color_class: BTreeMap<String, usize>,
+    line_width_raw_hex: BTreeMap<String, usize>,
+    line_boolean_raw_hex: BTreeMap<String, usize>,
+    shape_type_hex: BTreeMap<String, usize>,
+    shape_type_with_client_textbox: BTreeMap<String, usize>,
+    shape_type_with_scheme_fill: BTreeMap<String, usize>,
+    shape_profile: BTreeMap<String, usize>,
     cooccurrence: BTreeMap<String, usize>,
     dgg_fill_type_raw_hex: BTreeMap<String, usize>,
     dgg_fill_color_class: BTreeMap<String, usize>,
@@ -171,8 +187,25 @@ fn main() -> Result<()> {
         let mut fill_type = None;
         let mut fill_color = None;
         let mut fill_bool = None;
+        let mut line_color = None;
+        let mut line_width = None;
+        let mut line_bool = None;
         let mut has_fill_opacity = false;
         let mut has_line_opacity = false;
+        let has_client_textbox = shape.client_textbox.is_some();
+        let shape_type = shape.fsp.as_ref().map(|fsp| fsp.shape_type);
+        if has_client_textbox {
+            counts.client_textbox_shapes += 1;
+        }
+        if let Some(shape_type) = shape_type {
+            bump(&mut histograms.shape_type_hex, format!("0x{shape_type:04X}"));
+            if has_client_textbox {
+                bump(
+                    &mut histograms.shape_type_with_client_textbox,
+                    format!("0x{shape_type:04X}"),
+                );
+            }
+        }
         for fopt in &shape.fopts {
             for entry in &fopt.properties {
                 if let Some(raw) = scalar_property(entry, FILL_TYPE) {
@@ -196,10 +229,25 @@ fn main() -> Result<()> {
                     has_fill_opacity = true;
                     bump(&mut histograms.fill_opacity_raw_hex, format!("0x{raw:08X}"));
                 }
+                if let Some(raw) = scalar_property(entry, LINE_COLOR) {
+                    counts.line_color_observations += 1;
+                    line_color = Some(raw);
+                    bump(&mut histograms.line_color_class, color_class(raw));
+                }
                 if let Some(raw) = scalar_property(entry, LINE_OPACITY) {
                     counts.line_opacity_observations += 1;
                     has_line_opacity = true;
                     bump(&mut histograms.line_opacity_raw_hex, format!("0x{raw:08X}"));
+                }
+                if let Some(raw) = scalar_property(entry, LINE_WIDTH) {
+                    counts.line_width_observations += 1;
+                    line_width = Some(raw);
+                    bump(&mut histograms.line_width_raw_hex, format!("0x{raw:08X}"));
+                }
+                if let Some(raw) = scalar_property(entry, LINE_BOOLEANS) {
+                    counts.line_boolean_observations += 1;
+                    line_bool = Some(raw);
+                    bump(&mut histograms.line_boolean_raw_hex, format!("0x{raw:08X}"));
                 }
                 if let Some(raw) = scalar_property(entry, FILL_BOOLEANS) {
                     counts.fill_boolean_observations += 1;
@@ -219,6 +267,20 @@ fn main() -> Result<()> {
             }
         }
 
+        if fill_color.is_some_and(|raw| (raw >> 24) as u8 == 0x08) {
+            if has_client_textbox {
+                counts.scheme_fill_client_textbox_shapes += 1;
+            } else {
+                counts.scheme_fill_non_client_textbox_shapes += 1;
+            }
+            if let Some(shape_type) = shape_type {
+                bump(
+                    &mut histograms.shape_type_with_scheme_fill,
+                    format!("0x{shape_type:04X}"),
+                );
+            }
+        }
+
         if has_fill_opacity {
             counts.fill_opacity_shapes += 1;
         }
@@ -235,9 +297,35 @@ fn main() -> Result<()> {
             Some(raw) if raw & FILL_FILLED_BIT == 0 => "filled_false",
             Some(_) => "filled_true",
         };
+        let line_color_bucket = line_color.map_or("line_color_absent", color_class);
+        let line_width_bucket = if line_width.is_some() {
+            "line_width_present"
+        } else {
+            "line_width_absent"
+        };
+        let line_bool_bucket = if line_bool.is_some() {
+            "line_bool_present"
+        } else {
+            "line_bool_absent"
+        };
+        let client_bucket = if has_client_textbox {
+            "client_textbox"
+        } else {
+            "no_client_textbox"
+        };
+        let shape_type_bucket = shape_type
+            .map(|value| format!("shape_0x{value:04X}"))
+            .unwrap_or_else(|| "shape_absent".to_owned());
+
         bump(
             &mut histograms.cooccurrence,
             format!("{type_bucket}|{color_bucket}|{bool_bucket}"),
+        );
+        bump(
+            &mut histograms.shape_profile,
+            format!(
+                "{shape_type_bucket}|{client_bucket}|{color_bucket}|{line_color_bucket}|{line_width_bucket}|{line_bool_bucket}"
+            ),
         );
 
         match effective_fill_state(shape) {
@@ -301,6 +389,7 @@ fn main() -> Result<()> {
             "Raw OfficeArt values are observations; this receipt does not infer Publisher authoring intent.",
             "The effective-state bucket mirrors only the current bounded solid/visibility admission law.",
             "Raw fillOpacity/lineOpacity values are observations only; no opacity/transparency semantics are inferred here.",
+            "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
