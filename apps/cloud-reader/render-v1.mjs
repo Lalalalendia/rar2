@@ -173,9 +173,11 @@ export function resolvedTextLinePaintPlan(node) {
   const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
   if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
 
+  const sortedLines = [...(layout.lines ?? [])]
+    .sort((left, right) => left.line_index - right.line_index);
+  const hasResolvedSpans = sortedLines.some((line) => (line.spans ?? []).length > 0);
   let lineY = y;
-  const lines = [...(layout.lines ?? [])]
-    .sort((left, right) => left.line_index - right.line_index)
+  const lines = sortedLines
     .map((line) => {
       const lineIndex = safeInteger(line.line_index, "text.line_index");
       const resolvedLineHeight = safeInteger(line.line_height_emu, "text.line_height_emu");
@@ -191,13 +193,13 @@ export function resolvedTextLinePaintPlan(node) {
       const resolved = {
         line_index: lineIndex,
         x,
-        y: lineY,
+        y: hasResolvedSpans ? lineY : y + lineIndex * lineHeight,
         text: String(line.text ?? ""),
         measured_width_emu: safeInteger(line.measured_width_emu, "text.measured_width_emu"),
         line_height_emu: resolvedLineHeight,
         spans
       };
-      lineY += resolvedLineHeight;
+      if (hasResolvedSpans) lineY += resolvedLineHeight;
       return resolved;
     });
   return Object.freeze({
