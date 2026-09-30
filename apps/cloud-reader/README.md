@@ -77,3 +77,12 @@ screenshots and an exact-head receipt under `target/cloud-reader-ui/`. Inputs ar
 public-safe synthetic DTOs. This UI suite does not establish real-PUB visual
 fidelity, live hostile-file scanning, deployed cleanup or contribution consent.
 Those require their own release evidence.
+
+## Standalone release
+
+`python3 apps/cloud-reader/build_release.py` produces an exact-commit ZIP and
+per-asset SHA-256 manifest with no frontend bundler or server binary. The
+same-origin edge recipe and operator gates are documented in
+[`cloud-reader-static-release.md`](../../docs/cloud-reader-static-release.md).
+`release-browser.test.mjs` proves deterministic builds and released-asset
+delivery through actual Caddy/CSP with a synthetic API.
