@@ -21,6 +21,7 @@ const DESCRIPTOR_ROOT: u32 = 0x18;
 const DESCRIPTOR_END: u32 = 0xffff_ffff;
 const DESCRIPTOR_SIZE: usize = 24;
 const DESCRIPTOR_PRESENT: u16 = 0x0018;
+const RAW_TYPE_SHAPE: u16 = 0x01;
 const CONTENTS_RAW_TYPE_STORY_FRAME_INDEX: u16 = 0x61;
 const STORY_FRAME_INDEX_DECLARED_COUNT_ID: u16 = 0x01;
 const STORY_FRAME_INDEX_ENTRY_ARRAY_ID: u16 = 0x02;
@@ -210,7 +211,93 @@ struct StoryCatalogFixed8PairProfile {
 struct StoryFrameEntryProbe {
     fields: Vec<RawContentsBlock>,
     text_id: Option<u32>,
+    shape_ref: Option<u32>,
     unsupported_tail: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StoryShapeEntryProbe {
+    fields: Vec<RawContentsBlock>,
+    unsupported_tail: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StoryShapeScalarFieldProfile {
+    field_id: u16,
+    present_story_count: usize,
+    scalar_story_count: usize,
+    duplicate_story_count: usize,
+    wire_types: Vec<u8>,
+    all_stories_present_once_scalar: bool,
+    distinct_value_count: usize,
+    monotonic_non_decreasing_in_story_order: bool,
+    all_values_match_fdpp_absolute_quill_offsets: bool,
+    all_values_match_fdpp_relative_bytes: bool,
+    all_values_match_fdpp_utf16_units: bool,
+    last_equals_text_end_absolute_quill_offset: bool,
+    last_equals_text_bytes: bool,
+    last_equals_text_utf16_units: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StoryShapeScalarPairProfile {
+    start_field_id: u16,
+    end_field_id: u16,
+    all_end_ge_start: bool,
+    contiguous: bool,
+    sum_deltas_equals_text_utf16_units: bool,
+    sum_deltas_equals_text_bytes: bool,
+    outer_span_equals_text_utf16_units: bool,
+    outer_span_equals_text_bytes: bool,
+    first_start_is_zero: bool,
+    all_starts_match_fdpp_absolute_quill_offsets: bool,
+    all_ends_match_fdpp_absolute_quill_offsets: bool,
+    all_starts_match_fdpp_relative_bytes: bool,
+    all_ends_match_fdpp_relative_bytes: bool,
+    all_starts_match_fdpp_utf16_units: bool,
+    all_ends_match_fdpp_utf16_units: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StoryShapeFixed8FieldProfile {
+    field_id: u16,
+    present_story_count: usize,
+    fixed8_story_count: usize,
+    duplicate_story_count: usize,
+    wire_types: Vec<u8>,
+    all_stories_present_once_fixed8: bool,
+    first_words_monotonic: bool,
+    second_words_monotonic: bool,
+    all_second_ge_first: bool,
+    contiguous: bool,
+    sum_deltas_equals_text_utf16_units: bool,
+    sum_deltas_equals_text_bytes: bool,
+    outer_span_equals_text_utf16_units: bool,
+    outer_span_equals_text_bytes: bool,
+    first_start_is_zero: bool,
+    all_first_words_match_fdpp_absolute_quill_offsets: bool,
+    all_second_words_match_fdpp_absolute_quill_offsets: bool,
+    all_first_words_match_fdpp_relative_bytes: bool,
+    all_second_words_match_fdpp_relative_bytes: bool,
+    all_first_words_match_fdpp_utf16_units: bool,
+    all_second_words_match_fdpp_utf16_units: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct StoryShapeProfile {
+    story_count: usize,
+    frame_entry_count: usize,
+    entries_with_shape_ref: usize,
+    distinct_shape_ref_count: usize,
+    resolved_shape_ref_count: usize,
+    shape_raw_type_match_count: usize,
+    field_27_identity_match_count: usize,
+    shape_chunks_with_unsupported_tail: usize,
+    stories_profiled: usize,
+    distinct_shape_field_ids: Vec<u16>,
+    scalar_field_profiles: Vec<StoryShapeScalarFieldProfile>,
+    scalar_pair_profiles: Vec<StoryShapeScalarPairProfile>,
+    fixed8_field_profiles: Vec<StoryShapeFixed8FieldProfile>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +332,7 @@ struct StoryFrameIndexProfile {
     distinct_entry_field_ids: Vec<u16>,
     extra_entry_field_ids: Vec<u16>,
     scalar_field_profiles: Vec<StoryFrameScalarFieldProfile>,
+    shape_profile: StoryShapeProfile,
 }
 
 #[derive(Debug, Serialize)]
@@ -631,6 +719,326 @@ fn fdpp_boundary_sets(
     Ok((absolute, relative_bytes, utf16_units))
 }
 
+
+fn profile_story_shapes(
+    contents: &[u8],
+    story_catalog: &MatureStoryCatalog,
+    frame_entries: &[StoryFrameEntryProbe],
+    quill: &[u8],
+    fdpp: &Descriptor,
+    text: &Descriptor,
+) -> Result<StoryShapeProfile> {
+    let stream = StreamPath(CONTENTS_STREAM.into());
+    let header =
+        parse_0x2c_header(stream.clone(), contents).context("parse mature Contents for Story SHAPE probe")?;
+    let trailer = parse_confirmed_0x2c_trailer_root(contents, &header)
+        .context("parse mature Contents trailer for Story SHAPE probe")?;
+
+    let mut entries_with_shape_ref = 0usize;
+    let mut shape_refs = BTreeSet::new();
+    let mut resolved_shape_ref_count = 0usize;
+    let mut shape_raw_type_match_count = 0usize;
+    let mut field_27_identity_match_count = 0usize;
+    let mut shape_chunks_with_unsupported_tail = 0usize;
+    let mut shape_entries = Vec::<StoryShapeEntryProbe>::new();
+
+    for story in &story_catalog.entries {
+        let frames = frame_entries
+            .iter()
+            .filter(|entry| entry.text_id == Some(story.text_id))
+            .collect::<Vec<_>>();
+        if frames.len() != 1 {
+            continue;
+        }
+        let Some(shape_ref) = frames[0].shape_ref else {
+            continue;
+        };
+        entries_with_shape_ref += 1;
+        shape_refs.insert(shape_ref);
+
+        let Ok(seq_num) = usize::try_from(shape_ref) else {
+            continue;
+        };
+        let Some(reference) = parse_confirmed_chunk_reference(contents, &trailer.directory, seq_num)
+            .with_context(|| format!("parse Story SHAPE reference seq {seq_num}"))?
+        else {
+            continue;
+        };
+        resolved_shape_ref_count += 1;
+        if reference.raw_types.len() != 1
+            || reference.raw_types[0].value != RAW_TYPE_SHAPE
+            || reference.chunk_offsets.len() != 1
+        {
+            continue;
+        }
+        shape_raw_type_match_count += 1;
+
+        let chunk = parse_confirmed_0x2c_chunk(
+            stream.clone(),
+            contents,
+            reference.chunk_offsets[0].value,
+        )
+        .with_context(|| format!("parse Story SHAPE chunk seq {seq_num}"))?;
+
+        let story_matches = chunk
+            .fields
+            .iter()
+            .filter(|field| field.id == 0x27)
+            .filter_map(scalar_u64_block)
+            .collect::<Vec<_>>();
+        if story_matches.len() == 1 && story_matches[0] == u64::from(story.text_id) {
+            field_27_identity_match_count += 1;
+        }
+        if chunk.unsupported_tail.is_some() {
+            shape_chunks_with_unsupported_tail += 1;
+        }
+        shape_entries.push(StoryShapeEntryProbe {
+            fields: chunk.fields,
+            unsupported_tail: chunk.unsupported_tail.is_some(),
+        });
+    }
+
+    let (fdpp_absolute, fdpp_relative_bytes, fdpp_utf16_units) =
+        fdpp_boundary_sets(quill, fdpp, text)?;
+    let text_start = u64::from(text.data_offset);
+    let text_bytes = u64::from(text.data_length);
+    let text_utf16_units = text_bytes / 2;
+    let text_end = text_start
+        .checked_add(text_bytes)
+        .context("TEXT end overflow while profiling Story SHAPEs")?;
+
+    let distinct_shape_field_ids = shape_entries
+        .iter()
+        .flat_map(|entry| entry.fields.iter().map(|field| field.id))
+        .collect::<BTreeSet<_>>();
+
+    let mut complete_scalar_vectors = BTreeMap::<u16, Vec<u64>>::new();
+    let shape_profile = profile_story_shapes(
+        contents,
+        story_catalog,
+        &entries,
+        quill,
+        fdpp,
+        text,
+    )?;
+
+    let mut scalar_field_profiles = Vec::new();
+    for field_id in distinct_shape_field_ids.iter().copied() {
+        let mut present_story_count = 0usize;
+        let mut scalar_story_count = 0usize;
+        let mut duplicate_story_count = 0usize;
+        let mut wire_types = BTreeSet::new();
+        let mut values = Vec::new();
+
+        for entry in &shape_entries {
+            let matches = entry
+                .fields
+                .iter()
+                .filter(|field| field.id == field_id)
+                .collect::<Vec<_>>();
+            if !matches.is_empty() {
+                present_story_count += 1;
+            }
+            if matches.len() > 1 {
+                duplicate_story_count += 1;
+            }
+            for field in &matches {
+                wire_types.insert(field.block_type);
+            }
+            if matches.len() == 1 {
+                if let Some(value) = scalar_u64_block(matches[0]) {
+                    scalar_story_count += 1;
+                    values.push(value);
+                }
+            }
+        }
+
+        let all_stories_present_once_scalar =
+            shape_entries.len() == story_catalog.entries.len()
+                && present_story_count == shape_entries.len()
+                && scalar_story_count == shape_entries.len()
+                && duplicate_story_count == 0;
+        if all_stories_present_once_scalar {
+            complete_scalar_vectors.insert(field_id, values.clone());
+        }
+        let last = all_stories_present_once_scalar.then(|| values.last().copied()).flatten();
+
+        scalar_field_profiles.push(StoryShapeScalarFieldProfile {
+            field_id,
+            present_story_count,
+            scalar_story_count,
+            duplicate_story_count,
+            wire_types: wire_types.into_iter().collect(),
+            all_stories_present_once_scalar,
+            distinct_value_count: values.iter().copied().collect::<BTreeSet<_>>().len(),
+            monotonic_non_decreasing_in_story_order:
+                all_stories_present_once_scalar && values.windows(2).all(|pair| pair[0] <= pair[1]),
+            all_values_match_fdpp_absolute_quill_offsets:
+                all_stories_present_once_scalar && values.iter().all(|value| fdpp_absolute.contains(value)),
+            all_values_match_fdpp_relative_bytes:
+                all_stories_present_once_scalar && values.iter().all(|value| fdpp_relative_bytes.contains(value)),
+            all_values_match_fdpp_utf16_units:
+                all_stories_present_once_scalar && values.iter().all(|value| fdpp_utf16_units.contains(value)),
+            last_equals_text_end_absolute_quill_offset:
+                all_stories_present_once_scalar && last == Some(text_end),
+            last_equals_text_bytes:
+                all_stories_present_once_scalar && last == Some(text_bytes),
+            last_equals_text_utf16_units:
+                all_stories_present_once_scalar && last == Some(text_utf16_units),
+        });
+    }
+
+    let mut scalar_pair_profiles = Vec::new();
+    for (start_field_id, starts) in &complete_scalar_vectors {
+        for (end_field_id, ends) in &complete_scalar_vectors {
+            if start_field_id == end_field_id {
+                continue;
+            }
+            let (
+                all_end_ge_start,
+                contiguous,
+                sum_deltas_equals_text_utf16_units,
+                sum_deltas_equals_text_bytes,
+                outer_span_equals_text_utf16_units,
+                outer_span_equals_text_bytes,
+                first_start_is_zero,
+            ) = profile_offset_pair(starts, ends, text_utf16_units, text_bytes);
+
+            scalar_pair_profiles.push(StoryShapeScalarPairProfile {
+                start_field_id: *start_field_id,
+                end_field_id: *end_field_id,
+                all_end_ge_start,
+                contiguous,
+                sum_deltas_equals_text_utf16_units,
+                sum_deltas_equals_text_bytes,
+                outer_span_equals_text_utf16_units,
+                outer_span_equals_text_bytes,
+                first_start_is_zero,
+                all_starts_match_fdpp_absolute_quill_offsets:
+                    starts.iter().all(|value| fdpp_absolute.contains(value)),
+                all_ends_match_fdpp_absolute_quill_offsets:
+                    ends.iter().all(|value| fdpp_absolute.contains(value)),
+                all_starts_match_fdpp_relative_bytes:
+                    starts.iter().all(|value| fdpp_relative_bytes.contains(value)),
+                all_ends_match_fdpp_relative_bytes:
+                    ends.iter().all(|value| fdpp_relative_bytes.contains(value)),
+                all_starts_match_fdpp_utf16_units:
+                    starts.iter().all(|value| fdpp_utf16_units.contains(value)),
+                all_ends_match_fdpp_utf16_units:
+                    ends.iter().all(|value| fdpp_utf16_units.contains(value)),
+            });
+        }
+    }
+
+    let mut fixed8_field_profiles = Vec::new();
+    for field_id in distinct_shape_field_ids.iter().copied() {
+        let mut present_story_count = 0usize;
+        let mut fixed8_story_count = 0usize;
+        let mut duplicate_story_count = 0usize;
+        let mut wire_types = BTreeSet::new();
+        let mut first_words = Vec::new();
+        let mut second_words = Vec::new();
+
+        for entry in &shape_entries {
+            let matches = entry
+                .fields
+                .iter()
+                .filter(|field| field.id == field_id)
+                .collect::<Vec<_>>();
+            if !matches.is_empty() {
+                present_story_count += 1;
+            }
+            if matches.len() > 1 {
+                duplicate_story_count += 1;
+            }
+            for field in &matches {
+                wire_types.insert(field.block_type);
+            }
+            if matches.len() == 1 {
+                if let RawContentsBlockBody::Fixed8 { bytes, .. } = &matches[0].body {
+                    fixed8_story_count += 1;
+                    first_words.push(u64::from(u32::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3],
+                    ])));
+                    second_words.push(u64::from(u32::from_le_bytes([
+                        bytes[4], bytes[5], bytes[6], bytes[7],
+                    ])));
+                }
+            }
+        }
+        if fixed8_story_count == 0 {
+            continue;
+        }
+
+        let all_stories_present_once_fixed8 =
+            shape_entries.len() == story_catalog.entries.len()
+                && present_story_count == shape_entries.len()
+                && fixed8_story_count == shape_entries.len()
+                && duplicate_story_count == 0;
+        let (
+            all_second_ge_first,
+            contiguous,
+            sum_deltas_equals_text_utf16_units,
+            sum_deltas_equals_text_bytes,
+            outer_span_equals_text_utf16_units,
+            outer_span_equals_text_bytes,
+            first_start_is_zero,
+        ) = if all_stories_present_once_fixed8 {
+            profile_offset_pair(&first_words, &second_words, text_utf16_units, text_bytes)
+        } else {
+            (false, false, false, false, false, false, false)
+        };
+
+        fixed8_field_profiles.push(StoryShapeFixed8FieldProfile {
+            field_id,
+            present_story_count,
+            fixed8_story_count,
+            duplicate_story_count,
+            wire_types: wire_types.into_iter().collect(),
+            all_stories_present_once_fixed8,
+            first_words_monotonic:
+                all_stories_present_once_fixed8 && first_words.windows(2).all(|pair| pair[0] <= pair[1]),
+            second_words_monotonic:
+                all_stories_present_once_fixed8 && second_words.windows(2).all(|pair| pair[0] <= pair[1]),
+            all_second_ge_first,
+            contiguous,
+            sum_deltas_equals_text_utf16_units,
+            sum_deltas_equals_text_bytes,
+            outer_span_equals_text_utf16_units,
+            outer_span_equals_text_bytes,
+            first_start_is_zero,
+            all_first_words_match_fdpp_absolute_quill_offsets:
+                all_stories_present_once_fixed8 && first_words.iter().all(|value| fdpp_absolute.contains(value)),
+            all_second_words_match_fdpp_absolute_quill_offsets:
+                all_stories_present_once_fixed8 && second_words.iter().all(|value| fdpp_absolute.contains(value)),
+            all_first_words_match_fdpp_relative_bytes:
+                all_stories_present_once_fixed8 && first_words.iter().all(|value| fdpp_relative_bytes.contains(value)),
+            all_second_words_match_fdpp_relative_bytes:
+                all_stories_present_once_fixed8 && second_words.iter().all(|value| fdpp_relative_bytes.contains(value)),
+            all_first_words_match_fdpp_utf16_units:
+                all_stories_present_once_fixed8 && first_words.iter().all(|value| fdpp_utf16_units.contains(value)),
+            all_second_words_match_fdpp_utf16_units:
+                all_stories_present_once_fixed8 && second_words.iter().all(|value| fdpp_utf16_units.contains(value)),
+        });
+    }
+
+    Ok(StoryShapeProfile {
+        story_count: story_catalog.entries.len(),
+        frame_entry_count: frame_entries.len(),
+        entries_with_shape_ref,
+        distinct_shape_ref_count: shape_refs.len(),
+        resolved_shape_ref_count,
+        shape_raw_type_match_count,
+        field_27_identity_match_count,
+        shape_chunks_with_unsupported_tail,
+        stories_profiled: shape_entries.len(),
+        distinct_shape_field_ids: distinct_shape_field_ids.into_iter().collect(),
+        scalar_field_profiles,
+        scalar_pair_profiles,
+        fixed8_field_profiles,
+    })
+}
+
 fn profile_story_frame_index(
     contents: &[u8],
     chunk: &Contents0x2cChunk,
@@ -695,10 +1103,19 @@ fn profile_story_frame_index(
         let text_id = (text_matches.len() == 1)
             .then(|| u32::try_from(text_matches[0]).ok())
             .flatten();
+        let shape_matches = fields
+            .iter()
+            .filter(|field| field.id == STORY_FRAME_ENTRY_SHAPE_REF_ID)
+            .filter_map(scalar_u64_block)
+            .collect::<Vec<_>>();
+        let shape_ref = (shape_matches.len() == 1)
+            .then(|| u32::try_from(shape_matches[0]).ok())
+            .flatten();
 
         entries.push(StoryFrameEntryProbe {
             fields,
             text_id,
+            shape_ref,
             unsupported_tail,
         });
     }
@@ -872,6 +1289,7 @@ fn profile_story_frame_index(
         distinct_entry_field_ids: distinct_entry_field_ids.into_iter().collect(),
         extra_entry_field_ids,
         scalar_field_profiles,
+        shape_profile,
     })
 }
 
@@ -2108,7 +2526,7 @@ fn main() -> Result<()> {
     rows.sort_by(|left, right| left.source_sha256.cmp(&right.source_sha256));
 
     let report = serde_json::json!({
-        "schema": "chaptera.quill-story-early-text-boundary.v11",
+        "schema": "chaptera.quill-story-early-text-boundary.v12",
         "witness_count": rows.len(),
         "rows": rows,
         "evidence_boundary": "exact witness SHA plus source-safe structural counts, lengths and booleans only; no filenames, paths, document text, Story IDs, raw payload bytes, absolute offsets or parser error text",
