@@ -4,6 +4,7 @@ use crate::failure_intake::{
 use crate::family_classifier::classify_pub_family;
 use pub_contents::ContentsFamily;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
 pub const READER_SALVAGE_PROBE_SCHEMA_V1: &str = "chaptera.reader-salvage-probe.v1";
@@ -102,6 +103,7 @@ impl ReaderSalvageSubsystemProbe {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReaderSalvageProbe {
     pub schema_version: String,
+    pub source_sha256: String,
     pub trigger: ReaderSalvageTrigger,
     pub eligibility: ReaderSalvageEligibility,
     pub intake: FailureIntakeClassification,
@@ -127,6 +129,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
     bytes: &[u8],
     trigger: ReaderSalvageTrigger,
 ) -> ReaderSalvageProbe {
+    let source_sha256 = source_sha256(bytes);
     let intake = classify_failure_candidate(bytes);
     let family = classify_pub_family(bytes);
     let eligibility = salvage_eligibility(bytes.len(), intake.class, trigger);
@@ -134,6 +137,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
     if !eligibility.is_eligible() {
         return ReaderSalvageProbe {
             schema_version: READER_SALVAGE_PROBE_SCHEMA_V1.to_owned(),
+            source_sha256: source_sha256.clone(),
             trigger,
             eligibility,
             intake,
@@ -270,6 +274,13 @@ fn probe_inventory_stream(
     }
 }
 
+fn source_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn contents_family_name(family: ContentsFamily) -> String {
     match family {
         ContentsFamily::Family0x22 => "0x22",
@@ -331,6 +342,7 @@ mod tests {
             ReaderSalvageStreamState::RecoveredRootRegular
         );
         assert!(probe.has_surviving_evidence());
+        assert_eq!(probe.source_sha256, source_sha256(&bytes));
         assert!(!probe.source_modified);
     }
 
