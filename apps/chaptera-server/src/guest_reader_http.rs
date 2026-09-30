@@ -92,6 +92,270 @@ pub struct GuestReaderHttpState {
     config: GuestReaderHttpConfig,
 }
 
+async fn issue_contribution_capability(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+    Json(consent): Json<IntakeConsentRequestV1>,
+) -> Result<GuestJson<ContributionCapabilityResponse>, GuestReaderError> {
+    let now_ms = now_ms()?;
+    state.cleanup_expired(now_ms).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now_ms)
+        .await?;
+
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms)
+        .await?;
+    if session.state != GuestSessionState::Opened
+        || session.classification.as_deref() != Some("unsupported")
+        || session.quarantine_deleted_at_ms.is_some()
+    {
+        return Err(GuestReaderError::unprocessable(
+            "guest_contribution_ineligible",
+        ));
+    }
+
+    let classification = decode_failure_classification(
+        session.failure_classification_json.as_deref(),
+    )?
+    .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
+    let failure_code = session
+        .terminal_code
+        .clone()
+        .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
+    let evidence = ServerIntakeEvidenceV1 {
+        classification: classification.clone(),
+        failure_code: failure_code.clone(),
+    };
+    evidence
+        .validate_and_authorize(&consent)
+        .map_err(|error| {
+            if error.code == "intake_class_ineligible" {
+                GuestReaderError::unprocessable("guest_contribution_ineligible")
+            } else {
+                GuestReaderError::bad_request("guest_contribution_consent_invalid")
+            }
+        })?;
+
+    let failure_classification_json = serde_json::to_vec(&classification)
+        .map_err(|_| GuestReaderError::internal("guest_failure_classification_serialize_failed"))?;
+    let submission_id = random_id("submission")?;
+    let capability_token = random_token()?;
+    let capability_token_hash = token_hash(capability_token.as_bytes());
+    let capability_deadline = add_duration(now_ms, CONTRIBUTION_CAPABILITY_TTL)?;
+    let expires_at_ms = capability_deadline.min(session.expires_at_ms);
+    if expires_at_ms <= now_ms {
+        return Err(GuestReaderError::gone("guest_session_expired"));
+    }
+
+    state
+        .sessions
+        .insert_research_submission(
+            &submission_id,
+            &session.session_id,
+            &capability_token_hash,
+            &consent.consent_version,
+            &failure_classification_json,
+            &failure_code,
+            now_ms,
+            expires_at_ms,
+        )
+        .await?;
+
+    Ok(GuestJson(ContributionCapabilityResponse {
+        protocol_version: CONTRIBUTION_CAPABILITY_PROTOCOL_V1,
+        submission_id,
+        capability_token,
+        expires_at_ms,
+        retention_policy: RETENTION_POLICY_V1,
+    }))
+}
+
+async fn contribute_session(
+    State(state): State<GuestReaderHttpState>,
+    Extension(client_ip): Extension<ClientIp>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<GuestJson<IntakeReceiptV1>, GuestReaderError> {
+    let now_ms = now_ms()?;
+    state.cleanup_expired(now_ms).await?;
+    state
+        .admit_network(client_ip.0, PublicRateClass::ReaderSessionOpen, now_ms)
+        .await?;
+
+    let session = state
+        .authorized_session(&session_id, &headers, now_ms)
+        .await?;
+    if session.state != GuestSessionState::Opened
+        || session.classification.as_deref() != Some("unsupported")
+        || session.quarantine_deleted_at_ms.is_some()
+    {
+        return Err(GuestReaderError::unprocessable(
+            "guest_contribution_ineligible",
+        ));
+    }
+
+    let capability_token = headers
+        .get(CONTRIBUTION_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| GuestReaderError::unauthorized("guest_contribution_token_required"))?;
+    let capability_token_hash = token_hash(capability_token.as_bytes());
+    let submission = state
+        .sessions
+        .claim_research_submission(&session.session_id, &capability_token_hash, now_ms)
+        .await?;
+
+    let result = retain_contribution(&state, &session, &submission, now_ms).await;
+    match result {
+        Ok(receipt) => Ok(GuestJson(receipt)),
+        Err(error) => {
+            let _ = state
+                .sessions
+                .reset_research_submission(&submission.submission_id)
+                .await;
+            Err(error)
+        }
+    }
+}
+
+async fn retain_contribution(
+    state: &GuestReaderHttpState,
+    session: &GuestReaderSession,
+    submission: &ResearchSubmission,
+    now_ms: i64,
+) -> Result<IntakeReceiptV1, GuestReaderError> {
+    if submission.session_id != session.session_id || submission.expires_at_ms <= now_ms {
+        return Err(GuestReaderError::conflict(
+            "guest_contribution_capability_invalid",
+        ));
+    }
+    let current_failure = session
+        .failure_classification_json
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::unprocessable("guest_contribution_ineligible"))?;
+    if current_failure != submission.failure_classification_json.as_slice()
+        || session.terminal_code.as_deref() != Some(submission.failure_code.as_str())
+    {
+        return Err(GuestReaderError::conflict(
+            "guest_contribution_evidence_changed",
+        ));
+    }
+
+    let generation = session
+        .storage_generation
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("guest_storage_identity_missing"))?;
+    let etag = session
+        .object_etag
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("guest_storage_identity_missing"))?;
+    let observed = session
+        .observed_byte_len
+        .ok_or_else(|| GuestReaderError::internal("guest_storage_identity_missing"))?;
+    let server_sha256 = session
+        .source_sha256
+        .as_deref()
+        .ok_or_else(|| GuestReaderError::internal("guest_source_identity_missing"))?;
+
+    let scan_input = state
+        .blob_store
+        .open_quarantine_exact(
+            GUEST_SERVICE_TENANT_ID,
+            &session.upload_id,
+            generation,
+            etag,
+            observed,
+        )
+        .await
+        .map_err(map_contribution_blob_error)?;
+    let mut scan_input = scan_input;
+    match state
+        .scanner
+        .scan(&mut *scan_input)
+        .await
+        .map_err(|_| GuestReaderError::unprocessable("guest_contribution_scan_failed"))?
+    {
+        SourceSecurityScanOutcome::Accepted(_) => {}
+        SourceSecurityScanOutcome::Rejected { .. } => {
+            return Err(GuestReaderError::unprocessable(
+                "guest_contribution_scan_rejected",
+            ));
+        }
+    }
+
+    let mut durable_input = state
+        .blob_store
+        .open_quarantine_exact(
+            GUEST_SERVICE_TENANT_ID,
+            &session.upload_id,
+            generation,
+            etag,
+            observed,
+        )
+        .await
+        .map_err(map_contribution_blob_error)?;
+    let outcome = state
+        .blob_store
+        .create_canonical_binding_with_outcome(
+            CreateBindingRequest {
+                tenant_id: RESEARCH_INTAKE_TENANT_ID.to_owned(),
+                project_id: None,
+                document_id: None,
+                content_sha256: server_sha256.to_owned(),
+                byte_len: observed,
+                canonical_mime: None,
+                resource_kind: ResourceKind::PubSource,
+                validation_profile: "chaptera-reader-research-intake-v1".to_owned(),
+                now_ms: u64::try_from(now_ms)
+                    .map_err(|_| GuestReaderError::internal("clock_out_of_range"))?,
+            },
+            &mut *durable_input,
+        )
+        .await
+        .map_err(map_contribution_blob_error)?;
+
+    let (exact_byte_disposition, exact_byte_token) = if outcome.reused_existing {
+        (
+            ExactByteDispositionV1::DuplicateExactBytes,
+            "duplicate_exact_bytes",
+        )
+    } else {
+        (ExactByteDispositionV1::NewExactBytes, "new_exact_bytes")
+    };
+    let receipt = IntakeReceiptV1 {
+        protocol_version: INTAKE_RECEIPT_V1.to_owned(),
+        submission_id: submission.submission_id.clone(),
+        server_sha256: server_sha256.to_owned(),
+        exact_byte_disposition,
+        cluster_disposition: ClusterDispositionV1::Deferred,
+        retention_policy: RETENTION_POLICY_V1.to_owned(),
+    };
+    receipt
+        .validate()
+        .map_err(|_| GuestReaderError::internal("guest_contribution_receipt_invalid"))?;
+
+    state
+        .sessions
+        .finish_research_submission(
+            &submission.submission_id,
+            &outcome.binding.binding_id,
+            server_sha256,
+            exact_byte_token,
+            now_ms,
+        )
+        .await?;
+
+    // The retained binding is now independent from the short guest lifetime.
+    // Best-effort removal minimizes duplicate service storage; the normal TTL
+    // cleanup remains authoritative if this exact delete cannot complete now.
+    let _ = state.delete_quarantine(session, now_ms).await;
+    Ok(receipt)
+}
+
+
 impl GuestReaderHttpState {
     pub fn new(
         rate: SqlitePublicRateLimitAuthority,
@@ -1524,6 +1788,10 @@ fn map_admission_error(error: UploadAdmissionError) -> GuestReaderError {
         }
         _ => GuestReaderError::internal("guest_upload_admission_failed"),
     }
+}
+
+fn map_contribution_blob_error(_error: BlobStoreError) -> GuestReaderError {
+    GuestReaderError::internal("guest_contribution_storage_failed")
 }
 
 fn map_blob_error(error: BlobStoreError) -> GuestReaderError {
