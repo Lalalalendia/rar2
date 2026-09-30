@@ -83,6 +83,16 @@ test("extraction admits only bounded inline images, never external or active con
   assert.equal(extractableImages(scene({ resources: [full, full, full, tooBig] })).length, 2);
 });
 
+test("server-owned failure class refines only unsupported terminal guidance", () => {
+  assert.match(classificationMessage("unsupported", "PUB_DAMAGED"), /appears damaged/);
+  assert.match(classificationMessage("unsupported", "NOT_PUB"), /not a Publisher document/);
+  assert.match(classificationMessage("unsupported", "PUB_HIGH_VALUE"), /improve compatibility/);
+  assert.match(classificationMessage("unsupported", "PUB_POSSIBLE"), /cannot verify/);
+  assert.match(classificationMessage("unsupported", "ARCHIVE_WITH_PUB"), /archive contains Publisher/);
+  assert.equal(classificationMessage("supported", "PUB_DAMAGED"), classificationMessage("supported"));
+  assert.equal(classificationMessage("unsupported", "SUSPICIOUS/POLYGLOT"), classificationMessage("unsupported"));
+});
+
 test("typed terminal states and HTTP errors provide recovery without exposing internals", () => {
   const states = ["supported", "partial", "unsupported", "damaged", "not_pub", "security_rejected"];
   assert.equal(new Set(states.map(classificationMessage)).size, states.length);
