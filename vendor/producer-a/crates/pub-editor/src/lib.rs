@@ -3345,6 +3345,7 @@ fn authored_text_box_node_v1(
             // Zero is a bounded synthetic sentinel; source_refs remain empty.
             contents_seq_num: 0,
             officeart_shape_type: None,
+            officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
             officeart_spid: None,
             image_slot: None,
             legacy_ole: None,
