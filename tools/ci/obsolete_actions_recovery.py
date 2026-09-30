@@ -17,7 +17,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 API_VERSION = "2022-11-28"
-NOT_QUEUED_MESSAGE = "Cannot cancel a workflow run that has not been queued yet"
+NOT_QUEUED_MESSAGE = "Cannot cancel a workflow run that has not been queued yet."
 MIN_STALE_AGE_SECONDS = 15 * 60
 
 
