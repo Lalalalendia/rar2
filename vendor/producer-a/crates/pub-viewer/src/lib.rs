@@ -65,7 +65,8 @@ use pub_reader::{
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_simple_table_cells,
-    rasterize_wmf_preview, read_legacy_0x22_image_wmfs, resolve_pub_source_graph,
+    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
+    resolve_pub_source_graph,
     scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
@@ -459,9 +460,21 @@ pub struct ViewerTable {
 pub struct ViewerTableCell {
     pub id: TableCellId,
     pub address: TableCellAddress,
+    #[serde(default = "default_table_span", skip_serializing_if = "table_span_is_one")]
+    pub row_span: u32,
+    #[serde(default = "default_table_span", skip_serializing_if = "table_span_is_one")]
+    pub column_span: u32,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
+}
+
+fn default_table_span() -> u32 {
+    1
+}
+
+fn table_span_is_one(value: &u32) -> bool {
+    *value == 1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2510,6 +2523,8 @@ fn viewer_tables_from_resolved(
             .map(|cell| ViewerTableCell {
                 id: cell.id,
                 address: cell.address,
+                row_span: cell.coordinates.end_row - cell.coordinates.start_row + 1,
+                column_span: cell.coordinates.end_column - cell.coordinates.start_column + 1,
                 text: cell.text,
                 bounds: cell.bounds.or_else(|| {
                     resolved_bounds.as_ref().and_then(|resolved| {
@@ -2532,6 +2547,129 @@ fn viewer_tables_from_resolved(
         });
     }
 
+    let projected_table_ids = projection
+        .tables
+        .iter()
+        .map(|table| table.origin)
+        .collect::<BTreeSet<_>>();
+    for node in graph.nodes.values() {
+        let node_id = node.header.id;
+        let Some(source) = node.payload.table.as_ref() else {
+            continue;
+        };
+        if source.simple_table.is_some() || projected_table_ids.contains(&node_id) {
+            continue;
+        }
+        let Some(owner) = projection
+            .node_geometry
+            .iter()
+            .find(|geometry| geometry.origin == node_id)
+        else {
+            continue;
+        };
+        let Some(story_id) = source.story_id else {
+            continue;
+        };
+        let Some(story) = graph.stories.get(&story_id) else {
+            continue;
+        };
+
+        let materialized = match materialize_bounded_table_cells(source, story) {
+            Ok(cells) => cells,
+            Err(error) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.table.spanning_cells_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message: format!(
+                        "Spanning table cells could not be materialized safely ({error:?})."
+                    ),
+                });
+                continue;
+            }
+        };
+
+        let resolved_bounds = source.layout_metrics.as_ref().and_then(|metrics| {
+            let cell_width = metrics.cell_width.get();
+            let row_pitch = metrics.row_pitch.get();
+            if cell_width <= 0 || row_pitch <= 0 {
+                return None;
+            }
+            let required_width = cell_width.checked_mul(i64::from(source.columns))?;
+            let required_height = row_pitch.checked_mul(i64::from(source.rows))?;
+            if required_width > owner.bounds.width.get()
+                || required_height > owner.bounds.height.get()
+            {
+                return None;
+            }
+
+            materialized
+                .iter()
+                .map(|cell| {
+                    let row_span = cell
+                        .coordinates
+                        .end_row
+                        .checked_sub(cell.coordinates.start_row)?
+                        .checked_add(1)?;
+                    let column_span = cell
+                        .coordinates
+                        .end_column
+                        .checked_sub(cell.coordinates.start_column)?
+                        .checked_add(1)?;
+                    let x_offset =
+                        cell_width.checked_mul(i64::from(cell.coordinates.start_column))?;
+                    let y_offset =
+                        row_pitch.checked_mul(i64::from(cell.coordinates.start_row))?;
+                    let width = cell_width.checked_mul(i64::from(column_span))?;
+                    let height = row_pitch.checked_mul(i64::from(row_span))?;
+                    let x = owner.bounds.x.get().checked_add(x_offset)?;
+                    let y = owner.bounds.y.get().checked_add(y_offset)?;
+                    Some((
+                        cell.id,
+                        RectEmu::new(
+                            LengthEmu::new(x),
+                            LengthEmu::new(y),
+                            LengthEmu::new(width),
+                            LengthEmu::new(height),
+                        ),
+                    ))
+                })
+                .collect::<Option<BTreeMap<_, _>>>()
+        });
+
+        if source.layout_metrics.is_some() && resolved_bounds.is_none() {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.table.cell_geometry_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message: "Exact table metrics were recovered, but spanning-cell geometry could not be resolved safely; semantic cells remain available.".to_owned(),
+            });
+        }
+
+        let cells = materialized
+            .into_iter()
+            .map(|cell| ViewerTableCell {
+                id: cell.id,
+                address: cell.address,
+                row_span: cell.coordinates.end_row - cell.coordinates.start_row + 1,
+                column_span: cell.coordinates.end_column - cell.coordinates.start_column + 1,
+                text: cell.text,
+                bounds: cell.bounds.or_else(|| {
+                    resolved_bounds
+                        .as_ref()
+                        .and_then(|resolved| resolved.get(&cell.id).copied())
+                }),
+            })
+            .collect();
+
+        tables.push(ViewerTable {
+            node_id,
+            story_id,
+            rows: source.rows,
+            columns: source.columns,
+            cells,
+        });
+    }
+
+    tables.sort_by_key(|table| table.node_id);
     (tables, diagnostics)
 }
 
