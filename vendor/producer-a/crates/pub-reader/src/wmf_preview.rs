@@ -35,6 +35,7 @@ const META_CREATEBRUSHINDIRECT: u16 = 0x02fc;
 const META_POLYGON: u16 = 0x0324;
 const META_POLYLINE: u16 = 0x0325;
 const META_INTERSECTCLIPRECT: u16 = 0x0416;
+const META_ELLIPSE: u16 = 0x0418;
 const META_RECTANGLE: u16 = 0x041b;
 const META_POLYPOLYGON: u16 = 0x0538;
 const META_ESCAPE: u16 = 0x0626;
@@ -827,6 +828,105 @@ fn draw_polyline(
     Ok(())
 }
 
+fn rasterize_bounded_ellipse(
+    params: &[u8],
+    state: &PlaybackState,
+    canvas: &mut Canvas,
+) -> Result<()> {
+    if params.len() != 8 {
+        bail!("unsupported WMF ELLIPSE payload length");
+    }
+    if !matches!(state.pen.style, PS_NULL | PS_INSIDEFRAME)
+        || !matches!(state.brush.style, BS_SOLID | BS_NULL)
+        || state.brush.pattern.is_some()
+    {
+        bail!("unsupported WMF ELLIPSE pen/brush profile");
+    }
+
+    let bottom = read_i16(params, 0).ok_or_else(|| anyhow!("WMF ELLIPSE bottom is truncated"))?;
+    let right = read_i16(params, 2).ok_or_else(|| anyhow!("WMF ELLIPSE right is truncated"))?;
+    let top = read_i16(params, 4).ok_or_else(|| anyhow!("WMF ELLIPSE top is truncated"))?;
+    let left = read_i16(params, 6).ok_or_else(|| anyhow!("WMF ELLIPSE left is truncated"))?;
+    if right <= left || bottom <= top {
+        bail!("unsupported WMF ELLIPSE logical orientation");
+    }
+
+    let (x0, y0) = map_point(state, canvas, left, top)?;
+    let (x1, y1) = map_point(state, canvas, right, bottom)?;
+    if x1 <= x0 || y1 <= y0 {
+        bail!("unsupported WMF ELLIPSE mapped orientation");
+    }
+
+    let bounds = RectPx {
+        left: x0,
+        top: y0,
+        right: x1,
+        bottom: y1,
+    };
+    let clipped = bounds
+        .intersect(state.clip)
+        .intersect(RectPx::full(canvas.width, canvas.height));
+    if clipped.left >= clipped.right || clipped.top >= clipped.bottom {
+        return Ok(());
+    }
+
+    let width = u64::try_from(clipped.right - clipped.left)
+        .map_err(|_| anyhow!("WMF ELLIPSE work width is out of bounds"))?;
+    let height = u64::try_from(clipped.bottom - clipped.top)
+        .map_err(|_| anyhow!("WMF ELLIPSE work height is out of bounds"))?;
+    canvas.charge_work(
+        width
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("WMF ELLIPSE work count overflow"))?,
+    )?;
+
+    let center_x = (f64::from(x0) + f64::from(x1)) * 0.5;
+    let center_y = (f64::from(y0) + f64::from(y1)) * 0.5;
+    let radius_x = f64::from(x1 - x0) * 0.5;
+    let radius_y = f64::from(y1 - y0) * 0.5;
+    if radius_x <= 0.0 || radius_y <= 0.0 {
+        bail!("unsupported WMF ELLIPSE mapped extent");
+    }
+
+    let pen_width = if state.pen.style == PS_INSIDEFRAME {
+        f64::from(mapped_pen_width(state, canvas))
+    } else {
+        0.0
+    };
+    let inner_radius_x = (radius_x - pen_width).max(0.0);
+    let inner_radius_y = (radius_y - pen_width).max(0.0);
+
+    for y in clipped.top..clipped.bottom {
+        let dy = (f64::from(y) + 0.5 - center_y) / radius_y;
+        for x in clipped.left..clipped.right {
+            let dx = (f64::from(x) + 0.5 - center_x) / radius_x;
+            if dx * dx + dy * dy > 1.0 {
+                continue;
+            }
+
+            let stroke = if state.pen.style == PS_INSIDEFRAME {
+                if inner_radius_x <= 0.0 || inner_radius_y <= 0.0 {
+                    true
+                } else {
+                    let inner_dx = (f64::from(x) + 0.5 - center_x) / inner_radius_x;
+                    let inner_dy = (f64::from(y) + 0.5 - center_y) / inner_radius_y;
+                    inner_dx * inner_dx + inner_dy * inner_dy >= 1.0
+                }
+            } else {
+                false
+            };
+
+            if stroke {
+                canvas.set(state.clip, x, y, state.pen.color);
+            } else if state.brush.style != BS_NULL {
+                canvas.set(state.clip, x, y, state.brush.color_at(x, y));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32)>]) -> Result<()> {
     let Some(min_y) = rings
         .iter()
@@ -1495,6 +1595,7 @@ pub fn rasterize_wmf_preview(
                     draw_polyline(&mut canvas, &state, ring, true)?;
                 }
             }
+            META_ELLIPSE => rasterize_bounded_ellipse(params, &state, &mut canvas)?,
             META_RECTANGLE => {
                 let bottom = read_i16(params, 0)
                     .ok_or_else(|| anyhow!("WMF RECTANGLE bottom is truncated"))?;
@@ -1664,6 +1765,49 @@ mod tests {
         bytes
     }
 
+    fn synthetic_ellipse() -> Vec<u8> {
+        let mut records = Vec::<u8>::new();
+        let mut window = Vec::new();
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        records.extend(record(META_SETWINDOWEXT, &window));
+
+        let mut brush = Vec::new();
+        brush.extend_from_slice(&BS_SOLID.to_le_bytes());
+        brush.extend_from_slice(&0x0000_00ff_u32.to_le_bytes());
+        brush.extend_from_slice(&0_u16.to_le_bytes());
+        records.extend(record(META_CREATEBRUSHINDIRECT, &brush));
+
+        let mut pen = Vec::new();
+        pen.extend_from_slice(&PS_NULL.to_le_bytes());
+        pen.extend_from_slice(&0_i16.to_le_bytes());
+        pen.extend_from_slice(&0_i16.to_le_bytes());
+        pen.extend_from_slice(&0_u32.to_le_bytes());
+        records.extend(record(META_CREATEPENINDIRECT, &pen));
+
+        records.extend(record(META_SELECTOBJECT, &0_u16.to_le_bytes()));
+        records.extend(record(META_SELECTOBJECT, &1_u16.to_le_bytes()));
+
+        let mut ellipse = Vec::new();
+        for value in [80_i16, 80, 20, 20] {
+            ellipse.extend_from_slice(&value.to_le_bytes());
+        }
+        records.extend(record(META_ELLIPSE, &ellipse));
+        records.extend(record(META_EOF, &[]));
+
+        let total_len = 18 + records.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&20_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
     fn synthetic_pattern_polygon() -> Vec<u8> {
         let mut records = Vec::<u8>::new();
         let mut window = Vec::new();
@@ -1789,6 +1933,32 @@ mod tests {
         bytes.extend_from_slice(&0_u16.to_le_bytes());
         bytes.extend(records);
         bytes
+    }
+
+    #[test]
+    fn rasterizes_bounded_ellipse_with_existing_brush_state() {
+        let image = rasterize_wmf_preview(&synthetic_ellipse(), 100, 100).expect("ellipse");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        let corner = ((20 * 100 + 20) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+        assert_eq!(&image.rgba[corner..corner + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_reversed_ellipse_outside_proven_profile() {
+        let mut bytes = synthetic_ellipse();
+        let mut offset = 18usize;
+        while offset + 6 <= bytes.len() {
+            let words = read_u32(&bytes, offset).expect("record size");
+            let function = read_u16(&bytes, offset + 4).expect("record function");
+            if function == META_ELLIPSE {
+                bytes[offset + 8..offset + 10].copy_from_slice(&10_i16.to_le_bytes());
+                bytes[offset + 12..offset + 14].copy_from_slice(&90_i16.to_le_bytes());
+                break;
+            }
+            offset += usize::try_from(words * 2).expect("record bytes");
+        }
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
     }
 
     #[test]
