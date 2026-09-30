@@ -198,7 +198,10 @@ fn main() -> Result<()> {
             counts.client_textbox_shapes += 1;
         }
         if let Some(shape_type) = shape_type {
-            bump(&mut histograms.shape_type_hex, format!("0x{shape_type:04X}"));
+            bump(
+                &mut histograms.shape_type_hex,
+                format!("0x{shape_type:04X}"),
+            );
             if has_client_textbox {
                 bump(
                     &mut histograms.shape_type_with_client_textbox,
