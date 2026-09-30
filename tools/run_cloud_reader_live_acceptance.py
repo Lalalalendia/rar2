@@ -555,6 +555,8 @@ def curl_request(
         command.extend(["--dump-header", str(dump_headers)])
     for header in headers or []:
         command.extend(["--header", header])
+    if method in {"POST", "PUT", "PATCH", "DELETE"}:
+        command.extend(["--header", "x-csrf-token: cloud-reader-live-acceptance"])
     if body_json is not None:
         command.extend(
             [
