@@ -13,11 +13,13 @@ PAIRS = [
         "id": "virginia-devinettes-2021",
         "pub": "virginia-devinettes.pub",
         "pdf": "virginia-devinettes-reference.pdf",
+        "reference_reader_ordinals": list(range(1, 7)),
     },
     {
         "id": "virginia-remplacante-zone-a-2015",
         "pub": "virginia-remplacante-modifiable.pub",
         "pdf": "virginia-remplacante-zone-a-reference.pdf",
+        "reference_reader_ordinals": list(range(1, 26)),
     },
 ]
 
@@ -130,6 +132,104 @@ def project_current_scenario(receipt: dict) -> dict:
     }
 
 
+def page_field_profile(page: dict) -> list[dict]:
+    fields = page.get("fields", [])
+    if not isinstance(fields, list) or not fields:
+        raise SystemExit(
+            f"PAGE {page.get('contents_seq_num')} has no source-safe property profile"
+        )
+    return sorted(
+        [
+            {
+                "id": int(field["id"]),
+                "block_type": int(field["block_type"]),
+                **(
+                    {"u16_value": int(field["u16_value"])}
+                    if "u16_value" in field
+                    else {}
+                ),
+                **(
+                    {"u32_value": int(field["u32_value"])}
+                    if "u32_value" in field
+                    else {}
+                ),
+                **(
+                    {"declared_length": int(field["declared_length"])}
+                    if "declared_length" in field
+                    else {}
+                ),
+            }
+            for field in fields
+        ],
+        key=lambda field: (field["id"], field["block_type"]),
+    )
+
+
+def reference_aligned_field_discriminators(
+    pages: list[dict], reference_ordinals: list[int]
+) -> dict:
+    by_ordinal = {int(page["document_ordinal"]): page for page in pages}
+    selected = [by_ordinal[ordinal] for ordinal in reference_ordinals]
+    reference_set = set(reference_ordinals)
+    extras = [
+        page
+        for ordinal, page in sorted(by_ordinal.items())
+        if ordinal not in reference_set
+    ]
+
+    def presence(page: dict) -> set[tuple[int, int]]:
+        return {
+            (int(field["id"]), int(field["block_type"]))
+            for field in page_field_profile(page)
+        }
+
+    common_presence = set.intersection(*(presence(page) for page in selected))
+    extra_presence = set.union(*(presence(page) for page in extras)) if extras else set()
+
+    def scalar_features(page: dict) -> set[tuple[int, int, str, int]]:
+        features: set[tuple[int, int, str, int]] = set()
+        for field in page_field_profile(page):
+            for key in ("u16_value", "u32_value", "declared_length"):
+                if key in field:
+                    features.add(
+                        (
+                            int(field["id"]),
+                            int(field["block_type"]),
+                            key,
+                            int(field[key]),
+                        )
+                    )
+        return features
+
+    common_scalars = set.intersection(*(scalar_features(page) for page in selected))
+    extra_scalars = (
+        set.union(*(scalar_features(page) for page in extras)) if extras else set()
+    )
+
+    return {
+        "reference_reader_ordinals_zero_based": reference_ordinals,
+        "reference_seq_nums": [int(page["contents_seq_num"]) for page in selected],
+        "extra_seq_nums": [int(page["contents_seq_num"]) for page in extras],
+        "presence_features_common_to_reference_absent_from_all_extras": [
+            {"id": field_id, "block_type": block_type}
+            for field_id, block_type in sorted(common_presence - extra_presence)
+        ],
+        "scalar_features_common_to_reference_absent_from_all_extras": [
+            {
+                "id": field_id,
+                "block_type": block_type,
+                "value_kind": value_kind,
+                "value": value,
+            }
+            for field_id, block_type, value_kind, value in sorted(
+                common_scalars - extra_scalars
+            )
+        ],
+        "promoted_to_authority": False,
+        "reference_alignment_is_validation_only": True,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pair-dir", type=Path, required=True)
@@ -154,6 +254,9 @@ def main() -> int:
         projected_count = scenario.get("projected_page_count")
         pages = sorted(
             observation["pages"], key=lambda page: page["document_ordinal"]
+        )
+        reference_field_discriminators = reference_aligned_field_discriminators(
+            pages, spec["reference_reader_ordinals"]
         )
         positive_shape_nonzero_oid = [
             page["contents_seq_num"]
@@ -215,6 +318,7 @@ def main() -> int:
                 "shape_child_count": page.get("shape_child_count", 0),
                 "group_child_count": page.get("group_child_count", 0),
                 "child_raw_type_counts": page.get("child_raw_type_counts", {}),
+                "fields": page_field_profile(page),
             }
             if page["contents_seq_num"] in discovery_selected:
                 customer_candidate_profiles.append(profile)
@@ -278,6 +382,9 @@ def main() -> int:
                     "customer_candidate_adjacent_0x59_count": sum(
                         profile["adjacent_to_page_list_special_0x59"]
                         for profile in customer_candidate_profiles
+                    ),
+                    "reference_aligned_field_discriminators": (
+                        reference_field_discriminators
                     ),
                     "promoted_to_authority": False,
                 },
