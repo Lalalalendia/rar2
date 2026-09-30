@@ -92,10 +92,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/cloud-reader-reference-pairs
-          cargo run -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
-          cargo run -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
           if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
-            cargo run -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
+            cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
           fi
 
       - name: Build exact reference fixture manifest
