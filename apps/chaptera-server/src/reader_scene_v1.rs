@@ -4,7 +4,7 @@ use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, RenderTextLayoutDispositionV1,
     build_page_render_plan_with_text_layout_v1,
 };
-use pub_viewer::ViewerGeometryDocument;
+use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -190,6 +190,7 @@ pub fn from_viewer_geometry(
     source_hash: String,
     revision_id: String,
     geometry: &ViewerGeometryDocument,
+    source_page_paint_orders: &[ViewerPagePaintOrderV1],
 ) -> Result<ReaderSceneV1, String> {
     let viewer_source_hash =
         serialized_string(&geometry.document.source.source_hash, "Viewer source hash")?;
@@ -505,6 +506,9 @@ pub fn from_viewer_geometry(
         });
     }
 
+    let stacking_known =
+        apply_source_page_paint_order(&mut nodes, &pages, source_page_paint_orders)?;
+
     let stories = geometry
         .document
         .stories
@@ -553,7 +557,7 @@ pub fn from_viewer_geometry(
     }
 
     let mut reasons = Vec::new();
-    if !nodes.is_empty() {
+    if !nodes.is_empty() && !stacking_known {
         reasons.push("stacking_order_unavailable");
     }
     if kind_by_node.values().any(|kind| *kind == "unknown") {
@@ -581,7 +585,11 @@ pub fn from_viewer_geometry(
         source_hash,
         revision_id,
         scene_authority: "server_viewer_projection",
-        stacking_fidelity: "unknown",
+        stacking_fidelity: if stacking_known {
+            "source_back_to_front"
+        } else {
+            "unknown"
+        },
         fidelity: ReaderFidelityV1 {
             state: if reasons.is_empty() {
                 "supported"
@@ -597,6 +605,75 @@ pub fn from_viewer_geometry(
         fonts,
         diagnostics,
     })
+}
+
+fn apply_source_page_paint_order(
+    nodes: &mut Vec<ReaderNodeV1>,
+    pages: &[ReaderPageV1],
+    source_orders: &[ViewerPagePaintOrderV1],
+) -> Result<bool, String> {
+    if nodes.is_empty() {
+        return Ok(false);
+    }
+
+    let page_order = pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| (page.page_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut nodes_by_page = HashMap::<&str, HashSet<&str>>::new();
+    for node in nodes.iter() {
+        nodes_by_page
+            .entry(node.page_id.as_str())
+            .or_default()
+            .insert(node.node_id.as_str());
+    }
+
+    let mut rank = HashMap::<String, (usize, usize)>::new();
+    let mut seen_pages = HashSet::new();
+    for order in source_orders {
+        let page_id = serialized_string(&order.page_id, "source paint-order page id")?;
+        let Some(page_rank) = page_order.get(page_id.as_str()).copied() else {
+            continue;
+        };
+        if !seen_pages.insert(page_id.clone()) {
+            return Ok(false);
+        }
+
+        let Some(expected_nodes) = nodes_by_page.get(page_id.as_str()) else {
+            continue;
+        };
+        let mut actual_nodes = HashSet::new();
+        for (stack_rank, node_id) in order.node_ids.iter().enumerate() {
+            let node_id = serialized_string(node_id, "source paint-order node id")?;
+            if !expected_nodes.contains(node_id.as_str())
+                || !actual_nodes.insert(node_id.clone())
+                || rank
+                    .insert(node_id, (page_rank, stack_rank))
+                    .is_some()
+            {
+                return Ok(false);
+            }
+        }
+        if actual_nodes.len() != expected_nodes.len() {
+            return Ok(false);
+        }
+    }
+
+    if nodes_by_page
+        .keys()
+        .any(|page_id| !seen_pages.contains(*page_id))
+        || rank.len() != nodes.len()
+    {
+        return Ok(false);
+    }
+
+    nodes.sort_by_key(|node| {
+        rank.get(&node.node_id)
+            .copied()
+            .expect("complete source paint-order rank validated above")
+    });
+    Ok(true)
 }
 
 fn bind_kind(
