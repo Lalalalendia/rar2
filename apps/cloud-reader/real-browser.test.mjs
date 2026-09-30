@@ -193,6 +193,13 @@ try {
       }));
     if (referenceRasterDpi > 0) {
       const emuPerPixel = 914400 / referenceRasterDpi;
+      const referenceZoom = String(referenceRasterDpi / 96);
+      assert.equal(
+        await page.locator(`#zoom-select option[value="${referenceZoom}"]`).count(),
+        1,
+        "reference raster DPI must map to an exact supported browser zoom"
+      );
+      await page.locator("#zoom-select").selectOption(referenceZoom);
       await page.locator("#pages svg.page").evaluateAll((svgs, argument) => {
         const byId = new Map(argument.pages.map((entry) => [entry.page_id, entry]));
         for (const svg of svgs) {
@@ -202,6 +209,22 @@ try {
           svg.setAttribute("height", String(Math.round(geometry.height_emu / argument.emuPerPixel)));
         }
       }, { pages: orderedPageGeometry, emuPerPixel });
+      const capturedPageSizes = await page.locator("#pages svg.page").evaluateAll((svgs) =>
+        svgs.map((svg) => {
+          const bounds = svg.getBoundingClientRect();
+          return { width: bounds.width, height: bounds.height };
+        })
+      );
+      for (let i = 0; i < orderedPageGeometry.length; i++) {
+        assert.ok(
+          Math.abs(capturedPageSizes[i].width - orderedPageGeometry[i].width_emu / emuPerPixel) < 1,
+          "reference raster page width must stay at requested DPI"
+        );
+        assert.ok(
+          Math.abs(capturedPageSizes[i].height - orderedPageGeometry[i].height_emu / emuPerPixel) < 1,
+          "reference raster page height must stay at requested DPI"
+        );
+      }
     }
     const screenshots = [];
     for (let i = 0; i < fixturePages; i++) {
