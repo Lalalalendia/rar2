@@ -400,6 +400,10 @@ struct SiblingScanDetails {
     fdpp_first_stored_count: Option<u16>,
     descriptor_topology: BTreeMap<String, Vec<u32>>,
     descriptor_payload_profiles: Vec<DescriptorPayloadProfile>,
+    ordinary_story_catalog_admitted: bool,
+    ordinary_story_end_count: usize,
+    ordinary_story_ends_all_in_fdpp: bool,
+    ordinary_story_end_set_equals_fdpp: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2545,6 +2549,31 @@ fn diagnose_sibling_scan(bytes: &[u8]) -> SiblingScanRow {
         let expected_syid_len = 8u64 + 4u64 * u64::from(grounded_story_count);
         let expected_strs_len = 22u64 + 8u64 * u64::from(grounded_story_count);
 
+        let (_, _, fdpp_utf16_units) = if let Some(first) = fdpp.first() {
+            fdpp_boundary_sets(&quill, first, text)?
+        } else {
+            (BTreeSet::new(), BTreeSet::new(), BTreeSet::new())
+        };
+        let ordinary_story_catalog =
+            pub_quill::parse_confirmed_story_catalog(StreamPath(QUILL_STREAM.into()), &quill).ok();
+        let mut ordinary_story_ends = BTreeSet::new();
+        if let Some(catalog) = &ordinary_story_catalog {
+            let mut cumulative = 0u64;
+            for story in &catalog.stories {
+                cumulative = cumulative
+                    .checked_add(u64::from(story.utf16_code_units))
+                    .context("ordinary STRS cumulative Story length overflow")?;
+                ordinary_story_ends.insert(cumulative);
+            }
+        }
+        let ordinary_story_end_count = ordinary_story_ends.len();
+        let ordinary_story_ends_all_in_fdpp = ordinary_story_catalog.is_some()
+            && ordinary_story_ends
+                .iter()
+                .all(|value| fdpp_utf16_units.contains(value));
+        let ordinary_story_end_set_equals_fdpp = ordinary_story_catalog.is_some()
+            && ordinary_story_ends == fdpp_utf16_units;
+
         Ok(SiblingScanDetails {
             contents_serialization_revision: revision,
             grounded_story_count,
@@ -2563,6 +2592,10 @@ fn diagnose_sibling_scan(bytes: &[u8]) -> SiblingScanRow {
             fdpp_first_stored_count,
             descriptor_topology: descriptor_topology(&descriptors),
             descriptor_payload_profiles,
+            ordinary_story_catalog_admitted: ordinary_story_catalog.is_some(),
+            ordinary_story_end_count,
+            ordinary_story_ends_all_in_fdpp,
+            ordinary_story_end_set_equals_fdpp,
         })
     })()
     .ok();
