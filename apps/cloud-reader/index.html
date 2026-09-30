@@ -26,6 +26,11 @@
 <p id="privacy" class="notice">The filename is not sent. Viewing authorizes temporary service processing only.
 The uploaded file expires automatically. Viewing and research contribution are separate actions;
 retaining a file for research requires separate explicit consent.</p>
+<div id="contribution-panel" class="contribution" hidden>
+<strong>Help Chaptera support this file</strong>
+<p class="small">This file looks like a Publisher document that Chaptera cannot fully open yet. You can separately choose to contribute the exact file for compatibility research.</p>
+<button id="open-contribution" class="secondary" type="button">Send this file to help Chaptera support it</button>
+</div>
 <details class="saved">
 <summary>Open a document already saved to your account</summary>
 <div class="toolbar"><label for="document-id">Saved document ID</label><input id="document-id" autocomplete="off" placeholder="document-…"><button id="open-document" class="secondary">Open saved document</button></div>
@@ -55,6 +60,25 @@ retaining a file for research requires separate explicit consent.</p>
 <details id="limitations-panel"><summary id="diagnostics">Display limitations</summary><p>Partial means some content is approximate or unavailable. Compare with the original before relying on page appearance.</p><ul id="limitations"></ul></details>
 </div>
 </section>
+<dialog id="contribution-dialog" aria-labelledby="contribution-title">
+<div class="dialog-body">
+<h2 id="contribution-title">Contribute this exact file?</h2>
+<p>File on this device: <strong id="contribution-filename"></strong></p>
+<p class="small">The filename above stays in this browser and is not included in the consent request.</p>
+<ul class="consent-terms">
+<li><strong>Purpose:</strong> compatibility research for Publisher files Chaptera cannot fully open.</li>
+<li><strong>File bytes:</strong> the exact file will be retained separately from temporary viewing only after you press <em>Send file</em>.</li>
+<li><strong>Access:</strong> retained bytes are private research material, not a public document or account file.</li>
+<li><strong>Retention:</strong> the server records the versioned <code>chaptera-intake-retention-v1</code> policy and an independent submission receipt.</li>
+<li><strong>Duplicates and deletion:</strong> duplicate bytes may share physical storage, but consent/deletion records stay separate per submission.</li>
+</ul>
+<p id="contribution-status" class="small" role="status"></p>
+<div class="actions dialog-actions">
+<button id="send-contribution" type="button">Send file</button>
+<button id="cancel-contribution" type="button" class="secondary">Cancel</button>
+</div>
+</div>
+</dialog>
 </main>
 <footer>Chaptera Cloud Reader · Your document remains read-only.</footer>
 <script type="module" src="./reader-app.mjs"></script>

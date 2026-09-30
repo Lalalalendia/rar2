@@ -1,6 +1,6 @@
 import { renderReaderScene } from "./render-v1.mjs";
 import {
-  EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath,
+  EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath, contributionEligible,
   extractableImages, classificationMessage, errorMessage
 } from "./reader-model.mjs";
 
@@ -21,6 +21,58 @@ let pages = [];
 let generation = 0;
 let pending = null;
 let pageIndex = 0;
+let contributionContext = null;
+let contributionExpiry = null;
+
+function clearContribution() {
+  clearTimeout(contributionExpiry);
+  contributionExpiry = null;
+  contributionContext?.controller?.abort();
+  if (contributionContext) contributionContext.accessToken = null;
+  contributionContext = null;
+  $("#contribution-panel").hidden = true;
+  $("#contribution-filename").textContent = "";
+  $("#contribution-status").textContent = "";
+  $("#send-contribution").disabled = false;
+  $("#cancel-contribution").disabled = false;
+  if ($("#contribution-dialog").open) $("#contribution-dialog").close();
+}
+
+function offerContribution(opened, file, sessionId, accessToken) {
+  if (opened.classification !== "unsupported"
+      || !contributionEligible(opened.failure_classification)
+      || !Number.isSafeInteger(opened.expires_at_ms)
+      || opened.expires_at_ms <= Date.now()) return;
+  contributionContext = {
+    sessionId,
+    accessToken,
+    generation,
+    expiresAt: opened.expires_at_ms,
+    controller: null,
+    retentionRequested: false,
+    filename: String(file["name"] ?? "")
+  };
+  const context = contributionContext;
+  contributionExpiry = setTimeout(() => {
+    if (contributionContext !== context) return;
+    clearContribution();
+    message("The viewing session expired. Open the file again to contribute.", true);
+  }, Math.min(2_147_483_647, context.expiresAt - Date.now()));
+  $("#contribution-panel").hidden = false;
+}
+
+function currentContribution(context) {
+  return contributionContext === context && context.generation === generation
+    && !context.controller?.signal.aborted && context.expiresAt > Date.now();
+}
+
+function cancelContribution() {
+  const retentionRequested = contributionContext?.retentionRequested;
+  clearContribution();
+  message(retentionRequested
+    ? "Contribution request cancelled. The file may already have been received."
+    : "Contribution cancelled. This file will continue to expire automatically.");
+}
 
 const csrfBytes = crypto.getRandomValues(new Uint8Array(16));
 const csrf = [...csrfBytes].map((value) => value.toString(16).padStart(2, "0")).join("");
@@ -38,6 +90,7 @@ function busy(value) {
 }
 
 function clearReader() {
+  clearContribution();
   scene = null;
   pages = [];
   pagesHost.replaceChildren();
@@ -260,12 +313,99 @@ async function openFile(file) {
         classificationMessage(opened.classification, opened.failure_classification?.class ?? null),
         !["supported", "partial"].includes(opened.classification)
       );
+      offerContribution(opened, file, issued.session_id, accessToken);
     }
   } catch (error) {
     if (isCurrent(operation)) message(errorMessage(error), true);
   } finally {
     accessToken = null;
     if (operation.generation === generation) { pending = null; busy(false); }
+  }
+}
+
+async function contributeCurrentFile() {
+  const context = contributionContext;
+  if (!context || !currentContribution(context) || context.controller) return;
+  context.controller = new AbortController();
+  const signal = context.controller.signal;
+  const send = $("#send-contribution");
+  send.disabled = true;
+  $("#contribution-status").textContent = "Preparing a private one-time contribution…";
+  let contributionToken = null;
+  try {
+    const base = "/v1/reader/guest-sessions/" + context.sessionId + "/";
+    const capabilityPath = guestRequestPath(
+      base + "contribution-capability",
+      "contribution-capability",
+      location.origin
+    );
+    const contributePath = guestRequestPath(base + "contribute", "contribute", location.origin);
+    const sessionHeaders = {
+      "x-csrf-token": csrf,
+      "x-chaptera-reader-session": context.accessToken
+    };
+    const capability = await jsonResponse(await fetch(capabilityPath, {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      signal,
+      headers: { ...sessionHeaders, "content-type": "application/json" },
+      body: JSON.stringify({
+        protocol_version: "chaptera.intake-capability-request.v1",
+        consent_version: "chaptera-intake-consent-v1"
+      })
+    }));
+    if (!currentContribution(context)) return;
+    if (capability.protocol_version !== "chaptera.reader-contribution-capability.v1"
+        || typeof capability.submission_id !== "string"
+        || !/^[A-Za-z0-9_:-]{16,160}$/.test(capability.submission_id)
+        || typeof capability.capability_token !== "string"
+        || !/^[0-9a-f]{64}$/.test(capability.capability_token)
+        || !Number.isSafeInteger(capability.expires_at_ms)
+        || capability.expires_at_ms <= Date.now()
+        || capability.expires_at_ms > context.expiresAt
+        || capability.retention_policy !== "chaptera-intake-retention-v1") {
+      throw new Error("guest_protocol_mismatch");
+    }
+    contributionToken = capability.capability_token;
+    $("#contribution-status").textContent = "Sending the exact file for compatibility research…";
+    context.retentionRequested = true;
+    const receipt = await jsonResponse(await fetch(contributePath, {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      signal,
+      headers: {
+        ...sessionHeaders,
+        "x-chaptera-reader-contribution": contributionToken
+      }
+    }));
+    contributionToken = null;
+    if (!currentContribution(context)) return;
+    if (receipt.protocol_version !== "chaptera.intake-receipt.v1"
+        || receipt.submission_id !== capability.submission_id
+        || typeof receipt.server_sha256 !== "string"
+        || !/^[0-9a-f]{64}$/.test(receipt.server_sha256)
+        || !["new_exact_bytes", "duplicate_exact_bytes"].includes(receipt.exact_byte_disposition)
+        || receipt.cluster_disposition !== "deferred"
+        || receipt.retention_policy !== "chaptera-intake-retention-v1") {
+      throw new Error("guest_protocol_mismatch");
+    }
+    clearContribution();
+    message("Contribution received for compatibility research. Your original file is unchanged.");
+  } catch (error) {
+    contributionToken = null;
+    if (!currentContribution(context)) return;
+    $("#contribution-status").textContent =
+      context.retentionRequested
+        ? "We could not confirm receipt. The file may already have been received; retry while this session is active."
+        : "The contribution could not start. Retry while this viewing session is active.";
+    send.disabled = false;
+  } finally {
+    contributionToken = null;
+    if (contributionContext === context) context.controller = null;
   }
 }
 
@@ -285,6 +425,19 @@ async function openDocument() {
     if (operation.generation === generation) { pending = null; busy(false); }
   }
 }
+
+$("#open-contribution").addEventListener("click", () => {
+  if (!contributionContext || !currentContribution(contributionContext)) {
+    clearContribution();
+    return;
+  }
+  $("#contribution-filename").textContent = contributionContext.filename;
+  $("#contribution-status").textContent = "";
+  $("#contribution-dialog").showModal();
+});
+$("#cancel-contribution").addEventListener("click", cancelContribution);
+$("#send-contribution").addEventListener("click", contributeCurrentFile);
+$("#contribution-dialog").addEventListener("cancel", cancelContribution);
 
 $("#cancel-open").addEventListener("click", () => {
   pending?.controller.abort();

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { orderedPages, searchStories, guestRequestPath, extractableImages, classificationMessage, errorMessage } from "./reader-model.mjs";
+import { orderedPages, searchStories, guestRequestPath, contributionEligible, extractableImages, classificationMessage, errorMessage } from "./reader-model.mjs";
 
 const scene = (extra = {}) => ({
   protocol_version: "chaptera.reader-scene.v1",
@@ -60,6 +60,22 @@ test("search bounds results and distinguishes a full list from truncation", () =
   const result = searchStories(scene({ stories: [{ story_id: "s", text: "a ".repeat(201) }] }), "a");
   assert.equal(result.matches.length, 200);
   assert.equal(result.truncated, true);
+});
+
+test("research contribution is fail-closed to server-owned eligible classes", () => {
+  const base = { protocol_version: "chaptera.failure-classifier.v1", confidence: "high", reason_flags: ["bounded"] };
+  assert.equal(contributionEligible({ ...base, class: "PUB_HIGH_VALUE" }), true);
+  assert.equal(contributionEligible({ ...base, class: "PUB_DAMAGED" }), true);
+  for (const value of [
+    { ...base, class: "PUB_POSSIBLE" },
+    { ...base, class: "ARCHIVE_WITH_PUB" },
+    { ...base, class: "NOT_PUB" },
+    { ...base, class: "SUSPICIOUS/POLYGLOT" },
+    { ...base, protocol_version: "other", class: "PUB_DAMAGED" },
+    null
+  ]) {
+    assert.equal(contributionEligible(value), false);
+  }
 });
 
 test("guest paths admit the actual colon-bearing session ID only on the same origin", () => {

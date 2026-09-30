@@ -17,6 +17,11 @@ required = [
     "research contribution are separate actions",
     "temporary service processing only",
     "read-only",
+    "Send this file to help Chaptera support it",
+    "chaptera-intake-consent-v1",
+    "chaptera-intake-retention-v1",
+    "x-chaptera-reader-contribution",
+    "contributionEligible",
     'renderReaderScene',
     './render-v1.mjs',
 ]
