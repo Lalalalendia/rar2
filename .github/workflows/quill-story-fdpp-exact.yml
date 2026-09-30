@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout exact three hash-addressed witnesses only
+      - name: Checkout exact seven hash-addressed witnesses only
         uses: actions/checkout@v4
         with:
           repository: Lalalalendia/lalamu
@@ -33,16 +33,20 @@ jobs:
           path: _witness/lalamu
           sparse-checkout-cone-mode: false
           sparse-checkout: |
+            pub-corpus/corpus/native/unclassified/211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157.pub
+            pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub
+            pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub
             pub-corpus/corpus/native/unclassified/9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966.pub
             pub-corpus/corpus/native/unclassified/b171668d889a4e30cc8c7838a88f406017d67c722bf059965b1dfcfb9876d055.pub
             pub-corpus/corpus/native/unclassified/bc28f3ced90b0c9452bda1bd5bdaf2d841feb1d44bd7e84749a13ff2072e20f2.pub
+            pub-corpus/corpus/native/unclassified/ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff.pub
 
       - name: Verify exact witness identities
         shell: bash
         run: |
           set -euo pipefail
           root="_witness/lalamu/pub-corpus/corpus/native/unclassified"
-          test "$(find "$root" -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 3
+          test "$(find "$root" -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 7
           for path in "$root"/*.pub; do
             sha="$(basename "$path" .pub)"
             echo "${sha}  ${path}" | sha256sum -c -
@@ -66,7 +70,7 @@ jobs:
           set -euo pipefail
           cargo build             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin fdpp_exact_story_receipt
 
-      - name: Run exact three Reader acceptance
+      - name: Run exact-gate positive and superset-negative Reader acceptance
         shell: bash
         run: |
           set -euo pipefail
@@ -75,3 +79,7 @@ jobs:
           "$bin" "$root/9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966.pub" 6
           "$bin" "$root/b171668d889a4e30cc8c7838a88f406017d67c722bf059965b1dfcfb9876d055.pub" 10
           "$bin" "$root/bc28f3ced90b0c9452bda1bd5bdaf2d841feb1d44bd7e84749a13ff2072e20f2.pub" 4
+          "$bin" "$root/211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157.pub" --reject
+          "$bin" "$root/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub" --reject
+          "$bin" "$root/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub" --reject
+          "$bin" "$root/ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff.pub" --reject
