@@ -6,6 +6,7 @@ on:
       - "Cargo.toml"
       - "crates/pub-model/**"
       - "crates/pub-presentation-profile/**"
+      - "vendor/producer-a/crates/pub-reader/src/bin/carlton_fill_opacity_census.rs"
       - ".github/workflows/carlton-exact-pub-runtime-inputs.yml"
   workflow_dispatch:
 
@@ -388,6 +389,56 @@ jobs:
           test "$(sha256sum out/carlton/exact/March-2026.pub | awk '{print $1}')" = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
           test "$(stat -c %s out/carlton/exact/December-2025.pub)" = "9988608"
           test "$(sha256sum out/carlton/exact/December-2025.pub | awk '{print $1}')" = "41786e9ee564dfc3d10864a49c9e58af5e1689d31479ef0c478ffb79da16f79e"
+
+      - name: Census raw OfficeArt fill/line opacity on exact Carlton controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/carlton/opacity-census
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml \
+            --bin carlton_fill_opacity_census -- \
+            out/carlton/exact/March-2026.pub \
+            out/carlton/opacity-census/march.json
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml \
+            --bin carlton_fill_opacity_census -- \
+            out/carlton/exact/December-2025.pub \
+            out/carlton/opacity-census/december.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("out/carlton/opacity-census")
+          expected = {
+              "march": "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3",
+              "december": "41786e9ee564dfc3d10864a49c9e58af5e1689d31479ef0c478ffb79da16f79e",
+          }
+          for label, digest in expected.items():
+              receipt = json.loads((root / f"{label}.json").read_text())
+              assert receipt["schema"] == "chaptera.carlton-fill-opacity-census.v1"
+              assert receipt["source_sha256"] == digest
+              counts = receipt["counts"]
+              assert counts["shape_containers"] > 0
+              assert counts["fill_color_observations"] > 0
+              print(
+                  f"{label}: shapes={counts['shape_containers']} "
+                  f"accent1={counts['accent1_shapes']} "
+                  f"accent1+fillOpacity={counts['accent1_with_fill_opacity_shapes']} "
+                  f"fillOpacityShapes={counts['fill_opacity_shapes']} "
+                  f"lineOpacityShapes={counts['line_opacity_shapes']} "
+                  f"dggFillOpacity={counts['dgg_fill_opacity_observations']}"
+              )
+          PY
+
+      - name: Upload source-safe Carlton opacity census
+        uses: actions/upload-artifact@v4
+        with:
+          name: carlton-fill-opacity-census
+          path: out/carlton/opacity-census
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Extract root Contents and Quill Contents separately
         shell: bash
