@@ -995,44 +995,99 @@ mod tests {
             *areas.entry(name).or_default() += area * 1000 / page_area;
         };
 
-        for node in scene.nodes.iter().filter(|node| node.page_id == page.page_id) {
+        for node in scene
+            .nodes
+            .iter()
+            .filter(|node| node.page_id == page.page_id)
+        {
             *kind_counts.entry(node.kind).or_default() += 1;
             let area = i128::from(node.bounds.width) * i128::from(node.bounds.height);
             if area <= 0 {
                 continue;
             }
-            let has_fill = node.paint.as_ref().is_some_and(|paint| paint.fill_rgb.is_some());
-            let has_line = node.paint.as_ref().is_some_and(|paint| paint.line.is_some());
+            let has_fill = node
+                .paint
+                .as_ref()
+                .is_some_and(|paint| paint.fill_rgb.is_some());
+            let has_line = node
+                .paint
+                .as_ref()
+                .is_some_and(|paint| paint.line.is_some());
             let has_resource = node.resource_id.is_some();
             let has_table = node.table.is_some();
             let has_text = node.text.as_ref().is_some_and(|text| !text.is_empty());
 
             if has_fill {
-                add_feature("fill", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "fill",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_line {
-                add_feature("line", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "line",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_resource {
-                add_feature("resource", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "resource",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_table {
-                add_feature("table", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "table",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_text {
-                add_feature("text", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "text",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_fill && has_table {
-                add_feature("fill+table", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "fill+table",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_fill && has_resource {
-                add_feature("fill+resource", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "fill+resource",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_fill && has_text {
-                add_feature("fill+text", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "fill+text",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
             if has_resource && has_text {
-                add_feature("resource+text", area, &mut feature_counts, &mut feature_area_permille);
+                add_feature(
+                    "resource+text",
+                    area,
+                    &mut feature_counts,
+                    &mut feature_area_permille,
+                );
             }
 
             if has_fill {
@@ -1086,7 +1141,11 @@ mod tests {
 
         println!(
             "CLOUD_READER_CARLTON_P3_RESIDUAL_CENSUS page_nodes={} kinds={kind_counts:?} feature_counts={feature_counts:?} feature_area_permille={feature_area_permille:?} table_nodes={} table_cells={} table_cells_with_bounds={} shared_text_nodes={} shared_nonempty_lines={} inline_resources={} descriptor_only_resources={} dominant_fill_permille={} dominant_fill_ties={} dominant_fill_kind={} dominant_fill_has_table={} dominant_fill_has_resource={} dominant_fill_has_text={}",
-            scene.nodes.iter().filter(|node| node.page_id == page.page_id).count(),
+            scene
+                .nodes
+                .iter()
+                .filter(|node| node.page_id == page.page_id)
+                .count(),
             table_nodes,
             table_cells,
             table_cells_with_bounds,
