@@ -37,6 +37,10 @@ PAIRS = [
     {
         "pair_id": "virginia-remplacante-zone-a-2015",
         "source_page": "https://laclassedevirginia.blogspot.com/2015/08/cahier-de-la-maitresse-remplacante.html",
+        "source_fallbacks": [
+            "https://laclassedevirginia.blogspot.com/2015/08/",
+            "https://laclassedevirginia.blogspot.com/2015/",
+        ],
         "pub": {
             "anchor": "Version modifiable",
             "artifact": "virginia-remplacante-modifiable.pub",
@@ -59,26 +63,41 @@ def normalized_text(value: str) -> str:
     return " ".join(value.replace("\xa0", " ").split()).casefold()
 
 
-def source_html(session: requests.Session, url: str) -> tuple[str, str]:
-    last_error: Exception | None = None
-    for attempt in range(4):
-        try:
-            response = session.get(
-                url,
-                params={"chaptera_pair_oracle": str(time.time_ns())},
-                timeout=30,
-            )
-            if response.status_code == 429:
+def source_html(
+    session: requests.Session, urls: list[str]
+) -> tuple[str, str, str]:
+    failures = []
+    for url in urls:
+        last_error: Exception | None = None
+        last_status: int | None = None
+        for attempt in range(3):
+            try:
+                response = session.get(
+                    url,
+                    params={"chaptera_pair_oracle": str(time.time_ns())},
+                    timeout=30,
+                )
+                last_status = response.status_code
+                if response.status_code == 429:
+                    time.sleep(2 ** attempt)
+                    continue
+                response.raise_for_status()
+                if len(response.content) > MAX_PAGE_BYTES:
+                    raise RuntimeError("source page exceeded bounded HTML ceiling")
+                return url, response.url, response.text
+            except requests.RequestException as exc:
+                last_error = exc
                 time.sleep(2 ** attempt)
-                continue
-            response.raise_for_status()
-            if len(response.content) > MAX_PAGE_BYTES:
-                raise RuntimeError("source page exceeded bounded HTML ceiling")
-            return response.url, response.text
-        except requests.RequestException as exc:
-            last_error = exc
-            time.sleep(2 ** attempt)
-    raise RuntimeError(f"source page unavailable: {url}: {last_error}")
+        failures.append(
+            {
+                "url": url,
+                "status": last_status,
+                "error": str(last_error) if last_error is not None else None,
+            }
+        )
+    raise RuntimeError(
+        "source pages unavailable: " + json.dumps(failures, sort_keys=True)
+    )
 
 
 def anchors(raw: str, base_url: str) -> list[tuple[str, str]]:
@@ -217,7 +236,10 @@ def main(argv: list[str]) -> None:
 
     receipt_pairs = []
     for pair in PAIRS:
-        final_url, raw = source_html(session, pair["source_page"])
+        selected_source, final_url, raw = source_html(
+            session,
+            [pair["source_page"], *pair.get("source_fallbacks", [])],
+        )
         entries = anchors(raw, final_url)
         pub_link = exact_anchor_link(entries, pair["pub"]["anchor"])
         pdf_link = exact_anchor_link(entries, pair["pdf"]["anchor"])
@@ -227,6 +249,7 @@ def main(argv: list[str]) -> None:
             {
                 "pair_id": pair["pair_id"],
                 "source_page": pair["source_page"],
+                "selected_source_page": selected_source,
                 "resolved_source_page": final_url,
                 "pair_class": "exact_source_pair",
                 "pub": pub,
