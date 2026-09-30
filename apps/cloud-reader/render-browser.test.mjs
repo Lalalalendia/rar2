@@ -114,17 +114,29 @@ try {
   });
   assert.deepEqual(clip, [emu(350), emu(30), emu(220), emu(80)], "clip remains in canonical node space");
   const before = await page.locator("svg").getAttribute("viewBox");
+  const sharedMatrixBefore = await page.locator('[data-text-authority="server-shared-resolved"]').first().evaluate((element) => {
+    const matrix = element.getScreenCTM(); return [matrix.a, matrix.b, matrix.c, matrix.d];
+  });
   await page.locator("svg").evaluate((svg) => { svg.setAttribute("width", 300); svg.setAttribute("height", 200); });
   const scaledHeight = await page.locator("foreignObject").first().evaluate((element) => {
     const range = document.createRange(); range.selectNodeContents(element.firstElementChild); return range.getBoundingClientRect().height;
   });
   assert.ok(Math.abs(scaledHeight * 2 - measurements[0].text_height_px) < 0.1);
   const scaledSharedHeight = await page.locator('[data-text-authority="server-shared-resolved"]').first().evaluate((element) => element.getBoundingClientRect().height);
-  assert.ok(Math.abs(scaledSharedHeight * 2 - shared[0].height) < 0.1);
+  const sharedMatrixAfter = await page.locator('[data-text-authority="server-shared-resolved"]').first().evaluate((element) => {
+    const matrix = element.getScreenCTM(); return [matrix.a, matrix.b, matrix.c, matrix.d];
+  });
+  sharedMatrixAfter.forEach((value, index) => assert.ok(Math.abs(value * 2 - sharedMatrixBefore[index]) < 0.00001,
+    "shared line paint must follow the exact SVG page transform"));
+  // geometricPrecision keeps glyph extents in continuous SVG coordinates,
+  // including headless Chromium, which otherwise hints these extents.
+  assert.ok(Math.abs(scaledSharedHeight * 2 - shared[0].height) < 0.1,
+    "shared glyph geometry must follow zoom: " + JSON.stringify({ before: shared[0].height, after: scaledSharedHeight }));
   assert.equal(await page.locator("svg").getAttribute("viewBox"), before);
   const receipt = { protocol: "chaptera.cloud-reader-preview-scale.v1", scope: "synthetic renderer readability only; excludes source typography and real-PUB reference parity",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(), measurements,
-    shared_lines: shared, loaded_fallback_font_sha256: fontSha, zoom_preserves_geometry: true };
+    shared_lines: shared, loaded_fallback_font_sha256: fontSha, shared_zoom: { before_height_px: shared[0].height,
+      after_height_px: scaledSharedHeight, matrix_before: sharedMatrixBefore, matrix_after: sharedMatrixAfter }, zoom_preserves_geometry: true };
   await writeFile(join(output, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
   console.log(JSON.stringify({ readable_preview_frames: measurements.length, readable_shared_lines: shared.length, zoom_preserves_geometry: true, receipt: join(output, "receipt.json") }));
 } finally {
