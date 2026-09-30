@@ -48,7 +48,11 @@ pub use pub_reader::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
     FailureIntakeClassification, FailureIntakeConfidence, FailureIntakeReason,
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
-    PubReaderRoute, classify_failure_candidate, classify_pub_family, exact_file_intake_eligible,
+    PubReaderRoute, READER_SALVAGE_PROBE_SCHEMA_V1, ReaderSalvageEligibility,
+    ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe,
+    ReaderSalvageTrigger, classify_failure_candidate, classify_pub_family,
+    exact_file_intake_eligible, probe_reader_salvage_candidate,
+    probe_reader_salvage_candidate_with_trigger,
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
@@ -1248,6 +1252,55 @@ pub fn open_pub_geometry(
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerGeometryDocument> {
     Ok(open_pub_bundle(bytes, environment)?.geometry)
+}
+
+/// Product-level Reader open outcome.
+///
+/// Normal parsing always runs first. Salvage is returned only when the
+/// bounded read-only probe has both explicit eligibility and surviving source
+/// evidence. This type deliberately carries no repair plan or reconstructed
+/// document state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewerProductOpenOutcome {
+    Normal(ViewerGeometryDocument),
+    Salvage(ReaderSalvageProbe),
+}
+
+/// Opens a Publisher source normally first, then attempts the conservative
+/// intake-only damaged-file salvage path.
+///
+/// Valid known-PUB files that fail normal parsing are not automatically called
+/// damaged: those require a typed ProvenStructuralCorruption trigger from a
+/// stronger discriminator. This keeps unsupported grammar research separate
+/// from recovery.
+pub fn open_pub_or_salvage(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+) -> Result<ViewerProductOpenOutcome> {
+    open_pub_or_salvage_with_trigger(bytes, environment, ReaderSalvageTrigger::IntakeOnly)
+}
+
+/// Same product fallback seam with an explicit upstream corruption trigger.
+///
+/// Callers may use ProvenStructuralCorruption only after a bounded typed
+/// discriminator has established corruption independently of the fact that
+/// normal Reader open failed.
+pub fn open_pub_or_salvage_with_trigger(
+    bytes: &[u8],
+    environment: BoundedLayoutEnvironment,
+    trigger: ReaderSalvageTrigger,
+) -> Result<ViewerProductOpenOutcome> {
+    match open_pub_geometry(bytes, environment) {
+        Ok(document) => Ok(ViewerProductOpenOutcome::Normal(document)),
+        Err(normal_error) => {
+            let probe = probe_reader_salvage_candidate_with_trigger(bytes, trigger);
+            if probe.eligibility.is_eligible() && probe.has_surviving_evidence() {
+                Ok(ViewerProductOpenOutcome::Salvage(probe))
+            } else {
+                Err(normal_error)
+            }
+        }
+    }
 }
 
 /// Opens one Publisher source through the same family router as the Viewer and
@@ -3168,6 +3221,15 @@ mod tests {
         assert!(!json.contains("\"filename\""));
         assert!(!json.contains("\"source_hash\""));
         assert!(!json.contains("\"sha256\""));
+    }
+
+    #[test]
+    fn foreign_input_never_enters_salvage_fallback() {
+        let outcome = open_pub_or_salvage(
+            b"<!DOCTYPE html><html>not a Publisher file</html>",
+            viewer_geometry_environment_v0_1(),
+        );
+        assert!(outcome.is_err());
     }
 
     #[test]
