@@ -1557,6 +1557,7 @@ mod tests {
                 &"a".repeat(64),
                 Some(br#"{"protocol_version":"chaptera.reader-scene.v1"}"#),
                 None,
+                None,
                 1_003,
             )
             .await
