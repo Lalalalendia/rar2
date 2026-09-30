@@ -929,15 +929,13 @@ fn validate_font_compatibility_object(params: &[u8]) -> Result<()> {
         );
     }
 
-    let height =
-        read_i16(params, 0).ok_or_else(|| anyhow!("WMF Font height is truncated"))?;
+    let height = read_i16(params, 0).ok_or_else(|| anyhow!("WMF Font height is truncated"))?;
     let width = read_i16(params, 2).ok_or_else(|| anyhow!("WMF Font width is truncated"))?;
     let escapement =
         read_i16(params, 4).ok_or_else(|| anyhow!("WMF Font escapement is truncated"))?;
     let orientation =
         read_i16(params, 6).ok_or_else(|| anyhow!("WMF Font orientation is truncated"))?;
-    let weight =
-        read_u16(params, 8).ok_or_else(|| anyhow!("WMF Font weight is truncated"))?;
+    let weight = read_u16(params, 8).ok_or_else(|| anyhow!("WMF Font weight is truncated"))?;
 
     let scalar_profile_matches = matches!((height, width), (16, 7) | (20, 9))
         && escapement == 0
@@ -1886,10 +1884,7 @@ mod tests {
         insert_record_before_function(
             &mut bytes,
             META_SELECTOBJECT,
-            record(
-                META_CREATEFONTINDIRECT,
-                &font_compatibility_params(16, 7),
-            ),
+            record(META_CREATEFONTINDIRECT, &font_compatibility_params(16, 7)),
         );
         insert_record_before_function(
             &mut bytes,
@@ -1909,21 +1904,14 @@ mod tests {
         insert_record_before_function(
             &mut bytes,
             META_SELECTOBJECT,
-            record(
-                META_CREATEFONTINDIRECT,
-                &font_compatibility_params(16, 7),
-            ),
+            record(META_CREATEFONTINDIRECT, &font_compatibility_params(16, 7)),
         );
         insert_record_before_function(
             &mut bytes,
             META_POLYGON,
             record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
         );
-        insert_record_before_function(
-            &mut bytes,
-            META_POLYGON,
-            record(META_EXTTEXTOUT_TEST, &[]),
-        );
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_EXTTEXTOUT_TEST, &[]));
 
         let error = rasterize_wmf_preview(&bytes, 100, 100).expect_err("text remains unsupported");
         assert!(
