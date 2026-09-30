@@ -745,6 +745,9 @@ impl GuestReaderHttpState {
     }
 
     async fn cleanup_expired(&self, now_ms: i64) -> Result<(), GuestReaderError> {
+        self.sessions
+            .cleanup_expired_research_capabilities(now_ms)
+            .await?;
         let expired = self.sessions.expired_pending(now_ms, CLEANUP_BATCH).await?;
         for session in expired {
             self.cleanup_one(session, now_ms).await?;
@@ -810,6 +813,15 @@ struct GuestReaderSession {
     quarantine_deleted_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone)]
+struct ResearchSubmission {
+    submission_id: String,
+    session_id: String,
+    failure_classification_json: Vec<u8>,
+    failure_code: String,
+    expires_at_ms: i64,
+}
+
 #[derive(Clone)]
 pub struct SqliteGuestReaderSessionStore {
     path: PathBuf,
@@ -862,12 +874,17 @@ impl SqliteGuestReaderSessionStore {
 
     async fn require_schema(&self) -> Result<(), GuestReaderError> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reader_guest_sessions'",
+            r#"
+            SELECT COUNT(*)
+            FROM sqlite_master
+            WHERE type='table'
+              AND name IN ('reader_guest_sessions', 'reader_research_submissions')
+            "#,
         )
         .fetch_one(&self.pool)
         .await
         .map_err(sqlite_error)?;
-        if count != 1 {
+        if count != 2 {
             return Err(GuestReaderError::internal("guest_session_schema_missing"));
         }
         Ok(())
@@ -920,6 +937,163 @@ impl SqliteGuestReaderSessionStore {
         .await
         .map_err(sqlite_error)?;
         row.as_ref().map(session_from_row).transpose()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_research_submission(
+        &self,
+        submission_id: &str,
+        session_id: &str,
+        capability_token_hash: &[u8; 32],
+        consent_version: &str,
+        failure_classification_json: &[u8],
+        failure_code: &str,
+        issued_at_ms: i64,
+        expires_at_ms: i64,
+    ) -> Result<(), GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO reader_research_submissions (
+                submission_id, session_id, capability_token_hash,
+                consent_version, retention_policy, failure_classification_json,
+                failure_code, state, issued_at_ms, expires_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?)
+            "#,
+        )
+        .bind(submission_id.as_bytes())
+        .bind(session_id.as_bytes())
+        .bind(capability_token_hash.as_slice())
+        .bind(consent_version)
+        .bind(RETENTION_POLICY_V1)
+        .bind(failure_classification_json)
+        .bind(failure_code)
+        .bind(issued_at_ms)
+        .bind(expires_at_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::internal(
+                "guest_contribution_capability_insert_failed",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn claim_research_submission(
+        &self,
+        session_id: &str,
+        capability_token_hash: &[u8; 32],
+        now_ms: i64,
+    ) -> Result<ResearchSubmission, GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE reader_research_submissions
+            SET state='consuming'
+            WHERE session_id=?
+              AND capability_token_hash=?
+              AND state='issued'
+              AND expires_at_ms>?
+            "#,
+        )
+        .bind(session_id.as_bytes())
+        .bind(capability_token_hash.as_slice())
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::conflict(
+                "guest_contribution_capability_invalid",
+            ));
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT submission_id, session_id, failure_classification_json,
+                   failure_code, expires_at_ms
+            FROM reader_research_submissions
+            WHERE capability_token_hash=? AND state='consuming'
+            "#,
+        )
+        .bind(capability_token_hash.as_slice())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+
+        Ok(ResearchSubmission {
+            submission_id: bytes_string(row.try_get("submission_id").map_err(sqlite_error)?)?,
+            session_id: bytes_string(row.try_get("session_id").map_err(sqlite_error)?)?,
+            failure_classification_json: row
+                .try_get("failure_classification_json")
+                .map_err(sqlite_error)?,
+            failure_code: row.try_get("failure_code").map_err(sqlite_error)?,
+            expires_at_ms: row.try_get("expires_at_ms").map_err(sqlite_error)?,
+        })
+    }
+
+    async fn reset_research_submission(
+        &self,
+        submission_id: &str,
+    ) -> Result<(), GuestReaderError> {
+        sqlx::query(
+            "UPDATE reader_research_submissions SET state='issued' WHERE submission_id=? AND state='consuming'",
+        )
+        .bind(submission_id.as_bytes())
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        Ok(())
+    }
+
+    async fn finish_research_submission(
+        &self,
+        submission_id: &str,
+        binding_id: &str,
+        server_sha256: &str,
+        exact_byte_disposition: &'static str,
+        now_ms: i64,
+    ) -> Result<(), GuestReaderError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE reader_research_submissions
+            SET state='retained',
+                consumed_at_ms=?,
+                binding_id=?,
+                server_sha256=?,
+                exact_byte_disposition=?,
+                cluster_disposition='deferred'
+            WHERE submission_id=? AND state='consuming'
+            "#,
+        )
+        .bind(now_ms)
+        .bind(binding_id.as_bytes())
+        .bind(server_sha256.as_bytes())
+        .bind(exact_byte_disposition)
+        .bind(submission_id.as_bytes())
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        if result.rows_affected() != 1 {
+            return Err(GuestReaderError::conflict(
+                "guest_contribution_state_conflict",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn cleanup_expired_research_capabilities(
+        &self,
+        now_ms: i64,
+    ) -> Result<(), GuestReaderError> {
+        sqlx::query(
+            "DELETE FROM reader_research_submissions WHERE state='issued' AND expires_at_ms<=?",
+        )
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .map_err(sqlite_error)?;
+        Ok(())
     }
 
     async fn mark_stored(
