@@ -66,6 +66,7 @@ fn frame(
             officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
             officeart_spid: Some(100 + ordinal),
             image_slot: None,
+            legacy_ole: None,
             explicit_image_crop: None,
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
