@@ -648,9 +648,7 @@ fn apply_source_page_paint_order(
             let node_id = serialized_string(node_id, "source paint-order node id")?;
             if !expected_nodes.contains(node_id.as_str())
                 || !actual_nodes.insert(node_id.clone())
-                || rank
-                    .insert(node_id, (page_rank, stack_rank))
-                    .is_some()
+                || rank.insert(node_id, (page_rank, stack_rank)).is_some()
             {
                 return Ok(false);
             }
