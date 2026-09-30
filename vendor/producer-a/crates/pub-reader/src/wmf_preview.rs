@@ -1881,6 +1881,7 @@ mod tests {
         let baseline = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("baseline");
 
         let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
         insert_record_before_function(
             &mut bytes,
             META_SELECTOBJECT,
@@ -1901,6 +1902,7 @@ mod tests {
         const META_EXTTEXTOUT_TEST: u16 = 0x0a32;
 
         let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
         insert_record_before_function(
             &mut bytes,
             META_SELECTOBJECT,
