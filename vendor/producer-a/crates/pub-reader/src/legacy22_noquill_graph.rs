@@ -641,6 +641,7 @@ fn materialize_legacy_noquill_child(
             payload: PubNodePayload {
                 contents_seq_num: u32::from(child_object_id),
                 officeart_shape_type: None,
+                officeart_adjust_value: crate::PubOfficeArtAdjustValueSource::Unsupported,
                 officeart_spid: None,
                 image_slot: None,
                 legacy_ole,
