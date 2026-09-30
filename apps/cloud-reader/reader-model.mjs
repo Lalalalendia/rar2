@@ -101,7 +101,17 @@ export function extractableImages(scene) {
   });
 }
 
-export function classificationMessage(classification) {
+export function classificationMessage(classification, failureClass = null) {
+  if (classification === "unsupported") {
+    const terminal = ({
+      PUB_DAMAGED: "This Publisher file appears damaged and could not be opened completely. Keep the original; a recovery path may still help.",
+      NOT_PUB: "This file is not a Publisher document. Choose a .PUB file.",
+      PUB_HIGH_VALUE: "This Publisher file is not supported yet. Keep the original; it may help Chaptera improve compatibility.",
+      PUB_POSSIBLE: "This file may be Publisher-related, but the service cannot verify or open it yet.",
+      ARCHIVE_WITH_PUB: "This archive contains Publisher material, but the online Reader opens Publisher files directly."
+    })[failureClass];
+    if (terminal) return terminal;
+  }
   return ({
     supported: "Opened read-only.",
     partial: "Opened with display limitations. Check the details before relying on the page appearance.",

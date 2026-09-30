@@ -78,6 +78,14 @@ public-safe synthetic DTOs. This UI suite does not establish real-PUB visual
 fidelity, live hostile-file scanning, deployed cleanup or contribution consent.
 Those require their own release evidence.
 
+Eligible unsupported files can be contributed only through a separate confirmation
+dialog. The local filename is shown before consent and never sent. Contribution
+access stays in memory until the viewing session expires, is cancelled or replaced,
+or a receipt is confirmed. Cancelling or replacing the file aborts pending client
+requests; a late response cannot alter the replacement document. If receipt delivery
+fails after sending has begun, the interface explains that the server may already
+have received the file. A client abort does not undo server-side retention.
+
 ## Standalone release
 
 `python3 apps/cloud-reader/build_release.py` produces an exact-commit ZIP and

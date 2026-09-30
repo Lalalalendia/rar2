@@ -51,11 +51,13 @@ const server = createServer(async (req, res) => {
       if (url.pathname === "/v1/reader/guest-sessions") {
         const session_id = "guest:" + (++nextSession).toString().padStart(32, "0");
         const scenario = nextScenario;
+        scenario.expiresAt = Date.now() + (scenario.sessionTtl ?? 60_000);
         sessions.set(session_id, scenario);
         payload = {
           protocol_version: "chaptera.reader-guest-session.v1", session_id, access_token: "synthetic-token-" + nextSession,
           upload_path: "/v1/reader/guest-sessions/" + session_id + "/content",
-          open_path: "/v1/reader/guest-sessions/" + session_id + "/open", ...scenario.issue
+          open_path: "/v1/reader/guest-sessions/" + session_id + "/open",
+          expires_at_ms: scenario.expiresAt, ...scenario.issue
         };
         status = scenario.issueStatus ?? 200;
         redirect = scenario.issueRedirect;
@@ -65,7 +67,7 @@ const server = createServer(async (req, res) => {
         ) ?? [];
         const scenario = sessions.get(session_id) ?? {};
         const submission_id = "submission:" + session_id.split(":").at(-1);
-        payload = { protocol_version: "chaptera.reader-guest-session.v1", session_id };
+        payload = { protocol_version: "chaptera.reader-guest-session.v1", session_id, expires_at_ms: scenario.expiresAt };
         if (action === "content") {
           Object.assign(payload, { state: "uploaded" }, scenario.upload);
           redirect = scenario.uploadRedirect;
@@ -75,16 +77,18 @@ const server = createServer(async (req, res) => {
           Object.assign(payload, { classification: "partial", scene: fixture() }, scenario.open);
           redirect = scenario.openRedirect;
         } else if (action === "contribution-capability") {
+          if (scenario.capabilityWait) await scenario.capabilityWait;
           payload = {
             protocol_version: "chaptera.reader-contribution-capability.v1",
             submission_id,
             capability_token: "a".repeat(64),
-            expires_at_ms: Date.now() + 60_000,
+            expires_at_ms: scenario.expiresAt,
             retention_policy: "chaptera-intake-retention-v1",
             ...scenario.capability
           };
           status = scenario.capabilityStatus ?? 200;
         } else if (action === "contribute") {
+          if (scenario.contributionWait) await scenario.contributionWait;
           payload = {
             protocol_version: "chaptera.intake-receipt.v1",
             submission_id,
@@ -269,7 +273,7 @@ try {
         }
       }
     }, "private-research-name.pub", source);
-    await status(page, /not supported yet/);
+    await status(page, /appears damaged/);
     assert.equal(await page.locator("#contribution-panel").isVisible(), true);
     assert.equal(
       requests.slice(before).filter((request) => request.path.includes("contribut")).length,
@@ -326,9 +330,107 @@ try {
           }
         }
       });
-      await status(page, /not supported yet/);
+      await status(page, /not supported yet|Publisher-related|not a Publisher|archive contains/);
       assert.equal(await page.locator("#contribution-panel").isVisible(), false);
     }
+  });
+
+  const eligible = {
+    classification: "unsupported", scene: undefined,
+    failure_classification: {
+      protocol_version: "chaptera.failure-classifier.v1", class: "PUB_HIGH_VALUE",
+      confidence: "high", reason_flags: ["bounded"]
+    }
+  };
+
+  await check("cancel before consent sends nothing and clears contribution access", async () => {
+    await open(page, { open: eligible });
+    await status(page, /not supported yet/);
+    const before = requests.length;
+    await page.locator("#open-contribution").click();
+    await page.locator("#cancel-contribution").click();
+    await status(page, /Contribution cancelled/);
+    assert.equal(await page.locator("#contribution-panel").isVisible(), false);
+    assert.equal(await page.locator("#contribution-filename").textContent(), "");
+    assert.equal(requests.length, before);
+  });
+
+  await check("expiry clears eligibility and blocks retention after an expired capability", async () => {
+    await open(page, { open: eligible, sessionTtl: 500 });
+    await status(page, /not supported yet/);
+    await page.locator("#open-contribution").click();
+    await status(page, /viewing session expired/);
+    assert.equal(await page.locator("#contribution-panel").isVisible(), false);
+    assert.equal(await page.locator("#contribution-dialog").evaluate((dialog) => dialog.open), false);
+    assert.equal(await page.locator("#contribution-filename").textContent(), "");
+
+    await open(page, { open: eligible, capability: { expires_at_ms: Date.now() - 1 } });
+    await status(page, /not supported yet/);
+    const before = requests.length;
+    await page.locator("#open-contribution").click();
+    await page.locator("#send-contribution").click();
+    await page.waitForFunction(() => document.querySelector("#contribution-status").textContent.includes("could not start"));
+    assert.deepEqual(requests.slice(before).map((request) => request.path.split("/").at(-1)), ["contribution-capability"]);
+    await page.locator("#cancel-contribution").click();
+  });
+
+  await check("replacing a file during consent cannot retain it or overwrite the new document", async () => {
+    let release;
+    const capabilityWait = new Promise((resolve) => { release = resolve; });
+    await open(page, { open: eligible, capabilityWait });
+    await status(page, /not supported yet/);
+    await page.locator("#open-contribution").click();
+    const started = page.waitForRequest((request) => request.url().endsWith("/contribution-capability"));
+    await page.locator("#send-contribution").click();
+    await started;
+    nextScenario = { open: { scene: fixture("New document after consent") } };
+    await page.locator("#drop").evaluate((element) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(["replacement"], "replacement.pub"));
+      element.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true }));
+    });
+    await status(page, /Opened with/);
+    const before = requests.length;
+    release();
+    await page.waitForTimeout(100);
+    assert.equal(requests.length, before);
+    assert.equal(await page.locator("#story-text").inputValue(), "New document after consent");
+    assert.match(await page.locator("#status").textContent(), /Opened with/);
+  });
+
+  await check("a late contribution receipt cannot clear a replacement contribution dialog", async () => {
+    let release;
+    const contributionWait = new Promise((resolve) => { release = resolve; });
+    await open(page, { open: eligible, contributionWait });
+    await status(page, /not supported yet/);
+    await page.locator("#open-contribution").click();
+    const started = page.waitForRequest((request) => request.url().endsWith("/contribute"));
+    await page.locator("#send-contribution").click();
+    await started;
+    nextScenario = { open: eligible };
+    await page.locator("#drop").evaluate((element) => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(["second"], "second.pub"));
+      element.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true }));
+    });
+    await status(page, /not supported yet/);
+    await page.locator("#open-contribution").click();
+    release();
+    await page.waitForTimeout(100);
+    assert.equal(await page.locator("#contribution-dialog").evaluate((dialog) => dialog.open), true);
+    assert.equal(await page.locator("#contribution-filename").textContent(), "second.pub");
+    assert.match(await page.locator("#status").textContent(), /not supported yet/);
+    await page.locator("#cancel-contribution").click();
+  });
+
+  await check("an uncertain retention response never claims that nothing was authorized", async () => {
+    await open(page, { open: eligible, contributionStatus: 503 });
+    await status(page, /not supported yet/);
+    await page.locator("#open-contribution").click();
+    await page.locator("#send-contribution").click();
+    await page.waitForFunction(() => document.querySelector("#contribution-status").textContent.includes("may already have been received"));
+    assert.equal(await page.locator("#send-contribution").isDisabled(), false);
+    await page.locator("#cancel-contribution").click();
   });
 
   await check("incompatible protocols and off-origin paths never receive a capability", async () => {
