@@ -431,6 +431,7 @@ pub fn from_viewer_geometry(
     let fallback_font = shared_text_font_resource();
     let mut text_layout_by_node = HashMap::new();
     let mut text_layout_partial = false;
+    let mut mixed_size_text_layout = false;
     for page_index in 0..geometry.document.pages.len() {
         let plan = match build_page_render_plan_with_text_layout_v1(
             geometry,
@@ -461,6 +462,9 @@ pub fn from_viewer_geometry(
                 text_layout_partial = true;
                 continue;
             };
+            if layout.lines.iter().any(|line| !line.spans.is_empty()) {
+                mixed_size_text_layout = true;
+            }
             let node_id = serialized_string(&node.node_id, "text layout node id")?;
             let mapped = ReaderTextLayoutV1 {
                 disposition: "shared_resolved",
@@ -598,6 +602,9 @@ pub fn from_viewer_geometry(
     }
     if text_layout_partial {
         reasons.push("text_layout_partial");
+    }
+    if mixed_size_text_layout {
+        reasons.push("text_layout_bounded_mixed_size");
     }
     if diagnostics
         .iter()
