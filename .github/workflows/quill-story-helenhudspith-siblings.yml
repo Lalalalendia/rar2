@@ -8,6 +8,7 @@ on:
       - ".github/workflows/quill-story-helenhudspith-siblings.yml"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-early-text-boundary-probe.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-fdpc-boundary-probe.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-lineage-compare.rs"
       - "tools/research/quill_story_wayback_lineage.py"
   workflow_dispatch:
 
@@ -326,6 +327,37 @@ jobs:
           set -euo pipefail
           python tools/research/quill_story_wayback_lineage.py out
 
+      - name: Compare 2009 packag_advDis same-document donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import urllib.request
+          from pathlib import Path
+
+          url = "https://web.archive.org/web/20090210183325id_/http://helenhudspith.com/resources/graphics/laura_dale/packag_advDis.pub"
+          request = urllib.request.Request(
+              url,
+              headers={"User-Agent": "Chaptera-PUB-research/1.0 (+exact-public-lineage-probe)"},
+          )
+          with urllib.request.urlopen(request, timeout=90) as response:
+              payload = response.read()
+          expected = "e8c360c97f4604e60fd84fbc106f59723b03838e05c74b74f4d56aef8d40088e"
+          actual = hashlib.sha256(payload).hexdigest()
+          assert actual == expected, (actual, len(payload))
+          assert payload.startswith(bytes.fromhex("d0cf11e0a1b11ae1"))
+          Path("out/packag_advDis-2009.pub").write_bytes(payload)
+          PY
+
+          cargo run --quiet \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin quill-story-lineage-compare -- \
+            "_siblings/lalamu/pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub" \
+            "out/packag_advDis-2009.pub" \
+            "out/quill-story-packag-lineage.json"
+
       - name: Guard known seven and summarize sibling families
         shell: bash
         run: |
@@ -421,6 +453,7 @@ jobs:
             out/quill-story-fdpc-boundary.json
             out/quill-story-raw-strs-residue.json
             out/quill-story-wayback-lineage.json
+            out/quill-story-packag-lineage.json
             out/wayback-variants/*.pub
           if-no-files-found: error
           retention-days: 30
