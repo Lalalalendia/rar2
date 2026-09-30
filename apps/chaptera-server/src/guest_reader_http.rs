@@ -5,6 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use chaptera_failure_intake_protocol::FailureClassificationV1;
 use axum::{
     Json, Router,
     body::Body,
@@ -161,6 +162,8 @@ struct GuestOpenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    failure_classification: Option<FailureClassificationV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     scene: Option<Value>,
 }
 
@@ -174,6 +177,8 @@ struct GuestSceneResponse {
     source_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_classification: Option<FailureClassificationV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     scene: Option<Value>,
 }
@@ -252,6 +257,7 @@ async fn issue_session(
         classification: None,
         scene_json: None,
         terminal_code: None,
+        failure_classification_json: None,
         created_at_ms: now_ms,
         updated_at_ms: now_ms,
         expires_at_ms,
@@ -462,6 +468,7 @@ async fn open_session(
                 expires_at_ms: rejected.expires_at_ms,
                 source_sha256: None,
                 terminal_code: rejected.terminal_code,
+                failure_classification: None,
                 scene: None,
             }));
         }
@@ -492,6 +499,7 @@ async fn open_session(
 
     let mut classification = receipt.classification;
     let mut terminal_code = receipt.terminal_code;
+    let mut failure_classification = receipt.failure_classification;
     let mut scene = receipt.scene;
     let mut scene_json = scene
         .as_ref()
@@ -504,9 +512,16 @@ async fn open_session(
     {
         classification = "unsupported".to_owned();
         terminal_code = Some("reader_scene_too_large".to_owned());
+        failure_classification = None;
         scene = None;
         scene_json = None;
     }
+
+    let failure_classification_json = failure_classification
+        .as_ref()
+        .map(serde_json::to_vec)
+        .transpose()
+        .map_err(|_| GuestReaderError::internal("guest_failure_classification_serialize_failed"))?;
 
     let opened = state
         .sessions
@@ -516,6 +531,7 @@ async fn open_session(
             &receipt.source_sha256,
             scene_json.as_deref(),
             terminal_code.as_deref(),
+            failure_classification_json.as_deref(),
             now_ms,
         )
         .await?;
@@ -528,6 +544,7 @@ async fn open_session(
         expires_at_ms: opened.expires_at_ms,
         source_sha256: Some(receipt.source_sha256),
         terminal_code,
+        failure_classification,
         scene,
     }))
 }
@@ -569,6 +586,9 @@ async fn get_scene(
         expires_at_ms: session.expires_at_ms,
         source_sha256: session.source_sha256,
         terminal_code: session.terminal_code,
+        failure_classification: decode_failure_classification(
+            session.failure_classification_json.as_deref(),
+        )?,
         scene,
     }))
 }
@@ -758,6 +778,7 @@ struct GuestReaderSession {
     classification: Option<String>,
     scene_json: Option<Vec<u8>>,
     terminal_code: Option<String>,
+    failure_classification_json: Option<Vec<u8>>,
     created_at_ms: i64,
     updated_at_ms: i64,
     expires_at_ms: i64,
@@ -834,9 +855,9 @@ impl SqliteGuestReaderSessionStore {
                 session_id, access_token_hash, upload_id, reservation_id,
                 expected_byte_len, observed_byte_len, storage_generation,
                 object_etag, source_sha256, state, classification, scene_json,
-                terminal_code, created_at_ms, updated_at_ms, expires_at_ms,
+                terminal_code, failure_classification_json, created_at_ms, updated_at_ms, expires_at_ms,
                 quarantine_deleted_at_ms
-            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, NULL)
+            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, ?, ?, NULL)
             "#,
         )
         .bind(session.session_id.as_bytes())
@@ -863,7 +884,7 @@ impl SqliteGuestReaderSessionStore {
             SELECT session_id, access_token_hash, upload_id, reservation_id,
                    expected_byte_len, observed_byte_len, storage_generation,
                    object_etag, source_sha256, state, classification, scene_json,
-                   terminal_code, created_at_ms, updated_at_ms, expires_at_ms,
+                   terminal_code, failure_classification_json, created_at_ms, updated_at_ms, expires_at_ms,
                    quarantine_deleted_at_ms
             FROM reader_guest_sessions
             WHERE session_id = ?
@@ -964,13 +985,14 @@ impl SqliteGuestReaderSessionStore {
         source_sha256: &str,
         scene_json: Option<&[u8]>,
         terminal_code: Option<&str>,
+        failure_classification_json: Option<&[u8]>,
         now_ms: i64,
     ) -> Result<GuestReaderSession, GuestReaderError> {
         let result = sqlx::query(
             r#"
             UPDATE reader_guest_sessions
             SET state='opened', classification=?, source_sha256=?, scene_json=?,
-                terminal_code=?, updated_at_ms=?
+                terminal_code=?, failure_classification_json=?, updated_at_ms=?
             WHERE session_id=? AND state='opening'
             "#,
         )
@@ -978,6 +1000,7 @@ impl SqliteGuestReaderSessionStore {
         .bind(source_sha256.as_bytes())
         .bind(scene_json)
         .bind(terminal_code)
+        .bind(failure_classification_json)
         .bind(now_ms)
         .bind(session_id.as_bytes())
         .execute(&self.pool)
@@ -1088,7 +1111,7 @@ impl SqliteGuestReaderSessionStore {
             SELECT session_id, access_token_hash, upload_id, reservation_id,
                    expected_byte_len, observed_byte_len, storage_generation,
                    object_etag, source_sha256, state, classification, scene_json,
-                   terminal_code, created_at_ms, updated_at_ms, expires_at_ms,
+                   terminal_code, failure_classification_json, created_at_ms, updated_at_ms, expires_at_ms,
                    quarantine_deleted_at_ms
             FROM reader_guest_sessions
             WHERE expires_at_ms<=?
@@ -1133,6 +1156,9 @@ fn session_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<GuestReaderSession,
         classification: row.try_get("classification").map_err(sqlite_error)?,
         scene_json: row.try_get("scene_json").map_err(sqlite_error)?,
         terminal_code: row.try_get("terminal_code").map_err(sqlite_error)?,
+        failure_classification_json: row
+            .try_get("failure_classification_json")
+            .map_err(sqlite_error)?,
         created_at_ms: row.try_get("created_at_ms").map_err(sqlite_error)?,
         updated_at_ms: row.try_get("updated_at_ms").map_err(sqlite_error)?,
         expires_at_ms: row.try_get("expires_at_ms").map_err(sqlite_error)?,
@@ -1165,8 +1191,25 @@ fn open_response_from_stored(
         expires_at_ms: session.expires_at_ms,
         source_sha256: session.source_sha256.clone(),
         terminal_code: session.terminal_code.clone(),
+        failure_classification: decode_failure_classification(
+            session.failure_classification_json.as_deref(),
+        )?,
         scene,
     }))
+}
+
+fn decode_failure_classification(
+    encoded: Option<&[u8]>,
+) -> Result<Option<FailureClassificationV1>, GuestReaderError> {
+    let Some(encoded) = encoded else {
+        return Ok(None);
+    };
+    let classification: FailureClassificationV1 = serde_json::from_slice(encoded)
+        .map_err(|_| GuestReaderError::internal("guest_failure_classification_corrupt"))?;
+    classification
+        .validate()
+        .map_err(|_| GuestReaderError::internal("guest_failure_classification_invalid"))?;
+    Ok(Some(classification))
 }
 
 fn admission_request(
@@ -1433,6 +1476,7 @@ mod tests {
             classification: None,
             scene_json: None,
             terminal_code: None,
+            failure_classification_json: None,
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             expires_at_ms: now_ms + 60_000,
