@@ -63,8 +63,10 @@ fn frame(
         payload: PubResolvedNodePayload {
             contents_seq_num: 100 + ordinal,
             officeart_shape_type: Some(202),
+            officeart_adjust_value: pub_reader::PubOfficeArtAdjustValueSource::Unsupported,
             officeart_spid: Some(100 + ordinal),
             image_slot: None,
+            legacy_ole: None,
             explicit_image_crop: None,
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
