@@ -930,14 +930,36 @@ mod tests {
             &bundle.geometry,
             &bundle.source_page_paint_orders,
         ) {
-            Ok(scene) => println!(
-                "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} reasons={:?}",
-                scene.fidelity.state,
-                scene.stacking_fidelity,
-                scene.pages.len(),
-                scene.nodes.len(),
-                scene.fidelity.reasons
-            ),
+            Ok(scene) => {
+                let tables = scene
+                    .nodes
+                    .iter()
+                    .filter_map(|node| node.table.as_ref())
+                    .collect::<Vec<_>>();
+                let table_cells = tables.iter().map(|table| table.cells.len()).sum::<usize>();
+                let spanning_cells = tables
+                    .iter()
+                    .flat_map(|table| &table.cells)
+                    .filter(|cell| cell.row_span > 1 || cell.column_span > 1)
+                    .count();
+                let bounded_table_cells = tables
+                    .iter()
+                    .flat_map(|table| &table.cells)
+                    .filter(|cell| cell.bounds.is_some())
+                    .count();
+                println!(
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} reasons={:?}",
+                    scene.fidelity.state,
+                    scene.stacking_fidelity,
+                    scene.pages.len(),
+                    scene.nodes.len(),
+                    tables.len(),
+                    table_cells,
+                    spanning_cells,
+                    bounded_table_cells,
+                    scene.fidelity.reasons
+                );
+            }
             Err(error) => println!("CLOUD_READER_SCENE_PROJECTION_PROBE projection_error={error}"),
         }
     }
