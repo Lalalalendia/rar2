@@ -1030,21 +1030,17 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
 }
 
 fn validate_palette_compatibility_object(params: &[u8]) -> Result<()> {
-    const ENTRY_COUNT: usize = 256;
-    const PALETTE_BYTES: usize = 4 + ENTRY_COUNT * 4;
-
-    if params.len() != PALETTE_BYTES {
-        bail!(
-            "unsupported WMF Palette compatibility payload length {}",
-            params.len()
-        );
-    }
     let start = read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
     let entry_count =
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF Palette entry count is truncated"))?;
-    if start != 0x0300 || usize::from(entry_count) != ENTRY_COUNT {
+    let observed_profile = matches!(
+        (params.len(), entry_count),
+        (1028, 256) | (84, 20)
+    );
+    if start != 0x0300 || !observed_profile {
         bail!(
-            "unsupported WMF Palette compatibility profile start=0x{start:04x} entries={entry_count}"
+            "unsupported WMF Palette compatibility profile start=0x{start:04x} entries={entry_count} len={}",
+            params.len()
         );
     }
     Ok(())
