@@ -339,6 +339,57 @@ class ClamdHandler(socketserver.BaseRequestHandler):
         return bytes(data)
 
 
+class OidcServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address):
+        super().__init__(address, OidcHandler)
+        self.issuer = f"http://127.0.0.1:{self.server_address[1]}"
+
+
+class OidcHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "chaptera-acceptance-oidc"
+    sys_version = ""
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+    def _json(self, payload: dict[str, Any]) -> None:
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        issuer = self.server.issuer
+        if self.path == "/.well-known/openid-configuration":
+            self._json(
+                {
+                    "issuer": issuer,
+                    "authorization_endpoint": issuer + "/authorize",
+                    "token_endpoint": issuer + "/token",
+                    "jwks_uri": issuer + "/jwks",
+                    "response_types_supported": ["code"],
+                    "subject_types_supported": ["public"],
+                    "id_token_signing_alg_values_supported": ["RS256"],
+                    "scopes_supported": ["openid"],
+                    "token_endpoint_auth_methods_supported": ["client_secret_basic"],
+                    "claims_supported": ["sub", "iss", "aud", "exp", "iat"],
+                }
+            )
+            return
+        if self.path == "/jwks":
+            self._json({"keys": []})
+            return
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
 def write_isolation_wrapper(path: pathlib.Path) -> None:
     path.write_text(
         """#!/usr/bin/env python3
@@ -372,6 +423,7 @@ def write_config(
     sqlite_path: pathlib.Path,
     app_port: int,
     clamd_port: int,
+    oidc_port: int,
     isolation_wrapper: pathlib.Path,
     structural_worker: pathlib.Path,
     scan_root: pathlib.Path,
@@ -438,6 +490,17 @@ max_header_bytes = 32768
 max_api_body_bytes = {FIXTURE_MAX_BYTES}
 max_upload_body_bytes = {FIXTURE_MAX_BYTES}
 request_timeout_ms = 120000
+
+[auth]
+login_flow_ttl_seconds = 600
+session_idle_ttl_seconds = 1800
+session_absolute_ttl_seconds = 86400
+
+[auth.oidc]
+issuer = "http://127.0.0.1:{oidc_port}"
+client_id = "chaptera-live-acceptance"
+redirect_path = "/v1/auth/callback"
+client_secret = {{ source = "env", name = "CHAPTERA_OIDC_CLIENT_SECRET" }}
 
 [cloud_reader_guest]
 session_ttl_seconds = 60
@@ -665,12 +728,17 @@ def main() -> int:
     clamd_port = int(clamd_server.server_address[1])
     clamd_thread = threading.Thread(target=clamd_server.serve_forever, daemon=True)
 
+    oidc_server = OidcServer(("127.0.0.1", 0))
+    oidc_port = int(oidc_server.server_address[1])
+    oidc_thread = threading.Thread(target=oidc_server.serve_forever, daemon=True)
+
     write_isolation_wrapper(isolation_wrapper)
     write_config(
         config_path,
         sqlite_path=sqlite_path,
         app_port=app_port,
         clamd_port=clamd_port,
+        oidc_port=oidc_port,
         isolation_wrapper=isolation_wrapper,
         structural_worker=structural_worker,
         scan_root=scan_root,
@@ -691,11 +759,13 @@ def main() -> int:
     caddy_process: subprocess.Popen[str] | None = None
     s3_thread.start()
     clamd_thread.start()
+    oidc_thread.start()
 
     app_env = os.environ.copy()
     app_env.update(
         {
             "CHAPTERA_GUEST_RATE_SECRET": secrets.token_hex(32),
+            "CHAPTERA_OIDC_CLIENT_SECRET": secrets.token_hex(32),
             "CHAPTERA_ACCEPTANCE_REAL_ISOLATION_HARNESS": str(
                 ROOT / "tools" / "migration_pdf_worker_isolation.py"
             ),
@@ -967,8 +1037,11 @@ def main() -> int:
         clamd_server.server_close()
         s3_server.shutdown()
         s3_server.server_close()
+        oidc_server.shutdown()
+        oidc_server.server_close()
         clamd_thread.join(timeout=2)
         s3_thread.join(timeout=2)
+        oidc_thread.join(timeout=2)
         shutil.rmtree(work, ignore_errors=True)
 
     return 0
