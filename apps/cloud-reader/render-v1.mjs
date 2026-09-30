@@ -173,16 +173,33 @@ export function resolvedTextLinePaintPlan(node) {
   const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
   if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
 
+  let lineY = y;
   const lines = [...(layout.lines ?? [])]
     .sort((left, right) => left.line_index - right.line_index)
-    .map((line) => ({
-      line_index: safeInteger(line.line_index, "text.line_index"),
-      x,
-      y: y + safeInteger(line.line_index, "text.line_index") * lineHeight,
-      text: String(line.text ?? ""),
-      measured_width_emu: safeInteger(line.measured_width_emu, "text.measured_width_emu"),
-      line_height_emu: safeInteger(line.line_height_emu, "text.line_height_emu")
-    }));
+    .map((line) => {
+      const lineIndex = safeInteger(line.line_index, "text.line_index");
+      const resolvedLineHeight = safeInteger(line.line_height_emu, "text.line_height_emu");
+      if (resolvedLineHeight <= 0) throw new RangeError("text.line_height_emu must be positive");
+      const spans = [...(line.spans ?? [])].map((span) => ({
+        scalar_start: safeInteger(span.scalar_start, "text.span.scalar_start"),
+        scalar_end: safeInteger(span.scalar_end, "text.span.scalar_end"),
+        text: String(span.text ?? ""),
+        x_offset_emu: safeInteger(span.x_offset_emu, "text.span.x_offset_emu"),
+        measured_width_emu: safeInteger(span.measured_width_emu, "text.span.measured_width_emu"),
+        font_size_emu: safeInteger(span.font_size_emu, "text.span.font_size_emu")
+      }));
+      const resolved = {
+        line_index: lineIndex,
+        x,
+        y: lineY,
+        text: String(line.text ?? ""),
+        measured_width_emu: safeInteger(line.measured_width_emu, "text.measured_width_emu"),
+        line_height_emu: resolvedLineHeight,
+        spans
+      };
+      lineY += resolvedLineHeight;
+      return resolved;
+    });
   return Object.freeze({
     bounds: Object.freeze({ x, y, width, height }),
     font_resource_id: layout.font_resource_id,
@@ -246,7 +263,24 @@ function appendText(group, defs, node, fonts, index) {
       "data-measured-width-emu": line.measured_width_emu
     });
     text.setAttribute("xml:space", "preserve");
-    text.textContent = line.text;
+
+    if (line.spans.length === 0) {
+      text.textContent = line.text;
+    } else {
+      for (const span of line.spans) {
+        if (span.font_size_emu <= 0) continue;
+        const tspan = svgNode("tspan", {
+          x: span.x_offset_emu / EMU_PER_CSS_PX,
+          y: (line.y - plan.bounds.y) / EMU_PER_CSS_PX,
+          "font-size": span.font_size_emu / EMU_PER_CSS_PX,
+          "data-text-span-start": span.scalar_start,
+          "data-text-span-end": span.scalar_end,
+          "data-measured-width-emu": span.measured_width_emu
+        });
+        tspan.textContent = span.text;
+        text.appendChild(tspan);
+      }
+    }
     local.appendChild(text);
   }
 }
