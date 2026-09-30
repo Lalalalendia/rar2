@@ -1,0 +1,195 @@
+name: Quill same-source sibling census
+
+on:
+  push:
+    branches:
+      - research/quill-story-early-text-boundary-01
+    paths:
+      - ".github/workflows/quill-story-helenhudspith-siblings.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-early-text-boundary-probe.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  same-source-28:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout exact same-source sibling witnesses
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+          path: _siblings/lalamu
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            pub-corpus/corpus/native/unclassified/190e1c440eb4170758af00dac385af0f1c0c2d5ce198aacd2a7cd57474a57151.pub
+            pub-corpus/corpus/native/unclassified/1b6ff49f8097cccade719599177deaa10d5fee3061da12fdd0c7b3c73b8f0ad7.pub
+            pub-corpus/corpus/native/unclassified/211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157.pub
+            pub-corpus/corpus/native/unclassified/279501a4a01507c672743e127eab3bd01471cea51f7af1e1649a2f324e842776.pub
+            pub-corpus/corpus/native/unclassified/3253ec32aca8f07e3f4bcdf40f1053269946a6125a3fbf290c9e3d0c604e5e54.pub
+            pub-corpus/corpus/native/unclassified/32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027.pub
+            pub-corpus/corpus/native/unclassified/3db40a3fd7ce482cbbb0a6079131269f7e6f1c47917a397b8a57fd7344571cec.pub
+            pub-corpus/corpus/native/unclassified/4d29a5ec6a6e1f69b5b86a8c7eb029e7aca338de05d1c004c2ac2308a00e2c34.pub
+            pub-corpus/corpus/native/unclassified/57024215bcf09402254679b7cada15728f70ffa6c83fafc8880d1f42ae805308.pub
+            pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub
+            pub-corpus/corpus/native/unclassified/6d99150a5757e1233cb08893916720aaabeb84ee3dd2e3d63616adb224b7ed70.pub
+            pub-corpus/corpus/native/unclassified/796abfac39195d4f18e3c05a1a02b2fe3b6c30e8480b5187803779bd1c02fae7.pub
+            pub-corpus/corpus/native/unclassified/7a5393159155ad6b7e1e47fa2769e05ffdb7124298470bae15faa556b3c06cd6.pub
+            pub-corpus/corpus/native/unclassified/82fbcf5547b590d8a21e2654a0761c38d24c7224bdbcb0b4019f0f51e25744a4.pub
+            pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub
+            pub-corpus/corpus/native/unclassified/9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966.pub
+            pub-corpus/corpus/native/unclassified/9d90bc27166c00b47871bfea4df1e870d18db9f57ac0697112423141d2c40a37.pub
+            pub-corpus/corpus/native/unclassified/ae98fe6705fc822bdae5b268ff71050a8255aa0544021c7fbff849a987424586.pub
+            pub-corpus/corpus/native/unclassified/b171668d889a4e30cc8c7838a88f406017d67c722bf059965b1dfcfb9876d055.pub
+            pub-corpus/corpus/native/unclassified/b29ed1e9227e67256a58d23cbea58b9bcfb38943dd9ed07a4110f4cf8959dbe4.pub
+            pub-corpus/corpus/native/unclassified/ba714bc717f8b083ecc49812a7cfe9f686ef4a7bf4957185d5de6847da92a397.pub
+            pub-corpus/corpus/native/unclassified/bc28f3ced90b0c9452bda1bd5bdaf2d841feb1d44bd7e84749a13ff2072e20f2.pub
+            pub-corpus/corpus/native/unclassified/be415f413886ede01e6018c8a89538deb88719418c535baf50dd041f15393698.pub
+            pub-corpus/corpus/native/unclassified/c0c143168d5fb23bc1e7314b20622374d3b8bfc65783573bf4c990f6273a4947.pub
+            pub-corpus/corpus/native/unclassified/c7c235072d73683930a350d80783ea6a7ea3ba5e94983aee192728afbbef135b.pub
+            pub-corpus/corpus/native/unclassified/c96df4b2d4ce3d5bb238b2b31d8021501495b9bd15ff44eb9d918495c342430b.pub
+            pub-corpus/corpus/native/unclassified/ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff.pub
+            pub-corpus/corpus/native/unclassified/febf103d8e982bf811becea46b8776208126e75063f35b4622dc7b39b6de1819.pub
+
+      - name: Verify sibling witness identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="_siblings/lalamu/pub-corpus/corpus/native/unclassified"
+          test "$(find "$root" -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 28
+          for path in "$root"/*.pub; do
+            sha="$(basename "$path" .pub)"
+            echo "${sha}  ${path}" | sha256sum -c -
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Restore Reader Cargo build cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: rar2-target
+          key: reader-early-quill-boundary-v1-${{ runner.os }}-rust-1.94.1-${{ hashFiles('vendor/producer-a/Cargo.toml', 'vendor/producer-a/Cargo.lock', 'vendor/producer-a/crates/**/Cargo.toml') }}
+          restore-keys: |
+            reader-1050-release-v1-${{ runner.os }}-rust-1.94.1-
+            reader-tier-a-${{ runner.os }}-
+
+      - name: Build targeted sibling census
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --bin quill-story-early-text-boundary-probe
+
+      - name: Run same-source sibling census
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/debug/quill-story-early-text-boundary-probe" \
+            --siblings \
+            "_siblings/lalamu/pub-corpus/corpus/native/unclassified" \
+            "out/quill-story-helenhudspith-siblings.json"
+
+      - name: Guard known seven and summarize sibling families
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+
+          report = json.loads(Path("out/quill-story-helenhudspith-siblings.json").read_text())
+          assert report["witness_count"] == 28, report["witness_count"]
+
+          known = {
+              "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
+              "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a",
+              "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569",
+              "9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966",
+              "b171668d889a4e30cc8c7838a88f406017d67c722bf059965b1dfcfb9876d055",
+              "bc28f3ced90b0c9452bda1bd5bdaf2d841feb1d44bd7e84749a13ff2072e20f2",
+              "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff",
+          }
+          rows = report["rows"]
+          by_sha = {row["source_sha256"]: row for row in rows}
+          assert known <= set(by_sha), known - set(by_sha)
+
+          for sha in known:
+              row = by_sha[sha]
+              assert row["admitted"], sha
+              details = row["details"]
+              assert details["syid_chunk_all_ff"], sha
+              assert details["strs_chunk_all_ff"], sha
+              assert details["syid_declared_count"] == 0xFFFFFFFF, sha
+              assert details["strs_declared_count"] == 0xFFFFFFFF, sha
+
+          admitted = [row for row in rows if row["admitted"]]
+          sentinel = [
+              row for row in admitted
+              if row["details"]["syid_chunk_all_ff"] and row["details"]["strs_chunk_all_ff"]
+          ]
+          live = [
+              row for row in admitted
+              if not row["details"]["syid_chunk_all_ff"] or not row["details"]["strs_chunk_all_ff"]
+          ]
+          revisions = Counter(row["details"]["contents_serialization_revision"] for row in admitted)
+
+          summary = {
+              "schema": "chaptera.quill-story-same-source-sibling.summary.v1",
+              "witness_count": len(rows),
+              "admitted_count": len(admitted),
+              "skipped_count": len(rows) - len(admitted),
+              "sentinel_count": len(sentinel),
+              "live_syid_or_strs_count": len(live),
+              "revision_counts": dict(sorted(revisions.items())),
+              "sentinel_rows": [
+                  {
+                      "source_sha256": row["source_sha256"],
+                      "revision": row["details"]["contents_serialization_revision"],
+                      "story_count": row["details"]["grounded_story_count"],
+                      "text_utf16_units": row["details"]["text_utf16_units"],
+                      "fdpp_first_stored_count": row["details"]["fdpp_first_stored_count"],
+                  }
+                  for row in sentinel
+              ],
+              "live_rows": [
+                  {
+                      "source_sha256": row["source_sha256"],
+                      "revision": row["details"]["contents_serialization_revision"],
+                      "story_count": row["details"]["grounded_story_count"],
+                      "syid_all_ff": row["details"]["syid_chunk_all_ff"],
+                      "strs_all_ff": row["details"]["strs_chunk_all_ff"],
+                      "syid_declared_count": row["details"]["syid_declared_count"],
+                      "strs_declared_count": row["details"]["strs_declared_count"],
+                  }
+                  for row in live
+              ],
+              "evidence_boundary": (
+                  "28 exact SHA-addressed same-source siblings from the existing donor; "
+                  "no full-corpus materialization and no document text/filenames in receipt"
+              ),
+          }
+          Path("out/quill-story-helenhudspith-siblings-summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quill-story-helenhudspith-siblings-${{ github.run_id }}
+          path: |
+            out/quill-story-helenhudspith-siblings.json
+            out/quill-story-helenhudspith-siblings-summary.json
+          if-no-files-found: error
+          retention-days: 30
