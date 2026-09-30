@@ -216,7 +216,7 @@ fn exact_table_cell_officeart_geometry_join_probe() {
                 .collect::<Vec<_>>();
 
             match matches.as_slice() {
-                [( _, fill_colors, fill_booleans)] => {
+                [(_, fill_colors, fill_booleans)] => {
                     exact_match_count += 1;
                     exact_matches_with_fill_color += usize::from(!fill_colors.is_empty());
                     exact_matches_with_fill_booleans += usize::from(!fill_booleans.is_empty());
@@ -290,7 +290,10 @@ fn exact_table_cell_officeart_geometry_join_probe() {
         ]
     });
 
-    assert!(table_count > 0, "fixture exposes at least one bounded TABLE");
+    assert!(
+        table_count > 0,
+        "fixture exposes at least one bounded TABLE"
+    );
     assert_eq!(
         exact_match_count + ambiguous_match_count + unmatched_count,
         table_cell_count,
