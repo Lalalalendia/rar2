@@ -13,6 +13,8 @@ const MAX_RASTER_WORK_UNITS: u64 = 64 * 1024 * 1024;
 
 const META_EOF: u16 = 0x0000;
 const META_SAVEDC: u16 = 0x001e;
+const META_REALIZEPALETTE: u16 = 0x0035;
+const META_CREATEPALETTE: u16 = 0x00f7;
 const META_SETBKMODE: u16 = 0x0102;
 const META_SETMAPMODE: u16 = 0x0103;
 const META_SETROP2: u16 = 0x0104;
@@ -29,11 +31,14 @@ const META_SETBKCOLOR: u16 = 0x0201;
 const META_SETTEXTCOLOR: u16 = 0x0209;
 const META_SETWINDOWORG: u16 = 0x020b;
 const META_SETWINDOWEXT: u16 = 0x020c;
+const META_SELECTPALETTE: u16 = 0x0234;
 const META_CREATEPENINDIRECT: u16 = 0x02fa;
+const META_CREATEFONTINDIRECT: u16 = 0x02fb;
 const META_CREATEBRUSHINDIRECT: u16 = 0x02fc;
 const META_POLYGON: u16 = 0x0324;
 const META_POLYLINE: u16 = 0x0325;
 const META_INTERSECTCLIPRECT: u16 = 0x0416;
+const META_ELLIPSE: u16 = 0x0418;
 const META_RECTANGLE: u16 = 0x041b;
 const META_POLYPOLYGON: u16 = 0x0538;
 const META_ESCAPE: u16 = 0x0626;
@@ -47,6 +52,7 @@ const ABSOLUTE: u16 = 1;
 const ALTERNATE: u16 = 1;
 const WINDING: u16 = 2;
 const META_ESCAPE_ENHANCED_METAFILE: u16 = 0x000f;
+const META_ESCAPE_POSTSCRIPT_IGNORE: u16 = 0x0026;
 const WMFC_COMMENT_IDENTIFIER: u32 = 0x4346_4d57;
 const WMFC_COMMENT_TYPE: u32 = 1;
 const MAX_EMBEDDED_EMF_BYTES: usize = MAX_WMF_BYTES;
@@ -57,9 +63,11 @@ const PS_NULL: u16 = 5;
 const PS_INSIDEFRAME: u16 = 6;
 const BS_SOLID: u16 = 0;
 const BS_NULL: u16 = 1;
+const BS_PATTERN: u16 = 3;
 const BS_DIBPATTERNPT: u16 = 5;
 const DIB_RGB_COLORS: u16 = 0;
 const BI_RGB: u32 = 0;
+const SRCAND: u32 = 0x0088_00c6;
 const SRCCOPY: u32 = 0x00cc_0020;
 const LEGACY_PATTERN_DIB_BYTES: usize = 96;
 const LEGACY_PATTERN_SIDE: usize = 8;
@@ -120,6 +128,8 @@ impl Brush {
 enum GdiObject {
     Pen(Pen),
     Brush(Brush),
+    FontCompatibility,
+    PaletteCompatibility,
     RegionCompatibility,
 }
 
@@ -165,6 +175,7 @@ struct PlaybackState {
     polygon_fill_mode: u16,
     pen: Pen,
     brush: Brush,
+    selected_palette: Option<usize>,
 }
 
 impl PlaybackState {
@@ -190,6 +201,7 @@ impl PlaybackState {
                 },
                 pattern: None,
             },
+            selected_palette: None,
         }
     }
 }
@@ -254,6 +266,31 @@ impl Canvas {
         self.rgba[index..index + 4].copy_from_slice(&[color.r, color.g, color.b, 255]);
     }
 
+    fn src_and(&mut self, clip: RectPx, x: i32, y: i32, color: Color) {
+        if !clip.contains(x, y) || x < 0 || y < 0 {
+            return;
+        }
+        let Ok(x) = u32::try_from(x) else {
+            return;
+        };
+        let Ok(y) = u32::try_from(y) else {
+            return;
+        };
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        let index = (u64::from(y) * u64::from(self.width) + u64::from(x)) * 4;
+        let Ok(index) = usize::try_from(index) else {
+            return;
+        };
+        if self.rgba[index + 3] == 0 {
+            return;
+        }
+        self.rgba[index] &= color.r;
+        self.rgba[index + 1] &= color.g;
+        self.rgba[index + 2] &= color.b;
+    }
+
     fn span_brush(&mut self, clip: RectPx, y: i32, x0: i32, x1: i32, brush: Brush) -> Result<()> {
         if y < clip.top || y >= clip.bottom || y < 0 || y >= self.height as i32 {
             return Ok(());
@@ -292,12 +329,16 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
 }
 
-fn color_ref(value: u32) -> Color {
-    Color {
+fn color_ref(value: u32) -> Result<Color> {
+    let mode = (value >> 24) as u8;
+    if !matches!(mode, 0x00 | 0x02) {
+        bail!("unsupported palette-dependent WMF COLORREF mode 0x{mode:02x}");
+    }
+    Ok(Color {
         r: (value & 0xff) as u8,
         g: ((value >> 8) & 0xff) as u8,
         b: ((value >> 16) & 0xff) as u8,
-    }
+    })
 }
 
 fn rgb_quad(bytes: &[u8], offset: usize) -> Result<Color> {
@@ -315,14 +356,14 @@ fn rgb_quad(bytes: &[u8], offset: usize) -> Result<Color> {
 }
 
 fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
-    if params.len() != 4 + LEGACY_PATTERN_DIB_BYTES {
-        bail!("unsupported WMF DIB pattern brush payload length");
-    }
     let style =
         read_u16(params, 0).ok_or_else(|| anyhow!("WMF DIB pattern brush style is truncated"))?;
     let color_usage = read_u16(params, 2)
         .ok_or_else(|| anyhow!("WMF DIB pattern brush color usage is truncated"))?;
-    if style != BS_DIBPATTERNPT || color_usage != DIB_RGB_COLORS {
+    let long_legacy_profile =
+        params.len() == 4 + LEGACY_PATTERN_DIB_BYTES && style == BS_DIBPATTERNPT;
+    let compact_pattern_profile = params.len() == 84 && style == BS_PATTERN;
+    if color_usage != DIB_RGB_COLORS || !(long_legacy_profile || compact_pattern_profile) {
         bail!("unsupported WMF DIB pattern brush profile");
     }
 
@@ -351,7 +392,10 @@ fn parse_legacy_pattern_brush(params: &[u8]) -> Result<Brush> {
         || bit_count != 1
         || compression != BI_RGB
         || !matches!(image_size, 0 | 32)
-        || colors_used != 2
+        || !matches!(
+            (long_legacy_profile, compact_pattern_profile, colors_used),
+            (true, false, 2) | (false, true, 0)
+        )
     {
         bail!("unsupported WMF DIB pattern brush bitmap profile");
     }
@@ -394,6 +438,10 @@ fn proven_stretchdib_profile(width: i32, height: i32, bit_count: u16) -> bool {
             | (200, 200, 8)
             | (210, 210, 24)
     )
+}
+
+fn proven_srcand_stretchdib_profile(width: i32, height: i32, bit_count: u16) -> bool {
+    matches!((width, height, bit_count), (163, 117, 1) | (149, 148, 1))
 }
 
 fn rasterize_bounded_stretchdib(
@@ -442,8 +490,14 @@ fn rasterize_bounded_stretchdib(
     let colors_used =
         read_u32(dib, 32).ok_or_else(|| anyhow!("WMF STRETCHDIB color count is truncated"))?;
 
-    if raster_operation != SRCCOPY
-        || color_usage != DIB_RGB_COLORS
+    let srccopy_profile = raster_operation == SRCCOPY
+        && proven_stretchdib_profile(width, height, bit_count)
+        && matches!((bit_count, colors_used), (8, 256) | (24, 0));
+    let srcand_profile = raster_operation == SRCAND
+        && proven_srcand_stretchdib_profile(width, height, bit_count)
+        && colors_used == 0;
+
+    if color_usage != DIB_RGB_COLORS
         || src_x != 0
         || src_y != 0
         || dest_x != 0
@@ -457,8 +511,7 @@ fn rasterize_bounded_stretchdib(
         || compression != BI_RGB
         || width != i32::from(src_width)
         || height != i32::from(src_height)
-        || !proven_stretchdib_profile(width, height, bit_count)
-        || !matches!((bit_count, colors_used), (8, 256) | (24, 0))
+        || !(srccopy_profile || srcand_profile)
     {
         bail!("unsupported WMF STRETCHDIB profile");
     }
@@ -482,7 +535,11 @@ fn rasterize_bounded_stretchdib(
         bail!("unsupported WMF STRETCHDIB image size");
     }
 
-    let palette_entries = if bit_count == 8 { 256usize } else { 0usize };
+    let palette_entries = match bit_count {
+        1 => 2usize,
+        8 => 256usize,
+        _ => 0usize,
+    };
     let palette_bytes = palette_entries
         .checked_mul(RGBQUAD_BYTES)
         .ok_or_else(|| anyhow!("WMF STRETCHDIB palette size overflow"))?;
@@ -496,7 +553,7 @@ fn rasterize_bounded_stretchdib(
         bail!("unsupported WMF STRETCHDIB DIB length");
     }
 
-    let palette = if bit_count == 8 {
+    let palette = if matches!(bit_count, 1 | 8) {
         let mut colors = Vec::with_capacity(palette_entries);
         for index in 0..palette_entries {
             colors.push(rgb_quad(
@@ -560,34 +617,54 @@ fn rasterize_bounded_stretchdib(
                     .map_err(|_| anyhow!("WMF STRETCHDIB source x is out of bounds"))?
                     .min(width_usize - 1);
 
-            let color = if bit_count == 8 {
-                let index = usize::from(
-                    *dib.get(row_offset + source_x)
-                        .ok_or_else(|| anyhow!("WMF STRETCHDIB indexed pixel is truncated"))?,
-                );
-                palette
-                    .as_ref()
-                    .and_then(|colors| colors.get(index))
-                    .copied()
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))?
-            } else {
-                let pixel = row_offset
-                    .checked_add(
-                        source_x
-                            .checked_mul(3)
-                            .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?,
-                    )
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?;
-                let raw = dib
-                    .get(pixel..pixel + 3)
-                    .ok_or_else(|| anyhow!("WMF STRETCHDIB RGB pixel is truncated"))?;
-                Color {
-                    r: raw[2],
-                    g: raw[1],
-                    b: raw[0],
+            let color = match bit_count {
+                1 => {
+                    let byte = *dib
+                        .get(row_offset + source_x / 8)
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB monochrome pixel is truncated"))?;
+                    let bit = 7 - (source_x % 8);
+                    let index = usize::from((byte >> bit) & 1);
+                    palette
+                        .as_ref()
+                        .and_then(|colors| colors.get(index))
+                        .copied()
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))?
                 }
+                8 => {
+                    let index = usize::from(
+                        *dib.get(row_offset + source_x)
+                            .ok_or_else(|| anyhow!("WMF STRETCHDIB indexed pixel is truncated"))?,
+                    );
+                    palette
+                        .as_ref()
+                        .and_then(|colors| colors.get(index))
+                        .copied()
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB palette index is out of bounds"))?
+                }
+                24 => {
+                    let pixel = row_offset
+                        .checked_add(
+                            source_x
+                                .checked_mul(3)
+                                .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?,
+                        )
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB pixel offset overflow"))?;
+                    let raw = dib
+                        .get(pixel..pixel + 3)
+                        .ok_or_else(|| anyhow!("WMF STRETCHDIB RGB pixel is truncated"))?;
+                    Color {
+                        r: raw[2],
+                        g: raw[1],
+                        b: raw[0],
+                    }
+                }
+                _ => bail!("unsupported WMF STRETCHDIB bit depth"),
             };
-            canvas.set(state.clip, x, y, color);
+            if raster_operation == SRCAND {
+                canvas.src_and(state.clip, x, y, color);
+            } else {
+                canvas.set(state.clip, x, y, color);
+            }
         }
     }
 
@@ -825,6 +902,105 @@ fn draw_polyline(
     Ok(())
 }
 
+fn rasterize_bounded_ellipse(
+    params: &[u8],
+    state: &PlaybackState,
+    canvas: &mut Canvas,
+) -> Result<()> {
+    if params.len() != 8 {
+        bail!("unsupported WMF ELLIPSE payload length");
+    }
+    if !matches!(state.pen.style, PS_NULL | PS_INSIDEFRAME)
+        || !matches!(state.brush.style, BS_SOLID | BS_NULL)
+        || state.brush.pattern.is_some()
+    {
+        bail!("unsupported WMF ELLIPSE pen/brush profile");
+    }
+
+    let bottom = read_i16(params, 0).ok_or_else(|| anyhow!("WMF ELLIPSE bottom is truncated"))?;
+    let right = read_i16(params, 2).ok_or_else(|| anyhow!("WMF ELLIPSE right is truncated"))?;
+    let top = read_i16(params, 4).ok_or_else(|| anyhow!("WMF ELLIPSE top is truncated"))?;
+    let left = read_i16(params, 6).ok_or_else(|| anyhow!("WMF ELLIPSE left is truncated"))?;
+    if right <= left || bottom <= top {
+        bail!("unsupported WMF ELLIPSE logical orientation");
+    }
+
+    let (x0, y0) = map_point(state, canvas, left, top)?;
+    let (x1, y1) = map_point(state, canvas, right, bottom)?;
+    if x1 <= x0 || y1 <= y0 {
+        bail!("unsupported WMF ELLIPSE mapped orientation");
+    }
+
+    let bounds = RectPx {
+        left: x0,
+        top: y0,
+        right: x1,
+        bottom: y1,
+    };
+    let clipped = bounds
+        .intersect(state.clip)
+        .intersect(RectPx::full(canvas.width, canvas.height));
+    if clipped.left >= clipped.right || clipped.top >= clipped.bottom {
+        return Ok(());
+    }
+
+    let width = u64::try_from(clipped.right - clipped.left)
+        .map_err(|_| anyhow!("WMF ELLIPSE work width is out of bounds"))?;
+    let height = u64::try_from(clipped.bottom - clipped.top)
+        .map_err(|_| anyhow!("WMF ELLIPSE work height is out of bounds"))?;
+    canvas.charge_work(
+        width
+            .checked_mul(height)
+            .ok_or_else(|| anyhow!("WMF ELLIPSE work count overflow"))?,
+    )?;
+
+    let center_x = (f64::from(x0) + f64::from(x1)) * 0.5;
+    let center_y = (f64::from(y0) + f64::from(y1)) * 0.5;
+    let radius_x = f64::from(x1 - x0) * 0.5;
+    let radius_y = f64::from(y1 - y0) * 0.5;
+    if radius_x <= 0.0 || radius_y <= 0.0 {
+        bail!("unsupported WMF ELLIPSE mapped extent");
+    }
+
+    let pen_width = if state.pen.style == PS_INSIDEFRAME {
+        f64::from(mapped_pen_width(state, canvas))
+    } else {
+        0.0
+    };
+    let inner_radius_x = (radius_x - pen_width).max(0.0);
+    let inner_radius_y = (radius_y - pen_width).max(0.0);
+
+    for y in clipped.top..clipped.bottom {
+        let dy = (f64::from(y) + 0.5 - center_y) / radius_y;
+        for x in clipped.left..clipped.right {
+            let dx = (f64::from(x) + 0.5 - center_x) / radius_x;
+            if dx * dx + dy * dy > 1.0 {
+                continue;
+            }
+
+            let stroke = if state.pen.style == PS_INSIDEFRAME {
+                if inner_radius_x <= 0.0 || inner_radius_y <= 0.0 {
+                    true
+                } else {
+                    let inner_dx = (f64::from(x) + 0.5 - center_x) / inner_radius_x;
+                    let inner_dy = (f64::from(y) + 0.5 - center_y) / inner_radius_y;
+                    inner_dx * inner_dx + inner_dy * inner_dy >= 1.0
+                }
+            } else {
+                false
+            };
+
+            if stroke {
+                canvas.set(state.clip, x, y, state.pen.color);
+            } else if state.brush.style != BS_NULL {
+                canvas.set(state.clip, x, y, state.brush.color_at(x, y));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn fill_rings(canvas: &mut Canvas, state: &PlaybackState, rings: &[Vec<(i32, i32)>]) -> Result<()> {
     let Some(min_y) = rings
         .iter()
@@ -913,6 +1089,68 @@ fn allocate_object(objects: &mut [Option<GdiObject>], object: GdiObject) -> Resu
         bail!("WMF object table is full");
     };
     *slot = Some(object);
+    Ok(())
+}
+
+fn validate_palette_compatibility_object(params: &[u8]) -> Result<()> {
+    let start = read_u16(params, 0).ok_or_else(|| anyhow!("WMF Palette Start is truncated"))?;
+    let entry_count =
+        read_u16(params, 2).ok_or_else(|| anyhow!("WMF Palette entry count is truncated"))?;
+    let observed_profile = matches!((params.len(), entry_count), (1028, 256) | (84, 20));
+    if start != 0x0300 || !observed_profile {
+        bail!(
+            "unsupported WMF Palette compatibility profile start=0x{start:04x} entries={entry_count} len={}",
+            params.len()
+        );
+    }
+    Ok(())
+}
+
+fn validate_font_compatibility_object(params: &[u8]) -> Result<()> {
+    // Exact-1050 evidence for the Publisher text-free Font compatibility
+    // cohort. The short face-name tail stays opaque: this rasterizer does not
+    // resolve fonts or paint text, and TEXTOUT/EXTTEXTOUT remain unsupported.
+    if params.len() != 26 {
+        bail!(
+            "unsupported WMF Font compatibility payload length {}",
+            params.len()
+        );
+    }
+
+    let height = read_i16(params, 0).ok_or_else(|| anyhow!("WMF Font height is truncated"))?;
+    let width = read_i16(params, 2).ok_or_else(|| anyhow!("WMF Font width is truncated"))?;
+    let escapement =
+        read_i16(params, 4).ok_or_else(|| anyhow!("WMF Font escapement is truncated"))?;
+    let orientation =
+        read_i16(params, 6).ok_or_else(|| anyhow!("WMF Font orientation is truncated"))?;
+    let weight = read_u16(params, 8).ok_or_else(|| anyhow!("WMF Font weight is truncated"))?;
+
+    let shared_profile = weight == 700
+        && params[10] == 0
+        && params[11] == 0
+        && params[12] == 0
+        && params[13] == 0
+        && params[16] == 2
+        && params[17] == 34;
+    let scalar_profile_matches = shared_profile
+        && ((matches!((height, width), (16, 7) | (20, 9))
+            && escapement == 0
+            && orientation == 0
+            && params[14] == 1
+            && params[15] == 2)
+            || (height == 16
+                && width == 7
+                && escapement == 900
+                && orientation == 900
+                && params[14] == 7
+                && params[15] == 18));
+    if !scalar_profile_matches {
+        bail!("unsupported WMF Font compatibility profile");
+    }
+
+    let _opaque_face_tail = params
+        .get(18..26)
+        .ok_or_else(|| anyhow!("WMF Font compatibility face tail is truncated"))?;
     Ok(())
 }
 
@@ -1012,17 +1250,28 @@ fn map_points(
         .collect()
 }
 
-fn validate_enhanced_metafile_escape(params: &[u8]) -> Result<()> {
+fn validate_meta_escape(params: &[u8]) -> Result<()> {
     if params.len() < 4 {
         bail!("WMF META_ESCAPE record is truncated");
     }
     let escape = read_u16(params, 0).ok_or_else(|| anyhow!("WMF escape function is truncated"))?;
-    if escape != META_ESCAPE_ENHANCED_METAFILE {
-        bail!("unsupported WMF escape function 0x{escape:04x}");
-    }
     let byte_count = usize::from(
         read_u16(params, 2).ok_or_else(|| anyhow!("WMF escape byte count is truncated"))?,
     );
+
+    if escape == META_ESCAPE_POSTSCRIPT_IGNORE {
+        if params.len() != 6 || byte_count != 2 {
+            bail!("unsupported WMF POSTSCRIPT_IGNORE profile");
+        }
+        let _opaque_control = params
+            .get(4..6)
+            .ok_or_else(|| anyhow!("WMF POSTSCRIPT_IGNORE payload is truncated"))?;
+        return Ok(());
+    }
+
+    if escape != META_ESCAPE_ENHANCED_METAFILE {
+        bail!("unsupported WMF escape function 0x{escape:04x}");
+    }
     if byte_count > params.len().saturating_sub(4) {
         bail!("WMF MFCOMMENT payload is truncated");
     }
@@ -1325,9 +1574,17 @@ pub fn rasterize_wmf_preview(
                 let pen = Pen {
                     style,
                     width_x: read_i16(params, 2).unwrap(),
-                    color: color_ref(read_u32(params, 6).unwrap()),
+                    color: color_ref(read_u32(params, 6).unwrap())?,
                 };
                 allocate_object(&mut objects, GdiObject::Pen(pen))?;
+            }
+            META_CREATEFONTINDIRECT => {
+                validate_font_compatibility_object(params)?;
+                allocate_object(&mut objects, GdiObject::FontCompatibility)?;
+            }
+            META_CREATEPALETTE => {
+                validate_palette_compatibility_object(params)?;
+                allocate_object(&mut objects, GdiObject::PaletteCompatibility)?;
             }
             META_CREATEBRUSHINDIRECT => {
                 if params.len() < 8 {
@@ -1339,7 +1596,7 @@ pub fn rasterize_wmf_preview(
                 }
                 let brush = Brush {
                     style,
-                    color: color_ref(read_u32(params, 2).unwrap()),
+                    color: color_ref(read_u32(params, 2).unwrap())?,
                     pattern: None,
                 };
                 allocate_object(&mut objects, GdiObject::Brush(brush))?;
@@ -1356,6 +1613,9 @@ pub fn rasterize_wmf_preview(
                 let index = usize::from(
                     read_u16(params, 0).ok_or_else(|| anyhow!("WMF DELETEOBJECT is truncated"))?,
                 );
+                if state.selected_palette == Some(index) {
+                    bail!("WMF DELETEOBJECT targets the selected Palette");
+                }
                 let slot = objects
                     .get_mut(index)
                     .ok_or_else(|| anyhow!("WMF DELETEOBJECT index is out of bounds"))?;
@@ -1372,9 +1632,40 @@ pub fn rasterize_wmf_preview(
                 match object {
                     GdiObject::Pen(pen) => state.pen = pen,
                     GdiObject::Brush(brush) => state.brush = brush,
+                    GdiObject::FontCompatibility => {}
+                    GdiObject::PaletteCompatibility => {
+                        bail!("WMF Palette requires META_SELECTPALETTE");
+                    }
                     GdiObject::RegionCompatibility => {
                         pending_region_compat_cliprect = true;
                     }
+                }
+            }
+            META_SELECTPALETTE => {
+                if params.len() != 2 {
+                    bail!("WMF SELECTPALETTE has unsupported payload length");
+                }
+                let index = usize::from(
+                    read_u16(params, 0).ok_or_else(|| anyhow!("WMF SELECTPALETTE is truncated"))?,
+                );
+                match objects.get(index).and_then(|object| *object) {
+                    Some(GdiObject::PaletteCompatibility) => state.selected_palette = Some(index),
+                    Some(_) => bail!("WMF SELECTPALETTE refers to a non-Palette object"),
+                    None => bail!("WMF SELECTPALETTE refers to an empty or invalid slot"),
+                }
+            }
+            META_REALIZEPALETTE => {
+                if !params.is_empty() {
+                    bail!("WMF REALIZEPALETTE has unsupported payload length");
+                }
+                let index = state
+                    .selected_palette
+                    .ok_or_else(|| anyhow!("WMF REALIZEPALETTE without selected Palette"))?;
+                if !matches!(
+                    objects.get(index).and_then(|object| *object),
+                    Some(GdiObject::PaletteCompatibility)
+                ) {
+                    bail!("WMF REALIZEPALETTE selected Palette is unavailable");
                 }
             }
             META_SELECTCLIPREGION => {
@@ -1447,6 +1738,7 @@ pub fn rasterize_wmf_preview(
                     draw_polyline(&mut canvas, &state, ring, true)?;
                 }
             }
+            META_ELLIPSE => rasterize_bounded_ellipse(params, &state, &mut canvas)?,
             META_RECTANGLE => {
                 let bottom = read_i16(params, 0)
                     .ok_or_else(|| anyhow!("WMF RECTANGLE bottom is truncated"))?;
@@ -1464,7 +1756,7 @@ pub fn rasterize_wmf_preview(
                 draw_polyline(&mut canvas, &state, &points, true)?;
             }
             META_STRETCHDIB => rasterize_bounded_stretchdib(params, &state, &mut canvas)?,
-            META_ESCAPE => validate_enhanced_metafile_escape(params)?,
+            META_ESCAPE => validate_meta_escape(params)?,
             other => bail!("unsupported WMF record function 0x{other:04x}"),
         }
 
@@ -1531,6 +1823,38 @@ mod tests {
         }
     }
 
+    fn palette_compatibility_params() -> Vec<u8> {
+        let mut params = Vec::with_capacity(1028);
+        params.extend_from_slice(&0x0300_u16.to_le_bytes());
+        params.extend_from_slice(&256_u16.to_le_bytes());
+        for index in 0..256_u16 {
+            params.push(index as u8);
+            params.push((255 - index) as u8);
+            params.push((index / 2) as u8);
+            params.push(0x04);
+        }
+        assert_eq!(params.len(), 1028);
+        params
+    }
+
+    fn font_compatibility_params(height: i16, width: i16) -> Vec<u8> {
+        let mut params = Vec::new();
+        params.extend_from_slice(&height.to_le_bytes());
+        params.extend_from_slice(&width.to_le_bytes());
+        params.extend_from_slice(&0_i16.to_le_bytes());
+        params.extend_from_slice(&0_i16.to_le_bytes());
+        params.extend_from_slice(&700_u16.to_le_bytes());
+        params.extend_from_slice(&[0, 0, 0]);
+        params.push(0);
+        params.push(1);
+        params.push(2);
+        params.push(2);
+        params.push(34);
+        params.extend_from_slice(&[b'A', b'B', b'C', b'D', b'E', b'F', 0, 1]);
+        assert_eq!(params.len(), 26);
+        params
+    }
+
     fn region_compatibility_params() -> Vec<u8> {
         let mut params = Vec::new();
         params.extend_from_slice(&0_i16.to_le_bytes()); // nextInChain: ignored
@@ -1583,6 +1907,49 @@ mod tests {
             polygon.extend_from_slice(&y.to_le_bytes());
         }
         records.extend(record(META_POLYGON, &polygon));
+        records.extend(record(META_EOF, &[]));
+
+        let total_len = 18 + records.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&20_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
+    fn synthetic_ellipse() -> Vec<u8> {
+        let mut records = Vec::<u8>::new();
+        let mut window = Vec::new();
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        window.extend_from_slice(&100_i16.to_le_bytes());
+        records.extend(record(META_SETWINDOWEXT, &window));
+
+        let mut brush = Vec::new();
+        brush.extend_from_slice(&BS_SOLID.to_le_bytes());
+        brush.extend_from_slice(&0x0000_00ff_u32.to_le_bytes());
+        brush.extend_from_slice(&0_u16.to_le_bytes());
+        records.extend(record(META_CREATEBRUSHINDIRECT, &brush));
+
+        let mut pen = Vec::new();
+        pen.extend_from_slice(&PS_NULL.to_le_bytes());
+        pen.extend_from_slice(&0_i16.to_le_bytes());
+        pen.extend_from_slice(&0_i16.to_le_bytes());
+        pen.extend_from_slice(&0_u32.to_le_bytes());
+        records.extend(record(META_CREATEPENINDIRECT, &pen));
+
+        records.extend(record(META_SELECTOBJECT, &0_u16.to_le_bytes()));
+        records.extend(record(META_SELECTOBJECT, &1_u16.to_le_bytes()));
+
+        let mut ellipse = Vec::new();
+        for value in [80_i16, 80, 20, 20] {
+            ellipse.extend_from_slice(&value.to_le_bytes());
+        }
+        records.extend(record(META_ELLIPSE, &ellipse));
         records.extend(record(META_EOF, &[]));
 
         let total_len = 18 + records.len();
@@ -1725,6 +2092,121 @@ mod tests {
         bytes
     }
 
+    fn synthetic_srcand_stretchdib(paint_destination: bool) -> Vec<u8> {
+        const WIDTH: usize = 163;
+        const HEIGHT: usize = 117;
+        let mut records = Vec::<u8>::new();
+
+        let mut window = Vec::new();
+        window.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+        window.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+        records.extend(record(META_SETWINDOWEXT, &window));
+
+        if paint_destination {
+            let mut brush = Vec::new();
+            brush.extend_from_slice(&BS_SOLID.to_le_bytes());
+            brush.extend_from_slice(&0x00aa_ccf0_u32.to_le_bytes());
+            brush.extend_from_slice(&0_u16.to_le_bytes());
+            records.extend(record(META_CREATEBRUSHINDIRECT, &brush));
+            records.extend(record(META_SELECTOBJECT, &0_u16.to_le_bytes()));
+
+            let mut rectangle = Vec::new();
+            rectangle.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+            rectangle.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+            rectangle.extend_from_slice(&0_i16.to_le_bytes());
+            rectangle.extend_from_slice(&0_i16.to_le_bytes());
+            records.extend(record(META_RECTANGLE, &rectangle));
+        }
+
+        let row_stride = WIDTH.div_ceil(32) * 4;
+        let image_size = row_stride * HEIGHT;
+        let mut dib = Vec::new();
+        dib.extend_from_slice(&40_u32.to_le_bytes());
+        dib.extend_from_slice(&(WIDTH as i32).to_le_bytes());
+        dib.extend_from_slice(&(HEIGHT as i32).to_le_bytes());
+        dib.extend_from_slice(&1_u16.to_le_bytes());
+        dib.extend_from_slice(&1_u16.to_le_bytes());
+        dib.extend_from_slice(&BI_RGB.to_le_bytes());
+        dib.extend_from_slice(&u32::try_from(image_size).unwrap().to_le_bytes());
+        dib.extend_from_slice(&0_i32.to_le_bytes());
+        dib.extend_from_slice(&0_i32.to_le_bytes());
+        dib.extend_from_slice(&0_u32.to_le_bytes());
+        dib.extend_from_slice(&0_u32.to_le_bytes());
+        dib.extend_from_slice(&[0, 0, 0, 0]);
+        dib.extend_from_slice(&[0xff, 0xf0, 0x0f, 0]);
+        dib.extend(std::iter::repeat_n(0xff_u8, image_size));
+
+        let mut stretch = Vec::new();
+        stretch.extend_from_slice(&SRCAND.to_le_bytes());
+        stretch.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        stretch.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+        stretch.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&(HEIGHT as i16).to_le_bytes());
+        stretch.extend_from_slice(&(WIDTH as i16).to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&0_i16.to_le_bytes());
+        stretch.extend_from_slice(&dib);
+        records.extend(record(META_STRETCHDIB, &stretch));
+        records.extend(record(META_EOF, &[]));
+
+        let total_len = 18 + records.len();
+        let max_record_words = u32::try_from((6 + stretch.len()) / 2).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&9_u16.to_le_bytes());
+        bytes.extend_from_slice(&0x0300_u16.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(total_len / 2).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&(if paint_destination { 1_u16 } else { 0 }).to_le_bytes());
+        bytes.extend_from_slice(&max_record_words.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend(records);
+        bytes
+    }
+
+    #[test]
+    fn srcand_preserves_transparent_destination() {
+        let image = rasterize_wmf_preview(&synthetic_srcand_stretchdib(false), 163, 117)
+            .expect("bounded SRCAND over transparent destination");
+        let center = ((58 * 163 + 81) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn srcand_composites_nontrivial_opaque_destination_rgb() {
+        let image = rasterize_wmf_preview(&synthetic_srcand_stretchdib(true), 163, 117)
+            .expect("bounded SRCAND over painted destination");
+        let center = ((58 * 163 + 81) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[0x00, 0xc0, 0xaa, 255]);
+    }
+
+    #[test]
+    fn rasterizes_bounded_ellipse_with_existing_brush_state() {
+        let image = rasterize_wmf_preview(&synthetic_ellipse(), 100, 100).expect("ellipse");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        let corner = ((20 * 100 + 20) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+        assert_eq!(&image.rgba[corner..corner + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_reversed_ellipse_outside_proven_profile() {
+        let mut bytes = synthetic_ellipse();
+        let mut offset = 18usize;
+        while offset + 6 <= bytes.len() {
+            let words = read_u32(&bytes, offset).expect("record size");
+            let function = read_u16(&bytes, offset + 4).expect("record function");
+            if function == META_ELLIPSE {
+                bytes[offset + 8..offset + 10].copy_from_slice(&10_i16.to_le_bytes());
+                bytes[offset + 12..offset + 14].copy_from_slice(&90_i16.to_le_bytes());
+                break;
+            }
+            offset += usize::try_from(words * 2).expect("record bytes");
+        }
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
     #[test]
     fn rasterizes_corpus_proven_8bpp_stretchdib() {
         let image =
@@ -1782,6 +2264,29 @@ mod tests {
     }
 
     #[test]
+    fn accepts_compact_8x8_monochrome_dib_pattern_brush() {
+        let mut params = Vec::new();
+        params.extend_from_slice(&BS_PATTERN.to_le_bytes());
+        params.extend_from_slice(&DIB_RGB_COLORS.to_le_bytes());
+        params.extend_from_slice(&40_u32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&8_i32.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&1_u16.to_le_bytes());
+        params.extend_from_slice(&BI_RGB.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_i32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&0_u32.to_le_bytes());
+        params.extend_from_slice(&[0, 0, 0, 0]);
+        params.extend_from_slice(&[0, 0, 255, 0]);
+        params.extend_from_slice(&[0_u8; 32]);
+        assert_eq!(params.len(), 84);
+        assert!(parse_legacy_pattern_brush(&params).is_ok());
+    }
+
+    #[test]
     fn rejects_pattern_brush_outside_proven_dib_profile() {
         let mut params = vec![0_u8; 100];
         params[0..2].copy_from_slice(&BS_DIBPATTERNPT.to_le_bytes());
@@ -1794,6 +2299,145 @@ mod tests {
         params[20..24].copy_from_slice(&BI_RGB.to_le_bytes());
         params[36..40].copy_from_slice(&2_u32.to_le_bytes());
         assert!(parse_legacy_pattern_brush(&params).is_err());
+    }
+
+    #[test]
+    fn validates_exact_palette_compatibility_profile() {
+        assert!(validate_palette_compatibility_object(&palette_compatibility_params()).is_ok());
+
+        let mut secondary = palette_compatibility_params();
+        secondary[2..4].copy_from_slice(&20_u16.to_le_bytes());
+        secondary.truncate(84);
+        assert!(validate_palette_compatibility_object(&secondary).is_ok());
+
+        let mut wrong_start = palette_compatibility_params();
+        wrong_start[0..2].copy_from_slice(&0_u16.to_le_bytes());
+        assert!(validate_palette_compatibility_object(&wrong_start).is_err());
+
+        let mut short = palette_compatibility_params();
+        short.truncate(1024);
+        assert!(validate_palette_compatibility_object(&short).is_err());
+    }
+
+    #[test]
+    fn palette_relative_rgb_is_true_color_but_palette_index_fails_closed() {
+        assert_eq!(
+            color_ref(0x0203_0201).expect("PALETTERGB"),
+            Color { r: 1, g: 2, b: 3 }
+        );
+        assert!(color_ref(0x0103_0201).is_err());
+    }
+
+    #[test]
+    fn selected_palette_lifecycle_is_inert_for_true_color_raster() {
+        let baseline = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("baseline");
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEPALETTE, &palette_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTPALETTE, &2_u16.to_le_bytes()),
+        );
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_REALIZEPALETTE, &[]));
+
+        let with_palette = rasterize_wmf_preview(&bytes, 100, 100).expect("palette compatibility");
+        assert_eq!(with_palette, baseline);
+    }
+
+    #[test]
+    fn deleting_selected_palette_fails_closed() {
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEPALETTE, &palette_compatibility_params()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTPALETTE, &2_u16.to_le_bytes()),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_DELETEOBJECT, &2_u16.to_le_bytes()),
+        );
+        assert!(rasterize_wmf_preview(&bytes, 100, 100).is_err());
+    }
+
+    #[test]
+    fn validates_only_observed_short_font_compatibility_profiles() {
+        assert!(validate_font_compatibility_object(&font_compatibility_params(16, 7)).is_ok());
+        assert!(validate_font_compatibility_object(&font_compatibility_params(20, 9)).is_ok());
+
+        let mut rotated = font_compatibility_params(16, 7);
+        rotated[4..6].copy_from_slice(&900_i16.to_le_bytes());
+        rotated[6..8].copy_from_slice(&900_i16.to_le_bytes());
+        rotated[14] = 7;
+        rotated[15] = 18;
+        assert!(validate_font_compatibility_object(&rotated).is_ok());
+
+        let mut unobserved = font_compatibility_params(16, 7);
+        unobserved[8..10].copy_from_slice(&400_u16.to_le_bytes());
+        assert!(validate_font_compatibility_object(&unobserved).is_err());
+
+        let mut long = font_compatibility_params(16, 7);
+        long.extend_from_slice(&[0, 0]);
+        assert!(validate_font_compatibility_object(&long).is_err());
+    }
+
+    #[test]
+    fn selected_font_compatibility_object_does_not_change_raster_state() {
+        let baseline = rasterize_wmf_preview(&synthetic_polygon(), 100, 100).expect("baseline");
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEFONTINDIRECT, &font_compatibility_params(16, 7)),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+
+        let with_font = rasterize_wmf_preview(&bytes, 100, 100).expect("font compatibility");
+        assert_eq!(with_font, baseline);
+    }
+
+    #[test]
+    fn selected_font_still_fails_closed_when_text_output_is_encountered() {
+        const META_EXTTEXTOUT_TEST: u16 = 0x0a32;
+
+        let mut bytes = synthetic_polygon();
+        bytes[10..12].copy_from_slice(&3_u16.to_le_bytes());
+        insert_record_before_function(
+            &mut bytes,
+            META_SELECTOBJECT,
+            record(META_CREATEFONTINDIRECT, &font_compatibility_params(16, 7)),
+        );
+        insert_record_before_function(
+            &mut bytes,
+            META_POLYGON,
+            record(META_SELECTOBJECT, &2_u16.to_le_bytes()),
+        );
+        insert_record_before_function(&mut bytes, META_POLYGON, record(META_EXTTEXTOUT_TEST, &[]));
+
+        let error = rasterize_wmf_preview(&bytes, 100, 100).expect_err("text remains unsupported");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported WMF record function 0x0a32")
+        );
     }
 
     #[test]
@@ -1952,7 +2596,29 @@ mod tests {
         params.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
         params.extend_from_slice(&body);
 
-        assert!(validate_enhanced_metafile_escape(&params).is_err());
+        assert!(validate_meta_escape(&params).is_err());
+    }
+
+    #[test]
+    fn accepts_bounded_postscript_ignore_without_postscript_execution() {
+        let mut bytes = synthetic_polygon();
+        let mut params = Vec::new();
+        params.extend_from_slice(&META_ESCAPE_POSTSCRIPT_IGNORE.to_le_bytes());
+        params.extend_from_slice(&2_u16.to_le_bytes());
+        params.extend_from_slice(&[0x01, 0x00]);
+        insert_record_before_eof(&mut bytes, record(META_ESCAPE, &params));
+
+        let image = rasterize_wmf_preview(&bytes, 100, 100).expect("POSTSCRIPT_IGNORE no-op");
+        let center = ((50 * 100 + 50) * 4) as usize;
+        assert_eq!(&image.rgba[center..center + 4], &[255, 0, 0, 255]);
+
+        let mut wrong_count = params.clone();
+        wrong_count[2..4].copy_from_slice(&1_u16.to_le_bytes());
+        assert!(validate_meta_escape(&wrong_count).is_err());
+
+        let mut oversized = params;
+        oversized.extend_from_slice(&[0, 0]);
+        assert!(validate_meta_escape(&oversized).is_err());
     }
 
     #[test]

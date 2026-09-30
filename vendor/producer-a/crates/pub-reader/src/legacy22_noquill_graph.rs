@@ -404,6 +404,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
             observed_scenario_page_ids: Vec::new(),
             scenario_evidence_list_count: 0,
         },
+        source_page_paint_orders: Vec::new(),
         diagnostics,
         typography_runs: Vec::new(),
         script_font_maps: Vec::new(),

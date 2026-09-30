@@ -8,7 +8,7 @@ use std::{
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
-use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
+use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -348,12 +348,13 @@ pub fn run_guest_scene_worker(
     })?;
 
     let (classification, terminal_code, scene) =
-        match open_pub_geometry(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(geometry) => match from_viewer_geometry(
+        match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
+            Ok(bundle) => match from_viewer_geometry(
                 session_id.to_owned(),
                 expected_sha256.to_owned(),
                 "guest:source".to_owned(),
-                &geometry,
+                &bundle.geometry,
+                &bundle.source_page_paint_orders,
             ) {
                 Ok(scene) => {
                     let classification = if scene.fidelity.state == "supported" {

@@ -4,9 +4,39 @@ import assert from "node:assert/strict";
 import {
   assertReaderSceneSourceNeutral,
   imagePaintGeometry,
+  imageResourcePaintPlan,
   resolvedTextLinePaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
+
+test("Viewer-materialized OLE preview PNG uses the generic image resource paint path", () => {
+  const resource = {
+    resource_id: "resource:legacy-ole-preview",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,Ym91bmRlZC1vbGUtcHJldmlldy1wbmc="
+  };
+  const node = {
+    node_id: "node:legacy-ole",
+    kind: "picture_frame",
+    bounds: { x: 100, y: 200, width: 300, height: 400 },
+    resource_id: resource.resource_id
+  };
+
+  assert.doesNotThrow(() =>
+    assertReaderSceneSourceNeutral({ nodes: [node], resources: [resource] })
+  );
+  assert.deepEqual(imageResourcePaintPlan(node, resource), {
+    href: resource.inline_data_url,
+    resource_id: resource.resource_id,
+    availability: "inline_data_url",
+    geometry: { x: 100, y: 200, width: 300, height: 400 }
+  });
+  assert.equal(
+    imageResourcePaintPlan(node, { ...resource, inline_data_url: "data:image/svg+xml;base64,PHN2Zy8+" }),
+    null
+  );
+});
 
 test("image crop maps the normalized source window onto the destination frame", () => {
   const geometry = imagePaintGeometry(

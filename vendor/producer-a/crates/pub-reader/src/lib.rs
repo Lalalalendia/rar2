@@ -100,9 +100,9 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillMcldReadError, QuillScriptFontEntryDisposition, QuillStoryReadError,
-    QuillTypographyValueSource, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    QuillGroundedStoryIdentity, QuillMcldReadError, QuillScriptFontEntryDisposition,
+    QuillStoryReadError, QuillTypographyValueSource, parse_bounded_fdpp_exact_story_catalog,
+    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -171,9 +171,19 @@ pub struct PubPageRoleObservationReceipt {
     pub document_page_list_entry_count: usize,
     pub confirmed_page_count: usize,
     pub special_entry_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub document_entries: Vec<PubDocumentPageListEntryObservation>,
     pub pages: Vec<PubPageRoleObservation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controlling: Vec<PubControllingObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubDocumentPageListEntryObservation {
+    pub document_ordinal: usize,
+    pub contents_seq_num: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_type: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,7 +197,17 @@ pub struct PubPageRoleObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_master_seq_num: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_master_raw_type: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pgt_type: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_document_entry_seq_num: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_document_entry_raw_type: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_document_entry_seq_num: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_document_entry_raw_type: Option<u16>,
     pub child_raw_type_counts: BTreeMap<u16, usize>,
     pub shape_child_count: usize,
     pub group_child_count: usize,
@@ -230,10 +250,26 @@ pub struct PubEffectivePageProjection {
     pub scenario_evidence_list_count: usize,
 }
 
+pub const PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1: &str = "chaptera.pub-source-page-paint-order.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubSourcePagePaintOrderV1 {
+    pub schema_version: String,
+    pub page_id: PageId,
+    /// Canonical Node identities in persisted OfficeArt back-to-front order.
+    pub node_ids: Vec<NodeId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubSourceGraphBuild {
     pub graph: PubSourceGraph,
     pub effective_pages: PubEffectivePageProjection,
+    /// Page-local back-to-front order for the bounded direct source-backed
+    /// object class whose persisted OfficeArt SpContainer order can be joined
+    /// unambiguously to canonical Nodes. Pages with incomplete/ambiguous
+    /// coverage are omitted rather than assigned an invented order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_page_paint_orders: Vec<PubSourcePagePaintOrderV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<PubBridgeDiagnostic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -555,6 +591,9 @@ pub enum PubBridgeDiagnostic {
         record_count: u32,
         record_id_count: u32,
     },
+    FdppExactStoryFallback {
+        story_count: usize,
+    },
     EquivalentMarginsPageExtents {
         count: usize,
         width_emu: u32,
@@ -688,6 +727,19 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
     let page_list = parse_confirmed_document_page_list(&contents, page_list_block)
         .context("parse DOCUMENT PageList for PAGE-role observation")?;
 
+    let document_entries = page_list
+        .entries
+        .iter()
+        .enumerate()
+        .map(
+            |(document_ordinal, entry)| PubDocumentPageListEntryObservation {
+                document_ordinal,
+                contents_seq_num: entry.handle,
+                raw_type: references.get(&entry.handle).and_then(single_raw_type),
+            },
+        )
+        .collect::<Vec<_>>();
+
     let mut pages = Vec::new();
     let mut special_entry_count = 0_usize;
 
@@ -751,13 +803,28 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             }
         }
 
+        let applied_master_raw_type = applied_master_seq_num
+            .and_then(|seq_num| references.get(&seq_num))
+            .and_then(single_raw_type);
+        let previous_document_entry = document_ordinal
+            .checked_sub(1)
+            .and_then(|ordinal| document_entries.get(ordinal));
+        let next_document_entry = document_entries.get(document_ordinal + 1);
+
         pages.push(PubPageRoleObservation {
             document_ordinal,
             contents_seq_num: entry.handle,
             oid_dword0: oid.map(|value| value.0),
             oid_dword1: oid.map(|value| value.1),
             applied_master_seq_num,
+            applied_master_raw_type,
             pgt_type,
+            previous_document_entry_seq_num: previous_document_entry
+                .map(|item| item.contents_seq_num),
+            previous_document_entry_raw_type: previous_document_entry
+                .and_then(|item| item.raw_type),
+            next_document_entry_seq_num: next_document_entry.map(|item| item.contents_seq_num),
+            next_document_entry_raw_type: next_document_entry.and_then(|item| item.raw_type),
             shape_child_count: child_raw_type_counts
                 .get(&RAW_TYPE_SHAPE)
                 .copied()
@@ -826,6 +893,7 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
         document_page_list_entry_count: page_list.entries.len(),
         confirmed_page_count: pages.len(),
         special_entry_count,
+        document_entries,
         pages,
         controlling,
     })
@@ -1895,10 +1963,10 @@ pub fn build_mature_0x2c_from_streams(
     )?;
     let story_catalog_chunk =
         chunk_for_reference(contents_stream.clone(), contents, story_catalog_reference)?;
-    let (story_layout_keys, physical_empty_story_catalog): (BTreeMap<_, _>, bool) =
+    let (story_layout_keys, grounded_story_catalog, physical_empty_story_catalog) =
         match parse_confirmed_mature_story_catalog(contents, &story_catalog_chunk) {
-            Ok(story_catalog) => (
-                story_catalog
+            Ok(story_catalog) => {
+                let story_layout_keys = story_catalog
                     .entries
                     .iter()
                     .filter_map(|entry| {
@@ -1907,9 +1975,9 @@ pub fn build_mature_0x2c_from_streams(
                             (entry.layout_key?, entry.layout_key_source.as_ref()?.clone()),
                         ))
                     })
-                    .collect(),
-                false,
-            ),
+                    .collect::<BTreeMap<_, _>>();
+                (story_layout_keys, Some(story_catalog), false)
+            }
             Err(StoryCatalogReadError::MissingDeclaredCount) => {
                 let _physical_empty = parse_bounded_empty_mature_story_catalog_variant(
                     contents,
@@ -1936,7 +2004,7 @@ pub fn build_mature_0x2c_from_streams(
                         referenced_story_ids
                     );
                 }
-                (BTreeMap::new(), true)
+                (BTreeMap::new(), None, true)
             }
             Err(error) => return Err(error).context("parse mature Story catalog 0x65"),
         };
@@ -2051,6 +2119,7 @@ pub fn build_mature_0x2c_from_streams(
     graph.pages = pages;
 
     let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
+    let mut fdpp_story_catalog = None;
     let quill_catalog = match parse_confirmed_story_catalog(quill_stream.clone(), quill) {
         Ok(catalog) => Some(catalog),
         Err(QuillStoryReadError::MissingRequiredChunk { name })
@@ -2061,7 +2130,33 @@ pub fn build_mature_0x2c_from_streams(
             });
             None
         }
-        Err(error) => return Err(error).context("parse grounded Quill story catalog"),
+        Err(ordinary_error) => {
+            let Some(story_catalog) = grounded_story_catalog.as_ref() else {
+                return Err(ordinary_error).context("parse grounded Quill story catalog");
+            };
+            let identities = story_catalog
+                .entries
+                .iter()
+                .map(|entry| QuillGroundedStoryIdentity {
+                    syid: pub_core::QuillSyid(entry.text_id),
+                    source: entry.text_id_source.clone(),
+                })
+                .collect::<Vec<_>>();
+            match parse_bounded_fdpp_exact_story_catalog(quill_stream.clone(), quill, &identities)
+                .context("parse bounded exact-FDPP Story fallback")?
+            {
+                Some(catalog) => {
+                    diagnostics.push(PubBridgeDiagnostic::FdppExactStoryFallback {
+                        story_count: catalog.stories.len(),
+                    });
+                    fdpp_story_catalog = Some(catalog);
+                    None
+                }
+                None => {
+                    return Err(ordinary_error).context("parse grounded Quill story catalog");
+                }
+            }
+        }
     };
     let typography_catalog = if let Some(quill_catalog) = quill_catalog.as_ref() {
         match parse_bounded_typography(quill, quill_catalog) {
@@ -2127,6 +2222,60 @@ pub fn build_mature_0x2c_from_streams(
                     &story_slice.syid_source,
                     Some(object_key.clone()),
                     Some("SYID".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &story_slice.text_source,
+                    Some(object_key),
+                    Some("TEXT".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ];
+
+            graph.stories.insert(
+                story_id,
+                Story {
+                    id: story_id,
+                    text,
+                    paragraphs: Vec::new(),
+                    runs: Vec::new(),
+                    fields: Vec::new(),
+                    hyperlinks: Vec::new(),
+                    source_refs,
+                },
+            );
+            story_by_syid.insert(syid, story_id);
+        }
+    }
+
+    if let Some(fdpp_catalog) = fdpp_story_catalog.as_ref() {
+        for story_slice in &fdpp_catalog.stories {
+            let syid = story_slice.syid.0;
+            let story_id = derive_pub_story_id(&source_hash, syid)?;
+            let object_key = quill_story_object_key(syid);
+            let text = decode_utf16le_strict(&story_slice.utf16le)
+                .with_context(|| format!("decode FDPP-bounded Story {syid} as strict UTF-16LE"))?;
+
+            let source_refs = vec![
+                source_ref(
+                    &graph.source,
+                    &story_slice.identity_source,
+                    Some(object_key.clone()),
+                    Some("Contents/0x65/textId".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &story_slice.boundary_source,
+                    Some(object_key.clone()),
+                    Some("FDPP/storyEnd".into()),
                     SourceRole::Relation,
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
@@ -2642,9 +2791,18 @@ pub fn build_mature_0x2c_from_streams(
 
     add_missing_link_target_diagnostics(&graph, &mut diagnostics);
 
+    let source_page_paint_orders = source_page_paint_orders_v1(
+        source_hash,
+        &graph,
+        &references,
+        &page_seq_to_id,
+        &escher_inventory,
+    );
+
     Ok(PubSourceGraphBuild {
         graph,
         effective_pages,
+        source_page_paint_orders,
         diagnostics,
         typography_runs,
         script_font_maps,
@@ -3114,6 +3272,86 @@ fn index_escher_by_contents_seq(inventory: &SpContainerInventory) -> BTreeMap<u3
     }
 
     index
+}
+
+fn source_page_paint_orders_v1(
+    source_hash: Sha256Digest,
+    graph: &PubSourceGraph,
+    references: &BTreeMap<u32, Contents0x2cChunkReference>,
+    page_seq_to_id: &BTreeMap<u32, PageId>,
+    inventory: &SpContainerInventory,
+) -> Vec<PubSourcePagePaintOrderV1> {
+    let mut expected = BTreeMap::<PageId, BTreeSet<NodeId>>::new();
+    for node in graph.nodes.values() {
+        let seq_num = node.payload.contents_seq_num;
+        let Some(reference) = references.get(&seq_num) else {
+            continue;
+        };
+        let Some(parent_seq) = single_parent_seq(reference) else {
+            continue;
+        };
+        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
+            continue;
+        };
+        if node.header.parent_id == page_id.into_canonical() {
+            expected.entry(page_id).or_default().insert(node.header.id);
+        }
+    }
+
+    let mut ordered = BTreeMap::<PageId, Vec<NodeId>>::new();
+    let mut rejected = BTreeSet::<PageId>::new();
+    let mut seen_seq = BTreeSet::<u32>::new();
+
+    // inspect_sp_containers preserves serialized traversal order. Do not sort
+    // SPIDs here: serialized page SpContainer order is the bounded authority.
+    for shape in &inventory.shapes {
+        let Some(client_data) = shape.client_data.as_ref() else {
+            continue;
+        };
+        let Some(shape_id) = unique_escher_field(client_data, PUBLISHER_FIELD_SHAPE_ID) else {
+            continue;
+        };
+        let seq_num = shape_id.value;
+        let Some(reference) = references.get(&seq_num) else {
+            continue;
+        };
+        let Some(parent_seq) = single_parent_seq(reference) else {
+            continue;
+        };
+        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
+            continue;
+        };
+        let Ok(node_id) = derive_pub_node_id(&source_hash, seq_num) else {
+            rejected.insert(page_id);
+            continue;
+        };
+        if !graph.nodes.contains_key(&node_id) {
+            continue;
+        }
+        if !seen_seq.insert(seq_num) {
+            rejected.insert(page_id);
+            continue;
+        }
+        ordered.entry(page_id).or_default().push(node_id);
+    }
+
+    expected
+        .into_iter()
+        .filter_map(|(page_id, expected_nodes)| {
+            if rejected.contains(&page_id) || expected_nodes.is_empty() {
+                return None;
+            }
+            let node_ids = ordered.remove(&page_id)?;
+            let actual_nodes = node_ids.iter().copied().collect::<BTreeSet<_>>();
+            (node_ids.len() == actual_nodes.len() && actual_nodes == expected_nodes).then(|| {
+                PubSourcePagePaintOrderV1 {
+                    schema_version: PUB_SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1.to_owned(),
+                    page_id,
+                    node_ids,
+                }
+            })
+        })
+        .collect()
 }
 
 const OFFICE_ART_FILL_TYPE: u16 = 0x0180;

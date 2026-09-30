@@ -18,7 +18,7 @@ use chaptera_cdm_model::{
 };
 use pub_editor::{EditOperation, LengthEmu, NodeId, Sha256Digest, open_mature_0x2c_editor};
 use pub_reader::PubResolvedGraph;
-use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
+use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -278,7 +278,7 @@ async fn reader_scene(
         .await
         .map_err(ProductApiError::Materializer)?;
 
-    let geometry = open_pub_geometry(
+    let bundle = open_pub_bundle(
         &materialized.source_bytes,
         viewer_geometry_environment_v0_1(),
     )
@@ -293,7 +293,8 @@ async fn reader_scene(
         document_id,
         source.source_sha256,
         head.revision_id,
-        &geometry,
+        &bundle.geometry,
+        &bundle.source_page_paint_orders,
     )
     .map_err(|error| {
         ProductApiError::internal(

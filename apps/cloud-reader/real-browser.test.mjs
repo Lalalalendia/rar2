@@ -17,10 +17,28 @@ const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/clou
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const fixtures = [
-  { name: "SampleNewsletter", sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", bytes: 291840, pages: 4 },
-  { name: "SampleBrochure", sha256: "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", bytes: 161792, pages: 2 }
+const defaultFixtures = [
+  { name: "SampleNewsletter", sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", bytes: 291840, pages: 4, require_render: true, require_shared_text: true },
+  { name: "SampleBrochure", sha256: "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", bytes: 161792, pages: 2, require_render: true, require_shared_text: true }
 ];
+const manifestPath = process.env.READER_REAL_MANIFEST ? resolve(process.env.READER_REAL_MANIFEST) : null;
+const fixtures = manifestPath
+  ? JSON.parse(await readFile(manifestPath, "utf8")).fixtures
+  : defaultFixtures;
+assert.ok(Array.isArray(fixtures) && fixtures.length > 0, "real fixture manifest must contain fixtures");
+for (const fixture of fixtures) {
+  assert.match(fixture.name, /^[A-Za-z0-9._-]+$/, "fixture name must be path-safe");
+  assert.match(fixture.sha256, /^[0-9a-f]{64}$/, "fixture SHA-256 must be canonical");
+  assert.ok(Number.isSafeInteger(fixture.bytes) && fixture.bytes > 0, "fixture byte length must be positive");
+  if (fixture.pages != null) assert.ok(Number.isSafeInteger(fixture.pages) && fixture.pages > 0, "fixture page count must be positive");
+  if (fixture.require_render != null) assert.equal(typeof fixture.require_render, "boolean", "require_render must be boolean");
+  if (fixture.require_shared_text != null) assert.equal(typeof fixture.require_shared_text, "boolean", "require_shared_text must be boolean");
+}
+const referenceRasterDpi = Number(process.env.READER_REFERENCE_RASTER_DPI ?? "0");
+assert.ok(
+  referenceRasterDpi === 0 || (Number.isInteger(referenceRasterDpi) && referenceRasterDpi >= 72 && referenceRasterDpi <= 300),
+  "reference raster DPI must be 0 or an integer in 72..300"
+);
 const temporary = await mkdtemp(join(tmpdir(), "chaptera-real-scene-"));
 const results = [];
 const errors = [];
@@ -73,7 +91,8 @@ try {
   for (const [index, fixture] of fixtures.entries()) {
     const source = join(temporary, fixture.name + ".pub");
     let bytes;
-    if (process.env.READER_REAL_FIXTURE_DIR) bytes = await readFile(join(process.env.READER_REAL_FIXTURE_DIR, fixture.name + ".pub"));
+    if (fixture.source_path) bytes = await readFile(resolve(fixture.source_path));
+    else if (process.env.READER_REAL_FIXTURE_DIR) bytes = await readFile(join(process.env.READER_REAL_FIXTURE_DIR, fixture.name + ".pub"));
     else {
       const response = await fetch(`https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/${fixture.name}.pub`);
       assert.equal(response.ok, true, "pinned public fixture must be acquired");
@@ -96,17 +115,52 @@ try {
     assert.equal(receipt.filesystem_confinement, true);
     assert.equal(receipt.source_sha256, fixture.sha256);
     assert.equal(receipt.source_byte_len, fixture.bytes);
-    assert.ok(["partial", "supported"].includes(receipt.classification));
+    assert.ok(["partial", "supported", "unsupported"].includes(receipt.classification));
+    if (receipt.classification === "unsupported") {
+      results.push({
+        fixture: fixture.name,
+        source_sha256: fixture.sha256,
+        source_byte_len: fixture.bytes,
+        classification: receipt.classification,
+        terminal_code: receipt.terminal_code ?? null,
+        rendered: false,
+        worker_receipt_sha256: sha256(receiptBytes),
+        filesystem_confinement: true,
+        network_policy: isolation.network_policy,
+        screenshots: []
+      });
+      console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, terminal_code: receipt.terminal_code ?? null }));
+      assert.equal(fixture.require_render === true, false, "required reference fixture must render");
+      continue;
+    }
     const scene = receipt.scene;
     assert.equal(scene.protocol_version, "chaptera.reader-scene.v1");
-    assert.equal(scene.pages.length, fixture.pages);
+    if (fixture.pages != null) assert.equal(scene.pages.length, fixture.pages);
+    const fixturePages = scene.pages.length;
     active = { fixture, receipt };
     await page.goto(origin);
     await page.locator("#pub-file").setInputFiles(source);
     await page.locator("#open-file").click();
     await page.waitForFunction(() => document.querySelectorAll("#pages svg.page").length > 0);
     await page.evaluate(() => document.fonts.ready);
-    assert.equal(await page.locator("#pages svg.page").count(), fixture.pages);
+    assert.equal(await page.locator("#pages svg.page").count(), fixturePages);
+    const expectedNodeOrderByPage = [...scene.pages]
+      .sort((left, right) => left.order - right.order)
+      .map((pageModel) => ({
+        page_id: pageModel.page_id,
+        node_ids: scene.nodes
+          .filter((node) => node.page_id === pageModel.page_id)
+          .map((node) => node.node_id)
+      }));
+    const paintedNodeOrderByPage = await page.locator("#pages svg.page").evaluateAll((pages) => pages.map((svg) => ({
+      page_id: svg.dataset.pageId,
+      node_ids: [...svg.querySelectorAll(":scope > g[data-node-id]")].map((node) => node.dataset.nodeId)
+    })));
+    assert.deepEqual(
+      paintedNodeOrderByPage,
+      expectedNodeOrderByPage,
+      "browser must preserve server scene node order within each page"
+    );
     const expectedLines = scene.nodes.flatMap((node) => node.text_layout?.disposition === "shared_resolved"
       ? node.text_layout.lines.map((line) => ({ node_id: node.node_id, index: line.line_index, text: line.text, font_size: node.text_layout.font_size_emu / 9525 })) : []);
     const painted = await page.locator('[data-text-authority="server-shared-resolved"]').evaluateAll((lines) => lines.map((line) => {
@@ -115,7 +169,9 @@ try {
         font_size: parseFloat(getComputedStyle(line).fontSize), height: bounds.height, width: bounds.width };
     }));
     assert.equal(painted.length, expectedLines.length, "actual SharedResolved frames must use loaded fonts");
-    assert.ok(painted.some((line) => line.text.trim()), "real fixture must exercise shared text");
+    if (fixture.require_shared_text === true) {
+      assert.ok(painted.some((line) => line.text.trim()), "fixture marked require_shared_text must exercise shared text");
+    }
     for (const line of painted) {
       const expected = expectedLines.find((candidate) => candidate.node_id === line.node_id && candidate.index === line.index);
       assert.ok(expected);
@@ -127,22 +183,121 @@ try {
     await page.screenshot({ path: join(output, fixture.name + "-ui.png") });
     // Pure page rasters remove only ancestor viewport clipping for capture.
     await page.locator(".viewer").evaluate((element) => { element.style.height = "auto"; element.style.overflow = "visible"; });
+    const orderedPageGeometry = [...scene.pages]
+      .sort((left, right) => left.order - right.order)
+      .map((pageModel) => ({
+        page_id: pageModel.page_id,
+        order: pageModel.order,
+        width_emu: pageModel.width_emu,
+        height_emu: pageModel.height_emu
+      }));
+    if (referenceRasterDpi > 0) {
+      const emuPerPixel = 914400 / referenceRasterDpi;
+      const referenceZoom = String(referenceRasterDpi / 96);
+      assert.equal(
+        await page.locator(`#zoom-select option[value="${referenceZoom}"]`).count(),
+        1,
+        "reference raster DPI must map to an exact supported browser zoom"
+      );
+      await page.locator("#zoom-select").selectOption(referenceZoom);
+      await page.locator("#pages svg.page").evaluateAll((svgs, argument) => {
+        const byId = new Map(argument.pages.map((entry) => [entry.page_id, entry]));
+        for (const svg of svgs) {
+          const geometry = byId.get(svg.dataset.pageId);
+          if (!geometry) throw new Error("reference raster page geometry missing");
+          svg.setAttribute("width", String(Math.round(geometry.width_emu / argument.emuPerPixel)));
+          svg.setAttribute("height", String(Math.round(geometry.height_emu / argument.emuPerPixel)));
+        }
+      }, { pages: orderedPageGeometry, emuPerPixel });
+      const capturedPageSizes = await page.locator("#pages svg.page").evaluateAll((svgs) =>
+        svgs.map((svg) => {
+          const bounds = svg.getBoundingClientRect();
+          return { width: bounds.width, height: bounds.height };
+        })
+      );
+      for (let i = 0; i < orderedPageGeometry.length; i++) {
+        assert.ok(
+          Math.abs(capturedPageSizes[i].width - orderedPageGeometry[i].width_emu / emuPerPixel) < 1,
+          "reference raster page width must stay at requested DPI"
+        );
+        assert.ok(
+          Math.abs(capturedPageSizes[i].height - orderedPageGeometry[i].height_emu / emuPerPixel) < 1,
+          "reference raster page height must stay at requested DPI"
+        );
+      }
+    }
     const screenshots = [];
-    for (let i = 0; i < fixture.pages; i++) {
+    for (let i = 0; i < fixturePages; i++) {
       const filename = `${fixture.name}-page-${i + 1}.png`;
-      const png = await page.locator("#pages svg.page").nth(i).screenshot({ path: join(output, filename) });
+      const pageSvg = page.locator("#pages svg.page").nth(i);
+      if (referenceRasterDpi > 0) {
+        await pageSvg.evaluate((svg) => {
+          svg.style.position = "fixed";
+          svg.style.left = "0";
+          svg.style.top = "0";
+          svg.style.zIndex = "2147483647";
+        });
+      }
+      const png = await pageSvg.screenshot({ path: join(output, filename) });
+      if (referenceRasterDpi > 0) {
+        await pageSvg.evaluate((svg) => {
+          svg.style.removeProperty("position");
+          svg.style.removeProperty("left");
+          svg.style.removeProperty("top");
+          svg.style.removeProperty("z-index");
+        });
+      }
       screenshots.push({ page: i + 1, filename, sha256: sha256(png) });
     }
     const nonempty = painted.filter((line) => line.text.trim());
+    const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
+    if (scene.stacking_fidelity === "source_back_to_front") {
+      assert.equal(
+        fidelityReasons.includes("stacking_order_unavailable"),
+        false,
+        "grounded source stacking must remove the unavailable reason"
+      );
+    } else {
+      assert.equal(scene.stacking_fidelity, "unknown");
+      assert.equal(
+        fidelityReasons.includes("stacking_order_unavailable"),
+        scene.nodes.length > 0,
+        "unknown non-empty scenes must keep stacking_order_unavailable explicit"
+      );
+    }
+    const diagnosticCodes = [...new Set((scene.diagnostics ?? []).map((diagnostic) =>
+      diagnostic.severity + ":" + diagnostic.code
+    ))].sort();
+    const nodeKindCounts = {};
+    const textLayoutDispositionCounts = {};
+    for (const node of scene.nodes) {
+      nodeKindCounts[node.kind] = (nodeKindCounts[node.kind] ?? 0) + 1;
+      const disposition = node.text_layout?.disposition ?? "none";
+      textLayoutDispositionCounts[disposition] = (textLayoutDispositionCounts[disposition] ?? 0) + 1;
+    }
+    const descriptorOnlyResourceCount = (scene.resources ?? [])
+      .filter((resource) => resource.availability !== "inline_data_url").length;
     results.push({ fixture: fixture.name, source_sha256: fixture.sha256, source_byte_len: fixture.bytes,
-      classification: receipt.classification, fidelity: scene.fidelity, pages: fixture.pages, nodes: scene.nodes.length,
+      classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
+      fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
+      node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
+      descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
+      reference_raster_dpi: referenceRasterDpi || null, page_geometry: orderedPageGeometry,
       stories: scene.stories.length, shared_lines: painted.length, nonempty_shared_lines: nonempty.length,
-      shared_line_height_px: { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) },
+      shared_line_height_px: nonempty.length > 0
+        ? { min: Math.min(...nonempty.map((line) => line.height)), max: Math.max(...nonempty.map((line) => line.height)) }
+        : null,
       worker_receipt_sha256: sha256(receiptBytes), filesystem_confinement: true, network_policy: isolation.network_policy, screenshots });
-    console.log(JSON.stringify({ fixture: fixture.name, pages: fixture.pages, readable_shared_lines: nonempty.length }));
+    console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, pages: fixturePages, readable_shared_lines: nonempty.length }));
   }
   assert.deepEqual(errors, []);
   assert.deepEqual(foreign, []);
+  if (!manifestPath) {
+    assert.ok(
+      results.some((result) => result.stacking_fidelity === "source_back_to_front"),
+      "default pinned real PUB set must contain at least one fully grounded source stacking witness"
+    );
+  }
   await writeFile(join(output, "receipt.json"), JSON.stringify({ protocol: "chaptera.cloud-reader-real-scene-browser.v1",
     repository_commit_sha: process.env.REPOSITORY_COMMIT_SHA ?? "local-uncommitted", browser: await browser.version(),
     scope: "pinned public PUB -> existing isolated Scene worker -> controlled HTTP -> browser; no live scanning/storage/TTL or Publisher-reference parity claim",

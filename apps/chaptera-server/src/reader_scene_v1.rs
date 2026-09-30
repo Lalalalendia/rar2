@@ -4,7 +4,7 @@ use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, RenderTextLayoutDispositionV1,
     build_page_render_plan_with_text_layout_v1,
 };
-use pub_viewer::ViewerGeometryDocument;
+use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -185,11 +185,30 @@ pub struct ReaderDiagnosticV1 {
     pub message: String,
 }
 
+fn bind_visible_paint(
+    paint_by_node: &mut HashMap<String, ReaderPaintV1>,
+    visible_node_ids: &HashSet<String>,
+    node_id: String,
+    paint: ReaderPaintV1,
+) -> Result<(), String> {
+    if !visible_node_ids.contains(&node_id) {
+        return Ok(());
+    }
+    if paint.fill_rgb.is_none() && paint.line.is_none() {
+        return Ok(());
+    }
+    if paint_by_node.insert(node_id.clone(), paint).is_some() {
+        return Err(format!("duplicate paint binding for node {node_id}"));
+    }
+    Ok(())
+}
+
 pub fn from_viewer_geometry(
     document_id: String,
     source_hash: String,
     revision_id: String,
     geometry: &ViewerGeometryDocument,
+    source_page_paint_orders: &[ViewerPagePaintOrderV1],
 ) -> Result<ReaderSceneV1, String> {
     let viewer_source_hash =
         serialized_string(&geometry.document.source.source_hash, "Viewer source hash")?;
@@ -278,19 +297,12 @@ pub fn from_viewer_geometry(
         if !resource_ids.insert(resource_id.clone()) {
             return Err(format!("duplicate Viewer image resource {resource_id}"));
         }
-        let inline_data_url =
-            inline_image_data_url(&image.mime, &image.bytes, &mut inline_image_budget);
-        let availability = if inline_data_url.is_some() {
-            "inline_data_url"
-        } else {
-            "descriptor_only"
-        };
-        resources.push(ReaderImageResourceV1 {
-            resource_id: resource_id.clone(),
-            mime: image.mime.clone(),
-            availability,
-            inline_data_url,
-        });
+        resources.push(reader_image_resource(
+            resource_id.clone(),
+            image.mime.clone(),
+            &image.bytes,
+            &mut inline_image_budget,
+        ));
 
         for placement in &image.placements {
             let node_id = serialized_string(&placement.node_id, "image placement node id")?;
@@ -371,9 +383,6 @@ pub fn from_viewer_geometry(
     let mut paint_by_node = HashMap::new();
     for paint in &geometry.paints {
         let node_id = serialized_string(&paint.node_id, "paint node id")?;
-        if !node_ids.contains(&node_id) {
-            return Err(format!("paint references unknown node {node_id}"));
-        }
         let mapped = ReaderPaintV1 {
             fill_rgb: paint.solid_fill_rgb,
             line: paint.solid_line.as_ref().map(|line| ReaderLineV1 {
@@ -381,12 +390,7 @@ pub fn from_viewer_geometry(
                 width_emu: line.width_emu,
             }),
         };
-        if mapped.fill_rgb.is_none() && mapped.line.is_none() {
-            continue;
-        }
-        if paint_by_node.insert(node_id.clone(), mapped).is_some() {
-            return Err(format!("duplicate paint binding for node {node_id}"));
-        }
+        bind_visible_paint(&mut paint_by_node, &node_ids, node_id, mapped)?;
     }
 
     let mut fragments_by_node: HashMap<String, Vec<(u32, u32, String)>> = HashMap::new();
@@ -505,6 +509,9 @@ pub fn from_viewer_geometry(
         });
     }
 
+    let stacking_known =
+        apply_source_page_paint_order(&mut nodes, &pages, source_page_paint_orders)?;
+
     let stories = geometry
         .document
         .stories
@@ -553,7 +560,7 @@ pub fn from_viewer_geometry(
     }
 
     let mut reasons = Vec::new();
-    if !nodes.is_empty() {
+    if !nodes.is_empty() && !stacking_known {
         reasons.push("stacking_order_unavailable");
     }
     if kind_by_node.values().any(|kind| *kind == "unknown") {
@@ -581,7 +588,11 @@ pub fn from_viewer_geometry(
         source_hash,
         revision_id,
         scene_authority: "server_viewer_projection",
-        stacking_fidelity: "unknown",
+        stacking_fidelity: if stacking_known {
+            "source_back_to_front"
+        } else {
+            "unknown"
+        },
         fidelity: ReaderFidelityV1 {
             state: if reasons.is_empty() {
                 "supported"
@@ -597,6 +608,73 @@ pub fn from_viewer_geometry(
         fonts,
         diagnostics,
     })
+}
+
+fn apply_source_page_paint_order(
+    nodes: &mut [ReaderNodeV1],
+    pages: &[ReaderPageV1],
+    source_orders: &[ViewerPagePaintOrderV1],
+) -> Result<bool, String> {
+    if nodes.is_empty() {
+        return Ok(false);
+    }
+
+    let page_order = pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| (page.page_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut nodes_by_page = HashMap::<&str, HashSet<&str>>::new();
+    for node in nodes.iter() {
+        nodes_by_page
+            .entry(node.page_id.as_str())
+            .or_default()
+            .insert(node.node_id.as_str());
+    }
+
+    let mut rank = HashMap::<String, (usize, usize)>::new();
+    let mut seen_pages = HashSet::new();
+    for order in source_orders {
+        let page_id = serialized_string(&order.page_id, "source paint-order page id")?;
+        let Some(page_rank) = page_order.get(page_id.as_str()).copied() else {
+            continue;
+        };
+        if !seen_pages.insert(page_id.clone()) {
+            return Ok(false);
+        }
+
+        let Some(expected_nodes) = nodes_by_page.get(page_id.as_str()) else {
+            continue;
+        };
+        let mut actual_nodes = HashSet::new();
+        for (stack_rank, node_id) in order.node_ids.iter().enumerate() {
+            let node_id = serialized_string(node_id, "source paint-order node id")?;
+            if !expected_nodes.contains(node_id.as_str())
+                || !actual_nodes.insert(node_id.clone())
+                || rank.insert(node_id, (page_rank, stack_rank)).is_some()
+            {
+                return Ok(false);
+            }
+        }
+        if actual_nodes.len() != expected_nodes.len() {
+            return Ok(false);
+        }
+    }
+
+    if nodes_by_page
+        .keys()
+        .any(|page_id| !seen_pages.contains(*page_id))
+        || rank.len() != nodes.len()
+    {
+        return Ok(false);
+    }
+
+    nodes.sort_by_key(|node| {
+        rank.get(&node.node_id)
+            .copied()
+            .expect("complete source paint-order rank validated above")
+    });
+    Ok(true)
 }
 
 fn bind_kind(
@@ -711,6 +789,26 @@ fn shared_text_font_resource() -> ExplicitRenderTextFontResourceV1<'static> {
     }
 }
 
+fn reader_image_resource(
+    resource_id: String,
+    mime: String,
+    bytes: &[u8],
+    remaining_budget: &mut usize,
+) -> ReaderImageResourceV1 {
+    let inline_data_url = inline_image_data_url(&mime, bytes, remaining_budget);
+    let availability = if inline_data_url.is_some() {
+        "inline_data_url"
+    } else {
+        "descriptor_only"
+    };
+    ReaderImageResourceV1 {
+        resource_id,
+        mime,
+        availability,
+        inline_data_url,
+    }
+}
+
 fn inline_image_data_url(mime: &str, bytes: &[u8], remaining_budget: &mut usize) -> Option<String> {
     if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif")
         || bytes.is_empty()
@@ -753,7 +851,95 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_INLINE_IMAGE_TOTAL_BYTES, base64_encode, inline_image_data_url};
+    use std::{
+        collections::{HashMap, HashSet},
+        env, fs,
+    };
+
+    use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+    use sha2::{Digest, Sha256};
+
+    use super::{
+        MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderPaintV1, base64_encode, bind_visible_paint,
+        from_viewer_geometry, inline_image_data_url, reader_image_resource,
+    };
+
+    #[test]
+    #[ignore = "requires an explicitly pinned external PUB path"]
+    fn real_reference_scene_projection_probe() {
+        let path = env::var("CHAPTERA_READER_SCENE_PROBE_PUB")
+            .expect("CHAPTERA_READER_SCENE_PROBE_PUB must name an exact pinned PUB");
+        let expected_sha256 = env::var("CHAPTERA_READER_SCENE_PROBE_SHA256")
+            .expect("CHAPTERA_READER_SCENE_PROBE_SHA256 must pin source identity");
+        let bytes = fs::read(&path).expect("probe source must be readable");
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(
+            actual_sha256, expected_sha256,
+            "probe source identity drift"
+        );
+
+        let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
+            .expect("shared Viewer bundle must open the probe source");
+        match from_viewer_geometry(
+            "probe:document".to_owned(),
+            actual_sha256,
+            "probe:source".to_owned(),
+            &bundle.geometry,
+            &bundle.source_page_paint_orders,
+        ) {
+            Ok(scene) => println!(
+                "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} reasons={:?}",
+                scene.fidelity.state,
+                scene.stacking_fidelity,
+                scene.pages.len(),
+                scene.nodes.len(),
+                scene.fidelity.reasons
+            ),
+            Err(error) => println!("CLOUD_READER_SCENE_PROJECTION_PROBE projection_error={error}"),
+        }
+    }
+
+    #[test]
+    fn non_visible_viewer_paint_is_ignored_but_visible_duplicates_fail_closed() {
+        let visible_node_ids = HashSet::from(["visible".to_owned()]);
+        let mut paint_by_node = HashMap::new();
+
+        bind_visible_paint(
+            &mut paint_by_node,
+            &visible_node_ids,
+            "hidden-carrier".to_owned(),
+            ReaderPaintV1 {
+                fill_rgb: Some([1, 2, 3]),
+                line: None,
+            },
+        )
+        .expect("hidden paint must not block visible Scene projection");
+        assert!(paint_by_node.is_empty());
+
+        bind_visible_paint(
+            &mut paint_by_node,
+            &visible_node_ids,
+            "visible".to_owned(),
+            ReaderPaintV1 {
+                fill_rgb: Some([4, 5, 6]),
+                line: None,
+            },
+        )
+        .expect("visible paint should bind");
+        assert_eq!(paint_by_node.len(), 1);
+
+        let duplicate = bind_visible_paint(
+            &mut paint_by_node,
+            &visible_node_ids,
+            "visible".to_owned(),
+            ReaderPaintV1 {
+                fill_rgb: Some([7, 8, 9]),
+                line: None,
+            },
+        )
+        .expect_err("visible duplicate paint must remain fail-closed");
+        assert!(duplicate.contains("duplicate paint binding"));
+    }
 
     #[test]
     fn base64_encoding_matches_rfc_4648_vectors() {
@@ -761,6 +947,29 @@ mod tests {
         assert_eq!(base64_encode(b"f"), "Zg==");
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
+    }
+
+    #[test]
+    fn viewer_materialized_ole_preview_png_uses_generic_reader_image_resource_path() {
+        let mut budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+        let resource = reader_image_resource(
+            "resource:legacy-ole-preview".to_owned(),
+            "image/png".to_owned(),
+            b"bounded-ole-preview-png",
+            &mut budget,
+        );
+
+        assert_eq!(resource.resource_id, "resource:legacy-ole-preview");
+        assert_eq!(resource.mime, "image/png");
+        assert_eq!(resource.availability, "inline_data_url");
+        assert_eq!(
+            resource.inline_data_url.as_deref(),
+            Some("data:image/png;base64,Ym91bmRlZC1vbGUtcHJldmlldy1wbmc=")
+        );
+        assert_eq!(
+            budget,
+            MAX_INLINE_IMAGE_TOTAL_BYTES - b"bounded-ole-preview-png".len()
+        );
     }
 
     #[test]
