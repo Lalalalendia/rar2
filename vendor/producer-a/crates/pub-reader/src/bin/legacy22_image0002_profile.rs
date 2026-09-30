@@ -48,9 +48,14 @@ const META_SETTEXTCOLOR_FUNCTION: u16 = 0x0209;
 const META_CREATEPENINDIRECT_FUNCTION: u16 = 0x02fa;
 const META_CREATEFONTINDIRECT_FUNCTION: u16 = 0x02fb;
 const META_CREATEBRUSHINDIRECT_FUNCTION: u16 = 0x02fc;
+const META_POLYGON_FUNCTION: u16 = 0x0324;
+const META_POLYLINE_FUNCTION: u16 = 0x0325;
+const META_INTERSECTCLIPRECT_FUNCTION: u16 = 0x0416;
 const META_CREATEBITMAPINDIRECT_FUNCTION: u16 = 0x02fd;
 const META_ELLIPSE_FUNCTION: u16 = 0x0418;
+const META_RECTANGLE_FUNCTION: u16 = 0x041b;
 const META_ANIMATEPALETTE_FUNCTION: u16 = 0x0436;
+const META_POLYPOLYGON_FUNCTION: u16 = 0x0538;
 const META_TEXTOUT_FUNCTION: u16 = 0x0521;
 const META_ESCAPE_FUNCTION: u16 = 0x0626;
 const META_CREATEBITMAP_FUNCTION: u16 = 0x06fe;
@@ -1266,6 +1271,65 @@ fn stretchdib_blocker_profile(params: &[u8]) -> Value {
     })
 }
 
+fn stretchdib_context_profile(records: &[(u16, &[u8])]) -> Value {
+    let Some((target_index, (_, params))) = records
+        .iter()
+        .enumerate()
+        .find(|(_, (function, params))| {
+            *function == META_STRETCHDIB_FUNCTION
+                && read_u32(params, 0) == Some(0x0088_00c6)
+        })
+    else {
+        return json!({"kind": "stretchdib", "record": "missing"});
+    };
+
+    let mut profile = stretchdib_blocker_profile(params);
+    let mut prior_drawing_counts = BTreeMap::<String, usize>::new();
+    let mut prior_canvas_mutation_count = 0usize;
+    let mut prior_clip_count = 0usize;
+    for (function, _) in &records[..target_index] {
+        if matches!(
+            *function,
+            META_POLYGON_FUNCTION
+                | META_POLYLINE_FUNCTION
+                | META_ELLIPSE_FUNCTION
+                | META_RECTANGLE_FUNCTION
+                | META_POLYPOLYGON_FUNCTION
+                | META_STRETCHDIB_FUNCTION
+        ) {
+            bump_function(&mut prior_drawing_counts, *function);
+            prior_canvas_mutation_count += 1;
+        }
+        if *function == META_INTERSECTCLIPRECT_FUNCTION {
+            prior_clip_count += 1;
+        }
+    }
+
+    let previous_function = target_index
+        .checked_sub(1)
+        .and_then(|index| records.get(index))
+        .map(|(function, _)| format!("0x{function:04x}"));
+    let next_function = records
+        .get(target_index + 1)
+        .map(|(function, _)| format!("0x{function:04x}"));
+
+    if let Some(object) = profile.as_object_mut() {
+        object.insert("target_record_index".to_owned(), json!(target_index));
+        object.insert("previous_function".to_owned(), json!(previous_function));
+        object.insert("next_function".to_owned(), json!(next_function));
+        object.insert(
+            "prior_canvas_mutation_count".to_owned(),
+            json!(prior_canvas_mutation_count),
+        );
+        object.insert(
+            "prior_drawing_function_counts".to_owned(),
+            json!(prior_drawing_counts),
+        );
+        object.insert("prior_intersect_cliprect_count".to_owned(), json!(prior_clip_count));
+    }
+    profile
+}
+
 fn postscript_ignore_blocker_profile(params: &[u8]) -> Value {
     let byte_count = read_u16(params, 2).map(usize::from);
     let payload_len = params.len().saturating_sub(4);
@@ -1364,11 +1428,9 @@ fn wmf_blocker_profile(wmf: &[u8], detail: &str) -> Value {
             font_blocker_profile(&records)
         }
         "record_function_0x0418" => ellipse_blocker_profile(&records),
-        "record_function_0x0f43" | "generated:unsupported WMF STRETCHDIB profile" => records
-            .iter()
-            .find(|(function, _)| *function == META_STRETCHDIB_FUNCTION)
-            .map(|(_, params)| stretchdib_blocker_profile(params))
-            .unwrap_or_else(|| json!({"kind": "stretchdib", "record": "missing"})),
+        "record_function_0x0f43" | "generated:unsupported WMF STRETCHDIB profile" => {
+            stretchdib_context_profile(&records)
+        }
         "generated:unsupported WMF DIB pattern brush payload length" => records
             .iter()
             .find(|(function, _)| *function == META_DIBCREATEPATTERNBRUSH_FUNCTION)
