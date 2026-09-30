@@ -714,6 +714,23 @@ pub(crate) fn build_table_source(
         });
     }
 
+    if let Err(error) = populate_exact_table_cell_bounds(
+        context,
+        table_seq_num,
+        table_chunk,
+        &tail_scalars,
+        rows,
+        columns,
+        &mut joined_cells,
+    ) {
+        diagnostics.push(PubBridgeDiagnostic::TableLayoutMetricsUnavailable {
+            seq_num: table_seq_num,
+            text_id,
+            layout_key: None,
+            reason: format!("TABLE row/column track geometry unavailable: {error}"),
+        });
+    }
+
     let simple_table = build_simple_table(rows, columns, &joined_cells);
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
