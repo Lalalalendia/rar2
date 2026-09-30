@@ -229,7 +229,24 @@ try {
     const screenshots = [];
     for (let i = 0; i < fixturePages; i++) {
       const filename = `${fixture.name}-page-${i + 1}.png`;
-      const png = await page.locator("#pages svg.page").nth(i).screenshot({ path: join(output, filename) });
+      const pageSvg = page.locator("#pages svg.page").nth(i);
+      if (referenceRasterDpi > 0) {
+        await pageSvg.evaluate((svg) => {
+          svg.style.position = "fixed";
+          svg.style.left = "0";
+          svg.style.top = "0";
+          svg.style.zIndex = "2147483647";
+        });
+      }
+      const png = await pageSvg.screenshot({ path: join(output, filename) });
+      if (referenceRasterDpi > 0) {
+        await pageSvg.evaluate((svg) => {
+          svg.style.removeProperty("position");
+          svg.style.removeProperty("left");
+          svg.style.removeProperty("top");
+          svg.style.removeProperty("z-index");
+        });
+      }
       screenshots.push({ page: i + 1, filename, sha256: sha256(png) });
     }
     const nonempty = painted.filter((line) => line.text.trim());
