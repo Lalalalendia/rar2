@@ -37,6 +37,8 @@ const UPLOAD_ADMISSION_SQL: &str = include_str!("../migrations/0015_upload_admis
 const PUBLIC_RATE_LIMIT_SQL: &str = include_str!("../migrations/0016_public_rate_limit.sql");
 const READER_GUEST_SESSIONS_SQL: &str =
     include_str!("../migrations/0017_reader_guest_sessions.sql");
+const READER_GUEST_FAILURE_CLASSIFICATION_SQL: &str =
+    include_str!("../migrations/0018_reader_guest_failure_classification.sql");
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -131,9 +133,14 @@ const MIGRATIONS: &[MigrationSpec] = &[
         name: "reader_guest_sessions",
         sql: READER_GUEST_SESSIONS_SQL,
     },
+    MigrationSpec {
+        version: 18,
+        name: "reader_guest_failure_classification",
+        sql: READER_GUEST_FAILURE_CLASSIFICATION_SQL,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 17;
+pub const CURRENT_SCHEMA_VERSION: i64 = 18;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MigrationReport {
@@ -649,7 +656,7 @@ mod tests {
         assert_eq!(report.target_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(
             report.pending_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
         );
         assert!(!path.exists());
     }
@@ -663,7 +670,7 @@ mod tests {
         assert_eq!(first.state, "current");
         assert_eq!(
             first.applied_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
         );
 
         let second = runtime.migrate_up().await.unwrap();
@@ -759,7 +766,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 final_report.applied_versions,
-                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
             );
 
             cleanup(&path);
