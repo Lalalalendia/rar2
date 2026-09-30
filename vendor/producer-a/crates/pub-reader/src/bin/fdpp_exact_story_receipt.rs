@@ -4,15 +4,21 @@ use pub_reader::{PubBridgeDiagnostic, build_mature_0x2c_source_graph};
 use std::io::Cursor;
 use std::path::PathBuf;
 
+fn fallback_counts(build: &pub_reader::PubSourceGraphBuild) -> Vec<usize> {
+    build
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            PubBridgeDiagnostic::FdppExactStoryFallback { story_count } => Some(*story_count),
+            _ => None,
+        })
+        .collect()
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let path = PathBuf::from(args.next().context("missing PUB path")?);
-    let expected_story_count: usize = args
-        .next()
-        .context("missing expected Story count")?
-        .to_string_lossy()
-        .parse()
-        .context("parse expected Story count")?;
+    let mode = args.next().context("missing expected Story count or --reject")?;
     if args.next().is_some() {
         bail!("unexpected extra arguments");
     }
@@ -23,6 +29,25 @@ fn main() -> Result<()> {
         .to_string_lossy();
     let source_hash: Sha256Digest = stem.parse().context("parse SHA-256 file stem")?;
     let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+
+    if mode == "--reject" {
+        match build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash) {
+            Ok(build) => {
+                let counts = fallback_counts(&build);
+                if !counts.is_empty() {
+                    bail!("FDPP exact fallback unexpectedly admitted this witness: {counts:?}");
+                }
+            }
+            Err(_) => {}
+        }
+        println!("fdpp_exact_story_rejection=pass");
+        return Ok(());
+    }
+
+    let expected_story_count: usize = mode
+        .to_string_lossy()
+        .parse()
+        .context("parse expected Story count")?;
     let build = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
         .with_context(|| format!("build SourceGraph for {}", path.display()))?;
 
@@ -34,16 +59,9 @@ fn main() -> Result<()> {
         );
     }
 
-    let fallback_counts = build
-        .diagnostics
-        .iter()
-        .filter_map(|diagnostic| match diagnostic {
-            PubBridgeDiagnostic::FdppExactStoryFallback { story_count } => Some(*story_count),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if fallback_counts != vec![expected_story_count] {
-        bail!("unexpected FDPP fallback receipt: {fallback_counts:?}");
+    let counts = fallback_counts(&build);
+    if counts != vec![expected_story_count] {
+        bail!("unexpected FDPP fallback receipt: {counts:?}");
     }
 
     for story in build.graph.stories.values() {
