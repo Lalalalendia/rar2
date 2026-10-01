@@ -1413,7 +1413,8 @@ impl ViewerApp {
             }
         };
 
-        let (editor, editor_load_error, project_status) = if reader_only_mode() || visual.is_none() {
+        let (editor, editor_load_error, project_status) = if reader_only_mode() || visual.is_none()
+        {
             (None, None, None)
         } else {
             let visual = visual
