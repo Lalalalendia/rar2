@@ -3507,10 +3507,11 @@ fn source_page_paint_orders_v1(
             continue;
         }
 
-        grouped_pending
-            .entry(page_id)
-            .or_default()
-            .push((parent_seq, *child_index, node.header.id));
+        grouped_pending.entry(page_id).or_default().push((
+            parent_seq,
+            *child_index,
+            node.header.id,
+        ));
     }
 
     let mut grouped_by_carrier = BTreeMap::<u32, (PageId, Vec<(usize, NodeId)>)>::new();
