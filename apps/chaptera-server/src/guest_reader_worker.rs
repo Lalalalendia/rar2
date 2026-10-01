@@ -24,8 +24,12 @@ use tokio::{
 };
 
 use crate::{
-    blob_store::BlobStoreService, guest_intake_classifier::guest_failure_intake_evidence,
-    reader_scene_v1::from_viewer_geometry, source_ingress_security::SourceSecurityScannerConfig,
+    blob_store::BlobStoreService,
+    guest_intake_classifier::guest_failure_intake_evidence,
+    reader_scene_v1::{
+        from_viewer_geometry, from_viewer_geometry_with_projected_text_inset_probe,
+    },
+    source_ingress_security::SourceSecurityScannerConfig,
 };
 
 pub const GUEST_SCENE_WORKER_V1: &str = "chaptera.reader-guest-scene-worker.v1";
@@ -288,6 +292,7 @@ pub fn run_guest_scene_worker(
     session_id: &str,
     expected_sha256: &str,
     expected_byte_len: u64,
+    probe_publisher_default_text_inset: bool,
 ) -> Result<(), GuestSceneWorkerError> {
     require_ident(session_id, "session_id")?;
     require_sha256(expected_sha256)?;
@@ -353,13 +358,23 @@ pub fn run_guest_scene_worker(
 
     let (classification, terminal_code, scene, salvage) =
         match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(bundle) => match from_viewer_geometry(
-                session_id.to_owned(),
-                expected_sha256.to_owned(),
-                "guest:source".to_owned(),
-                &bundle.geometry,
-                &bundle.source_page_paint_orders,
-            ) {
+            Ok(bundle) => match if probe_publisher_default_text_inset {
+                from_viewer_geometry_with_projected_text_inset_probe(
+                    session_id.to_owned(),
+                    expected_sha256.to_owned(),
+                    "guest:source".to_owned(),
+                    &bundle.geometry,
+                    &bundle.source_page_paint_orders,
+                )
+            } else {
+                from_viewer_geometry(
+                    session_id.to_owned(),
+                    expected_sha256.to_owned(),
+                    "guest:source".to_owned(),
+                    &bundle.geometry,
+                    &bundle.source_page_paint_orders,
+                )
+            } {
                 Ok(scene) => {
                     let classification = if scene.fidelity.state == "supported" {
                         "supported"
