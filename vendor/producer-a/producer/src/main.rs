@@ -1,7 +1,7 @@
 mod overset;
 
 use anyhow::{Context, Result};
-use pub_editor::{EditorEditableTarget, EditorProject, StoryId};
+use pub_editor::{EditorEditableTarget, EditorProject, LengthEmu, NodeId, StoryId};
 use pub_model::{Sha256Digest, to_cdm_debug_json_v0_1};
 use std::{env, fs, io::Cursor, path::Path};
 
@@ -89,6 +89,59 @@ fn emit_editable_export(
     Ok(())
 }
 
+
+fn emit_editor_move_node(
+    fixture: &str,
+    project_path: &str,
+    command_path: &str,
+) -> Result<()> {
+    let bytes = fs::read(fixture).context("read source PUB fixture")?;
+    let project: EditorProject =
+        serde_json::from_slice(&fs::read(project_path).context("read canonical EditorProject")?)
+            .context("parse canonical EditorProject")?;
+    let command: serde_json::Value =
+        serde_json::from_slice(&fs::read(command_path).context("read MoveNode command")?)
+            .context("parse MoveNode command")?;
+    if command.get("kind").and_then(|value| value.as_str()) != Some("move_node_to") {
+        anyhow::bail!("move_node_to command required");
+    }
+
+    let node_id: NodeId = serde_json::from_value(
+        command
+            .get("node_id")
+            .cloned()
+            .context("node_id missing")?,
+    )
+    .context("parse node_id")?;
+    let x = command
+        .get("x_emu")
+        .and_then(|value| value.as_i64())
+        .context("x_emu missing or invalid")?;
+    let y = command
+        .get("y_emu")
+        .and_then(|value| value.as_i64())
+        .context("y_emu missing or invalid")?;
+
+    let mut session =
+        pub_editor::open_mature_0x2c_editor(&bytes, project.source_hash).context("open editor")?;
+    session
+        .apply_project(&project)
+        .context("replay canonical EditorProject")?;
+    let operation = session
+        .move_node_to(node_id, LengthEmu::new(x), LengthEmu::new(y))
+        .context("apply bounded MoveNode")?;
+
+    print!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+            "protocol_version": "chaptera.editor-move-node-result.v1",
+            "source_hash": project.source_hash,
+            "operation": operation,
+            "project": session.project(),
+        }))?
+    );
+    Ok(())
+}
 
 fn emit_editor_story_range(
     fixture: &str,
@@ -269,6 +322,15 @@ fn main() -> Result<()> {
             anyhow::bail!("unexpected extra arguments");
         }
         return emit_editable_export(&fixture, &project, &target, &output, &report);
+    }
+    if first == "editor-move-node" {
+        let fixture = args.next().context("fixture path missing")?;
+        let project = args.next().context("project path missing")?;
+        let command = args.next().context("command path missing")?;
+        if args.next().is_some() {
+            anyhow::bail!("unexpected extra arguments");
+        }
+        return emit_editor_move_node(&fixture, &project, &command);
     }
     if first == "editor-story-range" {
         let fixture = args.next().context("fixture path missing")?;
