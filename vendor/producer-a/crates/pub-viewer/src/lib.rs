@@ -64,17 +64,17 @@ pub use pub_reader::{
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
-    LegacyOleCachedPresentationSelection, PubAssetExportDiagnostic, PubBridgeDiagnostic,
-    PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
-    MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, build_failure_envelope,
-    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
-    build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_wmf_preview_bundle_from_bytes,
-    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_table_cells,
-    rasterize_wmf_preview, read_legacy_0x22_image_wmfs, resolve_pub_source_graph,
-    scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
+    LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
+    PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
+    PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
+    PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
+    PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
+    build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
+    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1250,8 +1250,7 @@ fn mature_officeart_wmf_preview_resource_id(
     }
     let source_object_key = format!(
         "mature-officeart-wmf-preview/slot-{slot}/wmf-sha256-{wmf_sha256}/{}/{}",
-        MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
-        LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1,
+        MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1,
     );
     let canonical = derive_source_canonical_id(SourceDerivedIdInput {
         source_hash,
@@ -1270,30 +1269,17 @@ mod mature_officeart_wmf_preview_identity_tests {
     #[test]
     fn preview_resource_identity_is_source_slot_and_wmf_bound() {
         let source_hash = Sha256Digest::from_bytes([0x11; 32]);
-        let first = mature_officeart_wmf_preview_resource_id(
-            &source_hash,
-            3,
-            b"normalized-wmf-a",
-        )
-        .expect("preview resource id");
-        let repeated = mature_officeart_wmf_preview_resource_id(
-            &source_hash,
-            3,
-            b"normalized-wmf-a",
-        )
-        .expect("repeat preview resource id");
-        let other_slot = mature_officeart_wmf_preview_resource_id(
-            &source_hash,
-            4,
-            b"normalized-wmf-a",
-        )
-        .expect("other slot preview resource id");
-        let other_wmf = mature_officeart_wmf_preview_resource_id(
-            &source_hash,
-            3,
-            b"normalized-wmf-b",
-        )
-        .expect("other WMF preview resource id");
+        let first = mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
+            .expect("preview resource id");
+        let repeated =
+            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
+                .expect("repeat preview resource id");
+        let other_slot =
+            mature_officeart_wmf_preview_resource_id(&source_hash, 4, b"normalized-wmf-a")
+                .expect("other slot preview resource id");
+        let other_wmf =
+            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-b")
+                .expect("other WMF preview resource id");
 
         assert_eq!(first, repeated);
         assert_ne!(first, other_slot);
