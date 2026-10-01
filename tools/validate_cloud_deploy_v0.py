@@ -128,7 +128,7 @@ def main() -> int:
     )
     require(
         config,
-        'worker_binary = "/opt/chaptera/current/chaptera-untrusted-pub-worker"',
+        'worker_binary = "/opt/chaptera/current/chaptera"',
         "config",
     )
     require(config, "max_file_bytes = 268435456", "config")

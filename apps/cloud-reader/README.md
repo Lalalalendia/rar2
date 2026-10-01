@@ -4,7 +4,7 @@ Public, read-only web surface for opening Publisher (`.pub`) documents.
 
 ## Repository boundary
 
-This app lives in the `rar2` monorepo so it can evolve atomically with the Viewer scene contract, but it is an independently deployable static web artifact. It is **not** embedded in the `chaptera-server` binary.
+This app lives in the `rar2` monorepo so it can evolve atomically with the Viewer scene contract. The five admitted runtime assets are embedded directly in the canonical `chaptera` binary; operators do not install a separate Reader site tree.
 
 The read-only product consumes two bounded surfaces:
 
@@ -86,11 +86,15 @@ requests; a late response cannot alter the replacement document. If receipt deli
 fails after sending has begun, the interface explains that the server may already
 have received the file. A client abort does not undo server-side retention.
 
-## Standalone release
+## Embedded release
 
-`python3 apps/cloud-reader/build_release.py` produces an exact-commit ZIP and
-per-asset SHA-256 manifest with no frontend bundler or server binary. The
-same-origin edge recipe and operator gates are documented in
-[`cloud-reader-static-release.md`](../../docs/cloud-reader-static-release.md).
-`release-browser.test.mjs` proves deterministic builds and released-asset
-delivery through actual Caddy/CSP with a synthetic API.
+`chaptera` embeds the exact five Reader runtime assets and serves them on the
+same origin as `/v1/reader/*`. `/version` exposes their byte lengths and
+SHA-256 identities beside the binary build identity.
+
+`python3 apps/cloud-reader/build_release.py` remains a CI/reference tool for
+proving exact committed asset bytes and deterministic manifests; its ZIP is not
+an operator deployment artifact. The edge recipe and deployment gates are
+documented in [`cloud-reader-static-release.md`](../../docs/cloud-reader-static-release.md).
+`release-browser.test.mjs` proves the Caddy shape with a synthetic same-origin
+Chaptera while Rust tests prove the actual binary embedding.

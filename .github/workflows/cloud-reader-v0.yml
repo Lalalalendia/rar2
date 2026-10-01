@@ -10,6 +10,8 @@ on:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_http.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "apps/chaptera-server/src/untrusted_pub_worker.rs"
+      - "apps/chaptera-server/src/source_ingress_security.rs"
       - "apps/chaptera-server/src/cli.rs"
       - "apps/chaptera-server/src/schema_migration.rs"
       - "tools/run_cloud_migration_receipt.py"
@@ -18,6 +20,8 @@ on:
       - "apps/chaptera-server/src/config.rs"
       - "apps/chaptera-server/src/main.rs"
       - "apps/chaptera-server/src/lib.rs"
+      - "apps/chaptera-server/src/cloud_reader_assets.rs"
+      - "apps/chaptera-server/src/serve.rs"
       - "apps/chaptera-server/migrations/0017_reader_guest_sessions.sql"
       - "apps/chaptera-server/Cargo.toml"
       - ".github/workflows/cloud-reader-v0.yml"
@@ -31,6 +35,8 @@ on:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_http.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "apps/chaptera-server/src/untrusted_pub_worker.rs"
+      - "apps/chaptera-server/src/source_ingress_security.rs"
       - "apps/chaptera-server/src/cli.rs"
       - "apps/chaptera-server/src/schema_migration.rs"
       - "tools/run_cloud_migration_receipt.py"
@@ -39,6 +45,8 @@ on:
       - "apps/chaptera-server/src/config.rs"
       - "apps/chaptera-server/src/main.rs"
       - "apps/chaptera-server/src/lib.rs"
+      - "apps/chaptera-server/src/cloud_reader_assets.rs"
+      - "apps/chaptera-server/src/serve.rs"
       - "apps/chaptera-server/migrations/0017_reader_guest_sessions.sql"
       - "apps/chaptera-server/Cargo.toml"
       - ".github/workflows/cloud-reader-v0.yml"
@@ -105,7 +113,7 @@ jobs:
           echo "5c218bc34c9197369263da7e9317a83acdbd80ef45d94dca5eff76e727c67cdd  $RUNNER_TEMP/caddy.tar.gz" | sha256sum --check
           mkdir -p "$RUNNER_TEMP/reader-caddy"
           tar --no-same-owner -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP/reader-caddy" caddy
-      - name: Build exact-head standalone release and exercise its real edge
+      - name: Verify exact Reader assets and exercise the one-binary edge shape
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           READER_CADDY: ${{ runner.temp }}/reader-caddy/caddy

@@ -1,5 +1,8 @@
 use super::*;
-use pub_contents::{CONTENTS_RAW_TYPE_CELLS, MatureCellCoordinates, parse_confirmed_mature_cells};
+use pub_contents::{
+    CONTENTS_RAW_TYPE_CELLS, ContentsCursor, MatureCellCoordinates, parse_confirmed_block,
+    parse_confirmed_mature_cells,
+};
 use pub_model::{
     RectEmu, SimpleRectangularTable, SimpleTableCell, Story, TableCellAddress, TableCellId,
 };
@@ -9,6 +12,10 @@ pub const RAW_TYPE_TABLE: u16 = 0x10;
 pub const TABLE_NUM_ROWS_ID: u16 = 0x66;
 pub const TABLE_NUM_COLUMNS_ID: u16 = 0x67;
 pub const TABLE_CELLS_SEQ_NUM_ID: u16 = 0x6B;
+pub const TABLE_WIDTH_ID: u16 = 0x68;
+pub const TABLE_HEIGHT_ID: u16 = 0x69;
+pub const TABLE_ROWCOL_ARRAY_ID: u16 = 0x6D;
+pub const TABLE_ROWCOL_SIZE_ID: u16 = 0x02;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellSource {
@@ -46,6 +53,8 @@ impl From<MatureCellCoordinates> for PubTableCellCoordinates {
 pub struct PubMaterializedTableCell {
     pub id: TableCellId,
     pub address: TableCellAddress,
+    pub row_span: u32,
+    pub column_span: u32,
     pub text: String,
     pub bounds: Option<RectEmu>,
 }
@@ -59,6 +68,21 @@ pub enum PubTableTextError {
     },
     MissingSourceCell {
         id: TableCellId,
+    },
+    MissingCoordinates {
+        id: TableCellId,
+    },
+    InvalidCoordinates {
+        id: TableCellId,
+    },
+    OverlappingCells {
+        id: TableCellId,
+        other_id: TableCellId,
+    },
+    GridCoverageOverflow,
+    IncompleteGridCoverage {
+        expected: u64,
+        covered: u64,
     },
     InvalidRange {
         id: TableCellId,
@@ -75,15 +99,10 @@ pub enum PubTableTextError {
     },
 }
 
-pub fn materialize_bounded_simple_table_cells(
+pub fn materialize_bounded_table_cells(
     table: &PubTableSource,
     story: &Story,
 ) -> Result<Vec<PubMaterializedTableCell>, PubTableTextError> {
-    let simple = table
-        .simple_table
-        .as_ref()
-        .ok_or(PubTableTextError::NotSimpleRectangular)?;
-
     if table.story_id != Some(story.id) {
         return Err(PubTableTextError::StoryMismatch {
             expected: table.story_id,
@@ -91,22 +110,80 @@ pub fn materialize_bounded_simple_table_cells(
         });
     }
 
-    let story_utf16 = story.text.encode_utf16().collect::<Vec<_>>();
-    let mut semantic_cells = simple.cells.clone();
-    semantic_cells.sort_by_key(|cell| (cell.address.row, cell.address.column, cell.id));
+    let expected = u64::from(table.rows)
+        .checked_mul(u64::from(table.columns))
+        .ok_or(PubTableTextError::GridCoverageOverflow)?;
+    let mut covered = 0_u64;
+    let mut semantic_cells = table.cells.iter().collect::<Vec<_>>();
+    semantic_cells.sort_by_key(|cell| {
+        let coordinates = cell.coordinates.unwrap_or(PubTableCellCoordinates {
+            start_row: u32::MAX,
+            end_row: u32::MAX,
+            start_column: u32::MAX,
+            end_column: u32::MAX,
+        });
+        (
+            coordinates.start_row,
+            coordinates.start_column,
+            coordinates.end_row,
+            coordinates.end_column,
+            cell.id,
+        )
+    });
 
+    for (index, cell) in semantic_cells.iter().enumerate() {
+        let coordinates = cell
+            .coordinates
+            .ok_or(PubTableTextError::MissingCoordinates { id: cell.id })?;
+        if coordinates.start_row > coordinates.end_row
+            || coordinates.start_column > coordinates.end_column
+            || coordinates.end_row >= table.rows
+            || coordinates.end_column >= table.columns
+        {
+            return Err(PubTableTextError::InvalidCoordinates { id: cell.id });
+        }
+
+        let row_span = u64::from(coordinates.end_row - coordinates.start_row + 1);
+        let column_span = u64::from(coordinates.end_column - coordinates.start_column + 1);
+        covered = covered
+            .checked_add(
+                row_span
+                    .checked_mul(column_span)
+                    .ok_or(PubTableTextError::GridCoverageOverflow)?,
+            )
+            .ok_or(PubTableTextError::GridCoverageOverflow)?;
+
+        for other in &semantic_cells[..index] {
+            let other_coordinates = other
+                .coordinates
+                .ok_or(PubTableTextError::MissingCoordinates { id: other.id })?;
+            let rows_overlap = coordinates.start_row <= other_coordinates.end_row
+                && other_coordinates.start_row <= coordinates.end_row;
+            let columns_overlap = coordinates.start_column <= other_coordinates.end_column
+                && other_coordinates.start_column <= coordinates.end_column;
+            if rows_overlap && columns_overlap {
+                return Err(PubTableTextError::OverlappingCells {
+                    id: cell.id,
+                    other_id: other.id,
+                });
+            }
+        }
+    }
+
+    if covered != expected {
+        return Err(PubTableTextError::IncompleteGridCoverage { expected, covered });
+    }
+
+    let story_utf16 = story.text.encode_utf16().collect::<Vec<_>>();
     semantic_cells
         .into_iter()
-        .map(|semantic| {
-            let source = table
-                .cells
-                .iter()
-                .find(|cell| cell.id == semantic.id)
-                .ok_or(PubTableTextError::MissingSourceCell { id: semantic.id })?;
-
+        .map(|source| {
+            let coordinates = source
+                .coordinates
+                .ok_or(PubTableTextError::MissingCoordinates { id: source.id })?;
             let start = usize::try_from(source.utf16_start).map_err(|_| {
                 PubTableTextError::InvalidRange {
-                    id: semantic.id,
+                    id: source.id,
                     start: source.utf16_start,
                     end: source.utf16_end,
                     story_len_utf16: story_utf16.len(),
@@ -114,14 +191,14 @@ pub fn materialize_bounded_simple_table_cells(
             })?;
             let end =
                 usize::try_from(source.utf16_end).map_err(|_| PubTableTextError::InvalidRange {
-                    id: semantic.id,
+                    id: source.id,
                     start: source.utf16_start,
                     end: source.utf16_end,
                     story_len_utf16: story_utf16.len(),
                 })?;
             if start > end || end > story_utf16.len() {
                 return Err(PubTableTextError::InvalidRange {
-                    id: semantic.id,
+                    id: source.id,
                     start: source.utf16_start,
                     end: source.utf16_end,
                     story_len_utf16: story_utf16.len(),
@@ -130,23 +207,15 @@ pub fn materialize_bounded_simple_table_cells(
 
             let mut cell_start = start;
             let mut cell_end = end;
-
-            // The grounded Publisher TCD convention used by our mature bridge
-            // leaves the inter-cell CR at the start of every cell after the
-            // first source slice. The table structure itself represents that
-            // boundary, so it must not become cell content.
             if start > 0 {
                 if story_utf16.get(start) != Some(&0x000D) {
                     return Err(PubTableTextError::MissingLeadingCellSeparator {
-                        id: semantic.id,
+                        id: source.id,
                         start: source.utf16_start,
                     });
                 }
                 cell_start += 1;
             }
-
-            // The final Quill Story paragraph terminator is not table-cell
-            // content. Internal CRs are preserved for multi-paragraph cells.
             if end == story_utf16.len()
                 && cell_end > cell_start
                 && story_utf16.get(cell_end - 1) == Some(&0x000D)
@@ -155,16 +224,31 @@ pub fn materialize_bounded_simple_table_cells(
             }
 
             let text = String::from_utf16(&story_utf16[cell_start..cell_end])
-                .map_err(|_| PubTableTextError::InvalidUtf16 { id: semantic.id })?;
+                .map_err(|_| PubTableTextError::InvalidUtf16 { id: source.id })?;
 
             Ok(PubMaterializedTableCell {
-                id: semantic.id,
-                address: semantic.address,
+                id: source.id,
+                address: TableCellAddress {
+                    row: coordinates.start_row,
+                    column: coordinates.start_column,
+                },
+                row_span: coordinates.end_row - coordinates.start_row + 1,
+                column_span: coordinates.end_column - coordinates.start_column + 1,
                 text,
                 bounds: source.bounds,
             })
         })
         .collect()
+}
+
+pub fn materialize_bounded_simple_table_cells(
+    table: &PubTableSource,
+    story: &Story,
+) -> Result<Vec<PubMaterializedTableCell>, PubTableTextError> {
+    if table.simple_table.is_none() {
+        return Err(PubTableTextError::NotSimpleRectangular);
+    }
+    materialize_bounded_table_cells(table, story)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,6 +295,224 @@ pub(crate) struct TableBridgeContext<'a> {
     pub story_by_syid: &'a BTreeMap<u32, StoryId>,
     pub story_layout_keys: &'a BTreeMap<u32, (u32, RawSpan)>,
     pub mcld: Option<&'a QuillMcldChunk>,
+    pub table_bounds: &'a RectEmu,
+}
+
+fn populate_exact_table_cell_bounds(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    table_chunk: &Contents0x2cChunk,
+    tail_scalars: &TableTailScalars,
+    rows: u32,
+    columns: u32,
+    cells: &mut [PubTableCellSource],
+) -> Result<bool> {
+    let mut arrays = table_chunk
+        .fields
+        .iter()
+        .filter(|field| field.id == TABLE_ROWCOL_ARRAY_ID);
+    let Some(array) = arrays.next() else {
+        return Ok(false);
+    };
+    if arrays.next().is_some() {
+        bail!("TABLE has duplicate row/column arrays");
+    }
+    let RawContentsBlockBody::Container { content_source, .. } = &array.body else {
+        bail!("TABLE row/column array is not a container");
+    };
+
+    let start = usize::try_from(content_source.offset)
+        .map_err(|_| anyhow!("TABLE row/column array offset does not fit usize"))?;
+    let len = usize::try_from(content_source.len)
+        .map_err(|_| anyhow!("TABLE row/column array length does not fit usize"))?;
+    let mut cursor =
+        ContentsCursor::bounded(content_source.stream.clone(), context.contents, start, len)?;
+    let mut sizes = Vec::new();
+
+    while cursor.remaining() > 0 {
+        let item = parse_confirmed_block(&mut cursor)?;
+        if item.id != 0 {
+            bail!(
+                "TABLE row/column array item has nonzero id 0x{:02X}",
+                item.id
+            );
+        }
+        let RawContentsBlockBody::Container {
+            content_source: item_source,
+            ..
+        } = &item.body
+        else {
+            bail!("TABLE row/column array item is not a container");
+        };
+        let item_start = usize::try_from(item_source.offset)
+            .map_err(|_| anyhow!("TABLE row/column item offset does not fit usize"))?;
+        let item_len = usize::try_from(item_source.len)
+            .map_err(|_| anyhow!("TABLE row/column item length does not fit usize"))?;
+        let mut item_cursor = ContentsCursor::bounded(
+            item_source.stream.clone(),
+            context.contents,
+            item_start,
+            item_len,
+        )?;
+        let mut size = None;
+        while item_cursor.remaining() > 0 {
+            let field = parse_confirmed_block(&mut item_cursor)?;
+            if field.id != TABLE_ROWCOL_SIZE_ID {
+                continue;
+            }
+            let RawContentsBlockBody::U32 { value, .. } = field.body else {
+                bail!("TABLE row/column size is not u32");
+            };
+            if size.replace(value).is_some() {
+                bail!("TABLE row/column item has duplicate size");
+            }
+        }
+        let size = size.context("TABLE row/column item has no size")?;
+        if size == 0 {
+            bail!("TABLE row/column size is zero");
+        }
+        sizes.push(size);
+    }
+
+    let expected = usize::try_from(columns)
+        .ok()
+        .and_then(|columns| {
+            usize::try_from(rows)
+                .ok()
+                .and_then(|rows| columns.checked_add(rows))
+        })
+        .context("TABLE row/column count overflows usize")?;
+    if sizes.len() != expected {
+        bail!(
+            "TABLE row/column array count {} differs from columns+rows {}",
+            sizes.len(),
+            expected
+        );
+    }
+
+    let split = usize::try_from(columns).context("TABLE column count does not fit usize")?;
+    let (column_widths, row_heights) = sizes.split_at(split);
+    let declared_width = unique_table_scalar(table_chunk, tail_scalars, TABLE_WIDTH_ID)?
+        .map(|(value, _)| value)
+        .context("TABLE width is missing")?;
+    let declared_height = unique_table_scalar(table_chunk, tail_scalars, TABLE_HEIGHT_ID)?
+        .map(|(value, _)| value)
+        .context("TABLE height is missing")?;
+
+    let sum = |values: &[u32]| -> Result<u64> {
+        values.iter().try_fold(0_u64, |total, value| {
+            total
+                .checked_add(u64::from(*value))
+                .context("TABLE track extent sum overflow")
+        })
+    };
+    let width_sum = sum(column_widths)?;
+    let height_sum = sum(row_heights)?;
+    if width_sum != u64::from(declared_width) || height_sum != u64::from(declared_height) {
+        bail!(
+            "TABLE track sums {}x{} differ from declared {}x{}",
+            width_sum,
+            height_sum,
+            declared_width,
+            declared_height
+        );
+    }
+
+    let owner_width = u64::try_from(context.table_bounds.width.get())
+        .map_err(|_| anyhow!("TABLE owner width is negative"))?;
+    let owner_height = u64::try_from(context.table_bounds.height.get())
+        .map_err(|_| anyhow!("TABLE owner height is negative"))?;
+    if width_sum > owner_width || height_sum > owner_height {
+        bail!(
+            "TABLE tracks {}x{} exceed owner bounds {}x{}",
+            width_sum,
+            height_sum,
+            owner_width,
+            owner_height
+        );
+    }
+
+    let prefix = |values: &[u32]| -> Result<Vec<u64>> {
+        let mut out = Vec::with_capacity(values.len() + 1);
+        out.push(0);
+        for value in values {
+            let next = out
+                .last()
+                .copied()
+                .unwrap_or(0_u64)
+                .checked_add(u64::from(*value))
+                .context("TABLE track prefix overflow")?;
+            out.push(next);
+        }
+        Ok(out)
+    };
+    let column_prefix = prefix(column_widths)?;
+    let row_prefix = prefix(row_heights)?;
+
+    for cell in cells {
+        let coordinates = cell
+            .coordinates
+            .context("TABLE cell coordinates are unavailable for exact track geometry")?;
+        if coordinates.start_row > coordinates.end_row
+            || coordinates.start_column > coordinates.end_column
+            || coordinates.end_row >= rows
+            || coordinates.end_column >= columns
+        {
+            bail!("TABLE cell coordinates exceed bounded table grid");
+        }
+
+        let start_column =
+            usize::try_from(coordinates.start_column).context("TABLE column index overflow")?;
+        let end_column = usize::try_from(coordinates.end_column)
+            .context("TABLE column index overflow")?
+            .checked_add(1)
+            .context("TABLE column end overflow")?;
+        let start_row =
+            usize::try_from(coordinates.start_row).context("TABLE row index overflow")?;
+        let end_row = usize::try_from(coordinates.end_row)
+            .context("TABLE row index overflow")?
+            .checked_add(1)
+            .context("TABLE row end overflow")?;
+
+        let x_offset = i64::try_from(column_prefix[start_column])
+            .context("TABLE x offset does not fit i64")?;
+        let y_offset =
+            i64::try_from(row_prefix[start_row]).context("TABLE y offset does not fit i64")?;
+        let width = i64::try_from(column_prefix[end_column] - column_prefix[start_column])
+            .context("TABLE cell width does not fit i64")?;
+        let height = i64::try_from(row_prefix[end_row] - row_prefix[start_row])
+            .context("TABLE cell height does not fit i64")?;
+        let x = context
+            .table_bounds
+            .x
+            .get()
+            .checked_add(x_offset)
+            .context("TABLE cell x overflow")?;
+        let y = context
+            .table_bounds
+            .y
+            .get()
+            .checked_add(y_offset)
+            .context("TABLE cell y overflow")?;
+
+        cell.bounds = Some(RectEmu::new(
+            LengthEmu::new(x),
+            LengthEmu::new(y),
+            LengthEmu::new(width),
+            LengthEmu::new(height),
+        ));
+        cell.source_refs.push(source_ref(
+            context.source,
+            &array.source,
+            Some(contents_object_key(table_seq_num)),
+            Some("TABLE/rowcol_array".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        ));
+    }
+
+    Ok(true)
 }
 
 pub(crate) fn build_table_story_ownership_source(
@@ -422,6 +724,23 @@ pub(crate) fn build_table_source(
             seq_num: table_seq_num,
             tcd_last_end: previous_end,
             story_len: tcd.story_utf16_code_units.value,
+        });
+    }
+
+    if let Err(error) = populate_exact_table_cell_bounds(
+        context,
+        table_seq_num,
+        table_chunk,
+        &tail_scalars,
+        rows,
+        columns,
+        &mut joined_cells,
+    ) {
+        diagnostics.push(PubBridgeDiagnostic::TableLayoutMetricsUnavailable {
+            seq_num: table_seq_num,
+            text_id,
+            layout_key: None,
+            reason: format!("TABLE row/column track geometry unavailable: {error}"),
         });
     }
 
@@ -916,6 +1235,63 @@ mod tests {
         assert_eq!(cells.len(), 1);
         assert_eq!(cells[0].id, cell_id);
         assert_eq!(cells[0].text, "A");
+        assert_eq!(cells[0].bounds, Some(bounds));
+    }
+
+    #[test]
+    fn spanning_cell_materializes_without_flattening() {
+        let story_id = StoryId::from_canonical(CanonicalId::from_bytes([8; 16]));
+        let cell_id = table_cell_id(5);
+        let bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(600),
+            LengthEmu::new(100),
+        );
+        let table = PubTableSource {
+            text_id: 2,
+            story_id: Some(story_id),
+            rows: 1,
+            columns: 2,
+            cells_seq_num: None,
+            tcd_story_ordinal: None,
+            cells: vec![PubTableCellSource {
+                id: cell_id,
+                stored_record_index: 0,
+                coordinates: Some(PubTableCellCoordinates {
+                    start_row: 0,
+                    end_row: 0,
+                    start_column: 0,
+                    end_column: 1,
+                }),
+                utf16_start: 0,
+                utf16_end: 6,
+                bounds: Some(bounds),
+                source_refs: Vec::new(),
+            }],
+            simple_table: None,
+            layout_metrics: None,
+            source_refs: Vec::new(),
+        };
+        let story = Story {
+            id: story_id,
+            text: "Header".into(),
+            paragraphs: Vec::new(),
+            runs: Vec::new(),
+            fields: Vec::new(),
+            hyperlinks: Vec::new(),
+            source_refs: Vec::new(),
+        };
+
+        let cells = materialize_bounded_table_cells(&table, &story)
+            .expect("one cell spanning two columns must remain one semantic cell");
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].id, cell_id);
+        assert_eq!(cells[0].address, TableCellAddress { row: 0, column: 0 });
+        assert_eq!(cells[0].row_span, 1);
+        assert_eq!(cells[0].column_span, 2);
+        assert_eq!(cells[0].text, "Header");
         assert_eq!(cells[0].bounds, Some(bounds));
     }
 

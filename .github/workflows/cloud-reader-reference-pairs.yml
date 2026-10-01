@@ -10,6 +10,7 @@ on:
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
@@ -24,6 +25,7 @@ on:
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
@@ -55,12 +57,41 @@ jobs:
           python -m pip install --disable-pip-version-check --no-cache-dir             "requests==2.32.5" "PyMuPDF==1.24.14"
           python -m py_compile             tools/acquire_carlton_march_pair.py             tools/acquire_virginia_pub_pdf_pairs.py             tools/pdf_reference_diff_v1.py             tools/cloud_reader_reference_pdf_raster_v1.py
 
-      - name: Reacquire exact public PUB-PDF pairs
+      - name: Reacquire exact Carlton PUB-PDF pair
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/carlton-pair" "$RUNNER_TEMP/virginia-pairs"
+          mkdir -p "$RUNNER_TEMP/carlton-pair"
           python tools/acquire_carlton_march_pair.py "$RUNNER_TEMP/carlton-pair"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Census exact Carlton fill state
+        run: |
+          set -euo pipefail
+          mkdir -p target/cloud-reader-reference-pairs
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
+
+      - name: Census exact Carlton TABLE cell paint join
+        env:
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/carlton-pair/March-2026.pub
+          CHAPTERA_TABLE_CELL_PAINT_RECEIPT: ${{ github.workspace }}/target/cloud-reader-reference-pairs/carlton-table-cell-paint-join.json
+        run: cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+
+      - name: Reacquire exact Virginia PUB-PDF pairs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
           python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+
+      - name: Census exact Virginia fill state
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
+          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
+            cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -70,10 +101,6 @@ jobs:
         run: |
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.94.1"
 
       - name: Build canonical guest Scene producer
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
@@ -89,16 +116,6 @@ jobs:
           CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
           CHAPTERA_READER_SCENE_PROBE_SHA256: 077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e
         run: cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
-
-      - name: Census exact reference fill state
-        run: |
-          set -euo pipefail
-          mkdir -p target/cloud-reader-reference-pairs
-          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
-          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"             target/cloud-reader-reference-pairs/virginia-devinettes-fill-state.json
-          if [ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]; then
-            cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
-          fi
 
       - name: Build exact reference fixture manifest
         run: |

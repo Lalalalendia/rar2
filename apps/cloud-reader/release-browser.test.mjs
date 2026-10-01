@@ -1,5 +1,6 @@
-// Real Caddy + released static files + Chromium. The API is synthetic:
-// this proves release wiring, not scanner/BlobStore/TTL/production authority.
+// Real Caddy + synthetic same-origin Chaptera + Chromium.
+// Rust unit tests prove the same five files are embedded in the chaptera binary;
+// this test proves the simplified edge wiring without scanner/BlobStore/TTL.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -23,8 +24,26 @@ const scene = {
   stories: [{ story_id: "s", text: "Released Reader preview.", text_fidelity: "partial" }], resources: []
 };
 const seen = [];
+let site;
+const contentTypes = {
+  "index.html": "text/html; charset=utf-8",
+  "reader.css": "text/css; charset=utf-8",
+  "reader-app.mjs": "text/javascript; charset=utf-8",
+  "reader-model.mjs": "text/javascript; charset=utf-8",
+  "render-v1.mjs": "text/javascript; charset=utf-8"
+};
 const api = createServer(async (request, response) => {
   try {
+    const path = request.url.split("?", 1)[0];
+    if (request.method === "GET" && site) {
+      const name = path === "/" ? "index.html" : path.slice(1);
+      if (assets.includes(name)) {
+        const data = await readFile(join(site, name));
+        response.writeHead(200, { "content-type": contentTypes[name], "cache-control": "no-cache" });
+        response.end(data);
+        return;
+      }
+    }
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = Buffer.concat(chunks);
@@ -57,7 +76,7 @@ try {
     const build = spawnSync("python3", [join(root, "apps/cloud-reader/build_release.py"), "--commit", commit, "--output", join(output, folder)], { cwd: root, encoding: "utf8" });
     assert.equal(build.status, 0, build.stderr);
   }
-  const site = join(output, "build-a/site");
+  site = join(output, "build-a/site");
   const archive = await readFile(join(output, "build-a/cloud-reader.zip"));
   assert.deepEqual(archive, await readFile(join(output, "build-b/cloud-reader.zip")), "same committed assets must produce byte-identical releases");
   const manifest = JSON.parse(await readFile(join(site, "manifest.json"), "utf8"));
@@ -69,7 +88,7 @@ try {
     assert.equal(hash(data), manifest.files[name].sha256);
     assert.equal(data.length, manifest.files[name].byte_len);
   }
-  const environment = { ...process.env, CHAPTERA_READER_SITE: origin, CHAPTERA_READER_ROOT: site,
+  const environment = { ...process.env, CHAPTERA_READER_SITE: origin,
     CHAPTERA_READER_API: "127.0.0.1:" + api.address().port };
   const config = join(root, "deploy/caddy/CloudReader.Caddyfile.example");
   const adapted = spawnSync(caddyBinary, ["adapt", "--config", config, "--adapter", "caddyfile"], { cwd: output, env: environment, encoding: "utf8" });
@@ -146,7 +165,7 @@ try {
   assert.equal(oversized.status, 413, "edge must reject an oversized Reader body");
   await page.screenshot({ path: join(output, "released-reader.png"), fullPage: true });
   const version = spawnSync(caddyBinary, ["version"], { encoding: "utf8" }).stdout.trim();
-  const receipt = { protocol: "chaptera.cloud-reader-release-edge.v1", scope: "real Caddy/Chromium with synthetic API; excludes TLS, live scanner/isolation/BlobStore/TTL/consent and production host acceptance",
+  const receipt = { protocol: "chaptera.cloud-reader-one-binary-edge.v1", scope: "real Caddy/Chromium with synthetic same-origin Chaptera; Rust tests own embedded bytes; excludes TLS, live scanner/isolation/BlobStore/TTL/consent and production host acceptance",
     source_commit: commit, artifact_sha256: hash(archive), asset_count: assets.length, byte_identical_rebuild: true,
     caddy: version, browser: await browser.version(), all_assets_served_with_matching_hash: true,
     trusted_proxy_headers_collapsed: true, non_reader_api_blocked: true, reader_body_limit_bytes: bodyLimits[0], oversized_body_rejected: true,
