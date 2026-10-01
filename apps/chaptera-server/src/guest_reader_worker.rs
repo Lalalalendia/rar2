@@ -596,16 +596,34 @@ fn assess_editable_target(
     target: EditorEditableTarget,
 ) -> ReaderEditableTargetAssessmentV1 {
     match session.preview_editable_export(target, "guest:source") {
-        Ok(preview) if preview.report.can_serialize && preview.report.counts.blocking == 0 => {
-            ReaderEditableTargetAssessmentV1 {
-                state: "available_with_declared_losses".to_owned(),
-                reason_code: "serializable".to_owned(),
+        Ok(preview) => {
+            let counts = preview.report.counts;
+            let declared_loss_count = counts
+                .approximated
+                .saturating_add(counts.flattened)
+                .saturating_add(counts.rasterized)
+                .saturating_add(counts.unsupported);
+            if preview.report.can_serialize && counts.blocking == 0 {
+                ReaderEditableTargetAssessmentV1 {
+                    state: "available_with_declared_losses".to_owned(),
+                    reason_code: "serializable".to_owned(),
+                    declared_loss_count,
+                    blocking_loss_count: 0,
+                }
+            } else {
+                ReaderEditableTargetAssessmentV1 {
+                    state: "unavailable".to_owned(),
+                    reason_code: "blocking_losses".to_owned(),
+                    declared_loss_count,
+                    blocking_loss_count: counts.blocking,
+                }
             }
         }
-        Ok(_) => unavailable_route("blocking_losses"),
         Err(_) => ReaderEditableTargetAssessmentV1 {
             state: "not_verified".to_owned(),
             reason_code: "assessment_failed".to_owned(),
+            declared_loss_count: 0,
+            blocking_loss_count: 0,
         },
     }
 }
@@ -614,6 +632,8 @@ fn unavailable_route(reason_code: &str) -> ReaderEditableTargetAssessmentV1 {
     ReaderEditableTargetAssessmentV1 {
         state: "unavailable".to_owned(),
         reason_code: reason_code.to_owned(),
+        declared_loss_count: 0,
+        blocking_loss_count: 0,
     }
 }
 
@@ -624,10 +644,14 @@ fn unverified_routes(source_sha256: &str, reason_code: &str) -> ReaderEditableRo
         idml: ReaderEditableTargetAssessmentV1 {
             state: "not_verified".to_owned(),
             reason_code: reason_code.to_owned(),
+            declared_loss_count: 0,
+            blocking_loss_count: 0,
         },
         odg: ReaderEditableTargetAssessmentV1 {
             state: "not_verified".to_owned(),
             reason_code: reason_code.to_owned(),
+            declared_loss_count: 0,
+            blocking_loss_count: 0,
         },
     }
 }
