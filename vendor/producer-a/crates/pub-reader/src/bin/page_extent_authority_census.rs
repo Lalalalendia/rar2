@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use pub_contents::{
     Contents0x2cChunkReference, RawContentsBlockBody, parse_0x2c_header,
-    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
-    parse_confirmed_chunk_reference, parse_confirmed_margins_page_extent,
+    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    parse_confirmed_margins_page_extent,
 };
 use pub_core::StreamPath;
 use pub_model::Sha256Digest;
@@ -69,7 +69,10 @@ struct TargetMatch {
 }
 
 fn main() -> Result<()> {
-    let paths = std::env::args_os().skip(1).map(PathBuf::from).collect::<Vec<_>>();
+    let paths = std::env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
     if paths.is_empty() {
         bail!("usage: page_extent_authority_census <fixture.pub>...");
     }
@@ -88,8 +91,7 @@ fn main() -> Result<()> {
 }
 
 fn inspect_fixture(path: &Path) -> Result<FixtureReceipt> {
-    let source = std::fs::read(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let source = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let source_sha256 = sha256_hex(&source);
     let source_hash: Sha256Digest = source_sha256
         .parse()
@@ -98,17 +100,15 @@ fn inspect_fixture(path: &Path) -> Result<FixtureReceipt> {
     let contents = pub_cfb::read_stream_reader(Cursor::new(source.as_slice()), CONTENTS_STREAM)
         .with_context(|| format!("read {CONTENTS_STREAM} from {}", path.display()))?;
     let stream = StreamPath(CONTENTS_STREAM.to_owned());
-    let header = parse_0x2c_header(stream.clone(), &contents)
-        .context("parse mature Contents header")?;
+    let header =
+        parse_0x2c_header(stream.clone(), &contents).context("parse mature Contents header")?;
     let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
         .context("parse mature Contents trailer")?;
     let references = build_reference_index(&contents, &trailer.directory)?;
 
-    let build = pub_reader::build_mature_0x2c_source_graph(
-        Cursor::new(source.as_slice()),
-        source_hash,
-    )
-    .context("build current canonical source graph")?;
+    let build =
+        pub_reader::build_mature_0x2c_source_graph(Cursor::new(source.as_slice()), source_hash)
+            .context("build current canonical source graph")?;
     let canonical_page_sizes_emu = build
         .graph
         .pages
@@ -136,8 +136,8 @@ fn inspect_fixture(path: &Path) -> Result<FixtureReceipt> {
             continue;
         }
 
-        let seq_num = u32::try_from(reference.seq_num)
-            .context("Contents seqNum does not fit u32")?;
+        let seq_num =
+            u32::try_from(reference.seq_num).context("Contents seqNum does not fit u32")?;
         let offset = match reference.chunk_offsets.as_slice() {
             [field] => field.value,
             many => bail!(
