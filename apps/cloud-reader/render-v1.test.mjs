@@ -136,6 +136,37 @@ test("shared resolved text paint plan preserves server line breaks", () => {
   );
 });
 
+test("source-backed text bounds affect text only, not outer resource geometry", () => {
+  const node = {
+    node_id: "projected-carrier",
+    bounds: { x: 100, y: 200, width: 1000, height: 800 },
+    text_bounds: { x: 140, y: 240, width: 920, height: 720 },
+    resource_id: "resource-1",
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 120,
+      line_height_emu: 150,
+      lines: [{
+        line_index: 0,
+        text: "carrier",
+        measured_width_emu: 420,
+        line_height_emu: 150
+      }]
+    }
+  };
+  const resource = {
+    resource_id: "resource-1",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+
+  assert.doesNotThrow(() => assertReaderSceneSourceNeutral({ nodes: [node], resources: [resource] }));
+  assert.deepEqual(resolvedTextLinePaintPlan(node).bounds, node.text_bounds);
+  assert.deepEqual(imageResourcePaintPlan(node, resource).geometry, node.bounds);
+});
+
 test("mixed shared text plan preserves server span sizes and cumulative line heights", () => {
   const plan = resolvedTextLinePaintPlan({
     bounds: { x: 100, y: 200, width: 1000, height: 600 },
