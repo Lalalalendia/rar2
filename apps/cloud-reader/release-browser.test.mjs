@@ -1,5 +1,5 @@
 // Real Caddy + synthetic same-origin Chaptera + Chromium.
-// Rust unit tests prove the same five files are embedded in the chaptera binary;
+// Rust unit tests prove the same six files are embedded in the chaptera binary;
 // this test proves the simplified edge wiring without scanner/BlobStore/TTL.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -14,7 +14,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const output = resolve(process.env.READER_RELEASE_OUTPUT ?? join(root, "target/cloud-reader-release"));
 const caddyBinary = process.env.READER_CADDY ?? "caddy";
 const hash = (data) => createHash("sha256").update(data).digest("hex");
-const assets = ["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs"];
+const assets = ["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs", "observability-v1.mjs"];
 const fixtureBytes = Buffer.from("public synthetic release fixture");
 const scene = {
   protocol_version: "chaptera.reader-scene.v1",
@@ -30,7 +30,8 @@ const contentTypes = {
   "reader.css": "text/css; charset=utf-8",
   "reader-app.mjs": "text/javascript; charset=utf-8",
   "reader-model.mjs": "text/javascript; charset=utf-8",
-  "render-v1.mjs": "text/javascript; charset=utf-8"
+  "render-v1.mjs": "text/javascript; charset=utf-8",
+  "observability-v1.mjs": "text/javascript; charset=utf-8"
 };
 const api = createServer(async (request, response) => {
   try {
