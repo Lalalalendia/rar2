@@ -13,6 +13,7 @@ mod image_decode_adapter;
 mod locale;
 mod product_smoke;
 mod reader_product_ui;
+mod reader_salvage;
 mod render_backend;
 mod source_font;
 #[allow(dead_code)]
@@ -40,9 +41,10 @@ use pub_interaction::{
 };
 use pub_viewer::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
-    FailureIntakeClassification, ViewerDiagnosticSeverity, ViewerFidelityStatus,
-    ViewerGeometryDocument, ViewerTextMatch, classify_failure_candidate,
-    exact_file_intake_eligible,
+    FailureIntakeClassification, ReaderPartialSourceGraph, ViewerDiagnosticSeverity,
+    ViewerFidelityStatus, ViewerGeometryDocument, ViewerProductOpenOutcome, ViewerTextMatch,
+    classify_failure_candidate, exact_file_intake_eligible, open_pub_or_salvage,
+    viewer_geometry_environment_v0_1,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -263,6 +265,19 @@ struct PreparedDocumentOpen {
     editor: Option<pub_editor::EditorSession>,
     editor_load_error: Option<String>,
     project_status: Option<String>,
+}
+
+struct PreparedSalvageOpen {
+    source_path: PathBuf,
+    source_file_stamp: Option<SourceFileStamp>,
+    source_hash: pub_editor::Sha256Digest,
+    source_byte_len: u64,
+    salvage: ReaderPartialSourceGraph,
+}
+
+enum PreparedOpen {
+    Normal(PreparedDocumentOpen),
+    Salvage(PreparedSalvageOpen),
 }
 
 fn dropped_file_candidate(paths: &[Option<PathBuf>]) -> Result<Option<PathBuf>, &'static str> {
@@ -950,6 +965,7 @@ struct ViewerApp {
     source_revalidate_after: Option<Instant>,
     source_exact_revalidate_after: Option<Instant>,
     visual: Option<ViewerGeometryDocument>,
+    salvage: Option<ReaderPartialSourceGraph>,
     source_fonts: source_font::DesktopSourceFontRegistry,
     source_fonts_install_attempted: bool,
     source_fonts_active: bool,
@@ -966,6 +982,7 @@ struct ViewerApp {
     load_error: Option<ViewerLoadFailure>,
     search_query: String,
     search_results: Vec<ViewerTextMatch>,
+    salvage_search_results: Vec<reader_salvage::SalvageTextMatch>,
     selected_search_result: Option<usize>,
     image_textures: BTreeMap<String, CachedImageTexture>,
     image_decode_diagnostics: BTreeMap<String, image_decode_adapter::DesktopImageDecodeDiagnostic>,
@@ -1012,6 +1029,7 @@ impl ViewerApp {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
@@ -1028,6 +1046,7 @@ impl ViewerApp {
             load_error: None,
             search_query: String::new(),
             search_results: Vec::new(),
+            salvage_search_results: Vec::new(),
             selected_search_result: None,
             image_textures: BTreeMap::new(),
             image_decode_diagnostics: BTreeMap::new(),
@@ -1314,7 +1333,7 @@ impl ViewerApp {
         }
     }
 
-    fn prepare_document_open(path: PathBuf) -> Result<PreparedDocumentOpen, ViewerLoadFailure> {
+    fn prepare_document_open(path: PathBuf) -> Result<PreparedOpen, ViewerLoadFailure> {
         let stamp_before = source_file_stamp(&path).ok();
         let admitted = chaptera_suite_handoff::AdmittedSource::open(&path).map_err(|error| {
             ViewerLoadFailure {
@@ -1331,14 +1350,48 @@ impl ViewerApp {
             .then_some(stamp_after)
             .flatten();
 
-        let visual =
+        let visual = if reader_only_mode() {
+            match open_pub_or_salvage(bytes, viewer_geometry_environment_v0_1()) {
+                Ok(ViewerProductOpenOutcome::Normal(document)) => *document,
+                Ok(ViewerProductOpenOutcome::Salvage(salvage)) => {
+                    if salvage.source_sha256 != admitted.sha256() {
+                        return Err(ViewerLoadFailure {
+                            kind: ViewerLoadFailureKind::Unsupported,
+                            attempted_path: Some(path),
+                            message: "Recovered evidence did not match the admitted source identity."
+                                .to_owned(),
+                            classification: Some(classify_failure_candidate(bytes)),
+                            diagnostic_json: None,
+                        });
+                    }
+                    return Ok(PreparedOpen::Salvage(PreparedSalvageOpen {
+                        source_path: path,
+                        source_file_stamp,
+                        source_hash: source_sha256(bytes),
+                        source_byte_len: u64::try_from(bytes.len())
+                            .expect("desktop source length must fit u64"),
+                        salvage,
+                    }));
+                }
+                Err(error) => {
+                    return Err(ViewerLoadFailure {
+                        kind: ViewerLoadFailureKind::Unsupported,
+                        attempted_path: Some(path.clone()),
+                        message: format!("Could not open {}: {error:#}", path.display()),
+                        classification: Some(classify_failure_candidate(bytes)),
+                        diagnostic_json: pub_viewer::local_failure_diagnostic_json(bytes).ok(),
+                    });
+                }
+            }
+        } else {
             diagnostic_sweep::open_for_product(bytes).map_err(|error| ViewerLoadFailure {
                 kind: ViewerLoadFailureKind::Unsupported,
                 attempted_path: Some(path.clone()),
                 message: format!("Could not open {}: {error:#}", path.display()),
                 classification: Some(classify_failure_candidate(bytes)),
                 diagnostic_json: pub_viewer::local_failure_diagnostic_json(bytes).ok(),
-            })?;
+            })?
+        };
 
         let (editor, editor_load_error, project_status) = if reader_only_mode() {
             (None, None, None)
@@ -1360,14 +1413,14 @@ impl ViewerApp {
             }
         };
 
-        Ok(PreparedDocumentOpen {
+        Ok(PreparedOpen::Normal(PreparedDocumentOpen {
             source_path: path,
             source_file_stamp,
             visual,
             editor,
             editor_load_error,
             project_status,
-        })
+        }))
     }
 
     fn commit_prepared_document_open(
@@ -1416,6 +1469,7 @@ impl ViewerApp {
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
         self.visual = Some(visual);
+        self.salvage = None;
         self.selected_page = 0;
         self.page_frame_cache.clear();
         self.page_frame_cache_builds = 0;
@@ -1429,6 +1483,7 @@ impl ViewerApp {
         self.load_error = None;
         self.search_query.clear();
         self.search_results.clear();
+        self.salvage_search_results.clear();
         self.selected_search_result = None;
         self.image_textures.clear();
         self.image_decode_diagnostics.clear();
@@ -1470,19 +1525,82 @@ impl ViewerApp {
         self.sync_visual_geometry_from_editor();
     }
 
+    fn commit_prepared_salvage_open(
+        &mut self,
+        generation: OpenGeneration,
+        prepared: PreparedSalvageOpen,
+    ) {
+        self.source_path = Some(prepared.source_path);
+        self.committed_source = Some(CommittedSourceState {
+            generation,
+            source_hash: prepared.source_hash,
+            byte_len: prepared.source_byte_len,
+            file_stamp: prepared.source_file_stamp,
+            freshness: SourceFreshness::Current,
+        });
+        let now = Instant::now();
+        self.source_revalidate_after = Some(now + SOURCE_REVALIDATE_INTERVAL);
+        self.source_exact_revalidate_after = Some(now + SOURCE_EXACT_REVALIDATE_INTERVAL);
+        self.source_fonts = source_font::DesktopSourceFontRegistry::new();
+        self.source_fonts_install_attempted = false;
+        self.source_fonts_active = false;
+        self.visual = None;
+        self.salvage = Some(prepared.salvage);
+        self.selected_page = 0;
+        self.page_frame_cache.clear();
+        self.page_frame_cache_builds = 0;
+        self.canvas_selection.clear();
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+        self.created_text_box_scene_nodes.clear();
+        self.text_mode = None;
+        self.zoom = 1.0;
+        self.zoom_mode = CanvasZoomMode::FitPage;
+        self.load_error = None;
+        self.search_query.clear();
+        self.search_results.clear();
+        self.salvage_search_results.clear();
+        self.selected_search_result = None;
+        self.image_textures.clear();
+        self.image_decode_diagnostics.clear();
+        self.editor = None;
+        self.editor_load_error = None;
+        self.edit_buffer.clear();
+        self.edit_status = None;
+        self.selected_table_cell_index = None;
+        self.table_cell_buffer.clear();
+        self.export_preview = None;
+        self.project_status = None;
+        self.preview_clipped_frames = 0;
+        self.preview_clipped_story_keys.clear();
+        self.preview_text_diagnostics.clear();
+        self.diagnostic_save_path.clear();
+        self.diagnostic_status = None;
+        self.exact_file_consent_open = false;
+        self.exact_file_consent_status = None;
+        self.show_diagnostics = false;
+    }
+
     fn load_path(&mut self, path: PathBuf) {
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
         let generation = self.open_state.begin_attempt();
 
         match Self::prepare_document_open(path) {
-            Ok(prepared) => {
+            Ok(PreparedOpen::Normal(prepared)) => {
                 if self.open_state.commit_if_current(generation) {
                     self.commit_prepared_document_open(generation, prepared);
                 }
             }
+            Ok(PreparedOpen::Salvage(prepared)) => {
+                if self.open_state.commit_if_current(generation) {
+                    self.commit_prepared_salvage_open(generation, prepared);
+                }
+            }
             Err(error) => {
                 if self.open_state.finish_without_commit_if_current(generation) {
+                    self.visual = None;
+                    self.salvage = None;
                     self.load_error = Some(error);
                     self.exact_file_consent_open = false;
                     self.exact_file_consent_status = None;
@@ -2079,15 +2197,24 @@ impl ViewerApp {
     }
 
     fn refresh_search(&mut self) {
-        self.search_results = self
-            .visual
-            .as_ref()
-            .map(|visual| visual.document.search_text(&self.search_query))
-            .unwrap_or_default();
+        self.search_results.clear();
+        self.salvage_search_results.clear();
 
+        if let Some(visual) = &self.visual {
+            self.search_results = visual.document.search_text(&self.search_query);
+        } else if let Some(salvage) = &self.salvage {
+            self.salvage_search_results =
+                reader_salvage::search_text(salvage, &self.search_query);
+        }
+
+        let result_count = if self.salvage.is_some() {
+            self.salvage_search_results.len()
+        } else {
+            self.search_results.len()
+        };
         if self
             .selected_search_result
-            .is_some_and(|index| index >= self.search_results.len())
+            .is_some_and(|index| index >= result_count)
         {
             self.selected_search_result = None;
         }
@@ -2098,7 +2225,7 @@ impl ViewerApp {
         ui.heading("Search");
         ui.separator();
 
-        if self.visual.is_none() {
+        if self.visual.is_none() && self.salvage.is_none() {
             ui.weak("Open a document to search recovered text.");
             return;
         }
@@ -2111,12 +2238,22 @@ impl ViewerApp {
         }
 
         if self.search_query.is_empty() {
-            ui.weak("Search uses recovered story text, not OCR.");
+            if self.salvage.is_some() {
+                ui.weak("Search uses only source-backed text admitted by Salvage View.");
+            } else {
+                ui.weak("Search uses recovered story text, not OCR.");
+            }
             return;
         }
 
-        ui.label(format!("{} matches", self.search_results.len()));
-        if self.search_results.is_empty() {
+        let salvage_mode = self.salvage.is_some();
+        let result_count = if salvage_mode {
+            self.salvage_search_results.len()
+        } else {
+            self.search_results.len()
+        };
+        ui.label(format!("{result_count} matches"));
+        if result_count == 0 {
             ui.weak("No exact matches.");
             return;
         }
@@ -2125,11 +2262,26 @@ impl ViewerApp {
         egui::ScrollArea::vertical()
             .max_height(220.0)
             .show(ui, |ui| {
-                for (index, result) in self.search_results.iter().enumerate() {
-                    let selected = self.selected_search_result == Some(index);
-                    let label = format!("{}. {}", index + 1, search_result_preview(&result.text));
-                    if ui.selectable_label(selected, label).clicked() {
-                        clicked = Some(index);
+                if salvage_mode {
+                    for (index, result) in self.salvage_search_results.iter().enumerate() {
+                        let selected = self.selected_search_result == Some(index);
+                        let label = format!(
+                            "{}. {}",
+                            index + 1,
+                            search_result_preview(&result.text)
+                        );
+                        if ui.selectable_label(selected, label).clicked() {
+                            clicked = Some(index);
+                        }
+                    }
+                } else {
+                    for (index, result) in self.search_results.iter().enumerate() {
+                        let selected = self.selected_search_result == Some(index);
+                        let label =
+                            format!("{}. {}", index + 1, search_result_preview(&result.text));
+                        if ui.selectable_label(selected, label).clicked() {
+                            clicked = Some(index);
+                        }
                     }
                 }
             });
@@ -2138,11 +2290,17 @@ impl ViewerApp {
             self.selected_search_result = Some(index);
             self.supporter_value
                 .observe(supporter::ValueEvent::SearchResultSelected {
-                    match_count: self.search_results.len(),
+                    match_count: result_count,
                 });
             self.selected_table_cell_index = None;
             self.table_cell_buffer.clear();
-            if let Some(text) = self
+
+            if salvage_mode {
+                if let Some(result) = self.salvage_search_results.get(index) {
+                    self.edit_buffer = result.text.clone();
+                    self.edit_status = None;
+                }
+            } else if let Some(text) = self
                 .search_results
                 .get(index)
                 .and_then(|result| {
@@ -2161,7 +2319,15 @@ impl ViewerApp {
             }
         }
 
-        ui.small("Jump selects the exact story match. Page ownership is not shown unless proven.");
+        if salvage_mode {
+            ui.small(
+                "Matches come from proven recovered semantic text. Salvage View does not claim page placement.",
+            );
+        } else {
+            ui.small(
+                "Jump selects the exact story match. Page ownership is not shown unless proven.",
+            );
+        }
     }
 
     fn show_pages(&mut self, ui: &mut egui::Ui) {
@@ -2179,7 +2345,11 @@ impl ViewerApp {
         self.ensure_image_textures(ui.ctx());
 
         let Some(visual) = &self.visual else {
-            ui.weak("No document loaded.");
+            if self.salvage.is_some() {
+                ui.weak("Salvage View has no proven page layout to navigate.");
+            } else {
+                ui.weak("No document loaded.");
+            }
             return;
         };
 
@@ -2284,17 +2454,43 @@ impl ViewerApp {
                 ui.add_space(14.0);
                 reader_product_ui::panel_separator(ui);
                 reader_product_ui::section_label(ui, "Fidelity");
-                match self.fidelity_status() {
-                    Some(status) => {
-                        let label = fidelity_status_label(status);
-                        ui.label(
-                            egui::RichText::new(format!("●  {label}"))
-                                .strong()
-                                .color(reader_product_ui::status_color(label)),
-                        );
-                        reader_product_ui::muted(ui, fidelity_status_summary(status));
+                if self.salvage.is_some() {
+                    ui.label(
+                        egui::RichText::new("●  Salvage")
+                            .strong()
+                            .color(reader_product_ui::WARNING),
+                    );
+                    reader_product_ui::muted(
+                        ui,
+                        "Source-backed recovery facts only; no page layout is claimed.",
+                    );
+                } else if self
+                    .load_error
+                    .as_ref()
+                    .is_some_and(|failure| failure.kind == ViewerLoadFailureKind::Unsupported)
+                {
+                    ui.label(
+                        egui::RichText::new("●  Cannot safely display")
+                            .strong()
+                            .color(reader_product_ui::WARNING),
+                    );
+                    reader_product_ui::muted(
+                        ui,
+                        "No normal or source-neutral salvage view is available.",
+                    );
+                } else {
+                    match self.fidelity_status() {
+                        Some(status) => {
+                            let label = fidelity_status_label(status);
+                            ui.label(
+                                egui::RichText::new(format!("●  {label}"))
+                                    .strong()
+                                    .color(reader_product_ui::status_color(label)),
+                            );
+                            reader_product_ui::muted(ui, fidelity_status_summary(status));
+                        }
+                        None => reader_product_ui::muted(ui, "Not evaluated"),
                     }
-                    None => reader_product_ui::muted(ui, "Not evaluated"),
                 }
                 if self.preview_clipped_frames > 0 {
                     ui.add_space(6.0);
@@ -2319,7 +2515,20 @@ impl ViewerApp {
             reader_product_ui::InspectorTab::Text => {
                 self.show_search(ui);
                 if let Some(index) = self.selected_search_result {
-                    if let Some(result) = self.search_results.get(index) {
+                    if let Some(result) = self.salvage_search_results.get(index) {
+                        ui.add_space(12.0);
+                        reader_product_ui::section_label(ui, "Selected recovered match");
+                        ui.label(&result.text);
+                        ui.small(format!(
+                            "{} · UTF-16 {}..{}",
+                            result.story_key, result.utf16_start, result.utf16_end
+                        ));
+                        if ui.button("Copy match").clicked() {
+                            ui.ctx().copy_text(result.text.clone());
+                            self.supporter_value
+                                .observe(supporter::ValueEvent::SearchMatchCopied);
+                        }
+                    } else if let Some(result) = self.search_results.get(index) {
                         ui.add_space(12.0);
                         reader_product_ui::section_label(ui, "Selected match");
                         ui.label(&result.text);
@@ -2404,11 +2613,63 @@ impl ViewerApp {
             ui.add_space(8.0);
         }
 
+        if let Some(salvage) = &self.salvage {
+            ui.label(
+                egui::RichText::new("Salvage View — read-only")
+                    .strong()
+                    .color(reader_product_ui::WARNING),
+            );
+            ui.label(
+                "Chaptera could not establish trustworthy page geometry, but source-backed recovery evidence is available.",
+            );
+            ui.small("The original PUB is unchanged. Reader does not create or save a repaired PUB.");
+            ui.add_space(10.0);
+
+            reader_product_ui::section_label(ui, "Recovered subsystems");
+            for (label, state) in reader_salvage::subsystem_rows(salvage) {
+                ui.horizontal(|ui| {
+                    ui.strong(label);
+                    ui.label(state);
+                });
+            }
+
+            let gaps = reader_salvage::gap_labels(salvage);
+            if !gaps.is_empty() {
+                ui.add_space(10.0);
+                reader_product_ui::section_label(ui, "Known gaps");
+                for gap in gaps {
+                    ui.label(format!("• {gap}"));
+                }
+            }
+
+            let recovered = reader_salvage::recovered_text(salvage);
+            if !recovered.is_empty() {
+                ui.add_space(10.0);
+                if ui.button("Copy all recovered text").clicked() {
+                    ui.ctx().copy_text(recovered);
+                    self.supporter_value
+                        .observe(supporter::ValueEvent::FullStoryCopied);
+                }
+            }
+            ui.add_space(8.0);
+            ui.small(
+                "Durable repair/materialization belongs to Chaptera Rescue; Salvage View remains observation-only.",
+            );
+            return;
+        }
+
         let Some(visual) = &self.visual else {
             ui.weak("Load a .pub file to inspect it.");
             if let Some(error) = &self.load_error {
                 ui.add_space(12.0);
                 ui.colored_label(ui.visuals().error_fg_color, &error.message);
+                if reader_only_mode() && error.kind == ViewerLoadFailureKind::Unsupported {
+                    ui.add_space(8.0);
+                    ui.strong("Cannot safely display");
+                    ui.label(
+                        "No source-neutral Salvage View could be established for this file.",
+                    );
+                }
                 if error.kind == ViewerLoadFailureKind::FileAccess {
                     ui.add_space(8.0);
                     ui.strong("File access problem");
@@ -4068,6 +4329,31 @@ impl ViewerApp {
         }
 
         if self.visual.is_none() {
+            if let Some(salvage) = &self.salvage {
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.heading("Salvage View");
+                        ui.label(
+                            "Chaptera recovered source-backed facts, but cannot claim a trustworthy page layout.",
+                        );
+                        ui.add_space(8.0);
+                        ui.strong("Read-only · original PUB unchanged");
+                        let recovered = salvage
+                            .facts
+                            .iter()
+                            .filter(|fact| matches!(
+                                fact,
+                                pub_viewer::ReaderPartialSourceFact::TextRange { text, .. }
+                                    if !text.is_empty()
+                            ))
+                            .count();
+                        ui.small(format!("{recovered} recovered text section(s)"));
+                        ui.small("Use the Text tab to search/copy recovered text.");
+                    });
+                });
+                return;
+            }
+
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     if reader_only_mode() {
@@ -5822,6 +6108,7 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
@@ -5844,6 +6131,7 @@ mod tests {
             }),
             search_query: String::new(),
             search_results: Vec::new(),
+            salvage_search_results: Vec::new(),
             selected_search_result: None,
             image_textures: BTreeMap::new(),
             image_decode_diagnostics: BTreeMap::new(),
@@ -5888,6 +6176,7 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
@@ -5910,6 +6199,7 @@ mod tests {
             }),
             search_query: String::new(),
             search_results: Vec::new(),
+            salvage_search_results: Vec::new(),
             selected_search_result: None,
             image_textures: BTreeMap::new(),
             image_decode_diagnostics: BTreeMap::new(),
@@ -6169,6 +6459,7 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: Some(visual),
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
@@ -6185,6 +6476,7 @@ mod tests {
             load_error: None,
             search_query: String::new(),
             search_results: Vec::new(),
+            salvage_search_results: Vec::new(),
             selected_search_result: None,
             image_textures: BTreeMap::new(),
             image_decode_diagnostics: BTreeMap::new(),
