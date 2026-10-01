@@ -1624,7 +1624,8 @@ impl SqliteGuestReaderSessionStore {
             SELECT session_id, access_token_hash, upload_id, reservation_id,
                    expected_byte_len, observed_byte_len, storage_generation,
                    object_etag, source_sha256, state, classification, scene_json,
-                   terminal_code, failure_classification_json, created_at_ms, updated_at_ms, expires_at_ms,
+                   editable_routes_json, terminal_code, failure_classification_json,
+                   created_at_ms, updated_at_ms, expires_at_ms,
                    quarantine_deleted_at_ms
             FROM reader_guest_sessions
             WHERE expires_at_ms<=?
@@ -2093,6 +2094,7 @@ mod tests {
             state: GuestSessionState::Issued,
             classification: None,
             scene_json: None,
+            editable_routes_json: None,
             terminal_code: None,
             failure_classification_json: None,
             created_at_ms: now_ms,
@@ -2174,6 +2176,7 @@ mod tests {
                 "supported",
                 &"a".repeat(64),
                 Some(br#"{"protocol_version":"chaptera.reader-scene.v1"}"#),
+                None,
                 None,
                 None,
                 1_003,
