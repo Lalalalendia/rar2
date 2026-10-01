@@ -40,9 +40,11 @@ use pub_interaction::{
 };
 use pub_viewer::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
-    FailureIntakeClassification, ViewerDiagnosticSeverity, ViewerFidelityStatus,
-    ViewerGeometryDocument, ViewerTextMatch, classify_failure_candidate,
-    exact_file_intake_eligible,
+    FailureIntakeClassification, ReaderPartialSourceFact, ReaderPartialSourceGap,
+    ReaderPartialSourceGraph, ReaderSalvageStreamState, ViewerDiagnosticSeverity,
+    ViewerFidelityStatus, ViewerGeometryDocument, ViewerProductOpenOutcome, ViewerTextMatch,
+    classify_failure_candidate, exact_file_intake_eligible, open_pub_or_salvage,
+    viewer_geometry_environment_v0_1,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -259,10 +261,57 @@ impl OpenStateAuthority {
 struct PreparedDocumentOpen {
     source_path: PathBuf,
     source_file_stamp: Option<SourceFileStamp>,
-    visual: ViewerGeometryDocument,
+    source_hash: pub_editor::Sha256Digest,
+    source_byte_len: u64,
+    visual: Option<ViewerGeometryDocument>,
+    salvage: Option<ReaderPartialSourceGraph>,
     editor: Option<pub_editor::EditorSession>,
     editor_load_error: Option<String>,
     project_status: Option<String>,
+}
+
+fn salvage_stream_state_label(state: ReaderSalvageStreamState) -> &'static str {
+    match state {
+        ReaderSalvageStreamState::NotAttempted => "not attempted",
+        ReaderSalvageStreamState::Readable => "readable",
+        ReaderSalvageStreamState::RecoveredRootRegular => "recovered root stream",
+        ReaderSalvageStreamState::Absent => "absent",
+        ReaderSalvageStreamState::PresentOverLimit => "over safety limit",
+        ReaderSalvageStreamState::PresentUnreadable => "present but unreadable",
+        ReaderSalvageStreamState::ContainerUnavailable => "container unavailable",
+    }
+}
+
+fn salvage_gap_label(gap: ReaderPartialSourceGap) -> &'static str {
+    match gap {
+        ReaderPartialSourceGap::TextUnavailable => "Recovered text is unavailable.",
+        ReaderPartialSourceGap::TextSemanticAmbiguity => {
+            "Some recovered text could not be admitted without semantic ambiguity."
+        }
+        ReaderPartialSourceGap::ImageFactsUnavailable => "Verified image facts are unavailable.",
+        ReaderPartialSourceGap::GeometryFactsUnavailable => {
+            "Page/object geometry is not grounded; no page layout is claimed."
+        }
+    }
+}
+
+fn salvage_text_matches(graph: &ReaderPartialSourceGraph, query: &str) -> Vec<String> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    graph
+        .facts
+        .iter()
+        .filter_map(|fact| match fact {
+            ReaderPartialSourceFact::TextRange { text, .. }
+                if text.to_lowercase().contains(&query) =>
+            {
+                Some(text.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn dropped_file_candidate(paths: &[Option<PathBuf>]) -> Result<Option<PathBuf>, &'static str> {
@@ -950,6 +999,7 @@ struct ViewerApp {
     source_revalidate_after: Option<Instant>,
     source_exact_revalidate_after: Option<Instant>,
     visual: Option<ViewerGeometryDocument>,
+    salvage: Option<ReaderPartialSourceGraph>,
     source_fonts: source_font::DesktopSourceFontRegistry,
     source_fonts_install_attempted: bool,
     source_fonts_active: bool,
@@ -1012,6 +1062,7 @@ impl ViewerApp {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
@@ -1326,23 +1377,48 @@ impl ViewerApp {
             }
         })?;
         let bytes = admitted.bytes();
+        let source_hash = source_sha256(bytes);
+        let source_byte_len =
+            u64::try_from(bytes.len()).expect("admitted source length must fit into u64");
         let stamp_after = source_file_stamp(&path).ok();
         let source_file_stamp = (stamp_before.is_some() && stamp_before == stamp_after)
             .then_some(stamp_after)
             .flatten();
 
-        let visual =
-            diagnostic_sweep::open_for_product(bytes).map_err(|error| ViewerLoadFailure {
-                kind: ViewerLoadFailureKind::Unsupported,
-                attempted_path: Some(path.clone()),
-                message: format!("Could not open {}: {error:#}", path.display()),
-                classification: Some(classify_failure_candidate(bytes)),
-                diagnostic_json: pub_viewer::local_failure_diagnostic_json(bytes).ok(),
-            })?;
+        let normal_open = diagnostic_sweep::open_for_product(bytes);
+        let (visual, salvage) = match normal_open {
+            Ok(visual) => (Some(visual), None),
+            Err(error) if reader_only_mode() => {
+                match open_pub_or_salvage(bytes, viewer_geometry_environment_v0_1()) {
+                    Ok(ViewerProductOpenOutcome::Salvage(graph)) => (None, Some(graph)),
+                    Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => {
+                        return Err(ViewerLoadFailure {
+                            kind: ViewerLoadFailureKind::Unsupported,
+                            attempted_path: Some(path.clone()),
+                            message: format!("Could not open {}: {error:#}", path.display()),
+                            classification: Some(classify_failure_candidate(bytes)),
+                            diagnostic_json: pub_viewer::local_failure_diagnostic_json(bytes).ok(),
+                        });
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(ViewerLoadFailure {
+                    kind: ViewerLoadFailureKind::Unsupported,
+                    attempted_path: Some(path.clone()),
+                    message: format!("Could not open {}: {error:#}", path.display()),
+                    classification: Some(classify_failure_candidate(bytes)),
+                    diagnostic_json: pub_viewer::local_failure_diagnostic_json(bytes).ok(),
+                });
+            }
+        };
 
-        let (editor, editor_load_error, project_status) = if reader_only_mode() {
+        let (editor, editor_load_error, project_status) = if reader_only_mode() || visual.is_none() {
             (None, None, None)
         } else {
+            let visual = visual
+                .as_ref()
+                .expect("normal Editor open must carry Viewer geometry");
             let source_hash = visual.document.source.source_hash;
             match pub_editor::open_mature_0x2c_editor(bytes, source_hash) {
                 Ok(mut editor) => {
@@ -1363,7 +1439,10 @@ impl ViewerApp {
         Ok(PreparedDocumentOpen {
             source_path: path,
             source_file_stamp,
+            source_hash,
+            source_byte_len,
             visual,
+            salvage,
             editor,
             editor_load_error,
             project_status,
@@ -1378,14 +1457,70 @@ impl ViewerApp {
         let PreparedDocumentOpen {
             source_path,
             source_file_stamp,
+            source_hash,
+            source_byte_len,
             visual,
+            salvage,
             editor,
             editor_load_error,
             project_status,
         } = prepared;
 
-        let source_hash = visual.document.source.source_hash;
-        let source_byte_len = visual.document.source.byte_len;
+        if let Some(salvage) = salvage {
+            debug_assert!(visual.is_none());
+            self.source_path = Some(source_path);
+            self.committed_source = Some(CommittedSourceState {
+                generation,
+                source_hash,
+                byte_len: source_byte_len,
+                file_stamp: source_file_stamp,
+                freshness: SourceFreshness::Current,
+            });
+            let now = Instant::now();
+            self.source_revalidate_after = Some(now + SOURCE_REVALIDATE_INTERVAL);
+            self.source_exact_revalidate_after = Some(now + SOURCE_EXACT_REVALIDATE_INTERVAL);
+            self.visual = None;
+            self.salvage = Some(salvage);
+            self.source_fonts = source_font::DesktopSourceFontRegistry::new();
+            self.source_fonts_install_attempted = false;
+            self.source_fonts_active = false;
+            self.selected_page = 0;
+            self.page_frame_cache.clear();
+            self.page_frame_cache_builds = 0;
+            self.canvas_selection.clear();
+            self.canvas_drag = None;
+            self.canvas_resize = None;
+            self.created_text_box_scene_nodes.clear();
+            self.text_mode = None;
+            self.zoom = 1.0;
+            self.zoom_mode = CanvasZoomMode::FitPage;
+            self.load_error = None;
+            self.search_query.clear();
+            self.search_results.clear();
+            self.selected_search_result = None;
+            self.image_textures.clear();
+            self.image_decode_diagnostics.clear();
+            self.editor = None;
+            self.editor_load_error = None;
+            self.edit_buffer.clear();
+            self.edit_status = None;
+            self.selected_table_cell_index = None;
+            self.table_cell_buffer.clear();
+            self.export_preview = None;
+            self.project_status = None;
+            self.preview_clipped_frames = 0;
+            self.preview_clipped_story_keys.clear();
+            self.preview_text_diagnostics.clear();
+            self.diagnostic_save_path.clear();
+            self.diagnostic_status = None;
+            self.exact_file_consent_open = false;
+            self.exact_file_consent_status = None;
+            self.show_diagnostics = false;
+            self.reader_inspector_tab = reader_product_ui::InspectorTab::Document;
+            return;
+        }
+
+        let visual = visual.expect("normal prepared open must carry Viewer geometry");
         let supporter_status = match visual.document.fidelity_status() {
             ViewerFidelityStatus::Supported => supporter::OpenStatus::Supported,
             ViewerFidelityStatus::Partial => supporter::OpenStatus::Partial,
@@ -1416,6 +1551,7 @@ impl ViewerApp {
         self.source_fonts_install_attempted = false;
         self.source_fonts_active = false;
         self.visual = Some(visual);
+        self.salvage = None;
         self.selected_page = 0;
         self.page_frame_cache.clear();
         self.page_frame_cache_builds = 0;
@@ -1882,6 +2018,19 @@ impl ViewerApp {
     }
 
     fn show_workspace_status(&mut self, ui: &mut egui::Ui) {
+        if reader_only_mode() && self.salvage.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Salvage view");
+                ui.label("·");
+                ui.label("Local · read-only");
+                ui.label("·");
+                ui.label("Source unchanged");
+                ui.label("·");
+                ui.label("No page layout claimed");
+            });
+            return;
+        }
+
         if reader_only_mode() {
             let page_count = self
                 .visual
@@ -2098,8 +2247,42 @@ impl ViewerApp {
         ui.heading("Search");
         ui.separator();
 
-        if self.visual.is_none() {
+        if self.visual.is_none() && self.salvage.is_none() {
             ui.weak("Open a document to search recovered text.");
+            return;
+        }
+
+        if let Some(graph) = self.salvage.as_ref() {
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.search_query)
+                    .hint_text("Search proven recovered text"),
+            );
+            if self.search_query.trim().is_empty() {
+                ui.weak("Recovery search uses only proven semantic TextRange facts.");
+                return;
+            }
+
+            let matches = salvage_text_matches(graph, &self.search_query);
+            ui.label(format!("{} recovered text match(es)", matches.len()));
+            if matches.is_empty() {
+                ui.weak("No exact recovered-text matches.");
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for (index, text) in matches.iter().enumerate() {
+                        ui.group(|ui| {
+                            ui.strong(format!("Recovered text {}", index + 1));
+                            ui.add(egui::Label::new(text).selectable(true).wrap());
+                            if ui.button("Copy recovered text").clicked() {
+                                ui.ctx().copy_text(text.clone());
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
+                });
+            ui.small("Page ownership is not shown because salvage geometry is not claimed.");
             return;
         }
 
@@ -2176,7 +2359,35 @@ impl ViewerApp {
             ui.separator();
         }
 
+        if self.salvage.is_some() {
+            ui.weak("Recovery mode does not claim page layout. Proven facts are shown in the Salvage view.");
+            return;
+        }
+
         self.ensure_image_textures(ui.ctx());
+
+        if let Some(graph) = &self.salvage {
+            reader_product_ui::section_label(ui, "Reader mode");
+            ui.label(
+                egui::RichText::new("●  Salvage")
+                    .strong()
+                    .color(reader_product_ui::WARNING),
+            );
+            reader_product_ui::muted(
+                ui,
+                "Read-only source-backed recovery facts. No repaired document or page layout is claimed.",
+            );
+            ui.add_space(8.0);
+            reader_product_ui::muted(
+                ui,
+                format!(
+                    "{} proven fact(s), {} explicit gap(s)",
+                    graph.facts.len(),
+                    graph.gaps.len()
+                ),
+            );
+            return;
+        }
 
         let Some(visual) = &self.visual else {
             ui.weak("No document loaded.");
@@ -2284,17 +2495,29 @@ impl ViewerApp {
                 ui.add_space(14.0);
                 reader_product_ui::panel_separator(ui);
                 reader_product_ui::section_label(ui, "Fidelity");
-                match self.fidelity_status() {
-                    Some(status) => {
-                        let label = fidelity_status_label(status);
-                        ui.label(
-                            egui::RichText::new(format!("●  {label}"))
-                                .strong()
-                                .color(reader_product_ui::status_color(label)),
-                        );
-                        reader_product_ui::muted(ui, fidelity_status_summary(status));
+                if self.salvage.is_some() {
+                    ui.label(
+                        egui::RichText::new("●  Salvage")
+                            .strong()
+                            .color(reader_product_ui::WARNING),
+                    );
+                    reader_product_ui::muted(
+                        ui,
+                        "Only source-backed recovered facts are shown; page fidelity is not claimed.",
+                    );
+                } else {
+                    match self.fidelity_status() {
+                        Some(status) => {
+                            let label = fidelity_status_label(status);
+                            ui.label(
+                                egui::RichText::new(format!("●  {label}"))
+                                    .strong()
+                                    .color(reader_product_ui::status_color(label)),
+                            );
+                            reader_product_ui::muted(ui, fidelity_status_summary(status));
+                        }
+                        None => reader_product_ui::muted(ui, "Not evaluated"),
                     }
-                    None => reader_product_ui::muted(ui, "Not evaluated"),
                 }
                 if self.preview_clipped_frames > 0 {
                     ui.add_space(6.0);
@@ -3983,7 +4206,128 @@ impl ViewerApp {
         Ok(cache)
     }
 
+    fn show_salvage_view(&mut self, ui: &mut egui::Ui) {
+        let Some(graph) = self.salvage.as_ref() else {
+            return;
+        };
+
+        let text_ranges = graph
+            .facts
+            .iter()
+            .filter_map(|fact| match fact {
+                ReaderPartialSourceFact::TextRange {
+                    utf16_start,
+                    utf16_end,
+                    text,
+                    ..
+                } => Some((*utf16_start, *utf16_end, text.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let verified_images = graph
+            .facts
+            .iter()
+            .filter(|fact| matches!(fact, ReaderPartialSourceFact::VerifiedImage { .. }))
+            .count();
+        let grounded_geometry = graph
+            .facts
+            .iter()
+            .filter(|fact| matches!(fact, ReaderPartialSourceFact::GroundedGeometry { .. }))
+            .count();
+        let gaps = graph.gaps.clone();
+        let contents = salvage_stream_state_label(graph.subsystems.contents);
+        let quill = salvage_stream_state_label(graph.subsystems.quill);
+        let escher = salvage_stream_state_label(graph.subsystems.escher);
+        let escher_delay = salvage_stream_state_label(graph.subsystems.escher_delay);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.heading("Salvage view");
+            ui.label(
+                egui::RichText::new("Read-only recovered facts")
+                    .strong()
+                    .color(reader_product_ui::WARNING),
+            );
+            ui.label(
+                "Normal Publisher parsing did not produce a safe complete view. Chaptera is showing only independently admitted source-backed facts.",
+            );
+            ui.small("The original PUB is unchanged. No repair, donor substitution, reconstructed document, or synthetic page completion was performed.");
+            ui.add_space(12.0);
+
+            reader_product_ui::section_label(ui, "Subsystem availability");
+            egui::Grid::new("salvage-subsystems")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Contents");
+                    ui.label(contents);
+                    ui.end_row();
+                    ui.label("Quill");
+                    ui.label(quill);
+                    ui.end_row();
+                    ui.label("Escher");
+                    ui.label(escher);
+                    ui.end_row();
+                    ui.label("Escher delay");
+                    ui.label(escher_delay);
+                    ui.end_row();
+                });
+
+            ui.add_space(12.0);
+            reader_product_ui::section_label(ui, "Known gaps");
+            if gaps.is_empty() {
+                reader_product_ui::muted(ui, "No additional gap marker was emitted.");
+            } else {
+                for gap in gaps {
+                    ui.label(format!("• {}", salvage_gap_label(gap)));
+                }
+            }
+
+            ui.add_space(12.0);
+            reader_product_ui::section_label(ui, "Recovered facts");
+            ui.label(format!(
+                "{} text range(s) · {} verified image fact(s) · {} grounded geometry fact(s)",
+                text_ranges.len(),
+                verified_images,
+                grounded_geometry
+            ));
+            if grounded_geometry == 0 {
+                ui.small("No page layout is claimed. Recovered text is intentionally independent of page ownership.");
+            }
+
+            if !text_ranges.is_empty() {
+                ui.add_space(8.0);
+                for (index, (start, end, text)) in text_ranges.iter().enumerate() {
+                    ui.group(|ui| {
+                        ui.strong(format!(
+                            "Recovered text {} · UTF-16 {}..{}",
+                            index + 1,
+                            start,
+                            end
+                        ));
+                        ui.add(egui::Label::new(text).selectable(true).wrap());
+                        if ui.button("Copy recovered text").clicked() {
+                            ui.ctx().copy_text(text.clone());
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+            }
+
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new("Repair/materialization is not available in Reader.")
+                    .strong(),
+            );
+            ui.small("Use Chaptera Rescue only when an intervention workflow is explicitly requested; Salvage view itself never writes a repaired PUB.");
+        });
+    }
+
     fn show_canvas(&mut self, ui: &mut egui::Ui) {
+        if self.salvage.is_some() {
+            self.show_salvage_view(ui);
+            return;
+        }
+
         if !self.source_fonts_install_attempted {
             self.source_fonts_install_attempted = true;
             let additional = self.source_fonts.egui_fonts();
@@ -4071,19 +4415,32 @@ impl ViewerApp {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     if reader_only_mode() {
-                        ui.heading(READER_FIRST_RUN_HEADING);
-                        if ui.button("Open a PUB file").clicked() {
-                            self.open_pub_picker();
+                        if self
+                            .load_error
+                            .as_ref()
+                            .is_some_and(|error| error.kind == ViewerLoadFailureKind::Unsupported)
+                        {
+                            ui.heading("Cannot safely display");
+                            ui.label(
+                                "Reader could not establish either a normal document view or a bounded source-backed Salvage view.",
+                            );
+                            ui.small("The original PUB is unchanged. No repair or guessed page content was attempted.");
+                            ui.add_space(12.0);
+                        } else {
+                            ui.heading(READER_FIRST_RUN_HEADING);
+                            if ui.button("Open a PUB file").clicked() {
+                                self.open_pub_picker();
+                            }
+                            ui.label("or drag and drop a .pub file here");
+                            ui.small("Keyboard: Ctrl+O");
+                            ui.add_space(14.0);
+                            ui.strong(READER_FIRST_RUN_TRUST_CUE);
+                            ui.small(READER_READ_ONLY_CUE);
+                            ui.add_space(8.0);
+                            ui.small(
+                                "After opening, use page navigation, search/copy, fidelity status, and diagnostics without a required internet connection.",
+                            );
                         }
-                        ui.label("or drag and drop a .pub file here");
-                        ui.small("Keyboard: Ctrl+O");
-                        ui.add_space(14.0);
-                        ui.strong(READER_FIRST_RUN_TRUST_CUE);
-                        ui.small(READER_READ_ONLY_CUE);
-                        ui.add_space(8.0);
-                        ui.small(
-                            "After opening, use page navigation, search/copy, fidelity status, and diagnostics without a required internet connection.",
-                        );
                     } else {
                         ui.heading("Open a Publisher file");
                         ui.label("Use Open PUB… above, or drag and drop a .pub file here.");
@@ -5822,6 +6179,7 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
@@ -5888,6 +6246,7 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: None,
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
@@ -5940,6 +6299,49 @@ mod tests {
         };
 
         assert_eq!(app.fidelity_status(), None);
+    }
+
+    #[test]
+    fn salvage_search_uses_only_proven_text_ranges() {
+        let graph: ReaderPartialSourceGraph = serde_json::from_value(serde_json::json!({
+            "schema_version":"chaptera.reader-partial-source-graph.v1",
+            "source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "contents_family":"0x2c",
+            "subsystems":{
+                "contents":"readable",
+                "quill":"readable",
+                "escher":"absent",
+                "escher_delay":"absent"
+            },
+            "facts":[
+                {
+                    "kind":"text_range",
+                    "story_key":"quill-syid:00000001",
+                    "utf16_start":0,
+                    "utf16_end":18,
+                    "text":"Recovered Alpha"
+                },
+                {
+                    "kind":"verified_image",
+                    "resource_key":"escher-delay:0:test",
+                    "sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "byte_len":128
+                }
+            ],
+            "gaps":["geometry_facts_unavailable"]
+        }))
+        .expect("source-neutral salvage graph");
+
+        assert_eq!(
+            salvage_text_matches(&graph, "alpha"),
+            vec!["Recovered Alpha".to_owned()]
+        );
+        assert!(salvage_text_matches(&graph, "bbbb").is_empty());
+        assert!(salvage_text_matches(&graph, "").is_empty());
+        assert_eq!(
+            salvage_gap_label(ReaderPartialSourceGap::GeometryFactsUnavailable),
+            "Page/object geometry is not grounded; no page layout is claimed."
+        );
     }
 
     #[test]
@@ -6169,6 +6571,7 @@ mod tests {
             source_revalidate_after: None,
             source_exact_revalidate_after: None,
             visual: Some(visual),
+            salvage: None,
             source_fonts: source_font::DesktopSourceFontRegistry::new(),
             source_fonts_install_attempted: false,
             source_fonts_active: false,
