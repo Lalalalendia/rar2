@@ -5007,7 +5007,10 @@ mod tests {
             pub_escher::FoptObservation {
                 rec_type: pub_escher::OFFICE_ART_FOPT,
                 source: crop_test_span(10, 8),
-                properties: vec![crop_test_property(OFFICE_ART_FILL_BOOLEANS, FILL_FILLED_BIT)],
+                properties: vec![crop_test_property(
+                    OFFICE_ART_FILL_BOOLEANS,
+                    FILL_FILLED_BIT,
+                )],
             },
             pub_escher::FoptObservation {
                 rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
