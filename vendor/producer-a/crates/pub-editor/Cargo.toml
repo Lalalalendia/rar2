@@ -18,5 +18,8 @@ sha2.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+pub-cfb = { path = "../pub-cfb" }
+pub-core = { path = "../pub-core" }
+pub-quill = { path = "../pub-quill" }
 serde_json.workspace = true
 zip.workspace = true
