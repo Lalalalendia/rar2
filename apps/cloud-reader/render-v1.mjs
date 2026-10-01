@@ -313,7 +313,7 @@ export function tableCellPaintGeometry(cell) {
 export function tableCellFillPaintPlan(cell) {
   const geometry = tableCellPaintGeometry(cell);
   const fill = rgb(cell?.fill_rgb);
-  if (!geometry || !fill) return null;
+  if (!geometry || cell?.fill_visible !== true || !fill) return null;
   return Object.freeze({ geometry, fill });
 }
 
