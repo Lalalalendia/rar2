@@ -105,13 +105,13 @@ use pub_model::{
     SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
     derive_source_canonical_id,
 };
+pub use pub_quill::QuillTextSizeAuthorityDiagnostic as PubTextSizeAuthorityDiagnostic;
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillScriptFontEntryDisposition,
     QuillStoryReadError, QuillTypographyValueSource, bounded_mcld_uniform_text_inset,
     diagnose_bounded_text_size_authority, parse_bounded_fdpp_exact_story_catalog,
     parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
 };
-pub use pub_quill::QuillTextSizeAuthorityDiagnostic as PubTextSizeAuthorityDiagnostic;
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
     PubResolvedNodePayload, PubResolvedStoryFrame, resolve_pub_source_graph,
@@ -1008,11 +1008,8 @@ pub fn analyze_mature_0x2c_text_size_authority<R: Read + Seek>(
     reader.read_to_end(&mut pub_bytes)?;
     let quill = pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), QUILL_STREAM_PATH)
         .with_context(|| format!("read {QUILL_STREAM_PATH} for text-size diagnostic"))?;
-    let story_catalog = parse_confirmed_story_catalog(
-        StreamPath(QUILL_STREAM_PATH.into()),
-        &quill,
-    )
-    .context("parse bounded Quill Story catalog for text-size diagnostic")?;
+    let story_catalog = parse_confirmed_story_catalog(StreamPath(QUILL_STREAM_PATH.into()), &quill)
+        .context("parse bounded Quill Story catalog for text-size diagnostic")?;
 
     let mut target_story = None;
     for story in &story_catalog.stories {
@@ -1039,13 +1036,14 @@ pub fn analyze_mature_0x2c_text_size_authority<R: Read + Seek>(
     }
 
     let scalar_to_utf16 = |scalar: u32| -> Result<u32> {
-        let scalar = usize::try_from(scalar)
-            .map_err(|_| anyhow!("scalar offset exceeds usize"))?;
-        text.chars().take(scalar).try_fold(0_u32, |total, character| {
-            total
-                .checked_add(character.len_utf16() as u32)
-                .ok_or_else(|| anyhow!("UTF-16 offset overflow"))
-        })
+        let scalar = usize::try_from(scalar).map_err(|_| anyhow!("scalar offset exceeds usize"))?;
+        text.chars()
+            .take(scalar)
+            .try_fold(0_u32, |total, character| {
+                total
+                    .checked_add(character.len_utf16() as u32)
+                    .ok_or_else(|| anyhow!("UTF-16 offset overflow"))
+            })
     };
     let story_start_utf16 = scalar_to_utf16(story_scalar_start)?;
     let story_end_utf16 = scalar_to_utf16(story_scalar_end)?;
