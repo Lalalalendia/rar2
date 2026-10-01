@@ -1217,10 +1217,10 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES, SHARED_FALLBACK_FONT_MIME,
+        MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
         ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
-        ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
-        from_viewer_geometry_with_fonts, inline_image_data_url,
+        ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode, bind_visible_paint,
+        from_viewer_geometry, from_viewer_geometry_with_fonts, inline_image_data_url,
         insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
         take_direct_render_text,
     };
