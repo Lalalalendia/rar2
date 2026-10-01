@@ -178,8 +178,9 @@ export function resolvedTextLinePaintPlan(node) {
   for (const line of [...(layout.lines ?? [])].sort((left, right) => left.line_index - right.line_index)) {
     const lineIndex = safeInteger(line.line_index, "text.line_index");
     const currentLineHeight = safeInteger(line.line_height_emu, "text.line_height_emu");
+    const lineXOffset = safeInteger(line.x_offset_emu ?? 0, "text.x_offset_emu");
     const measuredWidth = safeInteger(line.measured_width_emu, "text.measured_width_emu");
-    if (currentLineHeight <= 0 || measuredWidth < 0) return null;
+    if (currentLineHeight <= 0 || lineXOffset < 0 || measuredWidth < 0) return null;
 
     const spans = [];
     for (const span of line.spans ?? []) {
@@ -201,7 +202,7 @@ export function resolvedTextLinePaintPlan(node) {
 
     lines.push(Object.freeze({
       line_index: lineIndex,
-      x,
+      x: x + lineXOffset,
       y: cursorY,
       text: String(line.text ?? ""),
       measured_width_emu: measuredWidth,
