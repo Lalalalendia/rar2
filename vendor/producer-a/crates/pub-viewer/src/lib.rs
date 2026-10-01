@@ -5444,11 +5444,9 @@ mod mature_officeart_wmf_exact_product_tests {
     use std::{fs, path::PathBuf};
 
     fn exact_escher_pib_bindings(bytes: &[u8]) -> Vec<(Vec<u32>, Vec<u32>, bool, bool)> {
-        let escher = pub_cfb::read_stream_reader(
-            Cursor::new(bytes),
-            pub_reader::ESCHER_STREAM_PATH,
-        )
-        .expect("read exact mature Escher stream");
+        let escher =
+            pub_cfb::read_stream_reader(Cursor::new(bytes), pub_reader::ESCHER_STREAM_PATH)
+                .expect("read exact mature Escher stream");
         let inventory = pub_escher::inspect_sp_containers(
             pub_core::StreamPath(pub_reader::ESCHER_STREAM_PATH.into()),
             &escher,
@@ -5561,8 +5559,7 @@ mod mature_officeart_wmf_exact_product_tests {
             .collect::<Vec<_>>();
         eprintln!(
             "EXACT_MATURE_WMF_SOURCE_BINDINGS bindings={:?} bridge_diagnostics={:?}",
-            graph_image_slot_bindings,
-            source.diagnostics,
+            graph_image_slot_bindings, source.diagnostics,
         );
 
         let geometry = open_mature_0x2c_geometry(&before, viewer_geometry_environment_v0_1())
