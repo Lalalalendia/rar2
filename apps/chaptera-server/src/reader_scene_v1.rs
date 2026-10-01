@@ -13,6 +13,8 @@ pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 const MAX_INLINE_IMAGE_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const SHARED_FALLBACK_FONT_MIME: &str = "font/ttf";
+const PUBLISHER_DEFAULT_TEXT_MARGIN_HORIZONTAL_EMU: i64 = 91_440;
+const PUBLISHER_DEFAULT_TEXT_MARGIN_VERTICAL_EMU: i64 = 45_720;
 
 #[derive(Debug, Serialize)]
 pub struct ReaderSceneV1 {
@@ -327,6 +329,86 @@ fn insert_projected_nodes_after_targets(
 }
 
 pub fn from_viewer_geometry(
+    document_id: String,
+    source_hash: String,
+    revision_id: String,
+    geometry: &ViewerGeometryDocument,
+    source_page_paint_orders: &[ViewerPagePaintOrderV1],
+) -> Result<ReaderSceneV1, String> {
+    from_viewer_geometry_impl(
+        document_id,
+        source_hash,
+        revision_id,
+        geometry,
+        source_page_paint_orders,
+    )
+}
+
+pub fn from_viewer_geometry_with_projected_text_inset_probe(
+    document_id: String,
+    source_hash: String,
+    revision_id: String,
+    geometry: &ViewerGeometryDocument,
+    source_page_paint_orders: &[ViewerPagePaintOrderV1],
+) -> Result<ReaderSceneV1, String> {
+    let mut adjusted = geometry.clone();
+    let horizontal_inset = PUBLISHER_DEFAULT_TEXT_MARGIN_HORIZONTAL_EMU
+        .checked_mul(2)
+        .ok_or_else(|| "projected text horizontal inset overflow".to_owned())?;
+    let vertical_inset = PUBLISHER_DEFAULT_TEXT_MARGIN_VERTICAL_EMU
+        .checked_mul(2)
+        .ok_or_else(|| "projected text vertical inset overflow".to_owned())?;
+
+    for projected in &mut adjusted.projected_instances {
+        if projected.scene_instance.story_authority_id.is_none() {
+            continue;
+        }
+        let x = projected
+            .bounds
+            .x
+            .get()
+            .checked_add(PUBLISHER_DEFAULT_TEXT_MARGIN_HORIZONTAL_EMU)
+            .ok_or_else(|| "projected text inset x overflow".to_owned())?;
+        let y = projected
+            .bounds
+            .y
+            .get()
+            .checked_add(PUBLISHER_DEFAULT_TEXT_MARGIN_VERTICAL_EMU)
+            .ok_or_else(|| "projected text inset y overflow".to_owned())?;
+        let width = projected
+            .bounds
+            .width
+            .get()
+            .checked_sub(horizontal_inset)
+            .ok_or_else(|| "projected text inset width overflow".to_owned())?;
+        let height = projected
+            .bounds
+            .height
+            .get()
+            .checked_sub(vertical_inset)
+            .ok_or_else(|| "projected text inset height overflow".to_owned())?;
+        if width <= 0 || height <= 0 {
+            return Err(format!(
+                "projected Scene instance {} cannot admit Publisher default text margins",
+                projected.scene_instance.instance_id
+            ));
+        }
+        projected.bounds.x.0 = x;
+        projected.bounds.y.0 = y;
+        projected.bounds.width.0 = width;
+        projected.bounds.height.0 = height;
+    }
+
+    from_viewer_geometry_impl(
+        document_id,
+        source_hash,
+        revision_id,
+        &adjusted,
+        source_page_paint_orders,
+    )
+}
+
+fn from_viewer_geometry_impl(
     document_id: String,
     source_hash: String,
     revision_id: String,
