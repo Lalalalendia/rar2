@@ -25,6 +25,11 @@ export async function GET(
             publisherFamily: record.result.publisherFamily,
             pages: record.result.pages,
             diagnosticsCode: record.result.diagnosticsCode,
+            limitations: record.result.limitations,
+            canonicalState: record.result.canonicalState,
+            editableIdml: record.result.editableIdml,
+            editableOdg: record.result.editableOdg,
+            recommendedNextStep: record.result.recommendedNextStep,
           }
         : undefined,
     },
