@@ -3,8 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
     RenderTextLayoutDispositionV1, admitted_single_family_source_font_v1,
-    build_page_render_plan_with_text_layout_resolver_v1,
-    build_page_render_plan_with_text_layout_v1, normalize_source_font_family_v1,
+    build_page_render_plan_with_text_layout_resolver_v1, normalize_source_font_family_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
