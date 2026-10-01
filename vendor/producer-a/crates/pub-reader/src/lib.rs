@@ -111,8 +111,9 @@ pub use resolve::{
 };
 pub use salvage::{
     READER_SALVAGE_PROBE_SCHEMA_V1, ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility,
-    ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
-    probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
+    ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe,
+    ReaderSalvageTrigger, probe_reader_salvage_candidate,
+    probe_reader_salvage_candidate_with_trigger,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
