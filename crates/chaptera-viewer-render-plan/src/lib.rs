@@ -1422,8 +1422,8 @@ mod tests {
     };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
-        ViewerNodePaint, ViewerPage, ViewerScriptFontEntry, ViewerScriptFontEntryDisposition,
-        ViewerScriptFontMap, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
+        ViewerNodePaint, ViewerPage, ViewerScriptFontEntry, ViewerScriptFontMap, ViewerSolidLine,
+        ViewerSource, ViewerTable, ViewerTableCell,
         ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
     };
 
