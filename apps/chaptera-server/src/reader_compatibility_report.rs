@@ -73,6 +73,8 @@ pub struct ReaderEditableRoutesAssessmentV1 {
 pub struct ReaderEditableTargetAssessmentV1 {
     pub state: String,
     pub reason_code: String,
+    pub declared_loss_count: u64,
+    pub blocking_loss_count: u64,
 }
 
 impl ReaderEditableRoutesAssessmentV1 {
@@ -234,7 +236,7 @@ pub fn build_reader_compatibility_report_with_routes(
 }
 
 fn validate_target_assessment(value: &ReaderEditableTargetAssessmentV1) -> Result<(), String> {
-    let valid = matches!(
+    let valid_state = matches!(
         (value.state.as_str(), value.reason_code.as_str()),
         ("available_with_declared_losses", "serializable")
             | ("unavailable", "blocking_losses")
@@ -242,8 +244,18 @@ fn validate_target_assessment(value: &ReaderEditableTargetAssessmentV1) -> Resul
             | ("not_verified", "assessment_failed")
             | ("not_verified", "source_identity_mismatch")
     );
-    if !valid {
-        return Err("editable route assessment state/reason pair is invalid".to_owned());
+    let valid_counts = match (value.state.as_str(), value.reason_code.as_str()) {
+        ("available_with_declared_losses", "serializable") => value.blocking_loss_count == 0,
+        ("unavailable", "blocking_losses") => value.blocking_loss_count > 0,
+        ("unavailable", "editor_profile_unavailable")
+        | ("not_verified", "assessment_failed")
+        | ("not_verified", "source_identity_mismatch") => {
+            value.declared_loss_count == 0 && value.blocking_loss_count == 0
+        }
+        _ => false,
+    };
+    if !valid_state || !valid_counts {
+        return Err("editable route assessment state/reason/count tuple is invalid".to_owned());
     }
     Ok(())
 }
@@ -278,28 +290,45 @@ fn append_target_route_limitation(
     target: &'static str,
     assessment: &ReaderEditableTargetAssessmentV1,
 ) {
-    let item = match (target, assessment.state.as_str(), assessment.reason_code.as_str()) {
-        ("idml", "unavailable", "blocking_losses") => Some(ReaderCompatibilityLimitationV1 {
+    let item = match (
+        target,
+        assessment.state.as_str(),
+        assessment.reason_code.as_str(),
+        assessment.declared_loss_count > 0,
+    ) {
+        ("idml", "available_with_declared_losses", "serializable", true) => {
+            Some(ReaderCompatibilityLimitationV1 {
+                code: "idml_editable_export_declared_losses",
+                message: "IDML editable export is available, but some document semantics will be changed and declared in the export loss report.",
+            })
+        }
+        ("odg", "available_with_declared_losses", "serializable", true) => {
+            Some(ReaderCompatibilityLimitationV1 {
+                code: "odg_editable_export_declared_losses",
+                message: "ODG editable export is available, but some document semantics will be changed and declared in the export loss report.",
+            })
+        }
+        ("idml", "unavailable", "blocking_losses", _) => Some(ReaderCompatibilityLimitationV1 {
             code: "idml_editable_export_blocked",
             message: "IDML editable export is blocked because required document semantics would be lost.",
         }),
-        ("odg", "unavailable", "blocking_losses") => Some(ReaderCompatibilityLimitationV1 {
+        ("odg", "unavailable", "blocking_losses", _) => Some(ReaderCompatibilityLimitationV1 {
             code: "odg_editable_export_blocked",
             message: "ODG editable export is blocked because required document semantics would be lost.",
         }),
-        ("idml", "unavailable", "editor_profile_unavailable") => Some(ReaderCompatibilityLimitationV1 {
+        ("idml", "unavailable", "editor_profile_unavailable", _) => Some(ReaderCompatibilityLimitationV1 {
             code: "idml_editable_export_unavailable",
             message: "IDML editable export is not available for this Publisher profile.",
         }),
-        ("odg", "unavailable", "editor_profile_unavailable") => Some(ReaderCompatibilityLimitationV1 {
+        ("odg", "unavailable", "editor_profile_unavailable", _) => Some(ReaderCompatibilityLimitationV1 {
             code: "odg_editable_export_unavailable",
             message: "ODG editable export is not available for this Publisher profile.",
         }),
-        ("idml", "not_verified", _) => Some(ReaderCompatibilityLimitationV1 {
+        ("idml", "not_verified", _, _) => Some(ReaderCompatibilityLimitationV1 {
             code: "idml_editable_export_not_verified",
             message: "IDML editable export could not be verified for this file.",
         }),
-        ("odg", "not_verified", _) => Some(ReaderCompatibilityLimitationV1 {
+        ("odg", "not_verified", _, _) => Some(ReaderCompatibilityLimitationV1 {
             code: "odg_editable_export_not_verified",
             message: "ODG editable export could not be verified for this file.",
         }),
@@ -671,10 +700,14 @@ mod tests {
             idml: ReaderEditableTargetAssessmentV1 {
                 state: "available_with_declared_losses".to_owned(),
                 reason_code: "serializable".to_owned(),
+                declared_loss_count: 2,
+                blocking_loss_count: 0,
             },
             odg: ReaderEditableTargetAssessmentV1 {
                 state: "unavailable".to_owned(),
                 reason_code: "blocking_losses".to_owned(),
+                declared_loss_count: 1,
+                blocking_loss_count: 1,
             },
         };
 
@@ -720,10 +753,14 @@ mod tests {
             idml: ReaderEditableTargetAssessmentV1 {
                 state: "not_verified".to_owned(),
                 reason_code: "source_identity_mismatch".to_owned(),
+                declared_loss_count: 0,
+                blocking_loss_count: 0,
             },
             odg: ReaderEditableTargetAssessmentV1 {
                 state: "not_verified".to_owned(),
                 reason_code: "source_identity_mismatch".to_owned(),
+                declared_loss_count: 0,
+                blocking_loss_count: 0,
             },
         };
 
@@ -754,10 +791,14 @@ mod tests {
             idml: ReaderEditableTargetAssessmentV1 {
                 state: "available_with_declared_losses".to_owned(),
                 reason_code: "serializable".to_owned(),
+                declared_loss_count: 2,
+                blocking_loss_count: 0,
             },
             odg: ReaderEditableTargetAssessmentV1 {
                 state: "available_with_declared_losses".to_owned(),
                 reason_code: "serializable".to_owned(),
+                declared_loss_count: 2,
+                blocking_loss_count: 0,
             },
         };
 
