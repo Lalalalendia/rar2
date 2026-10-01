@@ -58,6 +58,8 @@ pub struct ReaderNodeV1 {
     pub parent_node_id: Option<String>,
     pub kind: &'static str,
     pub bounds: ReaderRectV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_bounds: Option<ReaderRectV1>,
     pub transform: ReaderTransformV1,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paint: Option<ReaderPaintV1>,
@@ -633,6 +635,20 @@ pub fn from_viewer_geometry(
                 let kind = projected_node_kind(&node)?;
                 projected_kind_partial |= kind == "unknown";
                 let bounds = rect_from_serialized(&node.bounds)?;
+                let text_bounds = node
+                    .text_bounds
+                    .as_ref()
+                    .map(rect_from_serialized)
+                    .transpose()?;
+                if text_bounds
+                    .as_ref()
+                    .is_some_and(|bounds| bounds.width <= 0 || bounds.height <= 0)
+                {
+                    return Err(format!(
+                        "projected Scene instance {} has non-positive text bounds",
+                        instance.instance_id
+                    ));
+                }
                 if bounds.width <= 0 || bounds.height <= 0 {
                     return Err(format!(
                         "projected Scene instance {} has non-positive bounds",
@@ -688,6 +704,7 @@ pub fn from_viewer_geometry(
                         parent_node_id: None,
                         kind,
                         bounds,
+                        text_bounds,
                         transform: transform_from_serialized(&node.transform)?,
                         paint,
                         resource_id,
@@ -751,6 +768,7 @@ pub fn from_viewer_geometry(
             page_id,
             parent_node_id,
             bounds,
+            text_bounds: None,
             transform,
         });
     }
@@ -1540,6 +1558,7 @@ mod tests {
                 width: 1,
                 height: 1,
             },
+            text_bounds: None,
             transform: ReaderTransformV1 {
                 a: "1".to_owned(),
                 b: "0".to_owned(),
