@@ -24,7 +24,8 @@ use tokio::{
 };
 
 use crate::{
-    blob_store::BlobStoreService, guest_intake_classifier::guest_failure_intake_evidence,
+    blob_store::BlobStoreService,
+    guest_intake_classifier::guest_failure_intake_evidence,
     reader_scene_v1::{
         ReaderTextFontProbeResource, from_viewer_geometry, from_viewer_geometry_with_font_probe,
     },
