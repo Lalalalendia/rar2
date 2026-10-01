@@ -208,6 +208,10 @@ try {
     await open(page);
     await status(page, /Opened with display limitations/);
     assert.equal(await page.locator("#reader").isVisible(), true);
+    assert.equal(await page.locator("#compatibility-report").isVisible(), true);
+    assert.equal(await page.locator("#compatibility-state").textContent(), "Needs review");
+    assert.match(await page.locator("#compatibility-summary").textContent(), new RegExp(sourceSha));
+    assert.match(await page.locator("#compatibility-routes").textContent(), /not advertised/);
     assert.equal(await page.locator("#pages svg").count(), 2);
     assert.equal(await page.locator("#pages svg").first().getAttribute("data-page-id"), "p1");
     const guest = requests.filter((request) => request.path.startsWith("/v1/reader/guest-sessions"));
@@ -294,10 +298,35 @@ try {
   });
 
   await check("terminal classifications clear the previous document and explain recovery", async () => {
-    for (const classification of ["unsupported", "damaged", "not_pub", "security_rejected"]) {
-      await open(page, { open: { classification, scene: undefined } });
+    const terminalCases = [
+      { classification: "unsupported", scene: undefined },
+      {
+        classification: "unsupported",
+        scene: undefined,
+        failure_classification: {
+          protocol_version: "chaptera.failure-classifier.v1",
+          class: "PUB_DAMAGED",
+          confidence: "high",
+          reason_flags: ["bounded"]
+        }
+      },
+      {
+        classification: "unsupported",
+        scene: undefined,
+        failure_classification: {
+          protocol_version: "chaptera.failure-classifier.v1",
+          class: "NOT_PUB",
+          confidence: "high",
+          reason_flags: ["bounded"]
+        }
+      },
+      { classification: "rejected", scene: undefined, source_sha256: undefined }
+    ];
+    for (const openResponse of terminalCases) {
+      await open(page, { open: openResponse });
       await status(page, /Choose another|Choose a \.PUB|Keep the original/);
       assert.equal(await page.locator("#reader").isVisible(), false);
+      assert.equal(await page.locator("#compatibility-report").isVisible(), openResponse.classification !== "rejected");
       assert.equal(await page.locator("#pages svg").count(), 0);
     }
     for (const [code, expected] of [[413, /too large/], [429, /busy/], [403, /Access/], [410, /no longer available/], [503, /temporarily unavailable/]]) {

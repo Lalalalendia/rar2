@@ -888,6 +888,26 @@ def main() -> int:
             raise AssertionError("server source identity differs from pinned fixture")
         if opened.get("scene", {}).get("protocol_version") != "chaptera.reader-scene.v1":
             raise AssertionError("open response did not contain Reader Scene V1")
+        compatibility = opened.get("compatibility_report")
+        if not isinstance(compatibility, dict):
+            raise AssertionError("open response did not contain compatibility report")
+        if compatibility.get("protocol_version") != "chaptera.reader-compatibility-report.v1":
+            raise AssertionError("compatibility report protocol mismatch")
+        if compatibility.get("source_sha256") != fixture_sha256:
+            raise AssertionError("compatibility report source identity differs from pinned fixture")
+        if compatibility.get("engine_classification") != opened["classification"]:
+            raise AssertionError("compatibility report classification differs from Reader authority")
+        expected_compatibility_state = {
+            "supported": "opens_normally",
+            "partial": "needs_review",
+        }[opened["classification"]]
+        if compatibility.get("state") != expected_compatibility_state:
+            raise AssertionError("compatibility report customer state differs from Reader classification")
+        routes = compatibility.get("output_routes")
+        if not isinstance(routes, dict):
+            raise AssertionError("compatibility report output routes are missing")
+        if routes.get("editable_idml") != "not_verified" or routes.get("editable_odg") != "not_verified":
+            raise AssertionError("compatibility report advertised unverified editable migration")
 
         scene_status, scene_raw = curl_request(
             https_port=caddy_https_port,
@@ -901,6 +921,8 @@ def main() -> int:
         scene = json.loads(scene_raw)
         if scene.get("scene", {}).get("protocol_version") != "chaptera.reader-scene.v1":
             raise AssertionError("scene endpoint did not return Reader Scene V1")
+        if scene.get("compatibility_report") != compatibility:
+            raise AssertionError("scene endpoint compatibility report differs from open response")
 
         scans = clamd_state.snapshot()
         if len(scans) != 1 or scans[0]["sha256"] != fixture_sha256 or scans[0]["byte_len"] != fixture_bytes:
@@ -995,6 +1017,18 @@ def main() -> int:
                 "scene_status": scene_status,
                 "classification": opened["classification"],
                 "scene_protocol": opened["scene"]["protocol_version"],
+                "compatibility_report": {
+                    "protocol": compatibility["protocol_version"],
+                    "state": compatibility["state"],
+                    "source_identity_bound": True,
+                    "editable_idml": compatibility["output_routes"]["editable_idml"],
+                    "editable_odg": compatibility["output_routes"]["editable_odg"],
+                    "limitation_codes": [
+                        item.get("code")
+                        for item in compatibility.get("limitations", [])
+                        if isinstance(item, dict) and isinstance(item.get("code"), str)
+                    ],
+                },
                 "scanner_exact_source_observed": True,
                 "clamd_scan_count": len(scans),
                 "isolated_structural_scan_count": isolation_kinds.count("structural_scan"),
