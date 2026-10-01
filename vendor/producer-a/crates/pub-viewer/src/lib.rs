@@ -5517,14 +5517,13 @@ mod mature_officeart_wmf_exact_product_tests {
             .iter()
             .map(|image| image.node_ids.len())
             .sum::<usize>();
-        let diagnostic_counts = geometry
-            .document
-            .diagnostics
-            .iter()
-            .fold(BTreeMap::<&str, usize>::new(), |mut counts, diagnostic| {
+        let diagnostic_counts = geometry.document.diagnostics.iter().fold(
+            BTreeMap::<&str, usize>::new(),
+            |mut counts, diagnostic| {
                 *counts.entry(diagnostic.code.as_str()).or_default() += 1;
                 counts
-            });
+            },
+        );
         eprintln!(
             "EXACT_MATURE_WMF_ACCEPTANCE source_resources={} source_uses={} scene_bound_resources={} scene_bound_uses={} viewer_wmf_resources={} viewer_wmf_uses={} viewer_images={} viewer_image_uses={} diagnostics={:?}",
             source_wmf.sources.len(),
@@ -5551,8 +5550,7 @@ mod mature_officeart_wmf_exact_product_tests {
             "bounded mature OfficeArt WMF preview-resource count drift"
         );
         assert_eq!(
-            wmf_preview_uses,
-            expected_wmf_preview_uses,
+            wmf_preview_uses, expected_wmf_preview_uses,
             "bounded mature OfficeArt WMF preview-use count drift"
         );
         assert_eq!(
