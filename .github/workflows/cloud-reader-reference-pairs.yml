@@ -50,15 +50,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Census exact Carlton embedded EOT authority
-        run: |
-          set -euo pipefail
-          mkdir -p target/cloud-reader-reference-pairs
-          python tools/census_embedded_eot.py \
-            --pub "$RUNNER_TEMP/carlton-pair/March-2026.pub" \
-            --expected-pub-sha256 "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" \
-            --receipt target/cloud-reader-reference-pairs/carlton-embedded-eot-census.json
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
@@ -92,6 +83,15 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/carlton-pair"
           python tools/acquire_carlton_march_pair.py "$RUNNER_TEMP/carlton-pair"
+
+      - name: Census exact Carlton embedded EOT authority
+        run: |
+          set -euo pipefail
+          mkdir -p target/cloud-reader-reference-pairs
+          python tools/census_embedded_eot.py \
+            --pub "$RUNNER_TEMP/carlton-pair/March-2026.pub" \
+            --expected-pub-sha256 "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" \
+            --receipt target/cloud-reader-reference-pairs/carlton-embedded-eot-census.json
 
       - uses: dtolnay/rust-toolchain@stable
         with:
