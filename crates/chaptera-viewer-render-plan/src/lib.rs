@@ -19,7 +19,9 @@ use pub_model::{
 };
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
-use pub_viewer::{ViewerGeometryDocument, ViewerScriptFontEntryDisposition};
+use pub_viewer::{
+    ViewerGeometryDocument, ViewerParagraphAlignment, ViewerScriptFontEntryDisposition,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -996,7 +998,7 @@ fn resolve_text_layout_v1(
         Err(RenderTextLayoutFallbackReasonV1::MixedTypographySize)
             if projected_target_frame_node_id.is_none() =>
         {
-            return resolve_mixed_size_text_layout_v1(fragment, font, &bounds, &fingerprint);
+            return resolve_mixed_size_text_layout_v1(visual, fragment, font, &bounds, &fingerprint);
         }
         Err(reason) => return fallback_layout(reason),
     };
@@ -1077,16 +1079,27 @@ fn resolve_text_layout_v1(
 
     let lines = source_lines
         .into_iter()
-        .map(|line| RenderResolvedTextLineV1 {
-            line_index: line.frame_line_index,
-            scalar_start: line.scalar_start,
-            scalar_end: line.scalar_end,
-            consumed_scalar_end: line.consumed_scalar_end,
-            text: line.text,
-            x_offset_emu: 0,
-            measured_width_emu: line.measured_width.get(),
-            line_height_emu,
-            spans: Vec::new(),
+        .map(|line| {
+            let measured_width_emu = line.measured_width.get();
+            let x_offset_emu = resolved_line_x_offset_emu_v1(
+                visual,
+                fragment,
+                line.scalar_start,
+                line.consumed_scalar_end,
+                measured_width_emu,
+                bounds.width.get(),
+            );
+            RenderResolvedTextLineV1 {
+                line_index: line.frame_line_index,
+                scalar_start: line.scalar_start,
+                scalar_end: line.scalar_end,
+                consumed_scalar_end: line.consumed_scalar_end,
+                text: line.text,
+                x_offset_emu,
+                measured_width_emu,
+                line_height_emu,
+                spans: Vec::new(),
+            }
         })
         .collect();
 
@@ -1098,6 +1111,70 @@ fn resolve_text_layout_v1(
             line_height_emu,
         },
         lines,
+    }
+}
+
+fn admitted_line_paragraph_alignment_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+    scalar_start: u32,
+    consumed_scalar_end: u32,
+) -> Option<ViewerParagraphAlignment> {
+    if scalar_start >= consumed_scalar_end {
+        return None;
+    }
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+
+    let mut selected = None;
+    let mut overlap_count = 0_usize;
+    for run in visual
+        .paragraph_alignment_runs
+        .iter()
+        .filter(|run| run.story_id == fragment.story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter(|run| run.scalar_end > scalar_start && run.scalar_start < consumed_scalar_end)
+    {
+        overlap_count += 1;
+        if run.scalar_start > scalar_start || run.scalar_end < consumed_scalar_end {
+            return None;
+        }
+        match selected {
+            None => selected = Some(run.alignment),
+            Some(existing) if existing == run.alignment => {}
+            Some(_) => return None,
+        }
+    }
+    (overlap_count == 1).then_some(selected?).or(None)
+}
+
+fn resolved_line_x_offset_emu_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+    scalar_start: u32,
+    consumed_scalar_end: u32,
+    measured_width_emu: i64,
+    content_width_emu: i64,
+) -> i64 {
+    let Some(remaining) = content_width_emu.checked_sub(measured_width_emu) else {
+        return 0;
+    };
+    if remaining < 0 {
+        return 0;
+    }
+    match admitted_line_paragraph_alignment_v1(
+        visual,
+        fragment,
+        scalar_start,
+        consumed_scalar_end,
+    ) {
+        Some(ViewerParagraphAlignment::Left) => 0,
+        Some(ViewerParagraphAlignment::Center) => remaining / 2,
+        Some(ViewerParagraphAlignment::Right) => remaining,
+        Some(ViewerParagraphAlignment::Justify) | None => 0,
     }
 }
 
@@ -1257,6 +1334,7 @@ fn shape_mixed_line_candidate_v1(
 }
 
 fn resolve_mixed_size_text_layout_v1(
+    visual: &ViewerGeometryDocument,
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
     bounds: &RectEmu,
@@ -1353,13 +1431,21 @@ fn resolve_mixed_size_text_layout_v1(
             Some(value) => value,
             None => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
         };
+        let x_offset_emu = resolved_line_x_offset_emu_v1(
+            visual,
+            fragment,
+            cursor,
+            chosen.consumed_scalar_end,
+            chosen.measured_width_emu,
+            bounds.width.get(),
+        );
         lines.push(RenderResolvedTextLineV1 {
             line_index,
             scalar_start: cursor,
             scalar_end: chosen.scalar_end,
             consumed_scalar_end: chosen.consumed_scalar_end,
             text: chosen.text,
-            x_offset_emu: 0,
+            x_offset_emu,
             measured_width_emu: chosen.measured_width_emu,
             line_height_emu: chosen.line_height_emu,
             spans: chosen.spans,
