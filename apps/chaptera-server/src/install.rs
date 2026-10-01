@@ -303,11 +303,11 @@ fn sha256_file(path: &Path) -> io::Result<[u8; 32]> {
 }
 
 fn atomic_write(path: &Path, contents: &[u8], mode: u32) -> io::Result<()> {
-    if let Ok(existing) = fs::read(path) {
-        if existing == contents {
-            set_mode(path, mode)?;
-            return Ok(());
-        }
+    if let Ok(existing) = fs::read(path)
+        && existing == contents
+    {
+        set_mode(path, mode)?;
+        return Ok(());
     }
 
     let parent = path.parent().ok_or_else(|| {
