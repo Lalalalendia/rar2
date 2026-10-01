@@ -1692,6 +1692,7 @@ mod tests {
                 size_inherited: true,
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
+            paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
@@ -1777,6 +1778,130 @@ mod tests {
                 ),
             ],
             source_story_text_sha256: viewer_story_text_sha256(text),
+        }
+    }
+
+    #[test]
+    fn paragraph_alignment_line_offset_requires_one_complete_executable_range() {
+        let story_id = StoryId::from_canonical(canonical(3));
+        let node_id = NodeId::from_canonical(canonical(2));
+        let bounds = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(120),
+            LengthEmu::new(200),
+        );
+        let mut fragment = render_fragment(story_id, "hello", Vec::new());
+
+        // Missing authority keeps the existing leading origin.
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(
+                &fragment,
+                node_id,
+                &bounds,
+                0,
+                0,
+                5,
+                100,
+                "layout:test",
+            ),
+            0
+        );
+
+        fragment.paragraph_alignments = vec![RenderParagraphAlignmentRunV1 {
+            scalar_start: 0,
+            scalar_end: 5,
+            alignment: RenderParagraphAlignmentV1::Center,
+            source_value: 1,
+        }];
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(
+                &fragment,
+                node_id,
+                &bounds,
+                0,
+                0,
+                5,
+                100,
+                "layout:test",
+            ),
+            10
+        );
+
+        // Two complete authorities are ambiguous and therefore fail closed.
+        fragment.paragraph_alignments.push(RenderParagraphAlignmentRunV1 {
+            scalar_start: 0,
+            scalar_end: 5,
+            alignment: RenderParagraphAlignmentV1::Right,
+            source_value: 2,
+        });
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(
+                &fragment,
+                node_id,
+                &bounds,
+                0,
+                0,
+                5,
+                100,
+                "layout:test",
+            ),
+            0
+        );
+
+        // A line that crosses paragraph-range boundaries has no complete range.
+        fragment.paragraph_alignments = vec![
+            RenderParagraphAlignmentRunV1 {
+                scalar_start: 0,
+                scalar_end: 2,
+                alignment: RenderParagraphAlignmentV1::Right,
+                source_value: 2,
+            },
+            RenderParagraphAlignmentRunV1 {
+                scalar_start: 2,
+                scalar_end: 5,
+                alignment: RenderParagraphAlignmentV1::Right,
+                source_value: 2,
+            },
+        ];
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(
+                &fragment,
+                node_id,
+                &bounds,
+                0,
+                1,
+                4,
+                60,
+                "layout:test",
+            ),
+            0
+        );
+
+        // Preserved but non-executable Publisher justification values stay leading.
+        for alignment in [
+            RenderParagraphAlignmentV1::InterWord,
+            RenderParagraphAlignmentV1::Distribute,
+        ] {
+            fragment.paragraph_alignments = vec![RenderParagraphAlignmentRunV1 {
+                scalar_start: 0,
+                scalar_end: 5,
+                alignment,
+                source_value: 3,
+            }];
+            assert_eq!(
+                resolved_line_x_offset_emu_v1(
+                    &fragment,
+                    node_id,
+                    &bounds,
+                    0,
+                    0,
+                    5,
+                    100,
+                    "layout:test",
+                ),
+                0
+            );
         }
     }
 
