@@ -86,7 +86,10 @@ pub fn run(config_path: Option<&Path>, staging_root: Option<&Path>) -> Result<()
         let config_bytes = fs::read(config_path).map_err(|error| {
             io::Error::new(
                 error.kind(),
-                format!("cannot read validated config {}: {error}", config_path.display()),
+                format!(
+                    "cannot read validated config {}: {error}",
+                    config_path.display()
+                ),
             )
         })?;
         atomic_write(&staged_config, &config_bytes, 0o640)?;
