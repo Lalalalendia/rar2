@@ -17,7 +17,7 @@ use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, StoryId, TableCellId,
 };
-use pub_viewer::ViewerGeometryDocument;
+use pub_viewer::{ViewerGeometryDocument, ViewerScriptFontEntryDisposition};
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,172 @@ pub struct RenderTypographyRunV1 {
     pub text_size_emu: u32,
     pub font_inherited: bool,
     pub size_inherited: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ScalarSourceFontFamilyAuthorityV1 {
+    Authoritative(String),
+    Absent,
+    Invalid,
+}
+
+fn normalize_source_font_family_v1(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+fn scalar_source_font_family_authority_v1(
+    fragment: &RenderTextFragmentV1,
+) -> ScalarSourceFontFamilyAuthorityV1 {
+    if fragment.typography.is_empty() {
+        return ScalarSourceFontFamilyAuthorityV1::Absent;
+    }
+
+    let mut cursor = fragment.scalar_start;
+    let mut family: Option<(String, String)> = None;
+    let mut blank_family = false;
+
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+        {
+            return ScalarSourceFontFamilyAuthorityV1::Invalid;
+        }
+
+        let display = run.source_font_name.trim();
+        if display.is_empty() {
+            blank_family = true;
+        } else {
+            if blank_family {
+                return ScalarSourceFontFamilyAuthorityV1::Invalid;
+            }
+            let normalized = normalize_source_font_family_v1(display);
+            match family.as_ref() {
+                None => family = Some((display.to_owned(), normalized)),
+                Some((_, existing)) if *existing == normalized => {}
+                Some(_) => return ScalarSourceFontFamilyAuthorityV1::Invalid,
+            }
+        }
+        cursor = run.scalar_end;
+    }
+
+    if cursor != fragment.scalar_end {
+        return ScalarSourceFontFamilyAuthorityV1::Invalid;
+    }
+
+    match (family, blank_family) {
+        (Some((display, _)), false) => {
+            ScalarSourceFontFamilyAuthorityV1::Authoritative(display)
+        }
+        (None, true) => ScalarSourceFontFamilyAuthorityV1::Absent,
+        _ => ScalarSourceFontFamilyAuthorityV1::Invalid,
+    }
+}
+
+fn one_resolved_script_font_entry_v1<'a>(
+    entries: &'a [pub_viewer::ViewerScriptFontEntry],
+    script_slot: u16,
+) -> Option<&'a pub_viewer::ViewerScriptFontEntry> {
+    let mut matches = entries.iter().filter(|entry| entry.script_slot == script_slot);
+    let entry = matches.next()?;
+    if matches.next().is_some()
+        || entry.disposition != ViewerScriptFontEntryDisposition::Resolved
+        || entry.source_font_name.as_deref().is_none_or(|name| name.trim().is_empty())
+    {
+        return None;
+    }
+    Some(entry)
+}
+
+fn ascii_latin_script_font_family_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+) -> Option<String> {
+    if fragment.text.is_empty() || fragment.text.chars().any(|ch| !ch.is_ascii()) {
+        return None;
+    }
+
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+
+    let mut maps = visual
+        .script_font_maps
+        .iter()
+        .filter(|map| map.story_id == fragment.story_id)
+        .filter(|map| map.applies_to_story_text(&story.text))
+        .filter(|map| {
+            map.scalar_end > fragment.scalar_start && map.scalar_start < fragment.scalar_end
+        })
+        .collect::<Vec<_>>();
+    maps.sort_by_key(|map| (map.scalar_start, map.scalar_end));
+
+    let mut cursor = fragment.scalar_start;
+    let mut selected: Option<(u32, String, String)> = None;
+
+    for map in maps {
+        let start = map.scalar_start.max(fragment.scalar_start);
+        let end = map.scalar_end.min(fragment.scalar_end);
+        if start != cursor || end <= start {
+            return None;
+        }
+
+        let default = one_resolved_script_font_entry_v1(&map.entries, 0)?;
+        let ascii_latin = one_resolved_script_font_entry_v1(&map.entries, 1)?;
+        let latin = one_resolved_script_font_entry_v1(&map.entries, 2)?;
+
+        let entries = [default, ascii_latin, latin];
+        let first_name = entries[0].source_font_name.as_deref()?.trim();
+        let first = (
+            entries[0].source_font_index,
+            first_name.to_owned(),
+            normalize_source_font_family_v1(first_name),
+        );
+        if entries.iter().skip(1).any(|entry| {
+            let Some(name) = entry.source_font_name.as_deref() else {
+                return true;
+            };
+            entry.source_font_index != first.0
+                || normalize_source_font_family_v1(name) != first.2
+        }) {
+            return None;
+        }
+
+        match selected.as_ref() {
+            None => selected = Some(first),
+            Some((ordinal, _, normalized))
+                if *ordinal == first.0 && *normalized == first.2 => {}
+            Some(_) => return None,
+        }
+        cursor = end;
+    }
+
+    if cursor != fragment.scalar_end {
+        return None;
+    }
+
+    selected.map(|(_, display, _)| display)
+}
+
+/// Returns bounded source family authority for a render fragment without
+/// inventing font size, style, substitution, or general script fallback.
+///
+/// Complete scalar typography wins. ScriptFonts is admitted only for an
+/// ASCII-only fragment whose Default/AsciiLatin/Latin slots agree exactly
+/// across complete contiguous source ranges.
+pub fn effective_source_font_family_v1(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+) -> Option<String> {
+    match scalar_source_font_family_authority_v1(fragment) {
+        ScalarSourceFontFamilyAuthorityV1::Authoritative(family) => Some(family),
+        ScalarSourceFontFamilyAuthorityV1::Absent => {
+            ascii_latin_script_font_family_v1(visual, fragment)
+        }
+        ScalarSourceFontFamilyAuthorityV1::Invalid => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1244,7 +1410,8 @@ mod tests {
     };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
-        ViewerNodePaint, ViewerPage, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
+        ViewerNodePaint, ViewerPage, ViewerScriptFontEntry, ViewerScriptFontEntryDisposition,
+        ViewerScriptFontMap, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
         ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
     };
 
@@ -1354,6 +1521,184 @@ mod tests {
                 bytes: vec![0x89, b'P', b'N', b'G'],
             }],
         }
+    }
+
+    fn render_fragment(
+        story_id: StoryId,
+        text: &str,
+        typography: Vec<RenderTypographyRunV1>,
+    ) -> RenderTextFragmentV1 {
+        RenderTextFragmentV1 {
+            story_id,
+            scalar_start: 0,
+            scalar_end: u32::try_from(text.chars().count()).expect("test scalar length"),
+            text: text.to_owned(),
+            line_count: 1,
+            typography,
+            backend_font_resource_id: None,
+            layout: None,
+        }
+    }
+
+    fn script_entry(
+        slot: u16,
+        ordinal: u32,
+        family: Option<&str>,
+        disposition: ViewerScriptFontEntryDisposition,
+    ) -> ViewerScriptFontEntry {
+        ViewerScriptFontEntry {
+            script_slot: slot,
+            source_font_index: ordinal,
+            source_font_name: family.map(str::to_owned),
+            disposition,
+        }
+    }
+
+    fn latin_map(
+        story_id: StoryId,
+        text: &str,
+        start: u32,
+        end: u32,
+        family: &str,
+        ordinal: u32,
+    ) -> ViewerScriptFontMap {
+        ViewerScriptFontMap {
+            story_id,
+            scalar_start: start,
+            scalar_end: end,
+            entries: vec![
+                script_entry(0, ordinal, Some(family), ViewerScriptFontEntryDisposition::Resolved),
+                script_entry(1, ordinal, Some(family), ViewerScriptFontEntryDisposition::Resolved),
+                script_entry(2, ordinal, Some(family), ViewerScriptFontEntryDisposition::Resolved),
+            ],
+            source_story_text_sha256: viewer_story_text_sha256(text),
+        }
+    }
+
+    #[test]
+    fn effective_family_prefers_complete_scalar_typography() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let text = "hello";
+        visual.script_font_maps = vec![latin_map(story_id, text, 0, 5, "Caladea", 32)];
+        let fragment = render_fragment(
+            story_id,
+            text,
+            vec![RenderTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 5,
+                source_font_name: "Source Font".to_owned(),
+                text_size_emu: 152_400,
+                font_inherited: false,
+                size_inherited: false,
+            }],
+        );
+
+        assert_eq!(
+            effective_source_font_family_v1(&visual, &fragment).as_deref(),
+            Some("Source Font")
+        );
+    }
+
+    #[test]
+    fn effective_family_admits_strict_ascii_latin_scriptfonts() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let text = "hello";
+        visual.script_font_maps = vec![latin_map(story_id, text, 0, 5, "Caladea", 32)];
+        let fragment = render_fragment(story_id, text, Vec::new());
+
+        assert_eq!(
+            effective_source_font_family_v1(&visual, &fragment).as_deref(),
+            Some("Caladea")
+        );
+    }
+
+    #[test]
+    fn effective_family_scriptfonts_fail_closed_on_slot_range_and_script_ambiguity() {
+        let story_id = fixture().document.stories[0].id;
+        let text = "hello";
+        let fragment = render_fragment(story_id, text, Vec::new());
+
+        let mut missing_slot = fixture();
+        let mut map = latin_map(story_id, text, 0, 5, "Caladea", 32);
+        map.entries.retain(|entry| entry.script_slot != 2);
+        missing_slot.script_font_maps = vec![map];
+        assert_eq!(
+            effective_source_font_family_v1(&missing_slot, &fragment),
+            None
+        );
+
+        let mut unresolved = fixture();
+        let mut map = latin_map(story_id, text, 0, 5, "Caladea", 32);
+        map.entries
+            .iter_mut()
+            .find(|entry| entry.script_slot == 1)
+            .expect("ascii slot")
+            .disposition = ViewerScriptFontEntryDisposition::UnresolvedSentinel;
+        unresolved.script_font_maps = vec![map];
+        assert_eq!(effective_source_font_family_v1(&unresolved, &fragment), None);
+
+        let mut mixed = fixture();
+        let mut map = latin_map(story_id, text, 0, 5, "Caladea", 32);
+        let latin = map
+            .entries
+            .iter_mut()
+            .find(|entry| entry.script_slot == 2)
+            .expect("latin slot");
+        latin.source_font_index = 7;
+        latin.source_font_name = Some("Arial".to_owned());
+        mixed.script_font_maps = vec![map];
+        assert_eq!(effective_source_font_family_v1(&mixed, &fragment), None);
+
+        let mut gap = fixture();
+        gap.script_font_maps = vec![
+            latin_map(story_id, text, 0, 2, "Caladea", 32),
+            latin_map(story_id, text, 3, 5, "Caladea", 32),
+        ];
+        assert_eq!(effective_source_font_family_v1(&gap, &fragment), None);
+
+        let mut non_ascii = fixture();
+        non_ascii.document.stories[0].text = "héllo".to_owned();
+        non_ascii.script_font_maps =
+            vec![latin_map(story_id, "héllo", 0, 5, "Caladea", 32)];
+        let non_ascii_fragment = render_fragment(story_id, "héllo", Vec::new());
+        assert_eq!(
+            effective_source_font_family_v1(&non_ascii, &non_ascii_fragment),
+            None
+        );
+    }
+
+    #[test]
+    fn effective_family_does_not_override_invalid_scalar_family_evidence() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let text = "hello";
+        visual.script_font_maps = vec![latin_map(story_id, text, 0, 5, "Caladea", 32)];
+        let fragment = render_fragment(
+            story_id,
+            text,
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 5,
+                    source_font_name: "Caladea".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                },
+            ],
+        );
+
+        assert_eq!(effective_source_font_family_v1(&visual, &fragment), None);
     }
 
     #[test]
