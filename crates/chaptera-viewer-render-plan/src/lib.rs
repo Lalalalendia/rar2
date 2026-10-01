@@ -41,6 +41,8 @@ pub struct NodeRenderPlanV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projected_scene_instance: Option<SceneInstanceV1>,
     pub bounds: RectEmu,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_bounds: Option<RectEmu>,
     pub transform: Affine2D,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_fill_rgb: Option<[u8; 3]>,
@@ -519,6 +521,7 @@ pub fn build_page_render_plan_v1(
                 #[cfg(feature = "projected-scene-instances")]
                 projected_scene_instance: None,
                 bounds: node.bounds,
+                text_bounds: None,
                 transform: node.transform.clone(),
                 solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
                 solid_line: paint
@@ -575,6 +578,7 @@ pub fn build_page_render_plan_v1(
             node_id: origin_node_id,
             projected_scene_instance: Some(projected.scene_instance.clone()),
             bounds: projected.bounds,
+            text_bounds: projected.text_content_bounds,
             transform: projected.transform.clone(),
             solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
             solid_line: paint
@@ -664,7 +668,7 @@ where
             page_size,
             node_id: node.node_id,
             projected_target_frame_node_id,
-            bounds: node.bounds,
+            bounds: node.text_bounds.unwrap_or(node.bounds),
             transform: node.transform.clone(),
         };
         let resolved_font = resolve_font(fragment);
