@@ -379,8 +379,7 @@ fn populate_bounded_table_cell_fill(
         };
         let Some(visible) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_BOOLEANS)
             .and_then(|value| {
-                (value & FILL_USE_FILLED_BIT != 0)
-                    .then_some(value & FILL_FILLED_BIT != 0)
+                (value & FILL_USE_FILLED_BIT != 0).then_some(value & FILL_FILLED_BIT != 0)
             })
         else {
             continue;
