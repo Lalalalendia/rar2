@@ -1274,12 +1274,33 @@ mod tests {
                             .count()
                     })
                     .collect::<Vec<_>>();
+                let projected_scene_nodes = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| node.origin_node_id.is_some())
+                    .count();
+                let projected_shared_layout_nodes = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| node.origin_node_id.is_some() && node.text_layout.is_some())
+                    .count();
+                let projected_shared_nonempty_lines = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| node.origin_node_id.is_some())
+                    .filter_map(|node| node.text_layout.as_ref())
+                    .flat_map(|layout| &layout.lines)
+                    .filter(|line| !line.text.trim().is_empty())
+                    .count();
                 println!(
-                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
                     scene.fidelity.state,
                     scene.stacking_fidelity,
                     scene.pages.len(),
                     scene.nodes.len(),
+                    projected_scene_nodes,
+                    projected_shared_layout_nodes,
+                    projected_shared_nonempty_lines,
                     tables.len(),
                     table_cells,
                     spanning_cells,
