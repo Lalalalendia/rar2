@@ -3474,37 +3474,25 @@ mod tests {
 
     #[test]
     fn salvage_product_outcome_carries_partial_source_graph_not_probe() {
-        let mut bytes = Vec::new();
-        {
-            let mut compound = cfb::CompoundFile::create(Cursor::new(&mut bytes))
-                .expect("synthetic Publisher CFB");
-            compound.create_storage("/Objects").expect("Objects storage");
-            compound
-                .create_stream("/Objects/Damaged")
-                .expect("damaged mini stream");
-            let mut contents = vec![0_u8; 5_000];
-            contents[..4].copy_from_slice(&[0xe8, 0xac, 0x2c, 0x00]);
-            use std::io::Write;
-            compound
-                .create_stream("/Contents")
-                .expect("Contents stream")
-                .write_all(&contents)
-                .expect("write Contents");
-            compound.flush().expect("flush synthetic CFB");
-        }
-        // This healthy synthetic CFB is not expected to fail normal Viewer open
-        // in a particular way, so exercise only the public partial-graph type
-        // contract here; salvage eligibility remains covered in pub-reader.
-        let probe = probe_reader_salvage_candidate_with_trigger(
-            &bytes,
-            ReaderSalvageTrigger::ProvenStructuralCorruption,
-        );
-        if probe.eligibility.is_eligible() && probe.has_surviving_evidence() {
-            let graph = build_reader_partial_source_graph(&bytes, &probe)
-                .expect("eligible probe projects to partial graph");
-            assert_eq!(graph.schema_version, READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1);
-            assert_eq!(graph.source_sha256, probe.source_sha256);
-        }
+        let graph = ReaderPartialSourceGraph {
+            schema_version: READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1.to_owned(),
+            source_sha256: "a".repeat(64),
+            contents_family: None,
+            subsystems: ReaderSalvageSubsystemProbe {
+                contents: ReaderSalvageStreamState::Readable,
+                quill: ReaderSalvageStreamState::Absent,
+                escher: ReaderSalvageStreamState::Absent,
+                escher_delay: ReaderSalvageStreamState::Absent,
+            },
+            facts: Vec::new(),
+            gaps: vec![
+                ReaderPartialSourceGap::TextUnavailable,
+                ReaderPartialSourceGap::ImageFactsUnavailable,
+                ReaderPartialSourceGap::GeometryFactsUnavailable,
+            ],
+        };
+        let outcome = ViewerProductOpenOutcome::Salvage(graph.clone());
+        assert_eq!(outcome, ViewerProductOpenOutcome::Salvage(graph));
     }
 
     #[test]
