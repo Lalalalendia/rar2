@@ -26,9 +26,7 @@ use tokio::{
 use crate::{
     blob_store::BlobStoreService,
     guest_intake_classifier::guest_failure_intake_evidence,
-    reader_scene_v1::{
-        from_viewer_geometry, from_viewer_geometry_with_projected_text_inset_probe,
-    },
+    reader_scene_v1::{from_viewer_geometry, from_viewer_geometry_with_projected_text_inset_probe},
     source_ingress_security::SourceSecurityScannerConfig,
 };
 
