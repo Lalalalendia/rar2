@@ -70,6 +70,10 @@ pub use legacy22_noquill_graph::{
     build_legacy_0x22_noquill_from_contents, build_legacy_0x22_noquill_source_graph,
     read_legacy_0x22_image_wmf, read_legacy_0x22_image_wmfs,
 };
+pub use mature_wmf::{
+    MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, PubMatureOfficeArtWmfPreviewBundle,
+    PubMatureOfficeArtWmfPreviewSource, build_mature_0x2c_wmf_preview_bundle_from_bytes,
+};
 pub use ole_presentation::{
     LegacyOleCachedPresentation, LegacyOleCachedPresentationDiagnostic,
     LegacyOleCachedPresentationScan, LegacyOleCachedPresentationSelection, OlePresentation,
