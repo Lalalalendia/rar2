@@ -25,6 +25,7 @@ use pub_model::{
 use pub_viewer::ViewerProjectedSceneInstanceV1;
 use pub_viewer::{
     ViewerGeometryDocument, ViewerParagraphAlignment, ViewerScriptFontEntryDisposition,
+    ViewerStoryFrame, ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -359,6 +360,8 @@ pub struct ExplicitRenderTextFontResourceV1<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderTextLayoutV1 {
     pub disposition: RenderTextLayoutDispositionV1,
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub vertical_offset_emu: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<RenderResolvedTextLineV1>,
 }
@@ -625,6 +628,37 @@ fn projected_text(
     }))
 }
 
+fn unique_story_frame_for_node(
+    visual: &ViewerGeometryDocument,
+    node_id: NodeId,
+) -> Option<&ViewerStoryFrame> {
+    let mut matches = visual
+        .story_frames
+        .iter()
+        .filter(|frame| frame.frame_id == node_id);
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
+fn resolved_vertical_offset_emu_v1(
+    alignment: Option<ViewerTextVerticalAlignment>,
+    content_height_emu: i64,
+    laid_out_height_emu: i64,
+) -> i64 {
+    if content_height_emu <= 0
+        || laid_out_height_emu < 0
+        || laid_out_height_emu > content_height_emu
+    {
+        return 0;
+    }
+    let remaining = content_height_emu - laid_out_height_emu;
+    match alignment {
+        Some(ViewerTextVerticalAlignment::Center) => remaining / 2,
+        Some(ViewerTextVerticalAlignment::Bottom) => remaining,
+        Some(ViewerTextVerticalAlignment::Top) | None => 0,
+    }
+}
+
 pub fn build_page_render_plan_v1(
     visual: &ViewerGeometryDocument,
     page_index: usize,
@@ -777,12 +811,14 @@ pub fn build_page_render_plan_v1(
                         })
                         .collect(),
                 });
+            let text_bounds = unique_story_frame_for_node(visual, node.origin)
+                .and_then(|frame| frame.text_content_bounds);
             NodeRenderPlanV1 {
                 node_id: node.origin,
                 #[cfg(feature = "projected-scene-instances")]
                 projected_scene_instance: None,
                 bounds: node.bounds,
-                text_bounds: None,
+                text_bounds,
                 transform: node.transform.clone(),
                 solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
                 solid_line: paint
@@ -877,6 +913,7 @@ struct RenderTextLayoutTargetV1 {
     page_size: Size2D,
     node_id: NodeId,
     projected_target_frame_node_id: Option<NodeId>,
+    vertical_alignment: Option<ViewerTextVerticalAlignment>,
     bounds: RectEmu,
     transform: Affine2D,
 }
@@ -924,11 +961,18 @@ where
                 None
             }
         };
+        let vertical_alignment = if projected_target_frame_node_id.is_none() {
+            unique_story_frame_for_node(visual, node.node_id)
+                .and_then(|frame| frame.vertical_alignment)
+        } else {
+            None
+        };
         let target = RenderTextLayoutTargetV1 {
             page_id,
             page_size,
             node_id: node.node_id,
             projected_target_frame_node_id,
+            vertical_alignment,
             bounds: node.text_bounds.unwrap_or(node.bounds),
             transform: node.transform.clone(),
         };
@@ -1009,6 +1053,7 @@ fn node_id_string(id: NodeId) -> String {
 fn fallback_layout(reason: RenderTextLayoutFallbackReasonV1) -> RenderTextLayoutV1 {
     RenderTextLayoutV1 {
         disposition: RenderTextLayoutDispositionV1::BackendFallback { reason },
+        vertical_offset_emu: 0,
         lines: Vec::new(),
     }
 }
@@ -1087,6 +1132,7 @@ fn resolve_text_layout_v1(
         page_size,
         node_id,
         projected_target_frame_node_id,
+        vertical_alignment,
         bounds,
         transform,
     } = target;
@@ -1146,6 +1192,7 @@ fn resolve_text_layout_v1(
                 node_id,
                 &bounds,
                 &fingerprint,
+                vertical_alignment,
             );
         }
         Err(reason) => return fallback_layout(reason),
@@ -1248,6 +1295,10 @@ fn resolve_text_layout_v1(
         })
         .collect();
 
+    let laid_out_height_emu = lines
+        .iter()
+        .try_fold(0_i64, |total, line| total.checked_add(line.line_height_emu))
+        .unwrap_or(0);
     RenderTextLayoutV1 {
         disposition: RenderTextLayoutDispositionV1::SharedResolved {
             font_resource_id: font.resource_id.to_owned(),
@@ -1255,6 +1306,11 @@ fn resolve_text_layout_v1(
             font_size_emu,
             line_height_emu,
         },
+        vertical_offset_emu: resolved_vertical_offset_emu_v1(
+            vertical_alignment,
+            bounds.height.get(),
+            laid_out_height_emu,
+        ),
         lines,
     }
 }
@@ -1420,6 +1476,7 @@ fn resolve_mixed_size_text_layout_v1(
     node_id: NodeId,
     bounds: &RectEmu,
     fingerprint: &str,
+    vertical_alignment: Option<ViewerTextVerticalAlignment>,
 ) -> RenderTextLayoutV1 {
     let runs = match admitted_typography_runs_v1(fragment, font.default_font_size_emu) {
         Ok(runs) => runs,
@@ -1561,6 +1618,11 @@ fn resolve_mixed_size_text_layout_v1(
             font_size_emu: max_font_size_emu,
             line_height_emu: max_line_height_emu,
         },
+        vertical_offset_emu: resolved_vertical_offset_emu_v1(
+            vertical_alignment,
+            bounds.height.get(),
+            used_height_emu,
+        ),
         lines,
     }
 }
