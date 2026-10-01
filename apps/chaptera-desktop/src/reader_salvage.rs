@@ -84,9 +84,7 @@ pub fn search_text(graph: &ReaderPartialSourceGraph, query: &str) -> Vec<Salvage
     matches
 }
 
-pub fn subsystem_rows(
-    graph: &ReaderPartialSourceGraph,
-) -> [(&'static str, &'static str); 4] {
+pub fn subsystem_rows(graph: &ReaderPartialSourceGraph) -> [(&'static str, &'static str); 4] {
     [
         ("Contents", stream_state_label(graph.subsystems.contents)),
         ("Text", stream_state_label(graph.subsystems.quill)),
