@@ -1537,6 +1537,48 @@ mod tests {
             .expect("serialize projected line heights");
         let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
             .expect("serialize projected uniform text insets");
+
+        match actual_sha256.as_str() {
+            "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
+                assert_eq!(
+                    projected_text_nodes, 4,
+                    "exact Carlton projected carrier count drift"
+                );
+                assert_eq!(
+                    projected_text_bounds_nodes, 4,
+                    "exact Carlton must retain source-backed text bounds on every projected carrier"
+                );
+                assert_eq!(
+                    projected_uniform_insets_emu,
+                    BTreeMap::from([(36_576_i64, 4_usize)]),
+                    "exact Carlton projected carrier inset authority drift"
+                );
+                let projected_line_total = projected_line_counts
+                    .iter()
+                    .map(|(line_count, node_count)| line_count * node_count)
+                    .sum::<usize>();
+                assert_eq!(
+                    projected_line_total, 31,
+                    "exact Carlton projected source-backed line count drift"
+                );
+            }
+            "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
+                assert_eq!(
+                    projected_text_nodes, 0,
+                    "Virginia Devinettes must remain a zero-projected control"
+                );
+                assert_eq!(
+                    projected_text_bounds_nodes, 0,
+                    "Virginia Devinettes must not acquire projected carrier text bounds"
+                );
+                assert!(
+                    projected_uniform_insets_emu.is_empty(),
+                    "Virginia Devinettes must not acquire projected carrier inset authority"
+                );
+            }
+            _ => {}
+        }
+
         println!(
             "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
