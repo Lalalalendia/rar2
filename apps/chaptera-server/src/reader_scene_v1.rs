@@ -1424,9 +1424,11 @@ mod tests {
 
                 let mut hypothetical_scene_json_bytes = scene_json_bytes;
                 for image in budget_exhausted_images {
-                    let resource_id =
-                        super::serialized_string(&image.resource_id, "hypothetical image resource id")
-                            .expect("exact probe image resource id");
+                    let resource_id = super::serialized_string(
+                        &image.resource_id,
+                        "hypothetical image resource id",
+                    )
+                    .expect("exact probe image resource id");
                     let current = scene
                         .resources
                         .iter()
