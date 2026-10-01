@@ -1,4 +1,5 @@
 import { renderReaderScene } from "./render-v1.mjs";
+import { BrowserObservabilityV1, traceHeadersV1 } from "./observability-v1.mjs";
 import {
   EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath, contributionEligible,
   extractableImages, assertSalvageObservation, assertCompatibilityReport,
@@ -24,6 +25,19 @@ let pending = null;
 let pageIndex = 0;
 let contributionContext = null;
 let contributionExpiry = null;
+
+function browserFamily() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes("firefox/")) return "firefox";
+  if (ua.includes("edg/") || ua.includes("chrome/") || ua.includes("chromium/")) return "chromium";
+  if (ua.includes("safari/") && !ua.includes("chrome/")) return "webkit";
+  return "other";
+}
+
+const observability = new BrowserObservabilityV1({
+  sessionIncarnation: "reader-session:" + crypto.randomUUID(),
+  browserFamily: browserFamily()
+});
 
 function clearContribution() {
   clearTimeout(contributionExpiry);
@@ -113,9 +127,13 @@ function clearReader() {
   $("#copy-status").textContent = "";
 }
 
-function beginOpen() {
+function beginOpen(operationClass = "open") {
   pending?.controller.abort();
-  const operation = { generation: ++generation, controller: new AbortController() };
+  const operation = {
+    generation: ++generation,
+    controller: new AbortController(),
+    traceContext: observability.createContext({ operationClass })
+  };
   pending = operation;
   clearReader();
   busy(true);
@@ -346,11 +364,17 @@ async function openFile(file) {
   let accessToken = null;
   try {
     message("Creating private viewing session…");
-    const issued = await jsonResponse(await fetch("/v1/reader/guest-sessions", {
-      method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
-      headers: { "content-type": "application/json", "x-csrf-token": csrf },
-      body: JSON.stringify({ expected_byte_len: file.size })
-    }));
+    const issued = await observability.measure("reader.session_create", operation.traceContext, async () =>
+      jsonResponse(await fetch("/v1/reader/guest-sessions", {
+        method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
+        headers: {
+          "content-type": "application/json",
+          "x-csrf-token": csrf,
+          ...traceHeadersV1(operation.traceContext)
+        },
+        body: JSON.stringify({ expected_byte_len: file.size })
+      }))
+    );
     if (!isCurrent(operation)) return;
     if (issued.protocol_version !== "chaptera.reader-guest-session.v1"
         || typeof issued.session_id !== "string" || !/^[A-Za-z0-9_:-]+$/.test(issued.session_id)
@@ -362,21 +386,25 @@ async function openFile(file) {
     const sessionPath = "/v1/reader/guest-sessions/" + issued.session_id + "/";
     if (uploadPath !== sessionPath + "content" || openPath !== sessionPath + "open") throw new Error("guest_path_invalid");
     accessToken = issued.access_token;
-    const headers = { "x-csrf-token": csrf, "x-chaptera-reader-session": accessToken };
+    const headers = { "x-csrf-token": csrf, "x-chaptera-reader-session": accessToken, ...traceHeadersV1(operation.traceContext) };
     message("Uploading for temporary private processing…");
-    const uploaded = await jsonResponse(await fetch(uploadPath, {
-      method: "PUT", credentials: "omit", cache: "no-store", redirect: "error", signal,
-      headers: { ...headers, "content-type": "application/octet-stream" }, body: file
-    }));
+    const uploaded = await observability.measure("reader.upload", operation.traceContext, async () =>
+      jsonResponse(await fetch(uploadPath, {
+        method: "PUT", credentials: "omit", cache: "no-store", redirect: "error", signal,
+        headers: { ...headers, "content-type": "application/octet-stream" }, body: file
+      }))
+    );
     if (!isCurrent(operation)) return;
     if (uploaded.protocol_version !== issued.protocol_version || uploaded.session_id !== issued.session_id) {
       throw new Error("guest_protocol_mismatch");
     }
     message("Scanning and opening…");
-    const opened = await jsonResponse(await fetch(openPath, {
-      method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
-      headers: { ...headers, "content-type": "application/json" }, body: "{}"
-    }));
+    const opened = await observability.measure("reader.open", operation.traceContext, async () =>
+      jsonResponse(await fetch(openPath, {
+        method: "POST", credentials: "omit", cache: "no-store", redirect: "error", signal,
+        headers: { ...headers, "content-type": "application/json" }, body: "{}"
+      }))
+    );
     if (!isCurrent(operation)) return;
     if (opened.protocol_version !== issued.protocol_version || opened.session_id !== issued.session_id) {
       throw new Error("guest_protocol_mismatch");
@@ -395,7 +423,7 @@ async function openFile(file) {
     }
     if (["supported", "partial"].includes(opened.classification)) {
       if (!opened.scene || opened.salvage !== undefined) throw new Error("scene_protocol_mismatch");
-      if (!await render(opened.scene, operation)) return;
+      if (!await observability.measure("reader.render", operation.traceContext, () => render(opened.scene, operation))) return;
     } else if (opened.classification === "salvage") {
       if (opened.scene !== undefined || !opened.salvage) throw new Error("salvage_protocol_mismatch");
       const salvage = assertSalvageObservation(opened.salvage);
@@ -506,12 +534,17 @@ async function contributeCurrentFile() {
 async function openDocument() {
   const documentId = documentInput.value.trim();
   if (!documentId) { message("Enter the saved document ID first.", true); return; }
-  const operation = beginOpen();
+  const operation = beginOpen("scene_read");
   try {
     message("Opening saved document…");
-    const payload = await jsonResponse(await fetch("/v1/reader/documents/" + encodeURIComponent(documentId) + "/scene", {
-      credentials: "include", cache: "no-store", signal: operation.controller.signal
-    }));
+    const payload = await observability.measure("reader.scene_read", operation.traceContext, async () =>
+      jsonResponse(await fetch("/v1/reader/documents/" + encodeURIComponent(documentId) + "/scene", {
+        credentials: "include",
+        cache: "no-store",
+        signal: operation.controller.signal,
+        headers: traceHeadersV1(operation.traceContext)
+      }))
+    );
     if (await render(payload, operation)) message("Opened saved document read-only.");
   } catch (error) {
     if (isCurrent(operation)) message(errorMessage(error), true);
