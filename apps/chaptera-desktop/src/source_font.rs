@@ -1,4 +1,7 @@
-use chaptera_viewer_render_plan::{ExplicitRenderTextFontResourceV1, RenderTextFragmentV1};
+use chaptera_viewer_render_plan::{
+    ExplicitRenderTextFontResourceV1, RenderTextFragmentV1,
+    admitted_single_family_source_font_v1, normalize_source_font_family_v1,
+};
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(target_os = "windows")]
 use sha2::{Digest, Sha256};
@@ -75,8 +78,8 @@ impl DesktopSourceFontRegistry {
         &'a self,
         fragment: &RenderTextFragmentV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
-        let family = admitted_single_family(fragment)?;
-        let key = normalize_family(family);
+        let family = admitted_single_family_source_font_v1(fragment)?;
+        let key = normalize_source_font_family_v1(family);
         let font = self.resolved.get(&key)?;
         Some(ExplicitRenderTextFontResourceV1 {
             resource_id: &font.resource_id,
@@ -104,7 +107,7 @@ impl DesktopSourceFontRegistry {
 
     #[cfg(target_os = "windows")]
     fn ensure_family(&mut self, family: &str) -> bool {
-        let key = normalize_family(family);
+        let key = normalize_source_font_family_v1(family);
         if self.resolved.contains_key(&key) || self.unavailable.contains(&key) {
             return false;
         }
@@ -119,7 +122,7 @@ impl DesktopSourceFontRegistry {
                     && info
                         .families
                         .iter()
-                        .any(|(name, _)| normalize_family(name) == key)
+                        .any(|(name, _)| normalize_source_font_family_v1(name) == key)
             })
             .map(|info| info.id)
             .collect::<Vec<_>>();
@@ -171,43 +174,9 @@ impl DesktopSourceFontRegistry {
 
     #[cfg(not(target_os = "windows"))]
     fn ensure_family(&mut self, family: &str) -> bool {
-        self.unavailable.insert(normalize_family(family));
+        self.unavailable.insert(normalize_source_font_family_v1(family));
         false
     }
-}
-
-fn normalize_family(name: &str) -> String {
-    name.trim().to_lowercase()
-}
-
-fn admitted_single_family(fragment: &RenderTextFragmentV1) -> Option<&str> {
-    if fragment.typography.is_empty() {
-        return None;
-    }
-
-    let mut cursor = fragment.scalar_start;
-    let mut family: Option<&str> = None;
-    for run in &fragment.typography {
-        if run.scalar_start != cursor
-            || run.scalar_end <= run.scalar_start
-            || run.scalar_end > fragment.scalar_end
-        {
-            return None;
-        }
-        let name = run.source_font_name.trim();
-        if name.is_empty() {
-            return None;
-        }
-        match family {
-            None => family = Some(name),
-            Some(existing) if normalize_family(existing) == normalize_family(name) => {}
-            Some(_) => return None,
-        }
-        cursor = run.scalar_end;
-    }
-
-    let family = family?;
-    (cursor == fragment.scalar_end).then_some(family)
 }
 
 #[cfg(test)]
@@ -284,7 +253,7 @@ mod tests {
 
         let resolved = registry
             .resolved
-            .get(&normalize_family(source_family))
+            .get(&normalize_source_font_family_v1(source_family))
             .expect("resolved source family");
         let receipt = serde_json::json!({
             "schema": "chaptera.desktop-source-font-environment-receipt.v1",
