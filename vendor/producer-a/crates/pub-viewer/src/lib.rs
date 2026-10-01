@@ -5437,3 +5437,101 @@ mod standard_print_service_tail_exact_product_tests {
         );
     }
 }
+
+
+#[cfg(test)]
+mod mature_officeart_wmf_exact_product_tests {
+    use super::*;
+    use std::{fs, path::PathBuf};
+
+    fn exact_wmf_fixture(
+        env_name: &str,
+        expected_sha256: &str,
+        expected_image_resources: usize,
+        expected_image_uses: usize,
+        expected_wmf_preview_resources: usize,
+        expected_wmf_preview_uses: usize,
+    ) {
+        let path = std::env::var_os(env_name)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| panic!("{env_name} is required"));
+        let before = fs::read(&path).expect("read exact mature OfficeArt WMF fixture");
+        assert_eq!(sha256_digest(&before).unwrap().to_string(), expected_sha256);
+
+        let geometry = open_mature_0x2c_geometry(&before, viewer_geometry_environment_v0_1())
+            .expect("exact mature OfficeArt WMF fixture must open through Viewer product boundary");
+
+        assert_eq!(
+            geometry.images.len(),
+            expected_image_resources,
+            "exact fixture image-resource count drift"
+        );
+        assert_eq!(
+            geometry
+                .images
+                .iter()
+                .map(|image| image.node_ids.len())
+                .sum::<usize>(),
+            expected_image_uses,
+            "exact fixture grounded image-use count drift"
+        );
+
+        let wmf_previews = geometry
+            .images
+            .iter()
+            .filter(|image| image.mime == "image/png")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            wmf_previews.len(),
+            expected_wmf_preview_resources,
+            "bounded mature OfficeArt WMF preview-resource count drift"
+        );
+        assert_eq!(
+            wmf_previews
+                .iter()
+                .map(|image| image.node_ids.len())
+                .sum::<usize>(),
+            expected_wmf_preview_uses,
+            "bounded mature OfficeArt WMF preview-use count drift"
+        );
+        assert!(
+            wmf_previews.iter().all(|image| !image.bytes.is_empty()),
+            "bounded WMF previews must carry deterministic PNG bytes"
+        );
+        assert!(
+            geometry.document.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "viewer.mature_officeart_wmf.preview_applied"
+            }),
+            "exact fixture must record bounded mature OfficeArt WMF preview admission"
+        );
+
+        let after = fs::read(&path).expect("re-read exact mature OfficeArt WMF fixture");
+        assert_eq!(after, before, "Viewer WMF preview path mutated source PUB");
+    }
+
+    #[test]
+    #[ignore = "requires CHAPTERA_SAMPLE_NEWSLETTER exact Apache POI fixture"]
+    fn exact_sample_newsletter_mature_officeart_wmf_previews_reach_viewer() {
+        exact_wmf_fixture(
+            "CHAPTERA_SAMPLE_NEWSLETTER",
+            "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            9,
+            10,
+            8,
+            9,
+        );
+    }
+
+    #[test]
+    #[ignore = "requires CHAPTERA_SAMPLE_BROCHURE exact Apache POI fixture"]
+    fn exact_sample_brochure_mature_officeart_wmf_previews_reach_viewer() {
+        exact_wmf_fixture(
+            "CHAPTERA_SAMPLE_BROCHURE",
+            "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
+            6,
+            6,
+            5,
+            5,
+        );
+    }
+}
