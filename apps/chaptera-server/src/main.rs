@@ -87,12 +87,34 @@ fn main() -> ExitCode {
         session_id,
         expected_sha256,
         expected_byte_len,
+        probe_font_path,
+        probe_font_sha256,
+        probe_source_family_sha256,
+        probe_font_resource_id,
     } = &cli.command
     {
+        let probe = match (
+            probe_font_path.as_ref(),
+            probe_font_sha256.as_ref(),
+            probe_source_family_sha256.as_ref(),
+            probe_font_resource_id.as_ref(),
+        ) {
+            (Some(path), Some(font_sha256), Some(source_family_sha256), Some(resource_id)) => {
+                Some(guest_reader_worker::GuestSceneFontProbeConfig {
+                    path: path.clone(),
+                    expected_sha256: font_sha256.clone(),
+                    source_family_sha256: source_family_sha256.clone(),
+                    resource_id: resource_id.clone(),
+                })
+            }
+            (None, None, None, None) => None,
+            _ => unreachable!("clap requires the complete guest font probe tuple"),
+        };
         return match guest_reader_worker::run_guest_scene_worker(
             session_id,
             expected_sha256,
             *expected_byte_len,
+            probe.as_ref(),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
