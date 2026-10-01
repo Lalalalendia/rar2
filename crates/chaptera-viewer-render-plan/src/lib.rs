@@ -572,9 +572,8 @@ pub fn build_page_render_plan_v1(
                 }
             });
         let text = projected_text(visual, projected)?;
-        let has_shape_paint = paint.is_some_and(|paint| {
-            paint.solid_fill_rgb.is_some() || paint.solid_line.is_some()
-        });
+        let has_shape_paint =
+            paint.is_some_and(|paint| paint.solid_fill_rgb.is_some() || paint.solid_line.is_some());
         // A source-backed text content box may replace render-plan bounds only
         // for text-only projected carriers. Viewer keeps canonical carrier
         // geometry separately; projected carriers with paint/images stay on
