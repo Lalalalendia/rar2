@@ -5486,8 +5486,7 @@ mod mature_officeart_wmf_exact_product_tests {
             .nodes
             .values()
             .filter(|node| {
-                node.payload.image_slot.is_some()
-                    && graph_page_ids.contains(&node.header.parent_id)
+                node.payload.image_slot.is_some() && graph_page_ids.contains(&node.header.parent_id)
             })
             .count();
         let raw_assets = build_mature_0x2c_asset_export_bundle_from_bytes(&before, &source.graph)
