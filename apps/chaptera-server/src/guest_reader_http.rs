@@ -2129,6 +2129,13 @@ mod tests {
                 .unwrap();
         assert_eq!(principal_count, 1);
         assert_eq!(identity_count, 0);
+        let route_column_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('reader_guest_sessions') WHERE name='editable_routes_json'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(route_column_count, 1);
 
         pool.close().await;
         let _ = fs::remove_file(path);
@@ -2189,6 +2196,88 @@ mod tests {
         assert_eq!(opened.object_etag.as_deref(), Some("etag-1"));
         assert_eq!(opened.observed_byte_len, Some(1024));
         assert_eq!(opened.quarantine_deleted_at_ms, None);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn editable_routes_survive_session_persistence_and_repeat_response() {
+        let path = migrated_path("editable-routes").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let session = session(1_000);
+        store.insert(&session).await.unwrap();
+        store
+            .mark_stored(&session.session_id, 1024, "generation-1", "etag-1", 1_001)
+            .await
+            .unwrap();
+        store.claim_open(&session.session_id, 1_002).await.unwrap();
+
+        let source_sha256 = "a".repeat(64);
+        let scene = serde_json::json!({
+            "protocol_version": "chaptera.reader-scene.v1",
+            "source_hash": source_sha256,
+            "fidelity": {"state": "supported", "reasons": []},
+            "pages": [{"page_id": "p1"}],
+            "nodes": [],
+            "stories": []
+        });
+        let scene_json = serde_json::to_vec(&scene).unwrap();
+        let routes = ReaderEditableRoutesAssessmentV1 {
+            protocol_version:
+                crate::reader_compatibility_report::READER_EDITABLE_ROUTES_ASSESSMENT_V1
+                    .to_owned(),
+            source_sha256: "a".repeat(64),
+            idml: crate::reader_compatibility_report::ReaderEditableTargetAssessmentV1 {
+                state: "available_with_declared_losses".to_owned(),
+                reason_code: "serializable".to_owned(),
+                declared_loss_count: 1,
+                blocking_loss_count: 0,
+            },
+            odg: crate::reader_compatibility_report::ReaderEditableTargetAssessmentV1 {
+                state: "unavailable".to_owned(),
+                reason_code: "blocking_losses".to_owned(),
+                declared_loss_count: 2,
+                blocking_loss_count: 1,
+            },
+        };
+        let route_json = serde_json::to_vec(&routes).unwrap();
+
+        let opened = store
+            .finish_opened(
+                &session.session_id,
+                "supported",
+                &"a".repeat(64),
+                Some(&scene_json),
+                Some(&route_json),
+                None,
+                None,
+                1_003,
+            )
+            .await
+            .unwrap();
+
+        let response = open_response_from_stored(&opened).unwrap().0;
+        let report = response.compatibility_report.unwrap();
+        assert_eq!(
+            report.output_routes.editable_idml,
+            "available_with_declared_losses"
+        );
+        assert_eq!(report.output_routes.editable_odg, "unavailable");
+        assert!(
+            report
+                .limitations
+                .iter()
+                .any(|item| item.code == "idml_editable_export_declared_losses")
+        );
+        assert!(
+            report
+                .limitations
+                .iter()
+                .any(|item| item.code == "odg_editable_export_blocked")
+        );
 
         store.close().await;
         let _ = fs::remove_file(path);
