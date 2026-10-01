@@ -1349,6 +1349,21 @@ mod tests {
         }
     }
 
+    fn effective_paint_authority_label(
+        authority: pub_reader::PubEffectivePaintAuthority,
+    ) -> &'static str {
+        match authority {
+            pub_reader::PubEffectivePaintAuthority::ShapeLocal => "shape_local",
+            pub_reader::PubEffectivePaintAuthority::DrawingGroupPrimary => {
+                "drawing_group_primary"
+            }
+            pub_reader::PubEffectivePaintAuthority::DrawingGroupTertiary => {
+                "drawing_group_tertiary"
+            }
+            pub_reader::PubEffectivePaintAuthority::NormativeDefault => "normative_default",
+        }
+    }
+
     fn classify_probe_image_inline_admission(
         mime: &str,
         byte_len: usize,
@@ -1397,6 +1412,23 @@ mod tests {
         let mut source_effective_line_complete_hidden = 0_usize;
         let mut source_effective_line_incomplete = 0_usize;
         let mut source_effective_line_presence = [0_usize; 8];
+        let mut source_effective_fill_any = 0_usize;
+        let mut source_effective_fill_solid = 0_usize;
+        let mut source_effective_fill_color = 0_usize;
+        let mut source_effective_fill_visible = 0_usize;
+        let mut source_effective_fill_complete_visible = 0_usize;
+        let mut source_effective_fill_complete_hidden = 0_usize;
+        let mut source_effective_fill_non_solid = 0_usize;
+        let mut source_effective_fill_incomplete = 0_usize;
+        let mut source_effective_fill_incomplete_presence = [0_usize; 8];
+        let mut source_effective_fill_missing_components = BTreeMap::<&'static str, usize>::new();
+        let mut source_effective_fill_solid_authorities = BTreeMap::<&'static str, usize>::new();
+        let mut source_effective_fill_color_authorities = BTreeMap::<&'static str, usize>::new();
+        let mut source_effective_fill_visible_authorities = BTreeMap::<&'static str, usize>::new();
+        let mut source_effective_fill_incomplete_shape_types = BTreeMap::<String, usize>::new();
+        let mut source_effective_fill_incomplete_node_kinds = BTreeMap::<String, usize>::new();
+        let mut source_explicit_fill_color_effective_missing = 0_usize;
+        let mut source_explicit_fill_visible_effective_missing = 0_usize;
         for node in bundle.resolved_graph.nodes.values() {
             let explicit = &node.payload.explicit_paint.line;
             let explicit_any = explicit.color_rgb.is_some()
@@ -1407,10 +1439,82 @@ mod tests {
             source_explicit_line_width += usize::from(explicit.width_emu.is_some());
             source_explicit_line_visible += usize::from(explicit.visible.is_some());
 
+            let explicit_fill = &node.payload.explicit_paint.fill;
             let Some(effective) = node.payload.effective_paint.as_ref() else {
                 source_explicit_line_any_effective_none += usize::from(explicit_any);
                 continue;
             };
+
+            let fill = &effective.fill;
+            let fill_presence = (usize::from(fill.solid.is_some()) << 2)
+                | (usize::from(fill.color_rgb.is_some()) << 1)
+                | usize::from(fill.visible.is_some());
+            if fill_presence != 0 {
+                source_effective_fill_any += 1;
+            }
+            source_effective_fill_solid += usize::from(fill.solid.is_some());
+            source_effective_fill_color += usize::from(fill.color_rgb.is_some());
+            source_effective_fill_visible += usize::from(fill.visible.is_some());
+            source_explicit_fill_color_effective_missing +=
+                usize::from(explicit_fill.color_rgb.is_some() && fill.color_rgb.is_none());
+            source_explicit_fill_visible_effective_missing +=
+                usize::from(explicit_fill.visible.is_some() && fill.visible.is_none());
+
+            let mut fill_complete = false;
+            match (
+                fill.solid.as_ref(),
+                fill.color_rgb.as_ref(),
+                fill.visible.as_ref(),
+            ) {
+                (Some(solid), Some(_), Some(visible)) if solid.value && visible.value => {
+                    source_effective_fill_complete_visible += 1;
+                    fill_complete = true;
+                }
+                (Some(solid), Some(_), Some(visible)) if solid.value && !visible.value => {
+                    source_effective_fill_complete_hidden += 1;
+                    fill_complete = true;
+                }
+                (Some(solid), _, _) if !solid.value => {
+                    source_effective_fill_non_solid += 1;
+                }
+                _ => {}
+            }
+
+            if fill_presence != 0 && !fill_complete {
+                source_effective_fill_incomplete += 1;
+                source_effective_fill_incomplete_presence[fill_presence] += 1;
+                if fill.solid.is_none() {
+                    *source_effective_fill_missing_components.entry("solid").or_default() += 1;
+                }
+                if fill.color_rgb.is_none() {
+                    *source_effective_fill_missing_components.entry("color_rgb").or_default() += 1;
+                }
+                if fill.visible.is_none() {
+                    *source_effective_fill_missing_components.entry("visible").or_default() += 1;
+                }
+                if let Some(value) = fill.solid.as_ref() {
+                    *source_effective_fill_solid_authorities
+                        .entry(effective_paint_authority_label(value.authority))
+                        .or_default() += 1;
+                }
+                if let Some(value) = fill.color_rgb.as_ref() {
+                    *source_effective_fill_color_authorities
+                        .entry(effective_paint_authority_label(value.authority))
+                        .or_default() += 1;
+                }
+                if let Some(value) = fill.visible.as_ref() {
+                    *source_effective_fill_visible_authorities
+                        .entry(effective_paint_authority_label(value.authority))
+                        .or_default() += 1;
+                }
+                *source_effective_fill_incomplete_shape_types
+                    .entry(format!("{:?}", node.payload.officeart_shape_type))
+                    .or_default() += 1;
+                *source_effective_fill_incomplete_node_kinds
+                    .entry(format!("{:?}", node.kind))
+                    .or_default() += 1;
+            }
+
             let line = &effective.line;
             source_explicit_color_effective_missing +=
                 usize::from(explicit.color_rgb.is_some() && line.color_rgb.is_none());
@@ -1443,6 +1547,12 @@ mod tests {
             }
         }
 
+        let viewer_fill_paints = bundle
+            .geometry
+            .paints
+            .iter()
+            .filter(|paint| paint.solid_fill_rgb.is_some())
+            .count();
         let viewer_line_paints = bundle
             .geometry
             .paints
@@ -1491,6 +1601,34 @@ mod tests {
                     .flat_map(|table| &table.cells)
                     .filter(|cell| cell.bounds.is_some())
                     .count();
+                let scene_fill_nodes = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        node.paint
+                            .as_ref()
+                            .and_then(|paint| paint.fill_rgb.as_ref())
+                            .is_some()
+                    })
+                    .count();
+                let page_fill_nodes = scene
+                    .pages
+                    .iter()
+                    .map(|page| {
+                        scene
+                            .nodes
+                            .iter()
+                            .filter(|node| {
+                                node.page_id == page.page_id
+                                    && node
+                                        .paint
+                                        .as_ref()
+                                        .and_then(|paint| paint.fill_rgb.as_ref())
+                                        .is_some()
+                            })
+                            .count()
+                    })
+                    .collect::<Vec<_>>();
                 let scene_line_nodes = scene
                     .nodes
                     .iter()
@@ -1673,6 +1811,29 @@ mod tests {
                 let hypothetical_scene_margin_bytes =
                     GUEST_SCENE_BYTE_CAP.saturating_sub(hypothetical_scene_json_bytes);
 
+                println!(
+                    "CLOUD_READER_FILL_AUTHORITY_PROBE source_effective_fill_any={} source_effective_fill_solid={} source_effective_fill_color={} source_effective_fill_visible={} source_effective_fill_complete_visible={} source_effective_fill_complete_hidden={} source_effective_fill_non_solid={} source_effective_fill_incomplete={} source_effective_fill_incomplete_presence={:?} source_effective_fill_missing_components={:?} source_effective_fill_solid_authorities={:?} source_effective_fill_color_authorities={:?} source_effective_fill_visible_authorities={:?} source_effective_fill_incomplete_shape_types={:?} source_effective_fill_incomplete_node_kinds={:?} source_explicit_fill_color_effective_missing={} source_explicit_fill_visible_effective_missing={} viewer_fill_paints={} scene_fill_nodes={} page_fill_nodes={:?}",
+                    source_effective_fill_any,
+                    source_effective_fill_solid,
+                    source_effective_fill_color,
+                    source_effective_fill_visible,
+                    source_effective_fill_complete_visible,
+                    source_effective_fill_complete_hidden,
+                    source_effective_fill_non_solid,
+                    source_effective_fill_incomplete,
+                    source_effective_fill_incomplete_presence,
+                    source_effective_fill_missing_components,
+                    source_effective_fill_solid_authorities,
+                    source_effective_fill_color_authorities,
+                    source_effective_fill_visible_authorities,
+                    source_effective_fill_incomplete_shape_types,
+                    source_effective_fill_incomplete_node_kinds,
+                    source_explicit_fill_color_effective_missing,
+                    source_explicit_fill_visible_effective_missing,
+                    viewer_fill_paints,
+                    scene_fill_nodes,
+                    page_fill_nodes,
+                );
                 println!(
                     "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} inline_resource_count={} inline_raw_bytes={} inline_data_url_bytes={} descriptor_only_resource_count={} descriptor_only_mime_counts={:?} descriptor_only_reason_counts={:?} descriptor_only_total_bytes={} descriptor_only_visible_node_refs={} scene_json_bytes={} guest_scene_cap_bytes={} current_scene_margin_bytes={} hypothetical_budget_exhausted_inline_scene_json_bytes={} hypothetical_scene_margin_bytes={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
                     scene.fidelity.state,
