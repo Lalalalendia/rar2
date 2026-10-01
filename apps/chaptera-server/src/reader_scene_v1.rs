@@ -1127,9 +1127,11 @@ mod tests {
         env, fs,
     };
 
+    use chaptera_cdm_model::Sha256Digest;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
     };
+    use pub_reader::analyze_mature_0x2c_text_size_authority;
     use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
     use sha2::{Digest, Sha256};
 
@@ -1192,6 +1194,9 @@ mod tests {
             actual_sha256, expected_sha256,
             "probe source identity drift"
         );
+        let source_hash: Sha256Digest = expected_sha256
+            .parse()
+            .expect("probe source SHA-256 must be canonical lowercase hex");
 
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
@@ -1577,6 +1582,7 @@ mod tests {
         let mut projected_text_bounds_nodes = 0_usize;
         let mut projected_uniform_insets_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
+        let mut projected_zero_typography_size_authority = Vec::new();
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
@@ -1593,6 +1599,21 @@ mod tests {
                 if projected {
                     projected_text_nodes += 1;
                     projected_typography_runs += text.typography.len();
+                    if text.typography.is_empty()
+                        && actual_sha256
+                            == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+                    {
+                        projected_zero_typography_size_authority.push(
+                            analyze_mature_0x2c_text_size_authority(
+                                std::io::Cursor::new(bytes.as_slice()),
+                                source_hash,
+                                text.story_id,
+                                text.scalar_start,
+                                text.scalar_end,
+                            )
+                            .expect("exact Carlton zero-typography size authority must diagnose"),
+                        );
+                    }
                     if let Some(text_bounds) = node.text_bounds {
                         projected_text_bounds_nodes += 1;
                         let left = text_bounds.x.get() - node.bounds.x.get();
@@ -1706,6 +1727,9 @@ mod tests {
             .expect("serialize projected line heights");
         let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
             .expect("serialize projected uniform text insets");
+        let projected_zero_typography_size_authority_json =
+            serde_json::to_string(&projected_zero_typography_size_authority)
+                .expect("serialize projected zero-typography size authority");
 
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
@@ -1730,6 +1754,11 @@ mod tests {
                     projected_line_total, 31,
                     "exact Carlton projected source-backed line count drift"
                 );
+                assert_eq!(
+                    projected_zero_typography_size_authority.len(),
+                    1,
+                    "exact Carlton must retain one projected zero-typography size discriminator"
+                );
             }
             "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
                 assert_eq!(
@@ -1749,7 +1778,7 @@ mod tests {
         }
 
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={} projected_zero_typography_size_authority={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1773,6 +1802,7 @@ mod tests {
             projected_text_bounds_nodes,
             projected_uniform_insets_json,
             projected_measured_width_total_emu,
+            projected_zero_typography_size_authority_json,
         );
     }
 
