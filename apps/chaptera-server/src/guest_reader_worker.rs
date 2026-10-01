@@ -1083,6 +1083,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worker_receipt_accepts_source_bound_editable_routes() {
+        let source_sha256 = "a".repeat(64);
+        let receipt = GuestSceneWorkerReceiptV1 {
+            protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
+            session_id: "guest:0123456789abcdef".to_owned(),
+            source_sha256: source_sha256.clone(),
+            source_byte_len: 1,
+            classification: "supported".to_owned(),
+            terminal_code: None,
+            scene: Some(serde_json::json!({
+                "protocol_version":"chaptera.reader-scene.v1",
+                "source_hash":source_sha256
+            })),
+            salvage: None,
+            editable_routes: Some(ReaderEditableRoutesAssessmentV1 {
+                protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+                source_sha256: "a".repeat(64),
+                idml: ReaderEditableTargetAssessmentV1 {
+                    state: "available_with_declared_losses".to_owned(),
+                    reason_code: "serializable".to_owned(),
+                    declared_loss_count: 1,
+                    blocking_loss_count: 0,
+                },
+                odg: ReaderEditableTargetAssessmentV1 {
+                    state: "unavailable".to_owned(),
+                    reason_code: "blocking_losses".to_owned(),
+                    declared_loss_count: 2,
+                    blocking_loss_count: 1,
+                },
+            }),
+            failure_classification: None,
+            filesystem_confinement: true,
+        };
+
+        validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1)
+            .expect("source-bound editable routes should cross worker boundary");
+    }
+
+    #[test]
     fn worker_receipt_accepts_source_neutral_salvage_observation() {
         let receipt = GuestSceneWorkerReceiptV1 {
             protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
