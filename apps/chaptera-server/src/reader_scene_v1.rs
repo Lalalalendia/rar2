@@ -631,24 +631,13 @@ pub fn from_viewer_geometry_with_font_probe(
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
     let mut probe_font_used = false;
-    let projected_story_authority_ids = geometry
-        .projected_instances
-        .iter()
-        .filter_map(|projected| projected.scene_instance.story_authority_id.clone())
-        .collect::<HashSet<_>>();
     for page_index in 0..geometry.document.pages.len() {
         let plan = match font_probe {
             Some(probe) => build_page_render_plan_with_text_layout_resolver_v1(
                 geometry,
                 page_index,
                 &fallback_font,
-                |fragment| {
-                    let story_id = serialized_string(&fragment.story_id, "probe story id").ok()?;
-                    projected_story_authority_ids
-                        .contains(&story_id)
-                        .then(|| probe.resource_for_fragment(fragment))
-                        .flatten()
-                },
+                |fragment| probe.resource_for_fragment(fragment),
             ),
             None => {
                 build_page_render_plan_with_text_layout_v1(geometry, page_index, &fallback_font)
