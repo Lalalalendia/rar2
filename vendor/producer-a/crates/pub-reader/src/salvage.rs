@@ -219,7 +219,11 @@ pub fn build_reader_partial_source_graph(
                 for story in catalog.stories {
                     let mut units = Vec::with_capacity(story.utf16le.len() / 2);
                     let mut chunks = story.utf16le.chunks_exact(2);
-                    units.extend(chunks.by_ref().map(|pair| u16::from_le_bytes([pair[0], pair[1]])));
+                    units.extend(
+                        chunks
+                            .by_ref()
+                            .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
+                    );
                     if !chunks.remainder().is_empty() {
                         gaps.push(ReaderPartialSourceGap::TextSemanticAmbiguity);
                         continue;
@@ -615,10 +619,25 @@ mod tests {
 
         assert_eq!(graph.schema_version, READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1);
         assert_eq!(graph.source_sha256, source_sha256(&bytes));
-        assert!(graph.facts.is_empty(), "fixture has no Quill text or grounded graphics");
-        assert!(graph.gaps.contains(&ReaderPartialSourceGap::TextUnavailable));
-        assert!(graph.gaps.contains(&ReaderPartialSourceGap::ImageFactsUnavailable));
-        assert!(graph.gaps.contains(&ReaderPartialSourceGap::GeometryFactsUnavailable));
+        assert!(
+            graph.facts.is_empty(),
+            "fixture has no Quill text or grounded graphics"
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::TextUnavailable)
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::ImageFactsUnavailable)
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::GeometryFactsUnavailable)
+        );
 
         let mut changed = bytes.clone();
         changed.push(0);
