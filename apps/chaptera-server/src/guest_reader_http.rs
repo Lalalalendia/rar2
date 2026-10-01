@@ -829,12 +829,9 @@ async fn open_session(
                 .sessions
                 .reset_open(&opening.session_id, now_ms)
                 .await?;
-            state.observability.record(
-                "reader.open",
-                trace.as_ref(),
-                "error",
-                started.elapsed(),
-            );
+            state
+                .observability
+                .record("reader.open", trace.as_ref(), "error", started.elapsed());
             return Err(map_scene_worker_error(error));
         }
     };
