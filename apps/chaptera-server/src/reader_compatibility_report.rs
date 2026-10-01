@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const READER_COMPATIBILITY_REPORT_V1: &str = "chaptera.reader-compatibility-report.v1";
@@ -56,13 +56,65 @@ pub struct ReaderCompatibilityOutputRoutesV1 {
     pub editable_odg: &'static str,
 }
 
+pub const READER_EDITABLE_ROUTES_ASSESSMENT_V1: &str =
+    "chaptera.reader-editable-routes.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReaderEditableRoutesAssessmentV1 {
+    pub protocol_version: String,
+    pub source_sha256: String,
+    pub idml: ReaderEditableTargetAssessmentV1,
+    pub odg: ReaderEditableTargetAssessmentV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReaderEditableTargetAssessmentV1 {
+    pub state: String,
+    pub reason_code: String,
+}
+
+impl ReaderEditableRoutesAssessmentV1 {
+    pub fn validate_for_source(&self, source_sha256: &str) -> Result<(), String> {
+        validate_source_sha256(source_sha256)?;
+        if self.protocol_version != READER_EDITABLE_ROUTES_ASSESSMENT_V1
+            || self.source_sha256 != source_sha256
+        {
+            return Err("editable route assessment identity differs from compatibility source".to_owned());
+        }
+        validate_target_assessment(&self.idml)?;
+        validate_target_assessment(&self.odg)?;
+        Ok(())
+    }
+}
+
 pub fn build_reader_compatibility_report(
     source_sha256: &str,
     classification: &str,
     scene: Option<&Value>,
     salvage: Option<&Value>,
 ) -> Result<ReaderCompatibilityReportV1, String> {
+    build_reader_compatibility_report_with_routes(
+        source_sha256,
+        classification,
+        scene,
+        salvage,
+        None,
+    )
+}
+
+pub fn build_reader_compatibility_report_with_routes(
+    source_sha256: &str,
+    classification: &str,
+    scene: Option<&Value>,
+    salvage: Option<&Value>,
+    editable_routes: Option<&ReaderEditableRoutesAssessmentV1>,
+) -> Result<ReaderCompatibilityReportV1, String> {
     validate_source_sha256(source_sha256)?;
+    if let Some(routes) = editable_routes {
+        routes.validate_for_source(source_sha256)?;
+    }
 
     let (state, content_summary, mut limitations, output_routes, recommended_next_step) =
         match classification {
@@ -84,6 +136,7 @@ pub fn build_reader_compatibility_report(
                         message: "The preview has known limitations and should be reviewed before migration.",
                     });
                 }
+                append_editable_route_limitations(&mut limitations, editable_routes);
                 (
                     if classification == "supported" {
                         "opens_normally"
@@ -99,8 +152,8 @@ pub fn build_reader_compatibility_report(
                             "available_with_limitations"
                         },
                         salvage_recovery: "not_applicable",
-                        editable_idml: "not_verified",
-                        editable_odg: "not_verified",
+                        editable_idml: editable_route_state(editable_routes.map(|routes| &routes.idml))?,
+                        editable_odg: editable_route_state(editable_routes.map(|routes| &routes.odg))?,
                     },
                     if classification == "supported" {
                         "migration_pilot_preview"
@@ -110,6 +163,9 @@ pub fn build_reader_compatibility_report(
                 )
             }
             "salvage" => {
+                if editable_routes.is_some() {
+                    return Err("salvage compatibility report cannot carry editable route assessment".to_owned());
+                }
                 if scene.is_some() {
                     return Err("salvage compatibility report cannot carry Reader Scene".to_owned());
                 }
@@ -131,6 +187,9 @@ pub fn build_reader_compatibility_report(
                 )
             }
             "unsupported" => {
+                if editable_routes.is_some() {
+                    return Err("unsupported compatibility report cannot carry editable route assessment".to_owned());
+                }
                 if scene.is_some() || salvage.is_some() {
                     return Err(
                         "unsupported compatibility report cannot carry document payload".to_owned(),
@@ -172,6 +231,85 @@ pub fn build_reader_compatibility_report(
         output_routes,
         recommended_next_step,
     })
+}
+
+fn validate_target_assessment(value: &ReaderEditableTargetAssessmentV1) -> Result<(), String> {
+    let valid = matches!(
+        (value.state.as_str(), value.reason_code.as_str()),
+        ("available_with_declared_losses", "serializable")
+            | ("unavailable", "blocking_losses")
+            | ("unavailable", "editor_profile_unavailable")
+            | ("not_verified", "assessment_failed")
+            | ("not_verified", "source_identity_mismatch")
+    );
+    if !valid {
+        return Err("editable route assessment state/reason pair is invalid".to_owned());
+    }
+    Ok(())
+}
+
+fn editable_route_state(
+    value: Option<&ReaderEditableTargetAssessmentV1>,
+) -> Result<&'static str, String> {
+    let Some(value) = value else {
+        return Ok("not_verified");
+    };
+    match value.state.as_str() {
+        "available_with_declared_losses" => Ok("available_with_declared_losses"),
+        "unavailable" => Ok("unavailable"),
+        "not_verified" => Ok("not_verified"),
+        _ => Err("editable route assessment state is invalid".to_owned()),
+    }
+}
+
+fn append_editable_route_limitations(
+    limitations: &mut Vec<ReaderCompatibilityLimitationV1>,
+    routes: Option<&ReaderEditableRoutesAssessmentV1>,
+) {
+    let Some(routes) = routes else {
+        return;
+    };
+    append_target_route_limitation(limitations, "idml", &routes.idml);
+    append_target_route_limitation(limitations, "odg", &routes.odg);
+}
+
+fn append_target_route_limitation(
+    limitations: &mut Vec<ReaderCompatibilityLimitationV1>,
+    target: &'static str,
+    assessment: &ReaderEditableTargetAssessmentV1,
+) {
+    let item = match (target, assessment.state.as_str(), assessment.reason_code.as_str()) {
+        ("idml", "unavailable", "blocking_losses") => Some(ReaderCompatibilityLimitationV1 {
+            code: "idml_editable_export_blocked",
+            message: "IDML editable export is blocked because required document semantics would be lost.",
+        }),
+        ("odg", "unavailable", "blocking_losses") => Some(ReaderCompatibilityLimitationV1 {
+            code: "odg_editable_export_blocked",
+            message: "ODG editable export is blocked because required document semantics would be lost.",
+        }),
+        ("idml", "unavailable", "editor_profile_unavailable") => Some(ReaderCompatibilityLimitationV1 {
+            code: "idml_editable_export_unavailable",
+            message: "IDML editable export is not available for this Publisher profile.",
+        }),
+        ("odg", "unavailable", "editor_profile_unavailable") => Some(ReaderCompatibilityLimitationV1 {
+            code: "odg_editable_export_unavailable",
+            message: "ODG editable export is not available for this Publisher profile.",
+        }),
+        ("idml", "not_verified", _) => Some(ReaderCompatibilityLimitationV1 {
+            code: "idml_editable_export_not_verified",
+            message: "IDML editable export could not be verified for this file.",
+        }),
+        ("odg", "not_verified", _) => Some(ReaderCompatibilityLimitationV1 {
+            code: "odg_editable_export_not_verified",
+            message: "ODG editable export could not be verified for this file.",
+        }),
+        _ => None,
+    };
+    if let Some(item) = item {
+        if !limitations.iter().any(|existing| existing.code == item.code) {
+            limitations.push(item);
+        }
+    }
 }
 
 fn validate_source_sha256(value: &str) -> Result<(), String> {
