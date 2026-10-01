@@ -402,6 +402,7 @@ fn paint_shared_resolved_text(
     for (expected_index, line) in lines.iter().enumerate() {
         if usize::try_from(line.line_index).ok() != Some(expected_index)
             || line.line_height_emu != line_height_emu
+            || line.x_offset_emu < 0
         {
             return None;
         }
@@ -409,9 +410,10 @@ fn paint_shared_resolved_text(
         let job = shared_resolved_line_job(&line.text, font_id.clone());
         let galley = painter.layout_job(job);
         max_width_px = max_width_px.max(galley.size().x);
+        let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
         painter.galley(
-            egui::pos2(clip_rect.left(), y),
+            egui::pos2(x, y),
             galley,
             egui::Color32::BLACK,
         );
