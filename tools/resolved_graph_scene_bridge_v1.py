@@ -537,6 +537,38 @@ def scene_snapshot_id(scene: dict[str, Any]) -> str:
     return hash_id(scene)
 
 
+def _first_scene_difference(left: Any, right: Any, path: str = "$") -> str:
+    if type(left) is not type(right):
+        return f"{path}: type {type(left).__name__} != {type(right).__name__}"
+    if isinstance(left, dict):
+        left_keys = set(left)
+        right_keys = set(right)
+        if left_keys != right_keys:
+            missing = sorted(left_keys - right_keys)
+            extra = sorted(right_keys - left_keys)
+            return f"{path}: keys missing_in_adapter={missing} extra_in_adapter={extra}"
+        for key in sorted(left):
+            diff = _first_scene_difference(left[key], right[key], f"{path}.{key}")
+            if diff:
+                return diff
+        return ""
+    if isinstance(left, list):
+        if len(left) != len(right):
+            return f"{path}: length {len(left)} != {len(right)}"
+        for index, (left_item, right_item) in enumerate(zip(left, right)):
+            diff = _first_scene_difference(
+                left_item,
+                right_item,
+                f"{path}[{index}]",
+            )
+            if diff:
+                return diff
+        return ""
+    if left != right:
+        return f"{path}: value mismatch"
+    return ""
+
+
 def compare_viewer_and_adapter_scene(
     viewer_geometry: dict[str, Any],
     adapter_scene: dict[str, Any],
@@ -552,8 +584,10 @@ def compare_viewer_and_adapter_scene(
     # Baseline acceptance therefore requires exact source-neutral Scene equality,
     # not merely count/target-node parity.
     if viewer_scene != adapter_scene:
+        difference = _first_scene_difference(viewer_scene, adapter_scene)
         raise ResolvedGraphSceneError(
-            "real Viewer Scene differs from reusable resolved-graph adapter Scene"
+            "real Viewer Scene differs from reusable resolved-graph adapter Scene: "
+            + difference
         )
 
     return {
