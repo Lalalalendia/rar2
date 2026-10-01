@@ -17,6 +17,8 @@ until semantics are implemented.
 
 from __future__ import annotations
 
+# CI-only current-main baseline trigger; no semantic change.
+
 import copy
 import hashlib
 import json
