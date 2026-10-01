@@ -6,6 +6,10 @@
 
 #[cfg(feature = "projected-scene-instances")]
 use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1};
+use pub_line_placement::{
+    LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
+    ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
+};
 use pub_layout::{
     BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedShapedFlowRuntime,
     BoundedShapingRuntime, ProjectedNodeGeometry, ProjectedPage, ProjectedStory,
@@ -19,12 +23,18 @@ use pub_model::{
 };
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
-use pub_viewer::{ViewerGeometryDocument, ViewerScriptFontEntryDisposition};
+use pub_viewer::{
+    ViewerGeometryDocument, ViewerParagraphAlignment, ViewerScriptFontEntryDisposition,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const PAGE_RENDER_PLAN_SCHEMA_V1: &str = "chaptera.page-render-plan.v1";
 pub const SHARED_TEXT_LAYOUT_REVISION_V1: &str = "chaptera.viewer.shared-text-layout.v1";
+
+fn is_zero_i64(value: &i64) -> bool {
+    *value == 0
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageRenderPlanV1 {
@@ -123,10 +133,29 @@ pub struct RenderTextFragmentV1 {
     pub line_count: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography: Vec<RenderTypographyRunV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_alignments: Vec<RenderParagraphAlignmentRunV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_font_resource_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<RenderTextLayoutV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderParagraphAlignmentV1 {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderParagraphAlignmentRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub alignment: RenderParagraphAlignmentV1,
+    pub source_value: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -389,6 +418,8 @@ pub struct RenderResolvedTextLineV1 {
     pub text: String,
     pub measured_width_emu: i64,
     pub line_height_emu: i64,
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub x_offset_emu: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<RenderResolvedTextSpanV1>,
 }
@@ -509,6 +540,36 @@ fn parse_story_id(value: &str, field: &'static str) -> Result<StoryId, RenderPla
         })
 }
 
+fn render_paragraph_alignment_runs_v1(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    story_text: &str,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Vec<RenderParagraphAlignmentRunV1> {
+    visual
+        .paragraph_alignments
+        .iter()
+        .filter(|run| run.story_id == story_id)
+        .filter(|run| run.applies_to_story_text(story_text))
+        .filter_map(|run| {
+            let start = run.scalar_start.max(scalar_start);
+            let end = run.scalar_end.min(scalar_end);
+            (start < end).then(|| RenderParagraphAlignmentRunV1 {
+                scalar_start: start,
+                scalar_end: end,
+                alignment: match run.alignment {
+                    ViewerParagraphAlignment::Center => RenderParagraphAlignmentV1::Center,
+                    ViewerParagraphAlignment::Right => RenderParagraphAlignmentV1::Right,
+                    ViewerParagraphAlignment::InterWord => RenderParagraphAlignmentV1::InterWord,
+                    ViewerParagraphAlignment::Distribute => RenderParagraphAlignmentV1::Distribute,
+                },
+                source_value: run.source_value,
+            })
+        })
+        .collect()
+}
+
 #[cfg(feature = "projected-scene-instances")]
 fn projected_text(
     visual: &ViewerGeometryDocument,
@@ -552,6 +613,13 @@ fn projected_text(
         text: story.text.clone(),
         line_count: 0,
         typography,
+        paragraph_alignments: render_paragraph_alignment_runs_v1(
+            visual,
+            story_id,
+            &story.text,
+            0,
+            scalar_end,
+        ),
         backend_font_resource_id: None,
         layout: None,
     }))
@@ -618,6 +686,21 @@ pub fn build_page_render_plan_v1(
                             })
                         })
                         .collect(),
+                    paragraph_alignments: visual
+                        .document
+                        .stories
+                        .iter()
+                        .find(|story| story.id == fragment.story_id)
+                        .map(|story| {
+                            render_paragraph_alignment_runs_v1(
+                                visual,
+                                fragment.story_id,
+                                &story.text,
+                                fragment.scalar_start,
+                                fragment.scalar_end,
+                            )
+                        })
+                        .unwrap_or_default(),
                     backend_font_resource_id: None,
                     layout: None,
                 });
@@ -860,6 +943,66 @@ where
     Ok(plan)
 }
 
+fn resolved_line_x_offset_emu_v1(
+    fragment: &RenderTextFragmentV1,
+    node_id: NodeId,
+    bounds: &RectEmu,
+    line_index: u32,
+    scalar_start: u32,
+    scalar_end: u32,
+    measured_width_emu: i64,
+    layout_environment_fingerprint: &str,
+) -> i64 {
+    let mut matching = fragment.paragraph_alignments.iter().filter(|run| {
+        run.scalar_start <= scalar_start && run.scalar_end >= scalar_end && scalar_start < scalar_end
+    });
+    let Some(run) = matching.next() else {
+        return 0;
+    };
+    if matching.next().is_some() {
+        return 0;
+    }
+    let alignment = match run.alignment {
+        RenderParagraphAlignmentV1::Center => ParagraphAlignmentV1::Center,
+        RenderParagraphAlignmentV1::Right => ParagraphAlignmentV1::Right,
+        RenderParagraphAlignmentV1::InterWord | RenderParagraphAlignmentV1::Distribute => {
+            return 0;
+        }
+    };
+    let input = ParagraphLinePlacementInputV1 {
+        context: LayoutPlacementContextV1 {
+            authoring_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+            layout_environment_fingerprint: layout_environment_fingerprint.to_owned(),
+        },
+        alignment,
+        story_overset: false,
+        lines: vec![ResolvedLineInputV1 {
+            line_index: 0,
+            story_id: story_id_string(fragment.story_id),
+            frame_node_id: node_id_string(node_id),
+            frame_line_index: line_index,
+            scalar_start,
+            scalar_end,
+            content_leading_x_emu: 0,
+            content_width_emu: bounds.width.get(),
+            measured_width_emu,
+        }],
+    };
+    resolve_paragraph_line_placement_v1(&input)
+        .ok()
+        .and_then(|scene| scene.lines.into_iter().next())
+        .map(|line| line.line_origin_x_emu)
+        .unwrap_or(0)
+}
+
+fn story_id_string(id: StoryId) -> String {
+    format!("{:?}", id)
+}
+
+fn node_id_string(id: NodeId) -> String {
+    format!("{:?}", id)
+}
+
 fn fallback_layout(reason: RenderTextLayoutFallbackReasonV1) -> RenderTextLayoutV1 {
     RenderTextLayoutV1 {
         disposition: RenderTextLayoutDispositionV1::BackendFallback { reason },
@@ -994,7 +1137,13 @@ fn resolve_text_layout_v1(
         Err(RenderTextLayoutFallbackReasonV1::MixedTypographySize)
             if projected_target_frame_node_id.is_none() =>
         {
-            return resolve_mixed_size_text_layout_v1(fragment, font, &bounds, &fingerprint);
+            return resolve_mixed_size_text_layout_v1(
+                fragment,
+                font,
+                node_id,
+                &bounds,
+                &fingerprint,
+            );
         }
         Err(reason) => return fallback_layout(reason),
     };
@@ -1083,6 +1232,16 @@ fn resolve_text_layout_v1(
             text: line.text,
             measured_width_emu: line.measured_width.get(),
             line_height_emu,
+            x_offset_emu: resolved_line_x_offset_emu_v1(
+                fragment,
+                node_id,
+                &bounds,
+                line.frame_line_index,
+                line.scalar_start,
+                line.scalar_end,
+                line.measured_width.get(),
+                &fingerprint,
+            ),
             spans: Vec::new(),
         })
         .collect();
@@ -1256,6 +1415,7 @@ fn shape_mixed_line_candidate_v1(
 fn resolve_mixed_size_text_layout_v1(
     fragment: &RenderTextFragmentV1,
     font: &ExplicitRenderTextFontResourceV1<'_>,
+    node_id: NodeId,
     bounds: &RectEmu,
     fingerprint: &str,
 ) -> RenderTextLayoutV1 {
@@ -1350,6 +1510,16 @@ fn resolve_mixed_size_text_layout_v1(
             Some(value) => value,
             None => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
         };
+        let x_offset_emu = resolved_line_x_offset_emu_v1(
+            fragment,
+            node_id,
+            bounds,
+            line_index,
+            cursor,
+            chosen.scalar_end,
+            chosen.measured_width_emu,
+            fingerprint,
+        );
         lines.push(RenderResolvedTextLineV1 {
             line_index,
             scalar_start: cursor,
@@ -1358,6 +1528,7 @@ fn resolve_mixed_size_text_layout_v1(
             text: chosen.text,
             measured_width_emu: chosen.measured_width_emu,
             line_height_emu: chosen.line_height_emu,
+            x_offset_emu,
             spans: chosen.spans,
         });
         cursor = chosen.consumed_scalar_end;
@@ -1551,6 +1722,7 @@ mod tests {
             text: text.to_owned(),
             line_count: 1,
             typography,
+            paragraph_alignments: Vec::new(),
             backend_font_resource_id: None,
             layout: None,
         }
