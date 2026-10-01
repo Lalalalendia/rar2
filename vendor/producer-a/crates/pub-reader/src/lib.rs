@@ -280,10 +280,12 @@ pub struct PubSourcePagePaintOrderV1 {
 pub struct PubSourceGraphBuild {
     pub graph: PubSourceGraph,
     pub effective_pages: PubEffectivePageProjection,
-    /// Page-local back-to-front order for the bounded direct source-backed
-    /// object class whose persisted OfficeArt SpContainer order can be joined
-    /// unambiguously to canonical Nodes. Pages with incomplete/ambiguous
-    /// coverage are omitted rather than assigned an invented order.
+    /// Page-local back-to-front order for bounded source-backed paint
+    /// participants whose persisted OfficeArt SpContainer position can be
+    /// joined unambiguously to canonical Nodes. This includes direct page
+    /// objects and exact depth-1 grouped descendants at their proven top-level
+    /// GROUP carrier rank. Pages/classes with incomplete or ambiguous coverage
+    /// remain partial rather than receiving an invented order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_page_paint_orders: Vec<PubSourcePagePaintOrderV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3545,6 +3547,30 @@ fn index_escher_by_contents_seq(inventory: &SpContainerInventory) -> BTreeMap<u3
     index
 }
 
+type GroupedCarrierParticipant = (usize, NodeId);
+type GroupedCarrierMap = BTreeMap<u32, (PageId, Vec<GroupedCarrierParticipant>)>;
+
+fn append_grouped_carrier_participants(
+    seq_num: u32,
+    grouped_by_carrier: &GroupedCarrierMap,
+    seen_seq: &mut BTreeSet<u32>,
+    rejected: &mut BTreeSet<PageId>,
+    ordered: &mut BTreeMap<PageId, Vec<NodeId>>,
+) -> bool {
+    let Some((page_id, grouped_nodes)) = grouped_by_carrier.get(&seq_num) else {
+        return false;
+    };
+    if !seen_seq.insert(seq_num) {
+        rejected.insert(*page_id);
+        return true;
+    }
+    ordered
+        .entry(*page_id)
+        .or_default()
+        .extend(grouped_nodes.iter().map(|(_, node_id)| *node_id));
+    true
+}
+
 fn source_page_paint_orders_v1(
     source_hash: Sha256Digest,
     graph: &PubSourceGraph,
@@ -3552,7 +3578,17 @@ fn source_page_paint_orders_v1(
     page_seq_to_id: &BTreeMap<u32, PageId>,
     inventory: &SpContainerInventory,
 ) -> Vec<PubSourcePagePaintOrderV1> {
+    let escher_by_contents_seq = index_escher_by_contents_seq(inventory);
     let mut expected = BTreeMap::<PageId, BTreeSet<NodeId>>::new();
+
+    // Depth-1 grouped descendants are projected as page-owned canonical Nodes,
+    // but their persisted Contents parent remains the GROUP carrier. Admit that
+    // class into page paint order only when every participating descendant on
+    // the page has one exact child Escher shape, one exact top-level GROUP
+    // Escher carrier, and the OfficeArt parent-group source link agrees.
+    let mut grouped_pending = BTreeMap::<PageId, Vec<(u32, usize, NodeId)>>::new();
+    let mut grouped_invalid_pages = BTreeSet::<PageId>::new();
+
     for node in graph.nodes.values() {
         let seq_num = node.payload.contents_seq_num;
         let Some(reference) = references.get(&seq_num) else {
@@ -3561,12 +3597,82 @@ fn source_page_paint_orders_v1(
         let Some(parent_seq) = single_parent_seq(reference) else {
             continue;
         };
-        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
+
+        if let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() {
+            if node.header.parent_id == page_id.into_canonical() {
+                expected.entry(page_id).or_default().insert(node.header.id);
+            }
+            continue;
+        }
+
+        let Some(group_reference) = references.get(&parent_seq) else {
             continue;
         };
-        if node.header.parent_id == page_id.into_canonical() {
-            expected.entry(page_id).or_default().insert(node.header.id);
+        if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) {
+            continue;
         }
+        let Some(group_parent_seq) = single_parent_seq(group_reference) else {
+            continue;
+        };
+        let Some(page_id) = page_seq_to_id.get(&group_parent_seq).copied() else {
+            // Nested groups remain outside this first bounded stack-order slice.
+            continue;
+        };
+        if node.header.parent_id != page_id.into_canonical() {
+            continue;
+        }
+        // #632 proves the first carrier-rank class only for visible grouped
+        // Story and image descendants. Grouped TABLE/other classes remain
+        // outside this slice even when they happen to have exact ancestry.
+        if node.payload.story_frame.is_none() && node.payload.image_slot.is_none() {
+            continue;
+        }
+
+        let child_matches = escher_by_contents_seq
+            .get(&seq_num)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let group_matches = escher_by_contents_seq
+            .get(&parent_seq)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let ([child_index], [group_index]) = (child_matches, group_matches) else {
+            grouped_invalid_pages.insert(page_id);
+            continue;
+        };
+        let child_shape = &inventory.shapes[*child_index];
+        let group_shape = &inventory.shapes[*group_index];
+        if child_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
+            grouped_invalid_pages.insert(page_id);
+            continue;
+        }
+
+        grouped_pending.entry(page_id).or_default().push((
+            parent_seq,
+            *child_index,
+            node.header.id,
+        ));
+    }
+
+    let mut grouped_by_carrier = GroupedCarrierMap::new();
+    for (page_id, entries) in grouped_pending {
+        if grouped_invalid_pages.contains(&page_id) {
+            continue;
+        }
+        for (carrier_seq, child_index, node_id) in entries {
+            expected.entry(page_id).or_default().insert(node_id);
+            let entry = grouped_by_carrier
+                .entry(carrier_seq)
+                .or_insert_with(|| (page_id, Vec::new()));
+            if entry.0 != page_id {
+                grouped_invalid_pages.insert(page_id);
+                continue;
+            }
+            entry.1.push((child_index, node_id));
+        }
+    }
+    for (_, grouped) in grouped_by_carrier.values_mut() {
+        grouped.sort_by_key(|(child_index, _)| *child_index);
     }
 
     let mut ordered = BTreeMap::<PageId, Vec<NodeId>>::new();
@@ -3575,6 +3681,9 @@ fn source_page_paint_orders_v1(
 
     // inspect_sp_containers preserves serialized traversal order. Do not sort
     // SPIDs here: serialized page SpContainer order is the bounded authority.
+    // Exact depth-1 grouped descendants occupy the serialized position of their
+    // top-level GROUP carrier; their internal order remains the already-proven
+    // child SpContainer traversal order.
     for shape in &inventory.shapes {
         let Some(client_data) = shape.client_data.as_ref() else {
             continue;
@@ -3583,6 +3692,17 @@ fn source_page_paint_orders_v1(
             continue;
         };
         let seq_num = shape_id.value;
+
+        if append_grouped_carrier_participants(
+            seq_num,
+            &grouped_by_carrier,
+            &mut seen_seq,
+            &mut rejected,
+            &mut ordered,
+        ) {
+            continue;
+        }
+
         let Some(reference) = references.get(&seq_num) else {
             continue;
         };
@@ -4601,6 +4721,62 @@ fn add_missing_link_target_diagnostics(
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "requires CHAPTERA_SOURCE_STACK_FIXTURE and CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS"]
+    fn exact_public_source_stack_order_covers_materialized_grouped_nodes() {
+        let fixture = std::env::var_os("CHAPTERA_SOURCE_STACK_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_SOURCE_STACK_FIXTURE");
+        let expected = std::env::var("CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS")
+            .expect("CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS")
+            .split(',')
+            .map(|value| value.parse::<usize>().expect("page count"))
+            .collect::<Vec<_>>();
+        let bytes = std::fs::read(fixture).expect("read exact public PUB");
+        let source_hash: Sha256Digest = std::env::var("CHAPTERA_SOURCE_STACK_SHA256")
+            .expect("CHAPTERA_SOURCE_STACK_SHA256")
+            .parse()
+            .expect("valid source SHA-256");
+        let build = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
+            .expect("build mature source graph");
+
+        let page_ordinals = build
+            .graph
+            .document
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(ordinal, page_id)| (*page_id, ordinal))
+            .collect::<BTreeMap<_, _>>();
+        let mut actual = build
+            .source_page_paint_orders
+            .iter()
+            .filter_map(|order| {
+                page_ordinals
+                    .get(&order.page_id)
+                    .copied()
+                    .map(|ordinal| (ordinal, order.node_ids.len()))
+            })
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        let actual_counts = actual.iter().map(|(_, count)| *count).collect::<Vec<_>>();
+
+        assert_eq!(
+            actual_counts, expected,
+            "source stack order must cover all already-materialized page visuals in exact serialized OfficeArt order"
+        );
+        let unique = build
+            .source_page_paint_orders
+            .iter()
+            .flat_map(|order| order.node_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique.len(),
+            expected.iter().sum::<usize>(),
+            "one materialized node may occupy exactly one source stack slot"
+        );
+    }
+
     fn source_hash() -> Sha256Digest {
         "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
             .parse()
@@ -4731,6 +4907,57 @@ mod tests {
 
     fn test_page_id(seed: u8) -> PageId {
         PageId::from_canonical(CanonicalId::from_bytes([seed; 16]))
+    }
+
+    fn test_node_id(seed: u8) -> NodeId {
+        NodeId::from_canonical(CanonicalId::from_bytes([seed; 16]))
+    }
+
+    #[test]
+    fn grouped_carrier_participants_expand_at_one_source_order_slot_and_duplicate_fails_closed() {
+        let page_id = test_page_id(10);
+        let direct_before = test_node_id(11);
+        let grouped_first = test_node_id(12);
+        let grouped_second = test_node_id(13);
+        let carrier_seq = 300_u32;
+
+        let grouped_by_carrier = BTreeMap::from([(
+            carrier_seq,
+            (
+                page_id,
+                vec![(4_usize, grouped_first), (5_usize, grouped_second)],
+            ),
+        )]);
+        let mut seen_seq = BTreeSet::from([299_u32]);
+        let mut rejected = BTreeSet::new();
+        let mut ordered = BTreeMap::from([(page_id, vec![direct_before])]);
+
+        assert!(append_grouped_carrier_participants(
+            carrier_seq,
+            &grouped_by_carrier,
+            &mut seen_seq,
+            &mut rejected,
+            &mut ordered,
+        ));
+        assert_eq!(
+            ordered.get(&page_id),
+            Some(&vec![direct_before, grouped_first, grouped_second])
+        );
+        assert!(rejected.is_empty());
+
+        assert!(append_grouped_carrier_participants(
+            carrier_seq,
+            &grouped_by_carrier,
+            &mut seen_seq,
+            &mut rejected,
+            &mut ordered,
+        ));
+        assert!(rejected.contains(&page_id));
+        assert_eq!(
+            ordered.get(&page_id),
+            Some(&vec![direct_before, grouped_first, grouped_second]),
+            "duplicate carrier must not duplicate descendants"
+        );
     }
 
     #[test]
