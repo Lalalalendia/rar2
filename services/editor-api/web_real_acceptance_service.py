@@ -74,6 +74,67 @@ def sha256_path(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def _scene_node_identity(node: dict, label: str) -> tuple[str, str, str | None]:
+    if not isinstance(node, dict):
+        raise RuntimeError(f"{label} must be an object")
+    origin = node.get("origin")
+    parent_origin = node.get("parent_origin")
+    instance_id = node.get("instance_id")
+    if not isinstance(origin, str) or not isinstance(parent_origin, str):
+        raise RuntimeError(f"{label} identity is incomplete")
+    if instance_id is not None and not isinstance(instance_id, str):
+        raise RuntimeError(f"{label}.instance_id must be a string when present")
+    return origin, parent_origin, instance_id
+
+
+def align_adapter_scene_to_viewer_node_order(
+    viewer: dict,
+    adapter_scene: dict,
+) -> dict:
+    """Preserve Viewer-proven paint slots without borrowing Viewer geometry."""
+
+    viewer_scene = viewer.get("scene")
+    if not isinstance(viewer_scene, dict):
+        raise RuntimeError("Viewer receipt scene is required")
+    viewer_nodes = viewer_scene.get("nodes")
+    adapter_nodes = adapter_scene.get("nodes")
+    adapter_mapping = adapter_scene.get("origin_mapping")
+    if not isinstance(viewer_nodes, list) or not isinstance(adapter_nodes, list):
+        raise RuntimeError("Viewer/adapter Scene nodes must be arrays")
+    if not isinstance(adapter_mapping, list) or len(adapter_mapping) != len(adapter_nodes):
+        raise RuntimeError("adapter origin_mapping must align with Scene nodes")
+
+    adapter_by_identity: dict[tuple[str, str, str | None], tuple[dict, dict]] = {}
+    for index, (node, mapping) in enumerate(zip(adapter_nodes, adapter_mapping, strict=True)):
+        key = _scene_node_identity(node, f"adapter_scene.nodes[{index}]")
+        if key in adapter_by_identity:
+            raise RuntimeError("adapter Scene contains duplicate node identity")
+        if not isinstance(mapping, dict):
+            raise RuntimeError(f"adapter origin_mapping[{index}] must be an object")
+        adapter_by_identity[key] = (node, mapping)
+
+    viewer_order: list[tuple[str, str, str | None]] = []
+    viewer_seen: set[tuple[str, str, str | None]] = set()
+    for index, node in enumerate(viewer_nodes):
+        key = _scene_node_identity(node, f"viewer_scene.nodes[{index}]")
+        if key in viewer_seen:
+            raise RuntimeError("Viewer Scene contains duplicate node identity")
+        viewer_seen.add(key)
+        viewer_order.append(key)
+
+    if viewer_seen != set(adapter_by_identity):
+        raise RuntimeError("Viewer/adapter Scene node identity sets differ")
+
+    aligned = copy.deepcopy(adapter_scene)
+    aligned["nodes"] = [
+        copy.deepcopy(adapter_by_identity[key][0]) for key in viewer_order
+    ]
+    aligned["origin_mapping"] = [
+        copy.deepcopy(adapter_by_identity[key][1]) for key in viewer_order
+    ]
+    return aligned
+
+
 class RealAcceptanceState:
     def __init__(
         self,
@@ -183,6 +244,7 @@ class RealAcceptanceState:
             current_graph,
             page_ids=viewer_page_ids,
         )
+        source_scene = align_adapter_scene_to_viewer_node_order(viewer, source_scene)
         if require_viewer_equivalence:
             compare_viewer_and_adapter_scene(viewer, source_scene)
         current_viewer = copy.deepcopy(viewer)
