@@ -1379,7 +1379,8 @@ mod tests {
         let mut projected_typography_runs = 0_usize;
         let mut projected_complete_typography_nodes = 0_usize;
         let mut projected_single_family_nodes = 0_usize;
-        let mut projected_source_families = BTreeMap::<String, usize>::new();
+        let mut projected_source_family_fingerprints = BTreeMap::<String, usize>::new();
+        let mut projected_blank_source_family_runs = 0_usize;
         let mut projected_source_sizes_emu = BTreeMap::<u32, usize>::new();
         let mut projected_backend_resources = BTreeMap::<String, usize>::new();
         let mut projected_layout_resources = BTreeMap::<String, usize>::new();
@@ -1408,14 +1409,22 @@ mod tests {
                     let mut complete_coverage = !text.typography.is_empty();
                     let mut families = std::collections::BTreeSet::<String>::new();
                     for run in &text.typography {
+                        let normalized_family = run.source_font_name.trim().to_lowercase();
                         complete_coverage &= run.scalar_start == cursor
-                            && run.scalar_end >= run.scalar_start
-                            && run.scalar_end <= text.scalar_end;
+                            && run.scalar_end > run.scalar_start
+                            && run.scalar_end <= text.scalar_end
+                            && !normalized_family.is_empty();
                         cursor = run.scalar_end;
-                        families.insert(run.source_font_name.clone());
-                        *projected_source_families
-                            .entry(run.source_font_name.clone())
-                            .or_default() += 1;
+                        if normalized_family.is_empty() {
+                            projected_blank_source_family_runs += 1;
+                        } else {
+                            families.insert(normalized_family.clone());
+                            let family_fingerprint =
+                                format!("{:x}", Sha256::digest(normalized_family.as_bytes()));
+                            *projected_source_family_fingerprints
+                                .entry(family_fingerprint)
+                                .or_default() += 1;
+                        }
                         *projected_source_sizes_emu
                             .entry(run.text_size_emu)
                             .or_default() += 1;
@@ -1476,8 +1485,9 @@ mod tests {
 
         let backend_fallbacks_json =
             serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
-        let projected_source_families_json =
-            serde_json::to_string(&projected_source_families).expect("serialize projected families");
+        let projected_source_family_fingerprints_json =
+            serde_json::to_string(&projected_source_family_fingerprints)
+                .expect("serialize projected family fingerprints");
         let projected_source_sizes_json = serde_json::to_string(&projected_source_sizes_emu)
             .expect("serialize projected source sizes");
         let projected_backend_resources_json = serde_json::to_string(&projected_backend_resources)
@@ -1492,7 +1502,7 @@ mod tests {
         let projected_line_heights_json = serde_json::to_string(&projected_line_heights_emu)
             .expect("serialize projected line heights");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_families={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1505,7 +1515,8 @@ mod tests {
             projected_typography_runs,
             projected_complete_typography_nodes,
             projected_single_family_nodes,
-            projected_source_families_json,
+            projected_source_family_fingerprints_json,
+            projected_blank_source_family_runs,
             projected_source_sizes_json,
             projected_backend_resources_json,
             projected_layout_resources_json,
