@@ -1272,7 +1272,7 @@ fn resolve_text_layout_v1(
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutIncomplete);
     }
 
-    let lines = source_lines
+    let lines: Vec<RenderResolvedTextLineV1> = source_lines
         .into_iter()
         .map(|line| RenderResolvedTextLineV1 {
             line_index: line.frame_line_index,
