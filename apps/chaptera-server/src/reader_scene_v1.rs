@@ -153,6 +153,7 @@ pub struct ReaderTextLineV1 {
     pub scalar_end: u32,
     pub consumed_scalar_end: u32,
     pub text: String,
+    pub x_offset_emu: i64,
     pub measured_width_emu: i64,
     pub line_height_emu: i64,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -299,6 +300,7 @@ fn reader_text_layout_from_render_text(
                 scalar_end: line.scalar_end,
                 consumed_scalar_end: line.consumed_scalar_end,
                 text: line.text.clone(),
+                x_offset_emu: line.x_offset_emu,
                 measured_width_emu: line.measured_width_emu,
                 line_height_emu: line.line_height_emu,
                 spans: line
