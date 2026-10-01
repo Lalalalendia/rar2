@@ -1395,7 +1395,7 @@ pub fn open_pub_geometry(
 /// document state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewerProductOpenOutcome {
-    Normal(ViewerGeometryDocument),
+    Normal(Box<ViewerGeometryDocument>),
     Salvage(ReaderSalvageProbe),
 }
 
@@ -1424,7 +1424,7 @@ pub fn open_pub_or_salvage_with_trigger(
     trigger: ReaderSalvageTrigger,
 ) -> Result<ViewerProductOpenOutcome> {
     match open_pub_geometry(bytes, environment) {
-        Ok(document) => Ok(ViewerProductOpenOutcome::Normal(document)),
+        Ok(document) => Ok(ViewerProductOpenOutcome::Normal(Box::new(document))),
         Err(normal_error) => {
             let probe = probe_reader_salvage_candidate_with_trigger(bytes, trigger);
             if probe.eligibility.is_eligible() && probe.has_surviving_evidence() {
