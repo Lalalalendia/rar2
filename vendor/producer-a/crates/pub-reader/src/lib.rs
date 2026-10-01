@@ -18,6 +18,7 @@ mod guide_bridge;
 mod intake_protocol;
 mod legacy22_graph;
 mod legacy22_noquill_graph;
+mod mature_wmf;
 mod ole_presentation;
 mod resolve;
 mod salvage;
