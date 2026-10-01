@@ -3628,20 +3628,26 @@ fn resolve_effective_officeart_boolean(
     value_bit: u32,
     normative_default: bool,
 ) -> Option<PubEffectivePaintValue<bool>> {
-    let mut layers = vec![paint_scalar_from_records(
+    let mut layers = vec![paint_boolean_from_records(
         &shape.fopts,
         property_id,
+        use_bit,
+        value_bit,
         PubEffectivePaintAuthority::ShapeLocal,
     )];
     if let Some(dgg) = dgg_defaults {
-        layers.push(paint_scalar_from_records(
+        layers.push(paint_boolean_from_records(
             &dgg.primary_options,
             property_id,
+            use_bit,
+            value_bit,
             PubEffectivePaintAuthority::DrawingGroupPrimary,
         ));
-        layers.push(paint_scalar_from_records(
+        layers.push(paint_boolean_from_records(
             &dgg.tertiary_options,
             property_id,
+            use_bit,
+            value_bit,
             PubEffectivePaintAuthority::DrawingGroupTertiary,
         ));
     }
@@ -3650,12 +3656,7 @@ fn resolve_effective_officeart_boolean(
         match layer {
             PaintScalarLayer::Absent => {}
             PaintScalarLayer::Unresolved => return None,
-            PaintScalarLayer::Value(value) => {
-                if value.value & use_bit == 0 {
-                    continue;
-                }
-                return Some(value.map(|raw| raw & value_bit != 0));
-            }
+            PaintScalarLayer::Value(value) => return Some(value.map(|raw| raw != 0)),
         }
     }
 
@@ -3663,6 +3664,48 @@ fn resolve_effective_officeart_boolean(
         value: normative_default,
         authority: PubEffectivePaintAuthority::NormativeDefault,
         source: None,
+    })
+}
+
+fn paint_boolean_from_records(
+    records: &[pub_escher::FoptObservation],
+    property_id: u16,
+    use_bit: u32,
+    value_bit: u32,
+    authority: PubEffectivePaintAuthority,
+) -> PaintScalarLayer {
+    let mut participating = Vec::new();
+
+    for property in records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == property_id)
+    {
+        if property.op & use_bit == 0 {
+            continue;
+        }
+        if property.f_bid() || property.f_complex() {
+            return PaintScalarLayer::Unresolved;
+        }
+        participating.push(property);
+    }
+
+    let Some(first) = participating.first() else {
+        return PaintScalarLayer::Absent;
+    };
+    let first_value = u32::from(first.op & value_bit != 0);
+    if participating
+        .iter()
+        .skip(1)
+        .any(|property| u32::from(property.op & value_bit != 0) != first_value)
+    {
+        return PaintScalarLayer::Unresolved;
+    }
+
+    PaintScalarLayer::Value(PubEffectivePaintValue {
+        value: first_value,
+        authority,
+        source: (participating.len() == 1).then(|| first.source.clone()),
     })
 }
 
@@ -4742,6 +4785,43 @@ mod tests {
         assert_eq!(line_width.value, 30_000);
         assert_eq!(line_width.authority, PubEffectivePaintAuthority::ShapeLocal);
         assert!(paint.line.visible.unwrap().value);
+    }
+
+    #[test]
+    fn effective_officeart_boolean_ignores_nonparticipating_duplicate_records() {
+        let mut shape = crop_test_shape(vec![crop_test_property(
+            OFFICE_ART_LINE_BOOLEANS,
+            LINE_USE_LINE_BIT | LINE_LINE_BIT,
+        )]);
+        shape.fopts.push(pub_escher::FoptObservation {
+            rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+            source: crop_test_span(32, 16),
+            properties: vec![crop_test_property(
+                OFFICE_ART_LINE_BOOLEANS,
+                0x0060_0020,
+            )],
+        });
+
+        let paint = resolve_bounded_effective_officeart_paint(&shape, None, None, true)
+            .expect("bounded effective paint");
+        let visible = paint.line.visible.expect("participating primary line visibility");
+        assert!(visible.value);
+        assert_eq!(visible.authority, PubEffectivePaintAuthority::ShapeLocal);
+    }
+
+    #[test]
+    fn effective_officeart_boolean_fails_closed_on_conflicting_participants() {
+        let shape = crop_test_shape(vec![
+            crop_test_property(OFFICE_ART_LINE_BOOLEANS, LINE_USE_LINE_BIT),
+            crop_test_property(
+                OFFICE_ART_LINE_BOOLEANS,
+                LINE_USE_LINE_BIT | LINE_LINE_BIT,
+            ),
+        ]);
+
+        let paint = resolve_bounded_effective_officeart_paint(&shape, None, None, true)
+            .expect("other bounded paint fields remain available");
+        assert_eq!(paint.line.visible, None);
     }
 
     #[test]
