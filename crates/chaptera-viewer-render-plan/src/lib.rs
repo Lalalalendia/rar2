@@ -94,7 +94,9 @@ pub struct RenderTableCellV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub solid_fill_rgb: Option<[u8; 3]>,
+    pub fill_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_visible: Option<bool>,
 }
 
 fn default_render_table_span() -> u32 {
@@ -810,7 +812,8 @@ pub fn build_page_render_plan_v1(
                             column_span: cell.column_span,
                             text: cell.text.clone(),
                             bounds: cell.bounds,
-                            solid_fill_rgb: cell.solid_fill_rgb,
+                            fill_rgb: cell.fill_rgb,
+                            fill_visible: cell.fill_visible,
                         })
                         .collect(),
                 });
@@ -2133,6 +2136,8 @@ mod tests {
                 column_span: 1,
                 text: "cell".into(),
                 bounds: Some(cell_bounds),
+                fill_rgb: Some([10, 20, 30]),
+                fill_visible: Some(true),
             }],
         });
 
@@ -2151,7 +2156,8 @@ mod tests {
         assert_eq!(table.cells[0].column_span, 1);
         assert_eq!(table.cells[0].text, "cell");
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
-        assert_eq!(table.cells[0].solid_fill_rgb, Some([10, 20, 30]));
+        assert_eq!(table.cells[0].fill_rgb, Some([10, 20, 30]));
+        assert_eq!(table.cells[0].fill_visible, Some(true));
     }
 
     #[cfg(feature = "projected-scene-instances")]
