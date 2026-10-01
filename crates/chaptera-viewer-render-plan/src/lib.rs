@@ -6,15 +6,15 @@
 
 #[cfg(feature = "projected-scene-instances")]
 use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1};
-use pub_line_placement::{
-    LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
-    ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
-};
 use pub_layout::{
     BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedShapedFlowRuntime,
     BoundedShapingRuntime, ProjectedNodeGeometry, ProjectedPage, ProjectedStory,
     ProjectedStoryFrame, break_policy_for_shaped_text, font_fingerprint_sha256,
     resolve_bounded_shaped_flow, shape_bounded_ltr_segment,
+};
+use pub_line_placement::{
+    LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
+    ResolvedLineInputV1, resolve_paragraph_line_placement_v1,
 };
 #[cfg(feature = "projected-scene-instances")]
 use pub_model::CanonicalId;
@@ -954,7 +954,9 @@ fn resolved_line_x_offset_emu_v1(
     layout_environment_fingerprint: &str,
 ) -> i64 {
     let mut matching = fragment.paragraph_alignments.iter().filter(|run| {
-        run.scalar_start <= scalar_start && run.scalar_end >= scalar_end && scalar_start < scalar_end
+        run.scalar_start <= scalar_start
+            && run.scalar_end >= scalar_end
+            && scalar_start < scalar_end
     });
     let Some(run) = matching.next() else {
         return 0;
