@@ -1559,8 +1559,8 @@ mod tests {
 
                         contiguous_script_cover &=
                             script_cursor == text.scalar_end && script_cursor > text.scalar_start;
-                        latin_family_authority &= contiguous_script_cover
-                            && selected_latin_authority.is_some();
+                        latin_family_authority &=
+                            contiguous_script_cover && selected_latin_authority.is_some();
                         projected_zero_typography_contiguous_script_cover_nodes +=
                             usize::from(contiguous_script_cover);
                         projected_zero_typography_latin_family_authority_nodes +=
