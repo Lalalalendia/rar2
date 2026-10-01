@@ -5,7 +5,7 @@ use chaptera_viewer_render_plan::{
     RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
     build_page_render_plan_with_text_layout_v1,
 };
-use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
+use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1, ViewerScriptFontEntryDisposition};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -211,22 +211,23 @@ pub struct ReaderTextFontProbeResource<'a> {
 }
 
 impl ReaderTextFontProbeResource<'_> {
-    fn resource_for_fragment<'a>(
-        &'a self,
-        fragment: &RenderTextFragmentV1,
-    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
-        let family_sha256 = complete_single_family_sha256(fragment)?;
-        if family_sha256 != self.source_family_sha256 {
-            return None;
-        }
-        Some(ExplicitRenderTextFontResourceV1 {
+    fn explicit_resource<'a>(&'a self) -> ExplicitRenderTextFontResourceV1<'a> {
+        ExplicitRenderTextFontResourceV1 {
             resource_id: self.resource_id,
             expected_sha256: self.expected_sha256,
             face_index: self.face_index,
             default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
             default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
             bytes: self.bytes,
-        })
+        }
+    }
+
+    fn resource_for_fragment<'a>(
+        &'a self,
+        fragment: &RenderTextFragmentV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let family_sha256 = complete_single_family_sha256(fragment)?;
+        (family_sha256 == self.source_family_sha256).then(|| self.explicit_resource())
     }
 }
 
@@ -258,6 +259,72 @@ fn complete_single_family_sha256(fragment: &RenderTextFragmentV1) -> Option<Stri
         return None;
     }
     let family = normalized_family?;
+    Some(format!("{:x}", Sha256::digest(family.as_bytes())))
+}
+
+
+fn complete_ascii_latin_script_family_sha256(
+    geometry: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+) -> Option<String> {
+    if fragment.text.is_empty() || fragment.text.chars().any(|ch| !ch.is_ascii()) {
+        return None;
+    }
+    let story = geometry
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+
+    let mut maps = geometry
+        .script_font_maps
+        .iter()
+        .filter(|map| map.story_id == fragment.story_id)
+        .filter(|map| map.applies_to_story_text(&story.text))
+        .filter(|map| map.scalar_end > fragment.scalar_start && map.scalar_start < fragment.scalar_end)
+        .collect::<Vec<_>>();
+    maps.sort_by_key(|map| (map.scalar_start, map.scalar_end));
+
+    let mut cursor = fragment.scalar_start;
+    let mut selected: Option<(u32, String)> = None;
+    for map in maps {
+        let start = map.scalar_start.max(fragment.scalar_start);
+        let end = map.scalar_end.min(fragment.scalar_end);
+        if start != cursor || end <= start {
+            return None;
+        }
+
+        let mut local: Option<(u32, String)> = None;
+        for slot in [0_u16, 1_u16, 2_u16] {
+            let entry = map.entries.iter().find(|entry| entry.script_slot == slot)?;
+            if entry.disposition != ViewerScriptFontEntryDisposition::Resolved {
+                return None;
+            }
+            let family = entry.source_font_name.as_ref()?.trim().to_lowercase();
+            if family.is_empty() {
+                return None;
+            }
+            let candidate = (entry.source_font_index, family);
+            match local.as_ref() {
+                None => local = Some(candidate),
+                Some(existing) if *existing == candidate => {}
+                Some(_) => return None,
+            }
+        }
+
+        let local = local?;
+        match selected.as_ref() {
+            None => selected = Some(local),
+            Some(existing) if *existing == local => {}
+            Some(_) => return None,
+        }
+        cursor = end;
+    }
+
+    if cursor != fragment.scalar_end {
+        return None;
+    }
+    let (_, family) = selected?;
     Some(format!("{:x}", Sha256::digest(family.as_bytes())))
 }
 
@@ -637,7 +704,14 @@ pub fn from_viewer_geometry_with_font_probe(
                 geometry,
                 page_index,
                 &fallback_font,
-                |fragment| probe.resource_for_fragment(fragment),
+                |fragment| {
+                    probe.resource_for_fragment(fragment).or_else(|| {
+                        let family_sha256 =
+                            complete_ascii_latin_script_family_sha256(geometry, fragment)?;
+                        (family_sha256 == probe.source_family_sha256)
+                            .then(|| probe.explicit_resource())
+                    })
+                },
             ),
             None => {
                 build_page_render_plan_with_text_layout_v1(geometry, page_index, &fallback_font)
