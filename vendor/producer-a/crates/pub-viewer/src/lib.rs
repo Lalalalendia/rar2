@@ -5556,12 +5556,14 @@ mod mature_officeart_wmf_exact_product_tests {
             },
         );
         eprintln!(
-            "EXACT_MATURE_WMF_ACCEPTANCE graph_image_slot_nodes={} graph_image_slots={} graph_page_bound_image_slot_nodes={} raw_asset_mime_counts={:?} raw_asset_diagnostics={} source_resources={} source_uses={} source_rejected={} scene_bound_resources={} scene_bound_uses={} viewer_wmf_resources={} viewer_wmf_uses={} viewer_images={} viewer_image_uses={} diagnostics={:?}",
+            "EXACT_MATURE_WMF_ACCEPTANCE graph_image_slot_nodes={} graph_image_slots={} graph_page_bound_image_slot_nodes={} raw_asset_mime_counts={:?} raw_asset_diagnostics={} physical_wmf_records={} live_bstore_wmf_slots={} source_resources={} source_uses={} source_rejected={} scene_bound_resources={} scene_bound_uses={} viewer_wmf_resources={} viewer_wmf_uses={} viewer_images={} viewer_image_uses={} diagnostics={:?}",
             graph_image_slot_nodes,
             graph_image_slots.len(),
             graph_page_bound_image_slot_nodes,
             raw_asset_mime_counts,
             raw_assets.manifest.diagnostics.len(),
+            source_wmf.physical_wmf_record_count,
+            source_wmf.live_bstore_wmf_slot_count,
             source_wmf.sources.len(),
             source_wmf
                 .sources
