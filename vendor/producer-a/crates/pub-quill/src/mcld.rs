@@ -62,6 +62,13 @@ pub struct QuillMcldTableMetrics {
     pub row_pitch_emu: QuillMcldConsensusU32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillMcldUniformTextInset {
+    pub record_id: u32,
+    pub inset_emu: u32,
+    pub sources: Vec<RawSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuillMcldReadError {
     MissingMcldDescriptor,
@@ -110,6 +117,11 @@ pub enum QuillMcldReadError {
     },
     RecordIdNotFound {
         record_id: u32,
+    },
+    UnexpectedChildCount {
+        record_id: u32,
+        expected: u32,
+        found: u32,
     },
     MissingRequiredField {
         record_id: u32,
@@ -237,6 +249,54 @@ pub fn parse_bounded_mcld(
 /// Promotes only the two grounded uniform table metrics from one keyed MCLD
 /// record. Every child must contain exactly one u32 field 0x04 and 0x05 and all
 /// children must agree; disagreement is an error, never a coercion.
+/// Promotes only a one-child TextFrame record whose four grounded MCLD
+/// text-inset fields (0x06..0x09) are present as u32 and agree exactly.
+///
+/// This is intentionally narrower than the known asymmetric Publisher grammar:
+/// the exact within-axis side permutation remains separate research authority.
+/// A non-uniform record therefore stays unprojected rather than being guessed.
+pub fn bounded_mcld_uniform_text_inset(
+    mcld: &QuillMcldChunk,
+    record_id: u32,
+) -> Result<QuillMcldUniformTextInset, QuillMcldReadError> {
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == record_id)
+        .ok_or(QuillMcldReadError::RecordIdNotFound { record_id })?;
+    if record.children.len() != 1 {
+        return Err(QuillMcldReadError::UnexpectedChildCount {
+            record_id,
+            expected: 1,
+            found: u32::try_from(record.children.len()).unwrap_or(u32::MAX),
+        });
+    }
+
+    let child = &record.children[0];
+    let values = [0x06_u8, 0x07, 0x08, 0x09]
+        .into_iter()
+        .map(|field_id| required_u32_field(record_id, 0, child, field_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = values[0].0;
+    for (index, (found, _)) in values.iter().enumerate().skip(1) {
+        if *found != expected {
+            return Err(QuillMcldReadError::NonUniformRequiredField {
+                record_id,
+                field_id: [0x06_u8, 0x07, 0x08, 0x09][index],
+                expected,
+                found: *found,
+                child_index: 0,
+            });
+        }
+    }
+
+    Ok(QuillMcldUniformTextInset {
+        record_id,
+        inset_emu: expected,
+        sources: values.into_iter().map(|(_, source)| source).collect(),
+    })
+}
+
 pub fn bounded_mcld_table_metrics(
     mcld: &QuillMcldChunk,
     record_id: u32,
