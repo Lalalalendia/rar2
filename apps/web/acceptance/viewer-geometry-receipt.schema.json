@@ -644,8 +644,7 @@
           "minimum": 0
         },
         "source_font_name": {
-          "type": "string",
-          "minLength": 1
+          "type": "string"
         },
         "text_size_emu": {
           "type": "integer",
