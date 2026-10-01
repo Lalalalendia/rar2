@@ -12,6 +12,7 @@ use chaptera_server::{
         self, GuestReaderHttpConfig, GuestReaderHttpState, SqliteGuestReaderSessionStore,
     },
     guest_reader_worker::{self, IsolatedGuestSceneProducer},
+    install,
     job_queue::SqliteJobQueue,
     jobs::UnconfiguredWorkerRuntime,
     jobs_runtime::JobsRuntime,
@@ -129,6 +130,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         .transpose()?;
 
     match cli.command {
+        Command::Install { root } => {
+            install::run(cli.config.as_deref(), root.as_deref())?;
+        }
         Command::Serve => {
             let config = match explicit_config.as_ref() {
                 Some(config) => config.clone(),
