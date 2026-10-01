@@ -1,7 +1,7 @@
 mod overset;
 
 use anyhow::{Context, Result};
-use pub_editor::{EditorEditableTarget, EditorProject};
+use pub_editor::{EditorEditableTarget, EditorProject, StoryId};
 use pub_model::{Sha256Digest, to_cdm_debug_json_v0_1};
 use std::{env, fs, io::Cursor, path::Path};
 
@@ -90,6 +90,98 @@ fn emit_editable_export(
 }
 
 
+fn emit_editor_story_range(
+    fixture: &str,
+    project_path: &str,
+    command_path: &str,
+) -> Result<()> {
+    let bytes = fs::read(fixture).context("read source PUB fixture")?;
+    let project: EditorProject =
+        serde_json::from_slice(&fs::read(project_path).context("read canonical EditorProject")?)
+            .context("parse canonical EditorProject")?;
+    let command: serde_json::Value =
+        serde_json::from_slice(&fs::read(command_path).context("read Story range command")?)
+            .context("parse Story range command")?;
+    if command.get("kind").and_then(|value| value.as_str()) != Some("replace_story_range") {
+        anyhow::bail!("replace_story_range command required");
+    }
+
+    let story_id: StoryId = serde_json::from_value(
+        command
+            .get("story_id")
+            .cloned()
+            .context("story_id missing")?,
+    )
+    .context("parse story_id")?;
+    let start_scalar = u32::try_from(
+        command
+            .get("start_scalar")
+            .and_then(|value| value.as_u64())
+            .context("start_scalar missing or invalid")?,
+    )
+    .context("start_scalar exceeds u32")?;
+    let end_scalar = u32::try_from(
+        command
+            .get("end_scalar")
+            .and_then(|value| value.as_u64())
+            .context("end_scalar missing or invalid")?,
+    )
+    .context("end_scalar exceeds u32")?;
+    let expected_before = command
+        .get("expected_before")
+        .and_then(|value| value.as_str())
+        .context("expected_before missing or invalid")?
+        .to_owned();
+    let replacement_text = command
+        .get("replacement_text")
+        .and_then(|value| value.as_str())
+        .context("replacement_text missing or invalid")?
+        .to_owned();
+
+    let mut session =
+        pub_editor::open_mature_0x2c_editor(&bytes, project.source_hash).context("open editor")?;
+    session
+        .apply_project(&project)
+        .context("replay canonical EditorProject")?;
+    let before_text = session
+        .graph()
+        .stories
+        .get(&story_id)
+        .context("Story missing from Editor graph")?
+        .text
+        .clone();
+    let operation = session
+        .replace_story_range(
+            story_id,
+            start_scalar,
+            end_scalar,
+            expected_before,
+            replacement_text,
+        )
+        .context("apply bounded Story range")?;
+    let after_text = session
+        .graph()
+        .stories
+        .get(&story_id)
+        .context("edited Story missing from Editor graph")?
+        .text
+        .clone();
+
+    print!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+            "protocol_version": "chaptera.editor-story-range-result.v1",
+            "source_hash": project.source_hash,
+            "story_id": story_id,
+            "before_text": before_text,
+            "after_text": after_text,
+            "operation": operation,
+            "project": session.project(),
+        }))?
+    );
+    Ok(())
+}
+
 fn emit_native_pub_save(
     fixture: &str,
     project_path: &str,
@@ -106,9 +198,26 @@ fn emit_native_pub_save(
         .apply_project(&project)
         .context("replay canonical EditorProject")?;
 
-    let candidate = session
-        .materialize_mature_0x2c_native_pub_candidate(&bytes)
-        .context("materialize bounded native PUB candidate")?;
+    let candidate = match session.materialize_mature_0x2c_native_pub_candidate(&bytes) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            let report = serde_json::json!({
+                "protocol_version": "chaptera.native-pub-save.v1",
+                "source_hash": project.source_hash,
+                "can_serialize": false,
+                "blocker_code": error.code(),
+                "chaptera_reopen_verified": false,
+                "native_publisher_acceptance": "not_evaluated",
+            });
+            fs::write(
+                Path::new(report_path),
+                serde_json::to_vec_pretty(&report).context("serialize native PUB save report")?,
+            )
+            .context("write native PUB save report")?;
+            print!("{}", serde_json::to_string(&report)?);
+            return Ok(());
+        }
+    };
 
     let report = serde_json::json!({
         "protocol_version": "chaptera.native-pub-save.v1",
@@ -117,6 +226,8 @@ fn emit_native_pub_save(
         "source_story_id": candidate.source_story_id,
         "output_story_id": candidate.output_story_id,
         "byte_len": candidate.bytes.len(),
+        "can_serialize": true,
+        "blocker_code": serde_json::Value::Null,
         "chaptera_reopen_verified": true,
         "native_publisher_acceptance": "not_evaluated",
     });
@@ -158,6 +269,15 @@ fn main() -> Result<()> {
             anyhow::bail!("unexpected extra arguments");
         }
         return emit_editable_export(&fixture, &project, &target, &output, &report);
+    }
+    if first == "editor-story-range" {
+        let fixture = args.next().context("fixture path missing")?;
+        let project = args.next().context("project path missing")?;
+        let command = args.next().context("command path missing")?;
+        if args.next().is_some() {
+            anyhow::bail!("unexpected extra arguments");
+        }
+        return emit_editor_story_range(&fixture, &project, &command);
     }
     if first == "native-pub-save" {
         let fixture = args.next().context("fixture path missing")?;
