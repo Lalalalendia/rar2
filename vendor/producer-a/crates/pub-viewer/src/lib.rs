@@ -5443,16 +5443,15 @@ mod mature_officeart_wmf_exact_product_tests {
     use super::*;
     use std::{fs, path::PathBuf};
 
-    fn exact_wmf_fixture(
-        env_name: &str,
-        expected_sha256: &str,
-        expected_source_wmf_resources: usize,
-        expected_source_wmf_uses: usize,
-        expected_image_resources: usize,
-        expected_image_uses: usize,
-        expected_wmf_preview_resources: usize,
-        expected_wmf_preview_uses: usize,
-    ) {
+    fn exact_wmf_fixture(env_name: &str, expected_sha256: &str, expected_counts: [usize; 6]) {
+        let [
+            expected_source_wmf_resources,
+            expected_source_wmf_uses,
+            expected_image_resources,
+            expected_image_uses,
+            expected_wmf_preview_resources,
+            expected_wmf_preview_uses,
+        ] = expected_counts;
         let path = std::env::var_os(env_name)
             .map(PathBuf::from)
             .unwrap_or_else(|| panic!("{env_name} is required"));
@@ -5588,12 +5587,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_NEWSLETTER",
             "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
-            8,
-            9,
-            9,
-            10,
-            8,
-            9,
+            [8, 9, 9, 10, 8, 9],
         );
     }
 
@@ -5603,12 +5597,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_BROCHURE",
             "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
-            5,
-            5,
-            6,
-            6,
-            5,
-            5,
+            [5, 5, 6, 6, 5, 5],
         );
     }
 }
