@@ -4,7 +4,9 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use flate2::read::ZlibDecoder;
-use pub_escher::{BlipKind, OFFICE_ART_BLIP_WMF, inspect_delayed_blips};
+use pub_escher::{
+    BlipKind, OFFICE_ART_BLIP_WMF, inspect_bstore, inspect_delayed_blips, resolve_delayed_blip,
+};
 use std::io::{Cursor, Read};
 
 pub const MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1: &str = "mature-officeart-wmf-preview-source-v1";
@@ -29,6 +31,12 @@ pub struct PubMatureOfficeArtWmfPreviewSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubMatureOfficeArtWmfPreviewBundle {
     pub sources: Vec<PubMatureOfficeArtWmfPreviewSource>,
+    /// Physical WMF BLIP records present in EscherDelayStm. This is diagnostic
+    /// inventory only and is not itself grounded visual-resource authority.
+    pub physical_wmf_record_count: usize,
+    /// Non-empty BStore slots that resolve to a WMF delayed record. This
+    /// separates live BStore references from orphan physical delayed records.
+    pub live_bstore_wmf_slot_count: usize,
     /// Count only; callers must not promote rejected carrier details into the
     /// source-neutral Viewer contract.
     pub rejected_source_count: usize,
@@ -49,6 +57,8 @@ pub fn build_mature_0x2c_wmf_preview_bundle_from_bytes(
     if !has_delayed_stream {
         return Ok(PubMatureOfficeArtWmfPreviewBundle {
             sources: Vec::new(),
+            physical_wmf_record_count: 0,
+            live_bstore_wmf_slot_count: 0,
             rejected_source_count: 0,
         });
     }
@@ -61,6 +71,27 @@ pub fn build_mature_0x2c_wmf_preview_bundle_from_bytes(
         &delayed,
     )
     .context("inspect mature delayed BLIPs for WMF preview")?;
+    let bstore = inspect_bstore(
+        pub_core::StreamPath(ESCHER_STREAM_PATH.into()),
+        &escher,
+    )
+    .context("inspect mature BStore for WMF preview")?;
+    let physical_wmf_record_count = delayed_inventory
+        .records
+        .iter()
+        .filter(|record| record.kind == BlipKind::Wmf)
+        .count();
+    let live_bstore_wmf_slot_count = bstore
+        .slots
+        .iter()
+        .filter(|slot| !slot.is_empty())
+        .filter_map(|slot| {
+            resolve_delayed_blip(&bstore, &delayed_inventory, slot.slot)
+                .ok()
+                .flatten()
+        })
+        .filter(|record| record.kind == BlipKind::Wmf)
+        .count();
 
     let mut sources = Vec::new();
     let mut rejected_source_count = 0usize;
@@ -107,6 +138,8 @@ pub fn build_mature_0x2c_wmf_preview_bundle_from_bytes(
 
     Ok(PubMatureOfficeArtWmfPreviewBundle {
         sources,
+        physical_wmf_record_count,
+        live_bstore_wmf_slot_count,
         rejected_source_count,
     })
 }
