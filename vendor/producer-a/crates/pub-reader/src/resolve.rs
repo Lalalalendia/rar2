@@ -1,6 +1,6 @@
 use crate::{
     PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
-    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource,
+    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource, PubTextFrameInsetSource,
     PubTableStoryOwnershipSource,
 };
 use anyhow::{Result, bail};
@@ -26,6 +26,8 @@ pub struct PubResolvedNodePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_paint: Option<PubEffectiveShapePaintSource>,
     pub story_frame: Option<PubResolvedStoryFrame>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_inset: Option<PubTextFrameInsetSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_story: Option<PubTableStoryOwnershipSource>,
     pub table: Option<PubTableSource>,
@@ -129,6 +131,7 @@ fn resolve_node_payload(
         explicit_paint: payload.explicit_paint.clone(),
         effective_paint: payload.effective_paint.clone(),
         story_frame,
+        text_frame_inset: payload.text_frame_inset.clone(),
         table_story: payload.table_story.clone(),
         table: payload.table.clone(),
     }
@@ -163,6 +166,7 @@ mod tests {
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
             story_frame: None,
+            text_frame_inset: None,
             table_story: None,
             table: None,
         };
