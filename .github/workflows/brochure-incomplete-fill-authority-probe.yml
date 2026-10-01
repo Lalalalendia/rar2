@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
-      - ".github/workflows/brochure-effective-paint-probe.yml"
+      - ".github/workflows/brochure-incomplete-fill-authority-probe.yml"
   workflow_dispatch:
 
 permissions:
