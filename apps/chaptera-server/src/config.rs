@@ -630,7 +630,12 @@ impl ChapteraConfig {
         }
 
         if let Some(guest) = &self.cloud_reader_guest {
-            validate_cloud_reader_guest(self.environment, guest, &self.source_validation, &self.edge)?;
+            validate_cloud_reader_guest(
+                self.environment,
+                guest,
+                &self.source_validation,
+                &self.edge,
+            )?;
         }
 
         match (&self.auth, self.environment) {
