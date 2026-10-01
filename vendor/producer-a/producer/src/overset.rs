@@ -123,6 +123,7 @@ fn synthetic_graph(source_hash_text: &str) -> Result<PubResolvedGraph> {
                 previous_frame: None,
                 next_frame: None,
             }),
+            text_frame_inset: None,
             table_story: None,
             table: None,
         },
