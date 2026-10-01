@@ -777,12 +777,9 @@ async fn open_session(
                 .sessions
                 .reset_open(&opening.session_id, now_ms)
                 .await?;
-            state.observability.record(
-                "reader.open",
-                trace.as_ref(),
-                "error",
-                started.elapsed(),
-            );
+            state
+                .observability
+                .record("reader.open", trace.as_ref(), "error", started.elapsed());
             return Err(map_scan_error(error));
         }
     };
@@ -842,12 +839,12 @@ async fn open_session(
         }
     };
 
-    let structural_outcome =
-        if receipt.terminal_code.as_deref() == Some("reader_scene_open_failed") {
-            "error"
-        } else {
-            "success"
-        };
+    let structural_outcome = if receipt.terminal_code.as_deref() == Some("reader_scene_open_failed")
+    {
+        "error"
+    } else {
+        "success"
+    };
     state.observability.record(
         "reader.structural_scan",
         trace.as_ref(),
