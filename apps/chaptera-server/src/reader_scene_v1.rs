@@ -705,23 +705,21 @@ pub fn from_viewer_geometry(
                     "direct render-plan node references unknown Viewer node {node_id}"
                 ));
             }
-            if let Some(text) = node.text.as_ref() {
-                if render_text_by_node
+            if let Some(text) = node.text.as_ref()
+                && render_text_by_node
                     .insert(node_id.clone(), text.text.clone())
                     .is_some()
-                {
-                    return Err(format!(
-                        "duplicate direct render-plan text binding for node {node_id}"
-                    ));
-                }
+            {
+                return Err(format!(
+                    "duplicate direct render-plan text binding for node {node_id}"
+                ));
             }
-            if let Some(mapped_layout) = mapped_layout {
-                if text_layout_by_node
+            if let Some(mapped_layout) = mapped_layout
+                && text_layout_by_node
                     .insert(node_id.clone(), mapped_layout)
                     .is_some()
-                {
-                    return Err(format!("duplicate text layout binding for node {node_id}"));
-                }
+            {
+                return Err(format!("duplicate text layout binding for node {node_id}"));
             }
         }
     }
