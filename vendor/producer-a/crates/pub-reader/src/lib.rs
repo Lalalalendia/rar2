@@ -415,6 +415,9 @@ pub enum PubEffectivePaintAuthority {
     ShapeLocal,
     DrawingGroupPrimary,
     DrawingGroupTertiary,
+    /// Publisher Quill MCLD story-layout authority. Used for effective text
+    /// insets only; shape paint never resolves through this variant.
+    QuillMcld,
     NormativeDefault,
 }
 
@@ -464,14 +467,18 @@ pub struct PubEffectiveLineSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubEffectiveTextMarginsSource {
-    /// Effective MS-ODRAW fAutoTextMargin state. This structure is emitted
-    /// only for the false case; true remains fail-closed because Publisher's
-    /// application-defined automatic margin set is not inferred here.
-    pub auto_text_margin: PubEffectivePaintValue<bool>,
+    /// Present only when the fallback OfficeArt path directly proves the
+    /// effective automatic-margin state. MCLD is already resolved Publisher
+    /// layout state and therefore does not manufacture an fAutoTextMargin bit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_text_margin: Option<PubEffectivePaintValue<bool>>,
     pub left_emu: PubEffectivePaintValue<i64>,
     pub top_emu: PubEffectivePaintValue<i64>,
     pub right_emu: PubEffectivePaintValue<i64>,
     pub bottom_emu: PubEffectivePaintValue<i64>,
+    /// Exact Quill MCLD field spans when MCLD supplies the effective inset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcld_sources: Vec<RawSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
