@@ -1236,6 +1236,184 @@ fn viewer_legacy_image_preview_images(
     images
 }
 
+fn mature_officeart_wmf_preview_resource_id(
+    source_hash: &Sha256Digest,
+    slot: u32,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let digest = Sha256::digest(wmf_bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
+        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    let source_object_key = format!(
+        "mature-officeart-wmf-preview/slot-{slot}/wmf-sha256-{wmf_sha256}/{}/{}",
+        MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
+        LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1,
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &source_object_key,
+        semantic_role: "viewer.mature-officeart-wmf-preview-v1",
+    })
+    .map_err(|error| anyhow!("derive mature OfficeArt WMF preview identity: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+fn viewer_mature_officeart_wmf_preview_images(
+    bytes: &[u8],
+    source_hash: &Sha256Digest,
+    source: &PubSourceGraphBuild,
+    resolved: &PubResolvedGraph,
+    scene: &BoundedResolvedScene,
+    diagnostics: &mut Vec<ViewerDiagnostic>,
+) -> Vec<ViewerEmbeddedImage> {
+    let bundle = match build_mature_0x2c_wmf_preview_bundle_from_bytes(bytes, &source.graph) {
+        Ok(bundle) => bundle,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.mature_officeart_wmf.preview_source_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "Source-backed mature OfficeArt WMF images could not be materialized through the bounded preview bridge."
+                        .to_owned(),
+            });
+            return Vec::new();
+        }
+    };
+
+    if bundle.rejected_source_count > 0 {
+        diagnostics.push(ViewerDiagnostic {
+            code: "viewer.mature_officeart_wmf.preview_source_rejected".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{} mature OfficeArt WMF source(s) remain outside the bounded preview profile.",
+                bundle.rejected_source_count
+            ),
+        });
+    }
+
+    let renderable_node_ids = scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let mut images = Vec::new();
+
+    for preview_source in bundle.sources {
+        let mut node_ids = preview_source
+            .uses
+            .iter()
+            .map(|usage| usage.node_id)
+            .filter(|node_id| renderable_node_ids.contains(node_id))
+            .collect::<Vec<_>>();
+        node_ids.sort();
+        node_ids.dedup();
+        if node_ids.is_empty() {
+            continue;
+        }
+
+        let preview = match rasterize_wmf_preview(
+            &preview_source.wmf_bytes,
+            preview_source.width_hint,
+            preview_source.height_hint,
+        ) {
+            Ok(preview) => preview,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.mature_officeart_wmf.preview_raster_unsupported".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A structurally valid mature OfficeArt WMF is outside the existing bounded Viewer raster profile."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let png = match encode_wmf_preview_png(&preview) {
+            Ok(png) => png,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.mature_officeart_wmf.preview_encode_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded mature OfficeArt WMF preview could not be encoded as a Viewer image resource."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let resource_id = match mature_officeart_wmf_preview_resource_id(
+            source_hash,
+            preview_source.slot,
+            &preview_source.wmf_bytes,
+        ) {
+            Ok(resource_id) => resource_id,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.mature_officeart_wmf.preview_identity_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded mature OfficeArt WMF preview could not receive a deterministic Viewer resource identity."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+
+        let mut placements = Vec::new();
+        for node_id in &node_ids {
+            let source_window = match resolved.nodes.get(node_id).map(|node| {
+                viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
+            }) {
+                Some(Ok(source_window)) => source_window,
+                Some(Err(reason)) => {
+                    diagnostics.push(ViewerDiagnostic {
+                        code: "viewer.image.crop_partial".to_owned(),
+                        severity: ViewerDiagnosticSeverity::FidelityWarning,
+                        message: format!(
+                            "Image crop for node {} is present but cannot be projected exactly ({reason}); the bounded WMF preview remains available as the full-image fallback.",
+                            node_id.as_canonical()
+                        ),
+                    });
+                    None
+                }
+                None => None,
+            };
+            if let Some(source_window) = source_window {
+                placements.push(ViewerImagePlacementV1 {
+                    node_id: *node_id,
+                    source_window: Some(source_window),
+                });
+            }
+        }
+
+        images.push(ViewerEmbeddedImage {
+            resource_id,
+            mime: "image/png".to_owned(),
+            node_ids,
+            placements,
+            bytes: png,
+        });
+    }
+
+    if !images.is_empty() {
+        diagnostics.push(ViewerDiagnostic {
+            code: "viewer.mature_officeart_wmf.preview_applied".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "{} bounded source-backed mature OfficeArt WMF preview resource(s) admitted through the shared Viewer image path.",
+                images.len()
+            ),
+        });
+    }
+
+    images
+}
+
 fn viewer_legacy_ole_cached_preview_images(
     bytes: &[u8],
     source_hash: &Sha256Digest,
