@@ -27,9 +27,7 @@ use crate::{
     blob_store::BlobStoreService,
     config::CloudReaderFontResourceConfig,
     guest_intake_classifier::guest_failure_intake_evidence,
-    reader_scene_v1::{
-        ReaderConfiguredFontResourceV1, from_viewer_geometry_with_fonts,
-    },
+    reader_scene_v1::{ReaderConfiguredFontResourceV1, from_viewer_geometry_with_fonts},
     source_ingress_security::SourceSecurityScannerConfig,
 };
 
