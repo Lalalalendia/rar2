@@ -5463,23 +5463,41 @@ mod mature_officeart_wmf_exact_product_tests {
             .expect("build exact mature OfficeArt source graph");
         let source_wmf = build_mature_0x2c_wmf_preview_bundle_from_bytes(&before, &source.graph)
             .expect("materialize exact mature OfficeArt WMF source bundle");
-        assert_eq!(
-            source_wmf.sources.len(),
-            expected_source_wmf_resources,
-            "exact fixture source WMF resource count drift"
-        );
-        assert_eq!(
-            source_wmf
-                .sources
-                .iter()
-                .map(|source| source.uses.len())
-                .sum::<usize>(),
-            expected_source_wmf_uses,
-            "exact fixture source WMF grounded-use count drift"
-        );
-        assert_eq!(
-            source_wmf.rejected_source_count, 0,
-            "exact fixture contains a WMF source outside the bounded decode profile"
+        let graph_image_slot_nodes = source
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.payload.image_slot.is_some())
+            .count();
+        let graph_image_slots = source
+            .graph
+            .nodes
+            .values()
+            .filter_map(|node| node.payload.image_slot)
+            .collect::<BTreeSet<_>>();
+        let graph_page_ids = source
+            .graph
+            .pages
+            .keys()
+            .map(|page_id| page_id.into_canonical())
+            .collect::<BTreeSet<_>>();
+        let graph_page_bound_image_slot_nodes = source
+            .graph
+            .nodes
+            .values()
+            .filter(|node| {
+                node.payload.image_slot.is_some()
+                    && graph_page_ids.contains(&node.header.parent_id)
+            })
+            .count();
+        let raw_assets = build_mature_0x2c_asset_export_bundle_from_bytes(&before, &source.graph)
+            .expect("build exact mature image export bundle");
+        let raw_asset_mime_counts = raw_assets.manifest.assets.iter().fold(
+            BTreeMap::<&str, usize>::new(),
+            |mut counts, asset| {
+                *counts.entry(asset.mime.as_str()).or_default() += 1;
+                counts
+            },
         );
 
         let geometry = open_mature_0x2c_geometry(&before, viewer_geometry_environment_v0_1())
@@ -5524,13 +5542,19 @@ mod mature_officeart_wmf_exact_product_tests {
             },
         );
         eprintln!(
-            "EXACT_MATURE_WMF_ACCEPTANCE source_resources={} source_uses={} scene_bound_resources={} scene_bound_uses={} viewer_wmf_resources={} viewer_wmf_uses={} viewer_images={} viewer_image_uses={} diagnostics={:?}",
+            "EXACT_MATURE_WMF_ACCEPTANCE graph_image_slot_nodes={} graph_image_slots={} graph_page_bound_image_slot_nodes={} raw_asset_mime_counts={:?} raw_asset_diagnostics={} source_resources={} source_uses={} source_rejected={} scene_bound_resources={} scene_bound_uses={} viewer_wmf_resources={} viewer_wmf_uses={} viewer_images={} viewer_image_uses={} diagnostics={:?}",
+            graph_image_slot_nodes,
+            graph_image_slots.len(),
+            graph_page_bound_image_slot_nodes,
+            raw_asset_mime_counts,
+            raw_assets.manifest.diagnostics.len(),
             source_wmf.sources.len(),
             source_wmf
                 .sources
                 .iter()
                 .map(|source| source.uses.len())
                 .sum::<usize>(),
+            source_wmf.rejected_source_count,
             scene_bound_wmf_resources,
             scene_bound_wmf_uses,
             wmf_previews.len(),
@@ -5542,6 +5566,24 @@ mod mature_officeart_wmf_exact_product_tests {
                 .map(|image| image.node_ids.len())
                 .sum::<usize>(),
             diagnostic_counts,
+        );
+        assert_eq!(
+            source_wmf.sources.len(),
+            expected_source_wmf_resources,
+            "exact fixture source WMF resource count drift"
+        );
+        assert_eq!(
+            source_wmf
+                .sources
+                .iter()
+                .map(|source| source.uses.len())
+                .sum::<usize>(),
+            expected_source_wmf_uses,
+            "exact fixture source WMF grounded-use count drift"
+        );
+        assert_eq!(
+            source_wmf.rejected_source_count, 0,
+            "exact fixture contains a WMF source outside the bounded decode profile"
         );
         assert_eq!(
             wmf_previews.len(),
