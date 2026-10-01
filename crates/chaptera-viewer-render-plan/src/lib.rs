@@ -1578,6 +1578,7 @@ mod tests {
                 scene_instance: instance.clone(),
                 target_frame_node_id: origin_node_id,
                 target_frame_paint_scalar_end: None,
+                text_content_bounds: None,
                 bounds: RectEmu::new(
                     LengthEmu::new(50),
                     LengthEmu::new(60),
@@ -1631,6 +1632,7 @@ mod tests {
                 scene_instance: instance,
                 target_frame_node_id: frame_id,
                 target_frame_paint_scalar_end: None,
+                text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,
                 transform: Affine2D::identity(),
             });
@@ -1676,6 +1678,7 @@ mod tests {
                 scene_instance: instance,
                 target_frame_node_id: frame_id,
                 target_frame_paint_scalar_end: Some(3),
+                text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,
                 transform: Affine2D::identity(),
             });
