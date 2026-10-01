@@ -654,4 +654,122 @@ mod tests {
         });
         assert!(build_reader_compatibility_report(SHA, "supported", Some(&scene), None).is_err());
     }
+
+    #[test]
+    fn exact_source_editable_routes_are_exposed_without_internal_loss_details() {
+        let scene = json!({
+            "protocol_version": "chaptera.reader-scene.v1",
+            "source_hash": SHA,
+            "fidelity": {"state": "supported", "reasons": []},
+            "pages": [{"page_id": "p1"}],
+            "nodes": [],
+            "stories": []
+        });
+        let routes = ReaderEditableRoutesAssessmentV1 {
+            protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+            source_sha256: SHA.to_owned(),
+            idml: ReaderEditableTargetAssessmentV1 {
+                state: "available_with_declared_losses".to_owned(),
+                reason_code: "serializable".to_owned(),
+            },
+            odg: ReaderEditableTargetAssessmentV1 {
+                state: "unavailable".to_owned(),
+                reason_code: "blocking_losses".to_owned(),
+            },
+        };
+
+        let report = build_reader_compatibility_report_with_routes(
+            SHA,
+            "supported",
+            Some(&scene),
+            None,
+            Some(&routes),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.output_routes.editable_idml,
+            "available_with_declared_losses"
+        );
+        assert_eq!(report.output_routes.editable_odg, "unavailable");
+        assert!(
+            report
+                .limitations
+                .iter()
+                .any(|item| item.code == "odg_editable_export_blocked")
+        );
+        let encoded = to_string(&report).unwrap();
+        assert!(!encoded.contains("blocking_losses"));
+        assert!(!encoded.contains("serializable"));
+    }
+
+    #[test]
+    fn editable_routes_source_mismatch_fails_closed() {
+        let scene = json!({
+            "protocol_version": "chaptera.reader-scene.v1",
+            "source_hash": SHA,
+            "fidelity": {"state": "supported", "reasons": []},
+            "pages": [],
+            "nodes": [],
+            "stories": []
+        });
+        let routes = ReaderEditableRoutesAssessmentV1 {
+            protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+            source_sha256:
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_owned(),
+            idml: ReaderEditableTargetAssessmentV1 {
+                state: "not_verified".to_owned(),
+                reason_code: "source_identity_mismatch".to_owned(),
+            },
+            odg: ReaderEditableTargetAssessmentV1 {
+                state: "not_verified".to_owned(),
+                reason_code: "source_identity_mismatch".to_owned(),
+            },
+        };
+
+        assert!(
+            build_reader_compatibility_report_with_routes(
+                SHA,
+                "supported",
+                Some(&scene),
+                None,
+                Some(&routes),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn salvage_cannot_advertise_editable_routes() {
+        let salvage = json!({
+            "schema_version": "chaptera.reader-partial-source-graph.v1",
+            "source_sha256": SHA,
+            "subsystems": {},
+            "facts": [],
+            "gaps": ["text_unavailable"]
+        });
+        let routes = ReaderEditableRoutesAssessmentV1 {
+            protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+            source_sha256: SHA.to_owned(),
+            idml: ReaderEditableTargetAssessmentV1 {
+                state: "available_with_declared_losses".to_owned(),
+                reason_code: "serializable".to_owned(),
+            },
+            odg: ReaderEditableTargetAssessmentV1 {
+                state: "available_with_declared_losses".to_owned(),
+                reason_code: "serializable".to_owned(),
+            },
+        };
+
+        assert!(
+            build_reader_compatibility_report_with_routes(
+                SHA,
+                "salvage",
+                None,
+                Some(&salvage),
+                Some(&routes),
+            )
+            .is_err()
+        );
+    }
 }
