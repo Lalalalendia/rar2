@@ -36,7 +36,7 @@ pub const GUEST_SCENE_WORKER_V1: &str = "chaptera.reader-guest-scene-worker.v1";
 const MAX_RECEIPT_BYTES: u64 = 18 * 1024 * 1024;
 const MAX_FONT_PROBE_BYTES: u64 = 4 * 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
-const GUEST_SCENE_FONT_PROBE_FAMILY_NAME: &str = "Liberation Sans";
+const GUEST_SCENE_FONT_PROBE_FAMILY_NAME: &str = "Caladea";
 
 #[derive(Debug, Clone)]
 pub struct GuestSceneFontProbeConfig {
