@@ -555,7 +555,7 @@ fn render_paragraph_alignment_runs_v1(
         .filter_map(|run| {
             let start = run.scalar_start.max(scalar_start);
             let end = run.scalar_end.min(scalar_end);
-            (start < end).then(|| RenderParagraphAlignmentRunV1 {
+            (start < end).then_some(RenderParagraphAlignmentRunV1 {
                 scalar_start: start,
                 scalar_end: end,
                 alignment: match run.alignment {
@@ -943,6 +943,7 @@ where
     Ok(plan)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolved_line_x_offset_emu_v1(
     fragment: &RenderTextFragmentV1,
     node_id: NodeId,
