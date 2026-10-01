@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/caladea-local-probe-binary.yml"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
 
 permissions:
   contents: read
