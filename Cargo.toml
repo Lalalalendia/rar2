@@ -2,6 +2,7 @@
 members = [
   "apps/chaptera-server",
   "apps/chaptera-desktop",
+  "apps/chaptera-pub-cli",
   "crates/pub-model",
   "crates/chaptera-layout-projection",
   "crates/chaptera-scene-instance",
