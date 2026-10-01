@@ -12,24 +12,18 @@ use sha2::{Digest, Sha256};
 use crate::{build_info::BUILD_IDENTITY, config::ChapteraConfig};
 
 const CHAPTERA_SLICE: &str = include_str!("../../../deploy/systemd/chaptera.slice");
-const CHAPTERA_WEB_SERVICE: &str =
-    include_str!("../../../deploy/systemd/chaptera-web.service");
+const CHAPTERA_WEB_SERVICE: &str = include_str!("../../../deploy/systemd/chaptera-web.service");
 const CHAPTERA_WORKER_SERVICE: &str =
     include_str!("../../../deploy/systemd/chaptera-worker.service");
 const CHAPTERA_TARGET: &str = include_str!("../../../deploy/systemd/chaptera.target");
 const CHAPTERA_TMPFILES: &str = include_str!("../../../deploy/tmpfiles/chaptera.conf");
 const CHAPTERA_SYSUSERS: &str = include_str!("../../../deploy/sysusers/chaptera.conf");
-const ISOLATION_HARNESS: &[u8] =
-    include_bytes!("../../../tools/migration_pdf_worker_isolation.py");
+const ISOLATION_HARNESS: &[u8] = include_bytes!("../../../tools/migration_pdf_worker_isolation.py");
 
 const CANONICAL_CONFIG: &str = "/etc/chaptera/chaptera.toml";
 
 const HOST_FILES: [(&str, &str, u32); 6] = [
-    (
-        "/etc/systemd/system/chaptera.slice",
-        CHAPTERA_SLICE,
-        0o644,
-    ),
+    ("/etc/systemd/system/chaptera.slice", CHAPTERA_SLICE, 0o644),
     (
         "/etc/systemd/system/chaptera-web.service",
         CHAPTERA_WEB_SERVICE,
@@ -45,22 +39,11 @@ const HOST_FILES: [(&str, &str, u32); 6] = [
         CHAPTERA_TARGET,
         0o644,
     ),
-    (
-        "/etc/tmpfiles.d/chaptera.conf",
-        CHAPTERA_TMPFILES,
-        0o644,
-    ),
-    (
-        "/etc/sysusers.d/chaptera.conf",
-        CHAPTERA_SYSUSERS,
-        0o644,
-    ),
+    ("/etc/tmpfiles.d/chaptera.conf", CHAPTERA_TMPFILES, 0o644),
+    ("/etc/sysusers.d/chaptera.conf", CHAPTERA_SYSUSERS, 0o644),
 ];
 
-pub fn run(
-    config_path: Option<&Path>,
-    staging_root: Option<&Path>,
-) -> Result<(), Box<dyn Error>> {
+pub fn run(config_path: Option<&Path>, staging_root: Option<&Path>) -> Result<(), Box<dyn Error>> {
     ensure_linux()?;
 
     let config_path = config_path.ok_or_else(|| {
@@ -139,10 +122,7 @@ fn install_from(
     }
 
     if !staging {
-        run_checked(
-            "systemd-sysusers",
-            &["/etc/sysusers.d/chaptera.conf"],
-        )?;
+        run_checked("systemd-sysusers", &["/etc/sysusers.d/chaptera.conf"])?;
         run_checked(
             "systemd-tmpfiles",
             &["--create", "/etc/tmpfiles.d/chaptera.conf"],
@@ -228,9 +208,9 @@ fn run_checked(program: &str, args: &[&str]) -> io::Result<()> {
 
 fn validate_build_id(build_id: &str) -> io::Result<()> {
     if build_id.is_empty()
-        || !build_id.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-' | b'_')
-        })
+        || !build_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-' | b'_'))
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -255,13 +235,19 @@ fn install_exact_executable(source: &Path, destination: &Path) -> io::Result<()>
     let source_metadata = fs::metadata(source).map_err(|error| {
         io::Error::new(
             error.kind(),
-            format!("cannot stat running executable {}: {error}", source.display()),
+            format!(
+                "cannot stat running executable {}: {error}",
+                source.display()
+            ),
         )
     })?;
     if !source_metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("running executable {} is not a regular file", source.display()),
+            format!(
+                "running executable {} is not a regular file",
+                source.display()
+            ),
         ));
     }
 
@@ -284,7 +270,10 @@ fn install_exact_executable(source: &Path, destination: &Path) -> io::Result<()>
     let parent = destination.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("release executable has no parent: {}", destination.display()),
+            format!(
+                "release executable has no parent: {}",
+                destination.display()
+            ),
         )
     })?;
     fs::create_dir_all(parent)?;
@@ -446,10 +435,7 @@ mod tests {
     use super::*;
 
     fn test_root(name: &str) -> PathBuf {
-        let root = env::temp_dir().join(format!(
-            "chaptera-install-{name}-{}",
-            std::process::id()
-        ));
+        let root = env::temp_dir().join(format!("chaptera-install-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
@@ -493,12 +479,8 @@ mod tests {
             b"chaptera-build-b"
         );
         assert_eq!(
-            fs::read(
-                root.join(
-                    "opt/chaptera/current/tools/migration_pdf_worker_isolation.py"
-                )
-            )
-            .unwrap(),
+            fs::read(root.join("opt/chaptera/current/tools/migration_pdf_worker_isolation.py"))
+                .unwrap(),
             ISOLATION_HARNESS
         );
         assert_eq!(
