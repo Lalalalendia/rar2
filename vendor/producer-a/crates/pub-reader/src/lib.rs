@@ -2772,7 +2772,7 @@ pub fn build_mature_0x2c_from_streams(
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
             .flatten();
-        let story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
+        let mut story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
             build_story_frame(
                 source_hash,
                 seq_num,
