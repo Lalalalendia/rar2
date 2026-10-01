@@ -71,11 +71,8 @@ pub fn build_mature_0x2c_wmf_preview_bundle_from_bytes(
         &delayed,
     )
     .context("inspect mature delayed BLIPs for WMF preview")?;
-    let bstore = inspect_bstore(
-        pub_core::StreamPath(ESCHER_STREAM_PATH.into()),
-        &escher,
-    )
-    .context("inspect mature BStore for WMF preview")?;
+    let bstore = inspect_bstore(pub_core::StreamPath(ESCHER_STREAM_PATH.into()), &escher)
+        .context("inspect mature BStore for WMF preview")?;
     let physical_wmf_record_count = delayed_inventory
         .records
         .iter()
