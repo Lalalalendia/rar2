@@ -335,8 +335,8 @@ fn populate_bounded_table_cell_fill(
         .as_ref()
         .context("plain TABLE OfficeArt owner has no FSPGR")?;
     let group_rect = coordinate_rect_i128(group_coords)?;
-    let target_rect = rect_edges(*context.table_bounds)
-        .context("plain TABLE owner bounds overflow")?;
+    let target_rect =
+        rect_edges(*context.table_bounds).context("plain TABLE owner bounds overflow")?;
 
     let children = context
         .officeart_inventory
