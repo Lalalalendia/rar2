@@ -48,6 +48,11 @@ struct Counts {
     line_color_observations: usize,
     line_width_observations: usize,
     line_boolean_observations: usize,
+    line_boolean_primary_observations: usize,
+    line_boolean_tertiary_observations: usize,
+    line_boolean_primary_shapes: usize,
+    line_boolean_tertiary_shapes: usize,
+    line_boolean_primary_and_tertiary_shapes: usize,
     effective_solid_visible: usize,
     effective_solid_hidden: usize,
     effective_non_solid: usize,
@@ -75,6 +80,9 @@ struct Histograms {
     line_color_class: BTreeMap<String, usize>,
     line_width_raw_hex: BTreeMap<String, usize>,
     line_boolean_raw_hex: BTreeMap<String, usize>,
+    line_boolean_primary_raw_hex: BTreeMap<String, usize>,
+    line_boolean_tertiary_raw_hex: BTreeMap<String, usize>,
+    line_boolean_primary_tertiary_pair: BTreeMap<String, usize>,
     shape_type_hex: BTreeMap<String, usize>,
     shape_type_with_client_textbox: BTreeMap<String, usize>,
     shape_type_with_scheme_fill: BTreeMap<String, usize>,
@@ -217,6 +225,8 @@ fn main() -> Result<()> {
         let mut line_color = None;
         let mut line_width = None;
         let mut line_bool = None;
+        let mut line_bool_primary = Vec::new();
+        let mut line_bool_tertiary = Vec::new();
         let mut has_fill_opacity = false;
         let mut has_line_opacity = false;
         let has_client_textbox = shape.client_textbox.is_some();
@@ -316,6 +326,25 @@ fn main() -> Result<()> {
                     counts.line_boolean_observations += 1;
                     line_bool = Some(raw);
                     bump(&mut histograms.line_boolean_raw_hex, format!("0x{raw:08X}"));
+                    match fopt.rec_type {
+                        pub_escher::OFFICE_ART_FOPT => {
+                            counts.line_boolean_primary_observations += 1;
+                            line_bool_primary.push(raw);
+                            bump(
+                                &mut histograms.line_boolean_primary_raw_hex,
+                                format!("0x{raw:08X}"),
+                            );
+                        }
+                        pub_escher::OFFICE_ART_TERTIARY_FOPT => {
+                            counts.line_boolean_tertiary_observations += 1;
+                            line_bool_tertiary.push(raw);
+                            bump(
+                                &mut histograms.line_boolean_tertiary_raw_hex,
+                                format!("0x{raw:08X}"),
+                            );
+                        }
+                        _ => {}
+                    }
                 }
                 if let Some(raw) = scalar_property(entry, FILL_BOOLEANS) {
                     counts.fill_boolean_observations += 1;
@@ -347,6 +376,32 @@ fn main() -> Result<()> {
                     format!("0x{shape_type:04X}"),
                 );
             }
+        }
+
+        if !line_bool_primary.is_empty() {
+            counts.line_boolean_primary_shapes += 1;
+        }
+        if !line_bool_tertiary.is_empty() {
+            counts.line_boolean_tertiary_shapes += 1;
+        }
+        if !line_bool_primary.is_empty() && !line_bool_tertiary.is_empty() {
+            counts.line_boolean_primary_and_tertiary_shapes += 1;
+            line_bool_primary.sort_unstable();
+            line_bool_tertiary.sort_unstable();
+            let primary = line_bool_primary
+                .iter()
+                .map(|raw| format!("0x{raw:08X}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let tertiary = line_bool_tertiary
+                .iter()
+                .map(|raw| format!("0x{raw:08X}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            bump(
+                &mut histograms.line_boolean_primary_tertiary_pair,
+                format!("primary={primary}|tertiary={tertiary}"),
+            );
         }
 
         if has_fill_opacity {
@@ -510,7 +565,7 @@ fn main() -> Result<()> {
     }
 
     let receipt = Receipt {
-        schema: "chaptera.reference-fill-state-census.v2",
+        schema: "chaptera.reference-fill-state-census.v3",
         source_sha256: sha256_hex(&pub_bytes),
         byte_len: pub_bytes.len(),
         counts,
@@ -522,6 +577,7 @@ fn main() -> Result<()> {
             "Shape type / ClientTextbox / fill-line co-occurrence is aggregate ownership evidence only; no Publisher authoring role is inferred.",
             "RoundRectangle adjustment evidence records only property 0x0147 form/raw scalar counts; absent adjustment is not converted into a PDF-derived radius.",
             "TABLE paint authority is reported only as aggregate source-graph counts; no object identity or document text is emitted.",
+            "Line Boolean primary/tertiary FOPT histograms are aggregate structural evidence only; no shape identity is emitted.",
             "No PDF pixels are used as parser or paint authority.",
             "No source text, object ids, paths, filenames, offsets, or raw bytes are emitted.",
         ],
@@ -532,6 +588,15 @@ fn main() -> Result<()> {
     )
     .with_context(|| format!("write {}", output.display()))?;
 
+    println!(
+        "REFERENCE_LINE_BOOLEAN_LAYERS primary_obs={} tertiary_obs={} primary_shapes={} tertiary_shapes={} both_shapes={} pairs={:?}",
+        receipt.counts.line_boolean_primary_observations,
+        receipt.counts.line_boolean_tertiary_observations,
+        receipt.counts.line_boolean_primary_shapes,
+        receipt.counts.line_boolean_tertiary_shapes,
+        receipt.counts.line_boolean_primary_and_tertiary_shapes,
+        receipt.histograms.line_boolean_primary_tertiary_pair,
+    );
     println!(
         "REFERENCE_FILL_STATE_CENSUS sha={} shapes={} roundrect={} roundrect_adjust_scalar={} roundrect_adjust_absent={} roundrect_adjust_unsupported={} solid_visible={} solid_hidden={} non_solid={} unresolved={} fill_types={} fill_booleans={}",
         receipt.source_sha256,
