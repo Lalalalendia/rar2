@@ -440,6 +440,8 @@ struct GuestOpenResponse {
     failure_classification: Option<FailureClassificationV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     scene: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    salvage: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -456,6 +458,8 @@ struct GuestSceneResponse {
     failure_classification: Option<FailureClassificationV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     scene: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    salvage: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -754,6 +758,7 @@ async fn open_session(
                 terminal_code: rejected.terminal_code,
                 failure_classification: None,
                 scene: None,
+                salvage: None,
             }));
         }
     }
@@ -785,11 +790,14 @@ async fn open_session(
     let mut terminal_code = receipt.terminal_code;
     let mut failure_classification = receipt.failure_classification;
     let mut scene = receipt.scene;
-    let mut scene_json = scene
-        .as_ref()
-        .map(serde_json::to_vec)
-        .transpose()
-        .map_err(|_| GuestReaderError::internal("guest_reader_scene_serialize_failed"))?;
+    let mut salvage = receipt.salvage;
+    let mut scene_json = match classification.as_str() {
+        "salvage" => salvage.as_ref(),
+        _ => scene.as_ref(),
+    }
+    .map(serde_json::to_vec)
+    .transpose()
+    .map_err(|_| GuestReaderError::internal("guest_reader_payload_serialize_failed"))?;
     if scene_json
         .as_ref()
         .is_some_and(|encoded| encoded.len() > MAX_SCENE_BYTES)
@@ -798,6 +806,7 @@ async fn open_session(
         terminal_code = Some("reader_scene_too_large".to_owned());
         failure_classification = None;
         scene = None;
+        salvage = None;
         scene_json = None;
     }
 
@@ -830,6 +839,7 @@ async fn open_session(
         terminal_code,
         failure_classification,
         scene,
+        salvage,
     }))
 }
 
@@ -854,19 +864,16 @@ async fn get_scene(
     ) {
         return Err(GuestReaderError::conflict("guest_scene_not_ready"));
     }
-    let scene = session
-        .scene_json
-        .as_deref()
-        .map(serde_json::from_slice::<Value>)
-        .transpose()
-        .map_err(|_| GuestReaderError::internal("guest_scene_corrupt"))?;
+    let (scene, salvage) = stored_public_payload(&session)?;
+    let classification = session
+        .classification
+        .clone()
+        .unwrap_or_else(|| "rejected".to_owned());
 
     Ok(GuestJson(GuestSceneResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: session.session_id,
-        classification: session
-            .classification
-            .unwrap_or_else(|| "rejected".to_owned()),
+        classification,
         expires_at_ms: session.expires_at_ms,
         source_sha256: session.source_sha256,
         terminal_code: session.terminal_code,
@@ -874,6 +881,7 @@ async fn get_scene(
             session.failure_classification_json.as_deref(),
         )?,
         scene,
+        salvage,
     }))
 }
 
@@ -1624,18 +1632,49 @@ fn session_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<GuestReaderSession,
     })
 }
 
-fn open_response_from_stored(
+fn stored_public_payload(
     session: &GuestReaderSession,
-) -> Result<GuestJson<GuestOpenResponse>, GuestReaderError> {
-    let scene = session
+) -> Result<(Option<Value>, Option<Value>), GuestReaderError> {
+    let payload = session
         .scene_json
         .as_deref()
         .map(serde_json::from_slice::<Value>)
         .transpose()
-        .map_err(|_| GuestReaderError::internal("guest_scene_corrupt"))?;
+        .map_err(|_| GuestReaderError::internal("guest_reader_payload_corrupt"))?;
+    match session.classification.as_deref() {
+        Some("supported") | Some("partial") => Ok((payload, None)),
+        Some("salvage") => {
+            let observation = payload
+                .ok_or_else(|| GuestReaderError::internal("guest_salvage_observation_missing"))?;
+            if observation.get("schema_version").and_then(Value::as_str)
+                != Some("chaptera.reader-partial-source-graph.v1")
+                || observation.get("source_sha256").and_then(Value::as_str)
+                    != session.source_sha256.as_deref()
+            {
+                return Err(GuestReaderError::internal(
+                    "guest_salvage_observation_invalid",
+                ));
+            }
+            Ok((None, Some(observation)))
+        }
+        Some("unsupported") | Some("rejected") | None => {
+            if payload.is_some() {
+                return Err(GuestReaderError::internal("guest_terminal_payload_invalid"));
+            }
+            Ok((None, None))
+        }
+        Some(_) => Err(GuestReaderError::internal("guest_classification_invalid")),
+    }
+}
+
+fn open_response_from_stored(
+    session: &GuestReaderSession,
+) -> Result<GuestJson<GuestOpenResponse>, GuestReaderError> {
+    let (scene, salvage) = stored_public_payload(session)?;
     let classification = match session.classification.as_deref() {
         Some("supported") => "supported",
         Some("partial") => "partial",
+        Some("salvage") => "salvage",
         Some("unsupported") => "unsupported",
         Some("rejected") | None => "rejected",
         Some(_) => return Err(GuestReaderError::internal("guest_classification_invalid")),
@@ -1651,6 +1690,7 @@ fn open_response_from_stored(
             session.failure_classification_json.as_deref(),
         )?,
         scene,
+        salvage,
     }))
 }
 
@@ -2179,6 +2219,45 @@ mod tests {
 
         store.close().await;
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn stored_salvage_session_round_trips_source_neutral_observation() {
+        let mut stored = session(1_000);
+        stored.state = GuestSessionState::Opened;
+        stored.classification = Some("salvage".to_owned());
+        stored.source_sha256 = Some("a".repeat(64));
+        stored.scene_json = Some(
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version":"chaptera.reader-partial-source-graph.v1",
+                "source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "subsystems":{
+                    "contents":"readable",
+                    "quill":"absent",
+                    "escher":"absent",
+                    "escher_delay":"absent"
+                },
+                "facts":[],
+                "gaps":["text_unavailable","image_facts_unavailable","geometry_facts_unavailable"]
+            }))
+            .unwrap(),
+        );
+
+        let response = open_response_from_stored(&stored)
+            .expect("salvage observation should round-trip through guest API")
+            .0;
+        assert_eq!(response.classification, "salvage");
+        assert!(response.scene.is_none());
+        assert_eq!(
+            response
+                .salvage
+                .as_ref()
+                .and_then(|value| value.get("schema_version"))
+                .and_then(Value::as_str),
+            Some("chaptera.reader-partial-source-graph.v1")
+        );
+        assert!(response.terminal_code.is_none());
+        assert!(response.failure_classification.is_none());
     }
 
     #[test]

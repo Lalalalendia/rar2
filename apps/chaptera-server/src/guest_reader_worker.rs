@@ -8,7 +8,10 @@ use std::{
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
-use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+use pub_viewer::{
+    ViewerProductOpenOutcome, open_pub_bundle, open_pub_or_salvage,
+    viewer_geometry_environment_v0_1,
+};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -62,6 +65,7 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub classification: String,
     pub terminal_code: Option<String>,
     pub scene: Option<Value>,
+    pub salvage: Option<Value>,
     pub failure_classification: Option<FailureClassificationV1>,
     pub filesystem_confinement: bool,
 }
@@ -347,7 +351,7 @@ pub fn run_guest_scene_worker(
         )
     })?;
 
-    let (classification, terminal_code, scene) =
+    let (classification, terminal_code, scene, salvage) =
         match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
             Ok(bundle) => match from_viewer_geometry(
                 session_id.to_owned(),
@@ -368,19 +372,34 @@ pub fn run_guest_scene_worker(
                             "Reader scene serialization failed",
                         )
                     })?;
-                    (classification.to_owned(), None, Some(scene))
+                    (classification.to_owned(), None, Some(scene), None)
                 }
                 Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_projection_failed".to_owned()),
                     None,
+                    None,
                 ),
             },
-            Err(_) => (
-                "unsupported".to_owned(),
-                Some("reader_scene_open_failed".to_owned()),
-                None,
-            ),
+            Err(_) => {
+                match open_pub_or_salvage(&source_bytes, viewer_geometry_environment_v0_1()) {
+                    Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
+                        let observation = serde_json::to_value(partial_graph).map_err(|_| {
+                            GuestSceneWorkerError::new(
+                                "guest_scene_worker_output_failed",
+                                "Reader salvage observation serialization failed",
+                            )
+                        })?;
+                        ("salvage".to_owned(), None, None, Some(observation))
+                    }
+                    Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
+                        "unsupported".to_owned(),
+                        Some("reader_scene_open_failed".to_owned()),
+                        None,
+                        None,
+                    ),
+                }
+            }
         };
 
     let failure_classification =
@@ -395,6 +414,7 @@ pub fn run_guest_scene_worker(
         classification,
         terminal_code,
         scene,
+        salvage,
         failure_classification,
         filesystem_confinement: true,
     };
@@ -434,15 +454,50 @@ fn validate_receipt(
                     "worker scene uses an unsupported Reader scene protocol",
                 ));
             }
-            if receipt.terminal_code.is_some() || receipt.failure_classification.is_some() {
+            if receipt.salvage.is_some()
+                || receipt.terminal_code.is_some()
+                || receipt.failure_classification.is_some()
+            {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
                     "supported/partial receipt cannot carry terminal failure evidence",
                 ));
             }
         }
+        "salvage" => {
+            if receipt.scene.is_some() {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt cannot masquerade as Reader scene",
+                ));
+            }
+            let observation = receipt.salvage.as_ref().ok_or_else(|| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt is missing Reader partial source graph",
+                )
+            })?;
+            if observation.get("schema_version").and_then(Value::as_str)
+                != Some("chaptera.reader-partial-source-graph.v1")
+            {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt uses an unsupported observation protocol",
+                ));
+            }
+            if observation.get("source_sha256").and_then(Value::as_str) != Some(expected_sha256)
+                || receipt.terminal_code.is_some()
+                || receipt.failure_classification.is_some()
+            {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt identity/evidence shape is invalid",
+                ));
+            }
+        }
         "unsupported" => {
             if receipt.scene.is_some()
+                || receipt.salvage.is_some()
                 || !matches!(
                     receipt.terminal_code.as_deref(),
                     Some("reader_scene_open_failed" | "reader_scene_projection_failed")
@@ -610,6 +665,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worker_receipt_accepts_source_neutral_salvage_observation() {
+        let receipt = GuestSceneWorkerReceiptV1 {
+            protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
+            session_id: "guest:0123456789abcdef".to_owned(),
+            source_sha256: "a".repeat(64),
+            source_byte_len: 1,
+            classification: "salvage".to_owned(),
+            terminal_code: None,
+            scene: None,
+            salvage: Some(serde_json::json!({
+                "schema_version":"chaptera.reader-partial-source-graph.v1",
+                "source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "contents_family":null,
+                "subsystems":{
+                    "contents":"readable",
+                    "quill":"absent",
+                    "escher":"absent",
+                    "escher_delay":"absent"
+                },
+                "facts":[],
+                "gaps":["text_unavailable","image_facts_unavailable","geometry_facts_unavailable"]
+            })),
+            failure_classification: None,
+            filesystem_confinement: true,
+        };
+        validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1)
+            .expect("source-neutral salvage observation should cross worker boundary");
+    }
+
+    #[test]
     fn worker_receipt_rejects_scene_for_unsupported_classification() {
         let receipt = GuestSceneWorkerReceiptV1 {
             protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
@@ -619,6 +704,7 @@ mod tests {
             classification: "unsupported".to_owned(),
             terminal_code: Some("reader_scene_open_failed".to_owned()),
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
+            salvage: None,
             failure_classification: None,
             filesystem_confinement: true,
         };

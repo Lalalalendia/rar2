@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { orderedPages, searchStories, guestRequestPath, contributionEligible, extractableImages, classificationMessage, errorMessage } from "./reader-model.mjs";
+import { orderedPages, searchStories, guestRequestPath, contributionEligible, extractableImages, assertSalvageObservation, classificationMessage, errorMessage } from "./reader-model.mjs";
 
 const scene = (extra = {}) => ({
   protocol_version: "chaptera.reader-scene.v1",
@@ -99,6 +99,31 @@ test("extraction admits only bounded inline images, never external or active con
   assert.equal(extractableImages(scene({ resources: [full, full, full, tooBig] })).length, 2);
 });
 
+test("salvage observation is source-neutral and distinct from Reader scene", () => {
+  const salvage = {
+    schema_version: "chaptera.reader-partial-source-graph.v1",
+    source_sha256: "a".repeat(64),
+    contents_family: "0x2c",
+    subsystems: {
+      contents: "readable", quill: "readable", escher: "absent", escher_delay: "absent"
+    },
+    facts: [{
+      kind: "text_range", story_key: "quill-syid:00000001",
+      utf16_start: 0, utf16_end: 4, text: "test"
+    }],
+    gaps: ["image_facts_unavailable", "geometry_facts_unavailable"]
+  };
+  assert.equal(assertSalvageObservation(salvage), salvage);
+  assert.throws(
+    () => assertSalvageObservation({ ...salvage, raw_pub_bytes: "private" }),
+    /forbidden source field/
+  );
+  assert.throws(
+    () => assertSalvageObservation({ ...salvage, schema_version: "chaptera.reader-scene.v1" }),
+    /salvage_protocol_mismatch/
+  );
+});
+
 test("server-owned failure class refines only unsupported terminal guidance", () => {
   assert.match(classificationMessage("unsupported", "PUB_DAMAGED"), /appears damaged/);
   assert.match(classificationMessage("unsupported", "NOT_PUB"), /not a Publisher document/);
@@ -110,7 +135,7 @@ test("server-owned failure class refines only unsupported terminal guidance", ()
 });
 
 test("typed terminal states and HTTP errors provide recovery without exposing internals", () => {
-  const states = ["supported", "partial", "unsupported", "damaged", "not_pub", "security_rejected"];
+  const states = ["supported", "partial", "salvage", "unsupported", "damaged", "not_pub", "security_rejected"];
   assert.equal(new Set(states.map(classificationMessage)).size, states.length);
   for (const status of [401, 403, 404, 410, 413, 429, 500, 503]) {
     assert.ok(errorMessage({ status, message: "private database path" }).length > 25);

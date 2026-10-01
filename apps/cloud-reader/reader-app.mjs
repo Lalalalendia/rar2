@@ -1,7 +1,7 @@
 import { renderReaderScene } from "./render-v1.mjs";
 import {
   EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath, contributionEligible,
-  extractableImages, classificationMessage, errorMessage
+  extractableImages, assertSalvageObservation, classificationMessage, errorMessage
 } from "./reader-model.mjs";
 
 const $ = (selector) => document.querySelector(selector);
@@ -305,13 +305,17 @@ async function openFile(file) {
       throw new Error("guest_protocol_mismatch");
     }
     if (["supported", "partial"].includes(opened.classification)) {
-      if (!opened.scene) throw new Error("scene_protocol_mismatch");
+      if (!opened.scene || opened.salvage !== undefined) throw new Error("scene_protocol_mismatch");
       if (!await render(opened.scene, operation)) return;
+    } else if (opened.classification === "salvage") {
+      if (opened.scene !== undefined || !opened.salvage) throw new Error("salvage_protocol_mismatch");
+      const salvage = assertSalvageObservation(opened.salvage);
+      if (salvage.source_sha256 !== opened.source_sha256) throw new Error("salvage_protocol_mismatch");
     }
     if (isCurrent(operation)) {
       message(
         classificationMessage(opened.classification, opened.failure_classification?.class ?? null),
-        !["supported", "partial"].includes(opened.classification)
+        !["supported", "partial", "salvage"].includes(opened.classification)
       );
       offerContribution(opened, file, issued.session_id, accessToken);
     }
