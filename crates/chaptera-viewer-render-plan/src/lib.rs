@@ -571,10 +571,23 @@ pub fn build_page_render_plan_v1(
                     source_window,
                 }
             });
+        let text = projected_text(visual, projected)?;
+        let has_shape_paint = paint.is_some_and(|paint| {
+            paint.solid_fill_rgb.is_some() || paint.solid_line.is_some()
+        });
+        // A source-backed text content box may replace render-plan bounds only
+        // for text-only projected carriers. Viewer keeps canonical carrier
+        // geometry separately; projected carriers with paint/images stay on
+        // shape bounds rather than conflating inner margins with object bounds.
+        let render_bounds = if text.is_some() && image.is_none() && !has_shape_paint {
+            projected.text_content_bounds.unwrap_or(projected.bounds)
+        } else {
+            projected.bounds
+        };
         let node = NodeRenderPlanV1 {
             node_id: origin_node_id,
             projected_scene_instance: Some(projected.scene_instance.clone()),
-            bounds: projected.bounds,
+            bounds: render_bounds,
             transform: projected.transform.clone(),
             solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
             solid_line: paint
@@ -584,7 +597,7 @@ pub fn build_page_render_plan_v1(
                     width_emu: line.width_emu,
                 }),
             image,
-            text: projected_text(visual, projected)?,
+            text,
             table: None,
         };
 
