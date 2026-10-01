@@ -127,6 +127,8 @@ Stop and repair/drain instead of adding more work when any of these is true:
 
 Do not confuse "many queued workflow runs" with "many independent tasks".
 
+A proven GitHub provider-orphan record is **not** live queue pressure by itself. It may be excluded from runner-capacity stop decisions only when the bounded recovery path proves all of the following on a fresh re-read: obsolete pull-request head, public status queued, age at least 15 minutes, zero jobs across all attempts, zero pending deployments, updated_at equals created_at, and both normal cancel and force-cancel return the exact provider HTTP 409 saying the workflow run has not been queued yet. Keep these records visible in receipts and continue to report queue_drained=false; only queue_capacity_clear=true permits new hosted work. Any state change, job, deployment, current head, non-409 failure, or different provider response remains capacity-blocking until classified.
+
 ## 7. Failure classification before editing code
 
 Classify a red run before making changes:

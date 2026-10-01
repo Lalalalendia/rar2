@@ -7,8 +7,11 @@ from datetime import datetime, timedelta, timezone
 from obsolete_actions_recovery import (
     NOT_QUEUED_MESSAGE,
     ForceCancelContext,
+    ProviderOrphanContext,
     force_cancel_denials,
     force_cancel_eligible,
+    provider_orphan_denials,
+    provider_orphan_eligible,
 )
 
 
@@ -70,6 +73,62 @@ class ForceCancelDecisionTests(unittest.TestCase):
         context = self.context(event="workflow_dispatch")
         self.assertFalse(force_cancel_eligible(context))
         self.assertIn("not_pull_request", force_cancel_denials(context))
+
+class ProviderOrphanDecisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        created = self.now - timedelta(hours=1)
+        self.base = dict(
+            force_cancel_status=409,
+            force_cancel_message=NOT_QUEUED_MESSAGE,
+            event="pull_request",
+            status="queued",
+            head_sha="obsolete-head",
+            created_at=created,
+            updated_at=created,
+            total_jobs=0,
+            pending_deployments=0,
+            open_heads=frozenset({"current-head"}),
+            now=self.now,
+        )
+
+    def context(self, **changes: object) -> ProviderOrphanContext:
+        values = dict(self.base)
+        values.update(changes)
+        return ProviderOrphanContext(**values)
+
+    def test_exact_provider_orphan_does_not_block_runner_capacity(self) -> None:
+        self.assertTrue(provider_orphan_eligible(self.context()))
+        self.assertEqual(provider_orphan_denials(self.context()), ())
+
+    def test_jobs_keep_run_capacity_blocking(self) -> None:
+        context = self.context(total_jobs=1)
+        self.assertFalse(provider_orphan_eligible(context))
+        self.assertIn("jobs_present", provider_orphan_denials(context))
+
+    def test_pending_deployment_keeps_run_capacity_blocking(self) -> None:
+        context = self.context(pending_deployments=1)
+        self.assertFalse(provider_orphan_eligible(context))
+        self.assertIn(
+            "pending_deployments_present",
+            provider_orphan_denials(context),
+        )
+
+    def test_state_change_keeps_run_capacity_blocking(self) -> None:
+        context = self.context(updated_at=self.now - timedelta(minutes=30))
+        self.assertFalse(provider_orphan_eligible(context))
+        self.assertIn(
+            "run_state_changed_since_creation",
+            provider_orphan_denials(context),
+        )
+
+    def test_force_cancel_must_fail_with_exact_provider_conflict(self) -> None:
+        context = self.context(force_cancel_status=500)
+        self.assertFalse(provider_orphan_eligible(context))
+        self.assertIn(
+            "force_cancel_not_http409",
+            provider_orphan_denials(context),
+        )
 
 
 if __name__ == "__main__":

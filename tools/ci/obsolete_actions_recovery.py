@@ -64,6 +64,51 @@ def force_cancel_eligible(context: ForceCancelContext) -> bool:
     return not force_cancel_denials(context)
 
 
+@dataclass(frozen=True)
+class ProviderOrphanContext:
+    force_cancel_status: int
+    force_cancel_message: str
+    event: str
+    status: str
+    head_sha: str
+    created_at: datetime
+    updated_at: datetime
+    total_jobs: int
+    pending_deployments: int
+    open_heads: frozenset[str]
+    now: datetime
+
+
+def provider_orphan_denials(context: ProviderOrphanContext) -> tuple[str, ...]:
+    denials: list[str] = []
+    if context.force_cancel_status != 409:
+        denials.append("force_cancel_not_http409")
+    if context.force_cancel_message != NOT_QUEUED_MESSAGE:
+        denials.append("force_cancel_message_mismatch")
+    if context.event != "pull_request":
+        denials.append("not_pull_request")
+    if context.status != "queued":
+        denials.append("not_queued")
+    if not context.head_sha:
+        denials.append("missing_head_sha")
+    elif context.head_sha in context.open_heads:
+        denials.append("current_open_pr_head")
+    if context.total_jobs != 0:
+        denials.append("jobs_present")
+    if context.pending_deployments != 0:
+        denials.append("pending_deployments_present")
+    if context.updated_at != context.created_at:
+        denials.append("run_state_changed_since_creation")
+    age_seconds = (context.now - context.created_at).total_seconds()
+    if age_seconds < MIN_STALE_AGE_SECONDS:
+        denials.append("younger_than_15_minutes")
+    return tuple(denials)
+
+
+def provider_orphan_eligible(context: ProviderOrphanContext) -> bool:
+    return not provider_orphan_denials(context)
+
+
 class GitHubApi:
     def __init__(self, repo: str, token: str) -> None:
         self.repo = repo
@@ -165,6 +210,13 @@ class GitHubApi:
         )
         data = self.require(status, 200, payload, f"read jobs for run {run_id}")
         return int(data.get("total_count", 0))
+
+    def pending_deployment_count(self, run_id: int) -> int:
+        status, payload = self.request(f"actions/runs/{run_id}/pending_deployments")
+        rows = self.require(status, 200, payload, f"read pending deployments for run {run_id}")
+        if not isinstance(rows, list):
+            raise RuntimeError("pending deployments returned a non-list payload")
+        return len(rows)
 
     def cancel(self, run_id: int) -> tuple[int, Any]:
         return self.request(f"actions/runs/{run_id}/cancel", method="POST")
@@ -268,11 +320,55 @@ def drain(client: GitHubApi, *, now: datetime) -> dict[str, Any]:
             continue
 
         force_status, force_payload = client.force_cancel(run_id)
+        force_message = error_message(force_payload)
         record["force_cancel_http_status"] = force_status
-        record["force_cancel_message"] = error_message(force_payload)
+        record["force_cancel_message"] = force_message
+        if force_status in (202, 204):
+            record["action"] = "force_cancel_accepted"
+            decisions.append(record)
+            continue
+
+        # A zero-job run can be stuck in GitHub's control plane: public status says
+        # queued while both cancel endpoints say it has not been queued yet. Prove
+        # that exact provider-orphan shape before excluding it from runner pressure.
+        orphan_open_heads = client.open_heads()
+        orphan_run = client.run(run_id)
+        orphan_jobs = client.job_count_all_attempts(run_id)
+        pending_deployments = client.pending_deployment_count(run_id)
+        orphan_context = ProviderOrphanContext(
+            force_cancel_status=force_status,
+            force_cancel_message=force_message,
+            event=str(orphan_run.get("event") or ""),
+            status=str(orphan_run.get("status") or ""),
+            head_sha=str(orphan_run.get("head_sha") or ""),
+            created_at=parse_github_time(str(orphan_run["created_at"])),
+            updated_at=parse_github_time(str(orphan_run["updated_at"])),
+            total_jobs=orphan_jobs,
+            pending_deployments=pending_deployments,
+            open_heads=frozenset(orphan_open_heads),
+            now=now,
+        )
+        orphan_denials = provider_orphan_denials(orphan_context)
+        record["provider_orphan_recheck"] = {
+            "event": orphan_context.event,
+            "status": orphan_context.status,
+            "head_sha": orphan_context.head_sha,
+            "total_jobs_all_attempts": orphan_context.total_jobs,
+            "pending_deployments": orphan_context.pending_deployments,
+            "updated_at_equals_created_at": (
+                orphan_context.updated_at == orphan_context.created_at
+            ),
+            "age_seconds": int(
+                (orphan_context.now - orphan_context.created_at).total_seconds()
+            ),
+            "head_is_current_open_pr": (
+                orphan_context.head_sha in orphan_context.open_heads
+            ),
+            "denials": list(orphan_denials),
+        }
         record["action"] = (
-            "force_cancel_accepted"
-            if force_status in (202, 204)
+            "provider_orphan_no_runner_capacity"
+            if not orphan_denials
             else "force_cancel_failed"
         )
         decisions.append(record)
@@ -285,13 +381,28 @@ def drain(client: GitHubApi, *, now: datetime) -> dict[str, Any]:
         if attempt < 6:
             time.sleep(2)
 
+    provider_orphan_ids = {
+        int(record["id"])
+        for record in decisions
+        if record.get("action") == "provider_orphan_no_runner_capacity"
+    }
+    provider_orphans = [
+        run for run in remaining if int(run["id"]) in provider_orphan_ids
+    ]
+    capacity_blockers = [
+        run for run in remaining if int(run["id"]) not in provider_orphan_ids
+    ]
+
     return {
-        "schema": "chaptera.ci-actions-prequeue-recovery.v1",
+        "schema": "chaptera.ci-actions-prequeue-recovery.v2",
         "repository": client.repo,
         "minimum_force_cancel_age_seconds": MIN_STALE_AGE_SECONDS,
         "decisions": decisions,
         "remaining_obsolete_pull_request_runs": remaining,
+        "provider_orphan_pull_request_runs": provider_orphans,
+        "capacity_blocking_obsolete_pull_request_runs": capacity_blockers,
         "queue_drained": not remaining,
+        "queue_capacity_clear": not capacity_blockers,
     }
 
 
@@ -314,12 +425,17 @@ def main() -> int:
         encoding="utf-8",
     )
     print(json.dumps(receipt, indent=2, sort_keys=True))
-    if not receipt["queue_drained"]:
+    if not receipt["queue_capacity_clear"]:
         print(
-            "obsolete pull-request run records remain after bounded recovery",
+            "capacity-blocking obsolete pull-request runs remain after bounded recovery",
             file=sys.stderr,
         )
         return 2
+    if not receipt["queue_drained"]:
+        print(
+            "provider-orphan run records remain visible but consume no runner capacity",
+            file=sys.stderr,
+        )
     return 0
 
 
