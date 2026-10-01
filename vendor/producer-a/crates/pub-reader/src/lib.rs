@@ -4535,6 +4535,7 @@ mod tests {
         let mut exact_top_group_escher = 0_usize;
         let mut ambiguous_top_group_escher = 0_usize;
         let mut max_depth = 0_usize;
+        let mut visible_descendants_by_top_group = BTreeMap::<u32, usize>::new();
 
         for node in build.graph.nodes.values() {
             let seq_num = node.payload.contents_seq_num;
@@ -4588,6 +4589,7 @@ mod tests {
                 .unwrap_or(0);
             exact_top_group_escher += usize::from(top_matches == 1);
             ambiguous_top_group_escher += usize::from(top_matches > 1);
+            *visible_descendants_by_top_group.entry(top_group_seq).or_default() += 1;
 
             let row = page_rows.entry(page_ordinal).or_default();
             *row.entry("grouped_visible_nodes".to_owned()).or_default() += 1;
@@ -4603,10 +4605,19 @@ mod tests {
             }
         }
 
+        let mut descendants_per_carrier_histogram = BTreeMap::<usize, usize>::new();
+        for descendant_count in visible_descendants_by_top_group.values().copied() {
+            *descendants_per_carrier_histogram
+                .entry(descendant_count)
+                .or_default() += 1;
+        }
+
         let receipt = serde_json::json!({
             "schema": "chaptera.newsletter-group-stack-carrier-census.v1",
             "source_sha256": source_hash,
             "page_count": build.graph.document.pages.len(),
+            "top_group_carrier_count": visible_descendants_by_top_group.len(),
+            "visible_descendants_per_top_group_histogram": descendants_per_carrier_histogram,
             "grouped_visible_node_count": total_grouped_nodes,
             "grouped_image_node_count": total_grouped_images,
             "grouped_story_node_count": total_grouped_story_nodes,
