@@ -309,7 +309,8 @@ async function openFile(file) {
       if (!await render(opened.scene, operation)) return;
     } else if (opened.classification === "salvage") {
       if (opened.scene !== undefined || !opened.salvage) throw new Error("salvage_protocol_mismatch");
-      assertSalvageObservation(opened.salvage);
+      const salvage = assertSalvageObservation(opened.salvage);
+      if (salvage.source_sha256 !== opened.source_sha256) throw new Error("salvage_protocol_mismatch");
     }
     if (isCurrent(operation)) {
       message(
