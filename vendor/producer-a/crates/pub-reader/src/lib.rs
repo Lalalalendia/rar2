@@ -3431,6 +3431,27 @@ fn index_escher_by_contents_seq(inventory: &SpContainerInventory) -> BTreeMap<u3
     index
 }
 
+fn append_grouped_carrier_participants(
+    seq_num: u32,
+    grouped_by_carrier: &BTreeMap<u32, (PageId, Vec<(usize, NodeId)>)>,
+    seen_seq: &mut BTreeSet<u32>,
+    rejected: &mut BTreeSet<PageId>,
+    ordered: &mut BTreeMap<PageId, Vec<NodeId>>,
+) -> bool {
+    let Some((page_id, grouped_nodes)) = grouped_by_carrier.get(&seq_num) else {
+        return false;
+    };
+    if !seen_seq.insert(seq_num) {
+        rejected.insert(*page_id);
+        return true;
+    }
+    ordered
+        .entry(*page_id)
+        .or_default()
+        .extend(grouped_nodes.iter().map(|(_, node_id)| *node_id));
+    true
+}
+
 fn source_page_paint_orders_v1(
     source_hash: Sha256Digest,
     graph: &PubSourceGraph,
@@ -3553,15 +3574,13 @@ fn source_page_paint_orders_v1(
         };
         let seq_num = shape_id.value;
 
-        if let Some((page_id, grouped_nodes)) = grouped_by_carrier.get(&seq_num) {
-            if !seen_seq.insert(seq_num) {
-                rejected.insert(*page_id);
-                continue;
-            }
-            ordered
-                .entry(*page_id)
-                .or_default()
-                .extend(grouped_nodes.iter().map(|(_, node_id)| *node_id));
+        if append_grouped_carrier_participants(
+            seq_num,
+            &grouped_by_carrier,
+            &mut seen_seq,
+            &mut rejected,
+            &mut ordered,
+        ) {
             continue;
         }
 
@@ -4712,6 +4731,57 @@ mod tests {
 
     fn test_page_id(seed: u8) -> PageId {
         PageId::from_canonical(CanonicalId::from_bytes([seed; 16]))
+    }
+
+    fn test_node_id(seed: u8) -> NodeId {
+        NodeId::from_canonical(CanonicalId::from_bytes([seed; 16]))
+    }
+
+    #[test]
+    fn grouped_carrier_participants_expand_at_one_source_order_slot_and_duplicate_fails_closed() {
+        let page_id = test_page_id(10);
+        let direct_before = test_node_id(11);
+        let grouped_first = test_node_id(12);
+        let grouped_second = test_node_id(13);
+        let carrier_seq = 300_u32;
+
+        let grouped_by_carrier = BTreeMap::from([(
+            carrier_seq,
+            (
+                page_id,
+                vec![(4_usize, grouped_first), (5_usize, grouped_second)],
+            ),
+        )]);
+        let mut seen_seq = BTreeSet::from([299_u32]);
+        let mut rejected = BTreeSet::new();
+        let mut ordered = BTreeMap::from([(page_id, vec![direct_before])]);
+
+        assert!(append_grouped_carrier_participants(
+            carrier_seq,
+            &grouped_by_carrier,
+            &mut seen_seq,
+            &mut rejected,
+            &mut ordered,
+        ));
+        assert_eq!(
+            ordered.get(&page_id),
+            Some(&vec![direct_before, grouped_first, grouped_second])
+        );
+        assert!(rejected.is_empty());
+
+        assert!(append_grouped_carrier_participants(
+            carrier_seq,
+            &grouped_by_carrier,
+            &mut seen_seq,
+            &mut rejected,
+            &mut ordered,
+        ));
+        assert!(rejected.contains(&page_id));
+        assert_eq!(
+            ordered.get(&page_id),
+            Some(&vec![direct_before, grouped_first, grouped_second]),
+            "duplicate carrier must not duplicate descendants"
+        );
     }
 
     #[test]
