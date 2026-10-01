@@ -408,6 +408,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
         diagnostics,
         typography_runs: Vec::new(),
         script_font_maps: Vec::new(),
+        paragraph_alignment_runs: Vec::new(),
     })
 }
 
