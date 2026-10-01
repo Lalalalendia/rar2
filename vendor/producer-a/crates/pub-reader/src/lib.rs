@@ -360,6 +360,11 @@ pub struct PubNodePayload {
     /// defaults, or the normative MS-ODRAW default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_paint: Option<PubEffectiveShapePaintSource>,
+    /// Bounded effective OfficeArt text-margin semantics. Present only when
+    /// automatic text margins are effectively disabled and all four margins
+    /// resolve unambiguously through shape/DGG/default authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_text_margins: Option<PubEffectiveTextMarginsSource>,
     pub story_frame: Option<PubStoryFrameSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_story: Option<PubTableStoryOwnershipSource>,
@@ -455,6 +460,18 @@ pub struct PubEffectiveLineSource {
     pub width_emu: Option<PubEffectivePaintValue<i64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible: Option<PubEffectivePaintValue<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubEffectiveTextMarginsSource {
+    /// Effective MS-ODRAW fAutoTextMargin state. This structure is emitted
+    /// only for the false case; true remains fail-closed because Publisher's
+    /// application-defined automatic margin set is not inferred here.
+    pub auto_text_margin: PubEffectivePaintValue<bool>,
+    pub left_emu: PubEffectivePaintValue<i64>,
+    pub top_emu: PubEffectivePaintValue<i64>,
+    pub right_emu: PubEffectivePaintValue<i64>,
+    pub bottom_emu: PubEffectivePaintValue<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2664,6 +2681,9 @@ pub fn build_mature_0x2c_from_streams(
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
             .flatten();
+        let effective_text_margins = (raw_type == Some(RAW_TYPE_SHAPE) && dgg_defaults_unambiguous)
+            .then(|| resolve_bounded_effective_officeart_text_margins(shape, dgg_defaults))
+            .flatten();
         let story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
             build_story_frame(
                 source_hash,
@@ -2725,7 +2745,9 @@ pub fn build_mature_0x2c_from_streams(
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
         ));
-        if has_explicit_officeart_paint_observation(shape) {
+        if has_explicit_officeart_paint_observation(shape)
+            || has_explicit_officeart_text_margin_observation(shape)
+        {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -2752,6 +2774,9 @@ pub fn build_mature_0x2c_from_streams(
         if effective_paint
             .as_ref()
             .is_some_and(effective_paint_has_dgg_authority)
+            || effective_text_margins
+                .as_ref()
+                .is_some_and(effective_text_margins_have_dgg_authority)
         {
             if let Some(dgg_defaults) = dgg_defaults {
                 source_refs.push(source_ref(
@@ -2810,6 +2835,7 @@ pub fn build_mature_0x2c_from_streams(
                     explicit_image_crop,
                     explicit_paint,
                     effective_paint,
+                    effective_text_margins,
                     story_frame,
                     table_story,
                     table,
@@ -3386,6 +3412,11 @@ fn source_page_paint_orders_v1(
 const OFFICE_ART_FILL_TYPE: u16 = 0x0180;
 const OFFICE_ART_FILL_COLOR: u16 = 0x0181;
 const OFFICE_ART_FILL_BOOLEANS: u16 = 0x01BF;
+const OFFICE_ART_TEXT_LEFT_MARGIN: u16 = 0x0081;
+const OFFICE_ART_TEXT_TOP_MARGIN: u16 = 0x0082;
+const OFFICE_ART_TEXT_RIGHT_MARGIN: u16 = 0x0083;
+const OFFICE_ART_TEXT_BOTTOM_MARGIN: u16 = 0x0084;
+const OFFICE_ART_TEXT_BOOLEANS: u16 = 0x00BF;
 const OFFICE_ART_LINE_COLOR: u16 = 0x01C0;
 const OFFICE_ART_LINE_WIDTH: u16 = 0x01CB;
 const OFFICE_ART_LINE_BOOLEANS: u16 = 0x01FF;
@@ -3398,6 +3429,11 @@ const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
 const LINE_USE_LINE_BIT: u32 = 1 << 19;
 const LINE_LINE_BIT: u32 = 1 << 3;
+// Text Boolean Properties (0x00BF) mirror use/value bits across the
+// high/low 16-bit words. fUsefAutoTextMargin is B (bit 28) and
+// fAutoTextMargin is G (bit 12).
+const TEXT_USE_AUTO_MARGIN_BIT: u32 = 1 << 28;
+const TEXT_AUTO_MARGIN_BIT: u32 = 1 << 12;
 const OFFICEART_FSP_CONNECTOR_BIT: u32 = 1 << 8;
 const OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE: u16 = 0x0000;
 const OFFICEART_SHAPE_TYPE_LINE: u16 = 0x0014;
@@ -3407,6 +3443,11 @@ const NORMATIVE_FILL_TYPE: u32 = 0;
 const NORMATIVE_FILL_COLOR: u32 = 0x00FF_FFFF;
 const NORMATIVE_LINE_COLOR: u32 = 0x0000_0000;
 const NORMATIVE_LINE_WIDTH_EMU: u32 = 0x0000_2535;
+const NORMATIVE_TEXT_LEFT_MARGIN_EMU: u32 = 0x0001_6530;
+const NORMATIVE_TEXT_TOP_MARGIN_EMU: u32 = 0x0000_B298;
+const NORMATIVE_TEXT_RIGHT_MARGIN_EMU: u32 = 0x0001_6530;
+const NORMATIVE_TEXT_BOTTOM_MARGIN_EMU: u32 = 0x0000_B298;
+const MAX_TEXT_MARGIN_EMU: u32 = 0x0132_F540;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PaintScalarLayer {
@@ -3420,6 +3461,25 @@ enum PaintLineVisibilityLayer {
     Absent,
     Value(PubEffectivePaintValue<bool>),
     Unresolved,
+}
+
+fn has_explicit_officeart_text_margin_observation(
+    shape: &pub_escher::SpContainerObservation,
+) -> bool {
+    shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| {
+            matches!(
+                property.property_id(),
+                OFFICE_ART_TEXT_LEFT_MARGIN
+                    | OFFICE_ART_TEXT_TOP_MARGIN
+                    | OFFICE_ART_TEXT_RIGHT_MARGIN
+                    | OFFICE_ART_TEXT_BOTTOM_MARGIN
+                    | OFFICE_ART_TEXT_BOOLEANS
+            )
+        })
 }
 
 fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
@@ -3558,6 +3618,108 @@ pub fn resolve_bounded_effective_officeart_paint(
             visible: line_visible,
         },
     })
+}
+
+pub fn resolve_bounded_effective_officeart_text_margins(
+    shape: &pub_escher::SpContainerObservation,
+    dgg_defaults: Option<&pub_escher::DggDefaultOptionsObservation>,
+) -> Option<PubEffectiveTextMarginsSource> {
+    let auto_text_margin = resolve_effective_officeart_text_auto_margin(shape, dgg_defaults)?;
+    if auto_text_margin.value {
+        return None;
+    }
+
+    let resolve_margin = |property_id, default_value| {
+        resolve_effective_officeart_scalar(shape, dgg_defaults, property_id, default_value)
+            .and_then(|value| {
+                (value.value <= MAX_TEXT_MARGIN_EMU).then(|| value.map(i64::from))
+            })
+    };
+
+    Some(PubEffectiveTextMarginsSource {
+        auto_text_margin,
+        left_emu: resolve_margin(
+            OFFICE_ART_TEXT_LEFT_MARGIN,
+            NORMATIVE_TEXT_LEFT_MARGIN_EMU,
+        )?,
+        top_emu: resolve_margin(
+            OFFICE_ART_TEXT_TOP_MARGIN,
+            NORMATIVE_TEXT_TOP_MARGIN_EMU,
+        )?,
+        right_emu: resolve_margin(
+            OFFICE_ART_TEXT_RIGHT_MARGIN,
+            NORMATIVE_TEXT_RIGHT_MARGIN_EMU,
+        )?,
+        bottom_emu: resolve_margin(
+            OFFICE_ART_TEXT_BOTTOM_MARGIN,
+            NORMATIVE_TEXT_BOTTOM_MARGIN_EMU,
+        )?,
+    })
+}
+
+fn resolve_effective_officeart_text_auto_margin(
+    shape: &pub_escher::SpContainerObservation,
+    dgg_defaults: Option<&pub_escher::DggDefaultOptionsObservation>,
+) -> Option<PubEffectivePaintValue<bool>> {
+    let mut layers = vec![text_auto_margin_from_records(
+        &shape.fopts,
+        PubEffectivePaintAuthority::ShapeLocal,
+    )];
+    if let Some(dgg) = dgg_defaults {
+        layers.push(text_auto_margin_from_records(
+            &dgg.primary_options,
+            PubEffectivePaintAuthority::DrawingGroupPrimary,
+        ));
+        layers.push(text_auto_margin_from_records(
+            &dgg.tertiary_options,
+            PubEffectivePaintAuthority::DrawingGroupTertiary,
+        ));
+    }
+
+    for layer in layers {
+        match layer {
+            PaintLineVisibilityLayer::Absent => {}
+            PaintLineVisibilityLayer::Unresolved => return None,
+            PaintLineVisibilityLayer::Value(value) => return Some(value),
+        }
+    }
+
+    Some(PubEffectivePaintValue {
+        value: false,
+        authority: PubEffectivePaintAuthority::NormativeDefault,
+        source: None,
+    })
+}
+
+fn text_auto_margin_from_records(
+    records: &[pub_escher::FoptObservation],
+    authority: PubEffectivePaintAuthority,
+) -> PaintLineVisibilityLayer {
+    let mut resolved = None;
+    for property in records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICE_ART_TEXT_BOOLEANS)
+    {
+        if property.f_bid() || property.f_complex() {
+            return PaintLineVisibilityLayer::Unresolved;
+        }
+        if property.op & TEXT_USE_AUTO_MARGIN_BIT == 0 {
+            continue;
+        }
+        if resolved.is_some() {
+            return PaintLineVisibilityLayer::Unresolved;
+        }
+        resolved = Some(PubEffectivePaintValue {
+            value: property.op & TEXT_AUTO_MARGIN_BIT != 0,
+            authority,
+            source: Some(property.source.clone()),
+        });
+    }
+
+    resolved
+        .map(PaintLineVisibilityLayer::Value)
+        .unwrap_or(PaintLineVisibilityLayer::Absent)
 }
 
 fn shape_has_explicit_filled_without_fill_color(
@@ -3775,6 +3937,24 @@ fn admits_normative_2d_paint_defaults(shape: &pub_escher::SpContainerObservation
     fsp.shape_type != OFFICEART_SHAPE_TYPE_NOT_PRIMITIVE
         && fsp.shape_type != OFFICEART_SHAPE_TYPE_LINE
         && fsp.flags & OFFICEART_FSP_CONNECTOR_BIT == 0
+}
+
+fn effective_text_margins_have_dgg_authority(margins: &PubEffectiveTextMarginsSource) -> bool {
+    [
+        margins.auto_text_margin.authority,
+        margins.left_emu.authority,
+        margins.top_emu.authority,
+        margins.right_emu.authority,
+        margins.bottom_emu.authority,
+    ]
+    .into_iter()
+    .any(|authority| {
+        matches!(
+            authority,
+            PubEffectivePaintAuthority::DrawingGroupPrimary
+                | PubEffectivePaintAuthority::DrawingGroupTertiary
+        )
+    })
 }
 
 fn effective_paint_has_dgg_authority(paint: &PubEffectiveShapePaintSource) -> bool {
