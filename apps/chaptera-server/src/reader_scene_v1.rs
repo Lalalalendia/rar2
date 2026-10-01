@@ -11,7 +11,7 @@ use serde_json::Value;
 pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
 const MAX_INLINE_IMAGE_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 10 * 1024 * 1024;
 const SHARED_FALLBACK_FONT_MIME: &str = "font/ttf";
 
 #[derive(Debug, Serialize)]
