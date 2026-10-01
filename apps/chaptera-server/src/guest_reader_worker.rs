@@ -3,11 +3,13 @@ use std::{
     fs::{self as stdfs, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    str::FromStr,
     time::Duration,
 };
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
+use pub_editor::{EditorEditableTarget, EditorSession, Sha256Digest, open_mature_0x2c_editor};
 use pub_viewer::{
     ViewerProductOpenOutcome, open_pub_bundle, open_pub_or_salvage,
     viewer_geometry_environment_v0_1,
@@ -27,6 +29,10 @@ use crate::{
     blob_store::BlobStoreService,
     config::CloudReaderFontResourceConfig,
     guest_intake_classifier::guest_failure_intake_evidence,
+    reader_compatibility_report::{
+        READER_EDITABLE_ROUTES_ASSESSMENT_V1, ReaderEditableRoutesAssessmentV1,
+        ReaderEditableTargetAssessmentV1,
+    },
     reader_scene_v1::{ReaderConfiguredFontResourceV1, from_viewer_geometry_with_fonts},
     source_ingress_security::SourceSecurityScannerConfig,
 };
@@ -90,6 +96,7 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub terminal_code: Option<String>,
     pub scene: Option<Value>,
     pub salvage: Option<Value>,
+    pub editable_routes: Option<ReaderEditableRoutesAssessmentV1>,
     pub failure_classification: Option<FailureClassificationV1>,
     pub filesystem_confinement: bool,
 }
@@ -521,6 +528,9 @@ pub fn run_guest_scene_worker(
             }
         };
 
+    let editable_routes =
+        assess_editable_routes(&source_bytes, expected_sha256, &classification);
+
     let failure_classification =
         guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
             .map(|evidence| evidence.classification);
@@ -534,10 +544,92 @@ pub fn run_guest_scene_worker(
         terminal_code,
         scene,
         salvage,
+        editable_routes,
         failure_classification,
         filesystem_confinement: true,
     };
     write_receipt(output, &receipt)
+}
+
+fn assess_editable_routes(
+    source_bytes: &[u8],
+    expected_sha256: &str,
+    classification: &str,
+) -> Option<ReaderEditableRoutesAssessmentV1> {
+    if !matches!(classification, "supported" | "partial") {
+        return None;
+    }
+
+    let source_hash = match Sha256Digest::from_str(expected_sha256) {
+        Ok(source_hash) => source_hash,
+        Err(_) => {
+            return Some(unverified_routes(expected_sha256, "source_identity_mismatch"));
+        }
+    };
+
+    let session = match open_mature_0x2c_editor(source_bytes, source_hash) {
+        Ok(session) => session,
+        Err(_) => {
+            return Some(ReaderEditableRoutesAssessmentV1 {
+                protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+                source_sha256: expected_sha256.to_owned(),
+                idml: unavailable_route("editor_profile_unavailable"),
+                odg: unavailable_route("editor_profile_unavailable"),
+            });
+        }
+    };
+
+    if session.source_hash() != source_hash {
+        return Some(unverified_routes(expected_sha256, "source_identity_mismatch"));
+    }
+
+    Some(ReaderEditableRoutesAssessmentV1 {
+        protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+        source_sha256: expected_sha256.to_owned(),
+        idml: assess_editable_target(&session, EditorEditableTarget::Idml),
+        odg: assess_editable_target(&session, EditorEditableTarget::Odg),
+    })
+}
+
+fn assess_editable_target(
+    session: &EditorSession,
+    target: EditorEditableTarget,
+) -> ReaderEditableTargetAssessmentV1 {
+    match session.preview_editable_export(target, "guest:source") {
+        Ok(preview) if preview.report.can_serialize && preview.report.counts.blocking == 0 => {
+            ReaderEditableTargetAssessmentV1 {
+                state: "available_with_declared_losses".to_owned(),
+                reason_code: "serializable".to_owned(),
+            }
+        }
+        Ok(_) => unavailable_route("blocking_losses"),
+        Err(_) => ReaderEditableTargetAssessmentV1 {
+            state: "not_verified".to_owned(),
+            reason_code: "assessment_failed".to_owned(),
+        },
+    }
+}
+
+fn unavailable_route(reason_code: &str) -> ReaderEditableTargetAssessmentV1 {
+    ReaderEditableTargetAssessmentV1 {
+        state: "unavailable".to_owned(),
+        reason_code: reason_code.to_owned(),
+    }
+}
+
+fn unverified_routes(source_sha256: &str, reason_code: &str) -> ReaderEditableRoutesAssessmentV1 {
+    ReaderEditableRoutesAssessmentV1 {
+        protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+        source_sha256: source_sha256.to_owned(),
+        idml: ReaderEditableTargetAssessmentV1 {
+            state: "not_verified".to_owned(),
+            reason_code: reason_code.to_owned(),
+        },
+        odg: ReaderEditableTargetAssessmentV1 {
+            state: "not_verified".to_owned(),
+            reason_code: reason_code.to_owned(),
+        },
+    }
 }
 
 fn configured_font_resource_id(expected_sha256: &str, face_index: u32) -> String {
@@ -741,6 +833,20 @@ fn validate_receipt(
                     "worker scene uses an unsupported Reader scene protocol",
                 ));
             }
+            let editable_routes = receipt.editable_routes.as_ref().ok_or_else(|| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "supported/partial receipt is missing editable route assessment",
+                )
+            })?;
+            editable_routes
+                .validate_for_source(expected_sha256)
+                .map_err(|_| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_receipt_invalid",
+                        "supported/partial receipt carries invalid editable route assessment",
+                    )
+                })?;
             if receipt.salvage.is_some()
                 || receipt.terminal_code.is_some()
                 || receipt.failure_classification.is_some()
@@ -752,10 +858,10 @@ fn validate_receipt(
             }
         }
         "salvage" => {
-            if receipt.scene.is_some() {
+            if receipt.scene.is_some() || receipt.editable_routes.is_some() {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
-                    "salvage receipt cannot masquerade as Reader scene",
+                    "salvage receipt cannot carry Reader scene or editable route assessment",
                 ));
             }
             let observation = receipt.salvage.as_ref().ok_or_else(|| {
@@ -785,6 +891,7 @@ fn validate_receipt(
         "unsupported" => {
             if receipt.scene.is_some()
                 || receipt.salvage.is_some()
+                || receipt.editable_routes.is_some()
                 || !matches!(
                     receipt.terminal_code.as_deref(),
                     Some("reader_scene_open_failed" | "reader_scene_projection_failed")
@@ -974,6 +1081,7 @@ mod tests {
                 "facts":[],
                 "gaps":["text_unavailable","image_facts_unavailable","geometry_facts_unavailable"]
             })),
+            editable_routes: None,
             failure_classification: None,
             filesystem_confinement: true,
         };
@@ -992,6 +1100,7 @@ mod tests {
             terminal_code: Some("reader_scene_open_failed".to_owned()),
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
             salvage: None,
+            editable_routes: None,
             failure_classification: None,
             filesystem_confinement: true,
         };
