@@ -1352,11 +1352,27 @@ mod tests {
                     .count();
 
                 let mut descriptor_probe_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+                let mut inline_resource_count = 0_usize;
+                let mut inline_total_bytes = 0_usize;
+                let mut eligible_resource_count = 0_usize;
+                let mut eligible_total_bytes = 0_usize;
+                let mut eligible_node_refs = 0_usize;
                 let mut descriptor_only_resource_count = 0_usize;
                 let mut descriptor_only_mime_counts = BTreeMap::<String, usize>::new();
                 let mut descriptor_only_reason_counts = BTreeMap::<&'static str, usize>::new();
                 let mut descriptor_only_total_bytes = 0_usize;
                 for image in &bundle.geometry.images {
+                    let individually_eligible = matches!(
+                        image.mime.as_str(),
+                        "image/png" | "image/jpeg" | "image/jpg" | "image/gif"
+                    ) && !image.bytes.is_empty()
+                        && image.bytes.len() <= MAX_INLINE_IMAGE_RESOURCE_BYTES;
+                    if individually_eligible {
+                        eligible_resource_count += 1;
+                        eligible_total_bytes += image.bytes.len();
+                        eligible_node_refs += image.node_ids.len();
+                    }
+
                     let admission = classify_probe_image_inline_admission(
                         &image.mime,
                         image.bytes.len(),
@@ -1364,6 +1380,8 @@ mod tests {
                     );
                     if admission == ProbeImageInlineAdmission::Inline {
                         descriptor_probe_budget -= image.bytes.len();
+                        inline_resource_count += 1;
+                        inline_total_bytes += image.bytes.len();
                         continue;
                     }
 
@@ -1403,7 +1421,7 @@ mod tests {
                     .count();
 
                 println!(
-                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} descriptor_only_resource_count={} descriptor_only_mime_counts={:?} descriptor_only_reason_counts={:?} descriptor_only_total_bytes={} descriptor_only_visible_node_refs={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} inline_resource_count={} inline_total_bytes={} eligible_resource_count={} eligible_total_bytes={} eligible_node_refs={} remaining_inline_budget={} descriptor_only_resource_count={} descriptor_only_mime_counts={:?} descriptor_only_reason_counts={:?} descriptor_only_total_bytes={} descriptor_only_visible_node_refs={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
                     scene.fidelity.state,
                     scene.stacking_fidelity,
                     scene.pages.len(),
@@ -1415,6 +1433,12 @@ mod tests {
                     table_cells,
                     spanning_cells,
                     bounded_table_cells,
+                    inline_resource_count,
+                    inline_total_bytes,
+                    eligible_resource_count,
+                    eligible_total_bytes,
+                    eligible_node_refs,
+                    descriptor_probe_budget,
                     descriptor_only_resource_count,
                     descriptor_only_mime_counts,
                     descriptor_only_reason_counts,
