@@ -1,0 +1,90 @@
+name: Brochure incomplete fill authority census
+
+on:
+  pull_request:
+    paths:
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - ".github/workflows/brochure-effective-paint-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Acquire exact public Brochure and Newsletter controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/paint-fixtures" target/manual-paint
+          python - <<'PY'
+          import hashlib
+          import urllib.request
+          from pathlib import Path
+          import os
+
+          expected = {
+              "SampleBrochure": "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
+              "SampleNewsletter": "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+          }
+          base = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          root = Path(os.environ["RUNNER_TEMP"]) / "paint-fixtures"
+          for name, digest in expected.items():
+              data = urllib.request.urlopen(f"{base}/{name}.pub", timeout=30).read()
+              actual = hashlib.sha256(data).hexdigest()
+              assert actual == digest, (name, actual, digest)
+              (root / f"{name}.pub").write_bytes(data)
+              print(name, len(data), actual)
+          PY
+
+      - name: Formatting
+        run: cargo fmt -p chaptera-server --check
+
+      - name: Build measurement surfaces
+        run: |
+          cargo test -p chaptera-server real_reference_scene_projection_probe --no-run
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census
+
+      - name: Raw OfficeArt fill census
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SampleBrochure SampleNewsletter; do
+            vendor/producer-a/target/debug/reference_fill_state_census               "$RUNNER_TEMP/paint-fixtures/$name.pub"               "target/manual-paint/$name.fill-state.json"               | tee "target/manual-paint/$name.fill-state.txt"
+          done
+
+      - name: Shared source to Viewer to Scene fill projection census
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_probe() {
+            local name="$1"
+            local sha="$2"
+            CHAPTERA_READER_SCENE_PROBE_PUB="$RUNNER_TEMP/paint-fixtures/$name.pub"             CHAPTERA_READER_SCENE_PROBE_SHA256="$sha"               cargo test -p chaptera-server real_reference_scene_projection_probe -- --ignored --nocapture               | tee "target/manual-paint/$name.scene-probe.txt"
+          }
+          run_probe SampleBrochure ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87
+          run_probe SampleNewsletter 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: brochure-incomplete-fill-authority-census
+          path: target/manual-paint/
+          if-no-files-found: error
+          retention-days: 3
