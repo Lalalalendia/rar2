@@ -3492,7 +3492,8 @@ fn materialized_node_source_page_v1(
     // nodes are already admitted only after project_grouped_object_shape()
     // validated their bounded raw0x30 ancestry against OfficeArt parent links.
     // Rewalk only that proven Contents ancestry here to recover the page stack
-    // lane; do not invent a new group identity or transform law.
+    // lane. Serialized OfficeArt traversal remains the sole order authority;
+    // this helper does not invent a new group identity or transform law.
     for depth in 0..=2 {
         if let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() {
             return (node.header.parent_id == page_id.into_canonical()).then_some(page_id);
