@@ -240,6 +240,71 @@ pub struct ViewerPagePaintOrderV1 {
     pub node_ids: Vec<NodeId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ViewerSourcePaintOrderApplicationStatsV1 {
+    page_order_count: usize,
+    known_node_count: usize,
+}
+
+/// Applies only the relative order already proven by source page-paint receipts.
+///
+/// pub-layout deliberately canonicalizes scene nodes by identity and does not
+/// assign paint semantics to vector order. At the Viewer consumer boundary we
+/// may restore the persisted OfficeArt order for the direct source-backed nodes
+/// covered by ViewerPagePaintOrderV1. Nodes outside that bounded authority keep
+/// their exact slots, so no relative ordering is invented for projected,
+/// inherited, grouped, or otherwise unsupported classes.
+fn apply_known_source_page_paint_orders_to_scene_nodes_v1(
+    nodes: &mut [ResolvedPhysicalNode],
+    source_orders: &[ViewerPagePaintOrderV1],
+) -> ViewerSourcePaintOrderApplicationStatsV1 {
+    let mut stats = ViewerSourcePaintOrderApplicationStatsV1::default();
+
+    for order in source_orders {
+        let mut rank = BTreeMap::<NodeId, usize>::new();
+        let mut invalid_order = false;
+        for (stack_rank, node_id) in order.node_ids.iter().copied().enumerate() {
+            if rank.insert(node_id, stack_rank).is_some() {
+                invalid_order = true;
+                break;
+            }
+        }
+        if invalid_order || rank.is_empty() {
+            continue;
+        }
+
+        let expected_parent = order.page_id.into_canonical();
+        let mut seen = BTreeSet::<NodeId>::new();
+        let mut slots = Vec::new();
+        let mut covered = Vec::new();
+        for (slot, node) in nodes.iter().enumerate() {
+            let Some(stack_rank) = rank.get(&node.origin).copied() else {
+                continue;
+            };
+            if node.parent_origin != expected_parent || !seen.insert(node.origin) {
+                invalid_order = true;
+                break;
+            }
+            slots.push(slot);
+            covered.push((stack_rank, node.clone()));
+        }
+        if invalid_order || covered.is_empty() {
+            continue;
+        }
+
+        covered.sort_by_key(|(stack_rank, _)| *stack_rank);
+        let covered_len = covered.len();
+        for (slot, (_, node)) in slots.into_iter().zip(covered) {
+            nodes[slot] = node;
+        }
+
+        stats.page_order_count += 1;
+        stats.known_node_count += covered_len;
+    }
+
+    stats
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewerOpenBundle {
     pub geometry: ViewerGeometryDocument,
@@ -1849,7 +1914,7 @@ fn open_mature_0x2c_bundle(
         }
     };
 
-    let scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
+    let mut scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
         let codes = blocked
             .projection_errors
             .iter()
@@ -1894,6 +1959,30 @@ fn open_mature_0x2c_bundle(
         }
     };
 
+    let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
+    let source_page_paint_orders = pipeline
+        .source
+        .source_page_paint_orders
+        .iter()
+        .filter(|order| selected_pages.contains(&order.page_id))
+        .map(viewer_page_paint_order_from_source)
+        .collect::<Vec<_>>();
+    let source_order_stats = apply_known_source_page_paint_orders_to_scene_nodes_v1(
+        &mut scene.nodes,
+        &source_page_paint_orders,
+    );
+    if source_order_stats.known_node_count > 0 {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.stacking.source_order_partial_applied".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "Persisted source back-to-front order was applied to {} direct source-backed node(s) across {} page order receipt(s); nodes outside that bounded authority retained their existing slots.",
+                source_order_stats.known_node_count,
+                source_order_stats.page_order_count,
+            ),
+        });
+    }
+
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
@@ -1918,15 +2007,6 @@ fn open_mature_0x2c_bundle(
         projected_instances,
         images,
     };
-    let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
-    let source_page_paint_orders = pipeline
-        .source
-        .source_page_paint_orders
-        .iter()
-        .filter(|order| selected_pages.contains(&order.page_id))
-        .map(viewer_page_paint_order_from_source)
-        .collect::<Vec<_>>();
-
     Ok(ViewerOpenBundle {
         geometry,
         resolved_graph: pipeline.resolved.graph,
@@ -4760,6 +4840,115 @@ mod tests {
         );
         assert_eq!(visual, mismatched_before);
         assert_ne!(visual, before);
+    }
+
+    #[test]
+    fn source_page_paint_order_reorders_only_known_direct_node_slots() {
+        let page_id = PageId::from_canonical(id(40));
+        let other_page_id = PageId::from_canonical(id(41));
+        let node = |byte: u8, parent: PageId| ResolvedPhysicalNode {
+            origin: NodeId::from_canonical(id(byte)),
+            parent_origin: parent.into_canonical(),
+            bounds: RectEmu::new(
+                LengthEmu::ZERO,
+                LengthEmu::ZERO,
+                LengthEmu::new(10),
+                LengthEmu::new(10),
+            ),
+            transform: Affine2D::identity(),
+        };
+
+        let mut nodes = vec![
+            node(1, page_id),
+            node(90, other_page_id),
+            node(2, page_id),
+            node(91, page_id),
+            node(3, page_id),
+        ];
+        let order = ViewerPagePaintOrderV1 {
+            page_id,
+            node_ids: vec![
+                NodeId::from_canonical(id(3)),
+                NodeId::from_canonical(id(1)),
+                NodeId::from_canonical(id(2)),
+            ],
+        };
+
+        let stats = apply_known_source_page_paint_orders_to_scene_nodes_v1(&mut nodes, &[order]);
+
+        assert_eq!(stats.page_order_count, 1);
+        assert_eq!(stats.known_node_count, 3);
+        assert_eq!(
+            nodes.iter().map(|node| node.origin).collect::<Vec<_>>(),
+            vec![
+                NodeId::from_canonical(id(3)),
+                NodeId::from_canonical(id(90)),
+                NodeId::from_canonical(id(1)),
+                NodeId::from_canonical(id(91)),
+                NodeId::from_canonical(id(2)),
+            ],
+            "only covered direct nodes may move; unknown/other-page nodes keep their slots"
+        );
+    }
+
+    #[test]
+    fn invalid_or_wrong_page_source_order_stays_fail_closed() {
+        let page_id = PageId::from_canonical(id(50));
+        let other_page_id = PageId::from_canonical(id(51));
+        let first = NodeId::from_canonical(id(4));
+        let second = NodeId::from_canonical(id(5));
+        let original = vec![
+            ResolvedPhysicalNode {
+                origin: first,
+                parent_origin: other_page_id.into_canonical(),
+                bounds: RectEmu::new(
+                    LengthEmu::ZERO,
+                    LengthEmu::ZERO,
+                    LengthEmu::new(10),
+                    LengthEmu::new(10),
+                ),
+                transform: Affine2D::identity(),
+            },
+            ResolvedPhysicalNode {
+                origin: second,
+                parent_origin: page_id.into_canonical(),
+                bounds: RectEmu::new(
+                    LengthEmu::ZERO,
+                    LengthEmu::ZERO,
+                    LengthEmu::new(10),
+                    LengthEmu::new(10),
+                ),
+                transform: Affine2D::identity(),
+            },
+        ];
+
+        let mut wrong_page_nodes = original.clone();
+        let wrong_page = ViewerPagePaintOrderV1 {
+            page_id,
+            node_ids: vec![second, first],
+        };
+        assert_eq!(
+            apply_known_source_page_paint_orders_to_scene_nodes_v1(
+                &mut wrong_page_nodes,
+                &[wrong_page],
+            ),
+            ViewerSourcePaintOrderApplicationStatsV1::default()
+        );
+        assert_eq!(wrong_page_nodes, original);
+
+        let mut duplicate_order_nodes = original.clone();
+        let duplicate = ViewerPagePaintOrderV1 {
+            page_id: other_page_id,
+            node_ids: vec![first, first],
+        };
+        assert_eq!(
+            apply_known_source_page_paint_orders_to_scene_nodes_v1(
+                &mut duplicate_order_nodes,
+                &[duplicate],
+            ),
+            ViewerSourcePaintOrderApplicationStatsV1::default()
+        );
+        assert_eq!(duplicate_order_nodes, original);
     }
 
     #[test]
