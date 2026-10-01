@@ -5168,6 +5168,8 @@ mod tests {
                 story_id: frame.story_origin,
                 frame_id: frame.frame_origin,
                 ordinal: frame.ordinal,
+                text_content_bounds: None,
+                vertical_alignment: None,
             })
             .collect::<Vec<_>>();
         let mut diagnostics = initial_flow_diagnostics
