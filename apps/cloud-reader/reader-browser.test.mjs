@@ -36,7 +36,7 @@ const requests = [];
 const sessions = new Map();
 let nextScenario = {};
 let nextSession = 0;
-const staticFiles = new Set(["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs"]);
+const staticFiles = new Set(["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs", "observability-v1.mjs"]);
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://127.0.0.1");
@@ -111,8 +111,10 @@ const server = createServer(async (req, res) => {
     const name = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
     if (!staticFiles.has(name)) { res.writeHead(404); res.end(); return; }
     const type = name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript";
+    const source = name === "observability-v1.mjs" ? join(root, "../web/observability-v1.mjs") : join(root, name);
+    const bytes = await readFile(source);
     res.writeHead(200, { "content-type": type + "; charset=utf-8" });
-    res.end(await readFile(join(root, name)));
+    res.end(bytes);
   } catch (error) { res.writeHead(500); res.end("synthetic_service_failure"); console.error(error); }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
