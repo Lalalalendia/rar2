@@ -1,4 +1,4 @@
-# Consumer-only acceptance helper.
+# Consumer-only acceptance helper for current editable-target proof.
 import os
 import sys
 
