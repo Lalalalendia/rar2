@@ -1,0 +1,97 @@
+name: Measure 2010 page extent authorities
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/page-extent-authority-2010.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/page_extent_authority_census.rs"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: target/page-extent-authority-2010
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Format probe
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -- --check
+
+      - name: Check probe
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page_extent_authority_census -- -D warnings
+
+      - name: Acquire exact Apache POI 2010 fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/page-extent-2010"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          names = ["Sample_2010", "Sample2_2010", "Sample3_2010", "Sample4_2010"]
+          base = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          root = Path(os.environ["RUNNER_TEMP"]) / "page-extent-2010"
+          receipts = []
+          for name in names:
+              data = urllib.request.urlopen(f"{base}/{name}.pub", timeout=30).read()
+              path = root / f"{name}.pub"
+              path.write_bytes(data)
+              receipts.append({
+                  "fixture": name,
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "bytes": len(data),
+              })
+          print(json.dumps(receipts, indent=2, sort_keys=True))
+          PY
+
+      - name: Run source-only authority census
+        run: |
+          mkdir -p target/page-extent-authority-receipt
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page_extent_authority_census -- \
+            "$RUNNER_TEMP/page-extent-2010/Sample_2010.pub" \
+            "$RUNNER_TEMP/page-extent-2010/Sample2_2010.pub" \
+            "$RUNNER_TEMP/page-extent-2010/Sample3_2010.pub" \
+            "$RUNNER_TEMP/page-extent-2010/Sample4_2010.pub" \
+            | tee target/page-extent-authority-receipt/receipt.json
+
+      - name: Validate receipt boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("target/page-extent-authority-receipt/receipt.json")
+          data = json.loads(p.read_text())
+          assert data["schema"] == "chaptera.page-extent-authority-census.v1"
+          assert len(data["fixtures"]) == 4
+          for fixture in data["fixtures"]:
+              assert fixture["canonical_page_sizes_emu"]
+              assert fixture["carriers"]
+          print(json.dumps(data, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: page-extent-authority-2010
+          path: target/page-extent-authority-receipt/receipt.json
+          if-no-files-found: error
+          retention-days: 7
