@@ -297,7 +297,7 @@ fn salvage_gap_label(gap: ReaderPartialSourceGap) -> &'static str {
 
 fn salvage_text_matches(graph: &ReaderPartialSourceGraph, query: &str) -> Vec<String> {
     let query = query.trim().to_lowercase();
-    if query.is_empty() {
+    if query.is_empty() || query.chars().count() > 200 {
         return Vec::new();
     }
     graph
@@ -311,6 +311,7 @@ fn salvage_text_matches(graph: &ReaderPartialSourceGraph, query: &str) -> Vec<St
             }
             _ => None,
         })
+        .take(200)
         .collect()
 }
 
@@ -1390,7 +1391,20 @@ impl ViewerApp {
             Ok(visual) => (Some(visual), None),
             Err(error) if reader_only_mode() => {
                 match open_pub_or_salvage(bytes, viewer_geometry_environment_v0_1()) {
-                    Ok(ViewerProductOpenOutcome::Salvage(graph)) => (None, Some(graph)),
+                    Ok(ViewerProductOpenOutcome::Salvage(graph)) => {
+                        if graph.source_sha256 != admitted.sha256() {
+                            return Err(ViewerLoadFailure {
+                                kind: ViewerLoadFailureKind::Unsupported,
+                                attempted_path: Some(path.clone()),
+                                message:
+                                    "Recovered evidence did not match the admitted source identity."
+                                        .to_owned(),
+                                classification: Some(classify_failure_candidate(bytes)),
+                                diagnostic_json: None,
+                            });
+                        }
+                        (None, Some(graph))
+                    }
                     Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => {
                         return Err(ViewerLoadFailure {
                             kind: ViewerLoadFailureKind::Unsupported,
@@ -6337,6 +6351,7 @@ mod tests {
         );
         assert!(salvage_text_matches(&graph, "bbbb").is_empty());
         assert!(salvage_text_matches(&graph, "").is_empty());
+        assert!(salvage_text_matches(&graph, &"a".repeat(201)).is_empty());
         assert_eq!(
             salvage_gap_label(ReaderPartialSourceGap::GeometryFactsUnavailable),
             "Page/object geometry is not grounded; no page layout is claimed."
