@@ -33,6 +33,7 @@ pub mod project_persistence_sqlite;
 pub mod public_rate_limit;
 pub mod quota_admission;
 pub mod quota_store;
+pub mod reader_observability;
 pub mod reader_scene_v1;
 pub mod revision_materializer;
 pub mod runtime_error;
