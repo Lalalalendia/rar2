@@ -1777,15 +1777,6 @@ fn open_legacy_0x22_noquill_bundle(
             .map(map_scene_diagnostic),
     );
 
-    images.extend(viewer_mature_officeart_wmf_preview_images(
-        bytes,
-        &pipeline.source_hash,
-        &pipeline.source,
-        &pipeline.resolved.graph,
-        &scene,
-        &mut document.diagnostics,
-    ));
-
     let preview_source_hash = document.source.source_hash;
     let mut images = viewer_legacy_ole_cached_preview_images(
         bytes,
@@ -2215,6 +2206,15 @@ fn open_mature_0x2c_bundle(
             .filter(|diagnostic| diagnostic.code != "story_text_layout_not_implemented")
             .map(map_scene_diagnostic),
     );
+
+    images.extend(viewer_mature_officeart_wmf_preview_images(
+        bytes,
+        &pipeline.source_hash,
+        &pipeline.source,
+        &pipeline.resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    ));
 
     #[cfg(feature = "cmo-slot-compose")]
     let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
