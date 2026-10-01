@@ -344,10 +344,7 @@ pub fn bounded_mcld_text_frame_vertical_alignment(
         1 => QuillMcldVerticalAlignment::Center,
         2 => QuillMcldVerticalAlignment::Bottom,
         value => {
-            return Err(QuillMcldReadError::UnsupportedVerticalAlignmentValue {
-                record_id,
-                value,
-            });
+            return Err(QuillMcldReadError::UnsupportedVerticalAlignmentValue { record_id, value });
         }
     };
 
