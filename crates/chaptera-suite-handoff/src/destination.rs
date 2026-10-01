@@ -98,7 +98,10 @@ impl fmt::Display for DestinationWriteError {
                 source,
             } => write!(f, "{operation} {}: {source}", path.display()),
             Self::UnsupportedPlatform => {
-                write!(f, "destination file identity is unsupported on this platform")
+                write!(
+                    f,
+                    "destination file identity is unsupported on this platform"
+                )
             }
             Self::ParentChanged { requested_parent } => write!(
                 f,
@@ -106,16 +109,32 @@ impl fmt::Display for DestinationWriteError {
                 requested_parent.display()
             ),
             Self::ReparseTarget { path } => {
-                write!(f, "destination target is a reparse/symlink: {}", path.display())
+                write!(
+                    f,
+                    "destination target is a reparse/symlink: {}",
+                    path.display()
+                )
             }
             Self::ProtectedAlias { path } => {
-                write!(f, "destination aliases a protected file: {}", path.display())
+                write!(
+                    f,
+                    "destination aliases a protected file: {}",
+                    path.display()
+                )
             }
             Self::TargetChanged { path } => {
-                write!(f, "destination target changed after admission: {}", path.display())
+                write!(
+                    f,
+                    "destination target changed after admission: {}",
+                    path.display()
+                )
             }
             Self::VerificationFailed { path, reason } => {
-                write!(f, "destination verification failed for {}: {reason}", path.display())
+                write!(
+                    f,
+                    "destination verification failed for {}: {reason}",
+                    path.display()
+                )
             }
             Self::ReplaceInterrupted {
                 target,
@@ -154,11 +173,7 @@ impl std::error::Error for DestinationWriteError {
     }
 }
 
-fn io_error(
-    operation: &'static str,
-    path: &Path,
-    source: io::Error,
-) -> DestinationWriteError {
+fn io_error(operation: &'static str, path: &Path, source: io::Error) -> DestinationWriteError {
     DestinationWriteError::Io {
         operation,
         path: path.to_path_buf(),
@@ -186,8 +201,9 @@ impl AdmittedDestination {
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let canonical_parent = fs::canonicalize(&requested_parent)
-            .map_err(|error| io_error("canonicalize destination parent", &requested_parent, error))?;
+        let canonical_parent = fs::canonicalize(&requested_parent).map_err(|error| {
+            io_error("canonicalize destination parent", &requested_parent, error)
+        })?;
         let parent_metadata = fs::metadata(&canonical_parent)
             .map_err(|error| io_error("stat destination parent", &canonical_parent, error))?;
         if !parent_metadata.is_dir() {
@@ -224,8 +240,7 @@ impl AdmittedDestination {
     ) -> Result<DestinationCommitReceipt, DestinationWriteError> {
         self.revalidate_parent()?;
 
-        let (candidate_path, mut candidate_file) =
-            create_unique_candidate(&self.canonical_parent)?;
+        let (candidate_path, mut candidate_file) = create_unique_candidate(&self.canonical_parent)?;
         candidate_file
             .write_all(bytes)
             .map_err(|error| io_error("write destination candidate", &candidate_path, error))?;
@@ -259,11 +274,9 @@ impl AdmittedDestination {
             None
         };
 
-        if let Err(error) = verify_exact_file(
-            &self.target_path,
-            bytes.len() as u64,
-            &expected_sha256,
-        ) {
+        if let Err(error) =
+            verify_exact_file(&self.target_path, bytes.len() as u64, &expected_sha256)
+        {
             return Err(DestinationWriteError::RecoveryRequired {
                 target: self.target_path.clone(),
                 candidate: candidate_path.exists().then_some(candidate_path),
@@ -362,9 +375,7 @@ fn inspect_target(
     Ok(Some(identity))
 }
 
-fn create_unique_candidate(
-    parent: &Path,
-) -> Result<(PathBuf, File), DestinationWriteError> {
+fn create_unique_candidate(parent: &Path) -> Result<(PathBuf, File), DestinationWriteError> {
     for _ in 0..64 {
         let sequence = SIBLING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let name = format!(
@@ -406,7 +417,8 @@ fn verify_exact_file(
     expected_len: u64,
     expected_sha256: &str,
 ) -> Result<(), DestinationWriteError> {
-    let mut file = File::open(path).map_err(|error| io_error("reopen written file", path, error))?;
+    let mut file =
+        File::open(path).map_err(|error| io_error("reopen written file", path, error))?;
     let mut digest = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -417,12 +429,13 @@ fn verify_exact_file(
         if read == 0 {
             break;
         }
-        total = total
-            .checked_add(read as u64)
-            .ok_or(DestinationWriteError::VerificationFailed {
-                path: path.to_path_buf(),
-                reason: "written byte length overflow",
-            })?;
+        total =
+            total
+                .checked_add(read as u64)
+                .ok_or(DestinationWriteError::VerificationFailed {
+                    path: path.to_path_buf(),
+                    reason: "written byte length overflow",
+                })?;
         digest.update(&buffer[..read]);
     }
     if total != expected_len {
@@ -462,7 +475,10 @@ fn replace_existing(target: &Path, candidate: &Path, backup: &Path) -> io::Resul
     use std::ptr;
 
     fn wide(path: &Path) -> Vec<u16> {
-        path.as_os_str().encode_wide().chain(iter::once(0)).collect()
+        path.as_os_str()
+            .encode_wide()
+            .chain(iter::once(0))
+            .collect()
     }
 
     let target = wide(target);
@@ -516,8 +532,7 @@ fn is_reparse_or_symlink(metadata: &fs::Metadata) -> bool {
 #[cfg(unix)]
 fn platform_file_identity(path: &Path) -> Result<FileIdentity, DestinationWriteError> {
     use std::os::unix::fs::MetadataExt;
-    let metadata =
-        fs::metadata(path).map_err(|error| io_error("identify file", path, error))?;
+    let metadata = fs::metadata(path).map_err(|error| io_error("identify file", path, error))?;
     Ok(FileIdentity {
         primary: metadata.dev(),
         secondary: metadata.ino(),
