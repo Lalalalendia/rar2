@@ -1,7 +1,9 @@
 import { internalAuthorized } from '../../../../../lib/auth';
 import {
+  type CanonicalCompatibilityState,
   type CheckResult,
   type Compatibility,
+  type EditableRouteState,
   readCheck,
   writeCheck,
 } from '../../../../../lib/checks';
@@ -13,6 +15,17 @@ const COMPATIBILITY: Compatibility[] = [
   'unsupported',
   'invalid',
   'failed',
+];
+const CANONICAL_STATES: CanonicalCompatibilityState[] = [
+  'opens_normally',
+  'needs_review',
+  'opens_with_salvage',
+  'unsupported',
+];
+const EDITABLE_ROUTES: EditableRouteState[] = [
+  'available_with_declared_losses',
+  'unavailable',
+  'not_verified',
 ];
 
 function validResult(value: unknown): value is CheckResult {
@@ -28,7 +41,17 @@ function validResult(value: unknown): value is CheckResult {
     (result.limitations === undefined ||
       (Array.isArray(result.limitations) &&
         result.limitations.length <= 100 &&
-        result.limitations.every((item) => typeof item === 'string' && item.length <= 1000)))
+        result.limitations.every((item) => typeof item === 'string' && item.length <= 1000))) &&
+    (result.canonicalState === undefined ||
+      CANONICAL_STATES.includes(result.canonicalState)) &&
+    (result.editableIdml === undefined ||
+      EDITABLE_ROUTES.includes(result.editableIdml)) &&
+    (result.editableOdg === undefined ||
+      EDITABLE_ROUTES.includes(result.editableOdg)) &&
+    (result.recommendedNextStep === undefined ||
+      (typeof result.recommendedNextStep === 'string' &&
+        result.recommendedNextStep.length > 0 &&
+        result.recommendedNextStep.length <= 160))
   );
 }
 
