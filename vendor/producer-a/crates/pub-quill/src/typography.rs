@@ -1,7 +1,7 @@
 use crate::{QuillStoryCatalog, QuillStorySlice};
 use pub_core::{QuillSyid, RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 const FONT: [u8; 4] = *b"FONT";
@@ -171,6 +171,25 @@ impl QuillEffectiveTypographyRun {
         self.font_source == QuillTypographyValueSource::InheritedStsh1
             || self.text_size_source == QuillTypographyValueSource::InheritedStsh1
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillTextSizeAuthorityDiagnostic {
+    pub fdpc_intersecting_ranges: usize,
+    pub fdpc_explicit_size_values_emu: BTreeMap<u32, usize>,
+    pub fdpp_intersecting_ranges: usize,
+    pub fdpp_explicit_selector_ranges: usize,
+    pub fdpp_implicit_style_zero_ranges: usize,
+    pub stsh_explicit_selector_size_values_emu: BTreeMap<u32, usize>,
+    pub effective_size_values_emu: BTreeMap<u32, usize>,
+    pub implicit_style_zero_applied: bool,
+    pub unresolved_reasons: BTreeMap<String, usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fdpc_unknown_block_types_assumed_zero_length: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inheritance_unknown_block_types_assumed_zero_length: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inheritance_unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -525,6 +544,310 @@ pub fn parse_bounded_typography(
             .collect(),
         effective_inheritance_unavailable_reason,
     })
+}
+
+pub fn diagnose_bounded_text_size_authority(
+    bytes: &[u8],
+    story_catalog: &QuillStoryCatalog,
+    story_syid: QuillSyid,
+    story_start_utf16: u32,
+    story_end_utf16: u32,
+) -> Result<QuillTextSizeAuthorityDiagnostic, QuillTypographyReadError> {
+    if story_start_utf16 >= story_end_utf16 {
+        return Err(QuillTypographyReadError::new(
+            "text-size diagnostic requires a non-empty Story range",
+        ));
+    }
+
+    let catalog = parse_bounded_typography(bytes, story_catalog)?;
+    let story_extents = build_story_extents(&story_catalog.stories)?;
+    let matching_stories = story_extents
+        .iter()
+        .filter(|story| story.story_syid == story_syid)
+        .collect::<Vec<_>>();
+    let [story] = matching_stories.as_slice() else {
+        return Err(QuillTypographyReadError::new(format!(
+            "text-size diagnostic expected one Story owner for SYID {}, got {}",
+            story_syid.0,
+            matching_stories.len()
+        )));
+    };
+    let story_len_utf16 = story.global_end_utf16 - story.global_start_utf16;
+    if story_end_utf16 > story_len_utf16 {
+        return Err(QuillTypographyReadError::new(format!(
+            "text-size diagnostic Story range {}..{} exceeds Story UTF-16 length {}",
+            story_start_utf16, story_end_utf16, story_len_utf16
+        )));
+    }
+    let target_start = story.global_start_utf16 + story_start_utf16;
+    let target_end = story.global_start_utf16 + story_end_utf16;
+
+    let mut diagnostic = QuillTextSizeAuthorityDiagnostic {
+        fdpc_intersecting_ranges: 0,
+        fdpc_explicit_size_values_emu: BTreeMap::new(),
+        fdpp_intersecting_ranges: 0,
+        fdpp_explicit_selector_ranges: 0,
+        fdpp_implicit_style_zero_ranges: 0,
+        stsh_explicit_selector_size_values_emu: BTreeMap::new(),
+        effective_size_values_emu: BTreeMap::new(),
+        implicit_style_zero_applied: false,
+        unresolved_reasons: BTreeMap::new(),
+        fdpc_unknown_block_types_assumed_zero_length: catalog
+            .unknown_block_types_assumed_zero_length
+            .clone(),
+        inheritance_unknown_block_types_assumed_zero_length: Vec::new(),
+        inheritance_unavailable_reason: None,
+    };
+
+    let target_fdpc_ranges = catalog
+        .ranges
+        .iter()
+        .filter(|range| {
+            range.global_end_utf16 > target_start && range.global_start_utf16 < target_end
+        })
+        .collect::<Vec<_>>();
+    diagnostic.fdpc_intersecting_ranges = target_fdpc_ranges.len();
+    for range in &target_fdpc_ranges {
+        for value in &range.text_sizes_emu {
+            *diagnostic
+                .fdpc_explicit_size_values_emu
+                .entry(*value)
+                .or_default() += 1;
+        }
+    }
+
+    if !diagnostic
+        .fdpc_unknown_block_types_assumed_zero_length
+        .is_empty()
+    {
+        *diagnostic
+            .unresolved_reasons
+            .entry("fdpc_unknown_block_widths".into())
+            .or_default() += 1;
+    }
+
+    let descriptors = story_catalog
+        .descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .enumerate()
+        .collect::<Vec<_>>();
+    let text_start = u32::try_from(story_catalog.text.source.offset)
+        .map_err(|_| QuillTypographyReadError::new("TEXT offset exceeds u32"))?;
+    let text_len = u32::try_from(story_catalog.text.source.len)
+        .map_err(|_| QuillTypographyReadError::new("TEXT length exceeds u32"))?;
+    let text_end = text_start
+        .checked_add(text_len)
+        .ok_or_else(|| QuillTypographyReadError::new("TEXT span overflows u32"))?;
+    let total_utf16 = story_extents
+        .last()
+        .map(|extent| extent.global_end_utf16)
+        .unwrap_or(0);
+
+    let mut inheritance_unknown_block_types = BTreeSet::new();
+    let inheritance_result = (|| {
+        let paragraph_styles = parse_fdpp_styles(
+            bytes,
+            story_catalog,
+            &descriptors,
+            &mut inheritance_unknown_block_types,
+        )?;
+        validate_monotone_fdpp_text_offsets(&paragraph_styles)?;
+        let mut paragraph_ranges =
+            materialize_paragraph_ranges(&paragraph_styles, text_start, text_end, total_utf16)?;
+
+        diagnostic.fdpp_intersecting_ranges = paragraph_ranges
+            .iter()
+            .filter(|range| {
+                range.global_end_utf16 > target_start
+                    && range.global_start_utf16 < target_end
+            })
+            .count();
+        diagnostic.fdpp_explicit_selector_ranges = paragraph_ranges
+            .iter()
+            .filter(|range| {
+                range.global_end_utf16 > target_start
+                    && range.global_start_utf16 < target_end
+                    && range.selector_source
+                        == Some(QuillParagraphSelectorSource::ExplicitFdpp0x19)
+            })
+            .count();
+
+        let defaults = parse_stsh1_character_defaults(
+            bytes,
+            story_catalog,
+            &descriptors,
+            &catalog.font_names,
+            &mut inheritance_unknown_block_types,
+        )?;
+
+        for paragraph in paragraph_ranges.iter().filter(|range| {
+            range.global_end_utf16 > target_start
+                && range.global_start_utf16 < target_end
+                && range.selector_source
+                    == Some(QuillParagraphSelectorSource::ExplicitFdpp0x19)
+        }) {
+            if let Some(style_index) = paragraph.selected_style_index
+                && let Some(default) = defaults
+                    .iter()
+                    .find(|candidate| candidate.logical_style_index == style_index)
+            {
+                for value in &default.text_sizes_emu {
+                    *diagnostic
+                        .stsh_explicit_selector_size_values_emu
+                        .entry(*value)
+                        .or_default() += 1;
+                }
+            }
+        }
+
+        diagnostic.implicit_style_zero_applied =
+            apply_bounded_implicit_style_zero(&mut paragraph_ranges, &defaults);
+        diagnostic.fdpp_implicit_style_zero_ranges = paragraph_ranges
+            .iter()
+            .filter(|range| {
+                range.global_end_utf16 > target_start
+                    && range.global_start_utf16 < target_end
+                    && range.selector_source
+                        == Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
+            })
+            .count();
+
+        let mut boundaries = BTreeSet::from([target_start, target_end]);
+        for range in &catalog.ranges {
+            if range.global_end_utf16 > target_start && range.global_start_utf16 < target_end {
+                boundaries.insert(range.global_start_utf16.max(target_start));
+                boundaries.insert(range.global_end_utf16.min(target_end));
+            }
+        }
+        for range in &paragraph_ranges {
+            if range.global_end_utf16 > target_start && range.global_start_utf16 < target_end {
+                boundaries.insert(range.global_start_utf16.max(target_start));
+                boundaries.insert(range.global_end_utf16.min(target_end));
+            }
+        }
+        let boundaries = boundaries.into_iter().collect::<Vec<_>>();
+
+        for pair in boundaries.windows(2) {
+            let [start, end] = pair else {
+                continue;
+            };
+            if start == end {
+                continue;
+            }
+
+            let fdpc_matches = catalog
+                .ranges
+                .iter()
+                .filter(|range| {
+                    range.global_start_utf16 <= *start && range.global_end_utf16 >= *end
+                })
+                .collect::<Vec<_>>();
+            let [fdpc] = fdpc_matches.as_slice() else {
+                *diagnostic
+                    .unresolved_reasons
+                    .entry("fdpc_owner_not_unique".into())
+                    .or_default() += 1;
+                continue;
+            };
+
+            let paragraph_matches = paragraph_ranges
+                .iter()
+                .filter(|range| {
+                    range.global_start_utf16 <= *start && range.global_end_utf16 >= *end
+                })
+                .collect::<Vec<_>>();
+            let [paragraph] = paragraph_matches.as_slice() else {
+                *diagnostic
+                    .unresolved_reasons
+                    .entry("fdpp_owner_not_unique".into())
+                    .or_default() += 1;
+                continue;
+            };
+
+            let mut explicit_sizes = fdpc.text_sizes_emu.clone();
+            explicit_sizes.sort_unstable();
+            explicit_sizes.dedup();
+            let resolved = match explicit_sizes.as_slice() {
+                [value] => Some(*value),
+                [] => {
+                    let Some(style_index) = paragraph.selected_style_index else {
+                        *diagnostic
+                            .unresolved_reasons
+                            .entry("fdpp_selector_missing".into())
+                            .or_default() += 1;
+                        continue;
+                    };
+                    let Some(default) = defaults
+                        .iter()
+                        .find(|candidate| candidate.logical_style_index == style_index)
+                    else {
+                        *diagnostic
+                            .unresolved_reasons
+                            .entry("stsh_default_missing".into())
+                            .or_default() += 1;
+                        continue;
+                    };
+                    match default.text_sizes_emu.as_slice() {
+                        [value] => Some(*value),
+                        [] => {
+                            *diagnostic
+                                .unresolved_reasons
+                                .entry("stsh_size_missing".into())
+                                .or_default() += 1;
+                            None
+                        }
+                        _ => {
+                            *diagnostic
+                                .unresolved_reasons
+                                .entry("stsh_size_ambiguous".into())
+                                .or_default() += 1;
+                            None
+                        }
+                    }
+                }
+                _ => {
+                    *diagnostic
+                        .unresolved_reasons
+                        .entry("fdpc_size_ambiguous".into())
+                        .or_default() += 1;
+                    None
+                }
+            };
+            if let Some(value) = resolved {
+                *diagnostic
+                    .effective_size_values_emu
+                    .entry(value)
+                    .or_default() += 1;
+            }
+        }
+
+        Ok::<(), QuillTypographyReadError>(())
+    })();
+
+    diagnostic.inheritance_unknown_block_types_assumed_zero_length =
+        inheritance_unknown_block_types.into_iter().collect();
+    if let Err(error) = inheritance_result {
+        diagnostic.inheritance_unavailable_reason = Some(error.to_string());
+        *diagnostic
+            .unresolved_reasons
+            .entry("inheritance_parse_unavailable".into())
+            .or_default() += 1;
+    } else if !diagnostic
+        .inheritance_unknown_block_types_assumed_zero_length
+        .is_empty()
+    {
+        diagnostic.inheritance_unavailable_reason = Some(format!(
+            "effective typography inheritance suppressed because unknown fixed Quill block widths were observed: {:?}",
+            diagnostic.inheritance_unknown_block_types_assumed_zero_length
+        ));
+        *diagnostic
+            .unresolved_reasons
+            .entry("inheritance_unknown_block_widths".into())
+            .or_default() += 1;
+    }
+
+    Ok(diagnostic)
 }
 
 #[derive(Debug, Clone, Copy)]
