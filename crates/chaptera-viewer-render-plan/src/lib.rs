@@ -2183,6 +2183,8 @@ mod tests {
             story_id: target_story_id,
             frame_id: target_frame_node_id,
             ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
         });
 
         assert_eq!(
