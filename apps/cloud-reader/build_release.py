@@ -12,7 +12,15 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
-ASSETS = ("index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs")
+ASSET_SOURCES = {
+    "index.html": "apps/cloud-reader/index.html",
+    "reader.css": "apps/cloud-reader/reader.css",
+    "reader-app.mjs": "apps/cloud-reader/reader-app.mjs",
+    "reader-model.mjs": "apps/cloud-reader/reader-model.mjs",
+    "render-v1.mjs": "apps/cloud-reader/render-v1.mjs",
+    "observability-v1.mjs": "apps/web/observability-v1.mjs",
+}
+ASSETS = tuple(ASSET_SOURCES)
 
 
 def sha256(data: bytes) -> str:
@@ -24,7 +32,7 @@ def build(output: Path, commit: str | None = None) -> dict:
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("release commit must be an exact lowercase Git SHA")
-    assets = {name: subprocess.check_output(["git", "show", f"{commit}:apps/cloud-reader/{name}"], cwd=ROOT) for name in ASSETS}
+    assets = {name: subprocess.check_output(["git", "show", f"{commit}:{ASSET_SOURCES[name]}"], cwd=ROOT) for name in ASSETS}
     manifest = {
         "protocol": "chaptera.cloud-reader-static-release.v1",
         "source_commit": commit,
