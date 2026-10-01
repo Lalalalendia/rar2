@@ -87,13 +87,10 @@ fn byte_diff_runs(left: &[u8], right: &[u8]) -> Vec<Value> {
 }
 
 fn typography_summary(quill: &[u8]) -> Result<Value> {
-    let story_catalog = parse_confirmed_story_catalog(
-        StreamPath(QUILL_STREAM_PATH.into()),
-        quill,
-    )
-    .context("parse confirmed Quill Story catalog")?;
-    let typography =
-        parse_bounded_typography(quill, &story_catalog).context("parse bounded Quill typography")?;
+    let story_catalog = parse_confirmed_story_catalog(StreamPath(QUILL_STREAM_PATH.into()), quill)
+        .context("parse confirmed Quill Story catalog")?;
+    let typography = parse_bounded_typography(quill, &story_catalog)
+        .context("parse bounded Quill typography")?;
 
     let stories = story_catalog
         .stories
