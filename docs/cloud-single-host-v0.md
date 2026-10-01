@@ -130,20 +130,30 @@ worker -> exact authorized object -> bounded file/fd -> sandboxed parser child
 
 ## Deploy transaction
 
-1. Install an immutable versioned artifact under
-   `/opt/chaptera/releases/<version>/chaptera`.
-2. Verify artifact identity/signing policy.
-3. Run `chaptera --version`, `chaptera doctor`, and migration status.
-4. Verify the previous release is still within the declared schema rollback
-   window.
-5. Run operator-controlled migration if required.
-6. Move `/opt/chaptera/current` to the new immutable release.
-7. Restart worker/web.
-8. Wait for readiness and run loopback/public smoke.
-9. Prove one acknowledged canonical edit survives restart.
-10. Keep the previous artifact until the rollback window closes.
+The normal application-artifact install path is:
 
-Never overwrite the running binary in place.
+```sh
+sudo ./chaptera install --config /etc/chaptera/chaptera.toml
+sudo systemctl enable --now chaptera.target
+```
+
+The installer validates the typed config before changing `current`, copies the
+exact running executable to
+`/opt/chaptera/releases/<build-id>/chaptera`, materializes the canonical
+systemd/tmpfiles/sysusers policy and embedded isolation harness, records the
+previous release, then atomically switches `/opt/chaptera/current`.
+
+For CI and package acceptance the same operation can target an isolated root:
+
+```sh
+./chaptera install --config ./chaptera.toml --root /tmp/chaptera-root
+```
+
+This staging mode never calls the host systemd tools. Real-host installation
+fails closed when systemd is not active.
+
+Schema compatibility, migrations, readiness and external Caddy remain separate
+operator gates. Never overwrite the running binary in place.
 
 ## Drain
 
