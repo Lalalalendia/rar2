@@ -1396,6 +1396,9 @@ mod tests {
         let mut projected_zero_typography_inherited_size_runs = 0_usize;
         let mut projected_zero_typography_script_maps = 0_usize;
         let mut projected_zero_typography_full_story_script_maps = 0_usize;
+        let mut projected_zero_typography_ascii_nodes = 0_usize;
+        let mut projected_zero_typography_contiguous_script_cover_nodes = 0_usize;
+        let mut projected_zero_typography_latin_family_authority_nodes = 0_usize;
         let mut projected_zero_typography_script_entries = BTreeMap::<&'static str, usize>::new();
         let mut projected_zero_typography_script_family_fingerprints =
             BTreeMap::<String, usize>::new();
@@ -1438,18 +1441,92 @@ mod tests {
                             projected_zero_typography_inherited_size_runs +=
                                 usize::from(run.size_inherited);
                         }
-                        for map in bundle
+                        let mut story_maps = bundle
                             .geometry
                             .script_font_maps
                             .iter()
                             .filter(|map| map.story_id == text.story_id)
                             .filter(|map| map.applies_to_story_text(&story.text))
-                        {
+                            .filter(|map| {
+                                map.scalar_end > text.scalar_start
+                                    && map.scalar_start < text.scalar_end
+                            })
+                            .collect::<Vec<_>>();
+                        story_maps.sort_by_key(|map| (map.scalar_start, map.scalar_end));
+
+                        let ascii_only = !text.text.is_empty() && text.text.is_ascii();
+                        projected_zero_typography_ascii_nodes += usize::from(ascii_only);
+                        let mut script_cursor = text.scalar_start;
+                        let mut contiguous_script_cover = true;
+                        let mut latin_family_authority = ascii_only;
+                        let mut selected_latin_authority: Option<(u32, String)> = None;
+
+                        for map in story_maps {
                             projected_zero_typography_script_maps += 1;
                             projected_zero_typography_full_story_script_maps += usize::from(
                                 map.scalar_start <= text.scalar_start
                                     && map.scalar_end >= text.scalar_end,
                             );
+
+                            let covered_start = map.scalar_start.max(text.scalar_start);
+                            let covered_end = map.scalar_end.min(text.scalar_end);
+                            if covered_start != script_cursor || covered_end <= covered_start {
+                                contiguous_script_cover = false;
+                                latin_family_authority = false;
+                            } else {
+                                script_cursor = covered_end;
+                            }
+
+                            let mut current_latin_authority: Option<(u32, String)> = None;
+                            for script_slot in [0_u16, 1_u16, 2_u16] {
+                                let mut matching_entries = map
+                                    .entries
+                                    .iter()
+                                    .filter(|entry| entry.script_slot == script_slot);
+                                let Some(entry) = matching_entries.next() else {
+                                    latin_family_authority = false;
+                                    continue;
+                                };
+                                if matching_entries.next().is_some()
+                                    || entry.disposition
+                                        != ViewerScriptFontEntryDisposition::Resolved
+                                {
+                                    latin_family_authority = false;
+                                    continue;
+                                }
+                                let Some(family) = entry.source_font_name.as_deref() else {
+                                    latin_family_authority = false;
+                                    continue;
+                                };
+                                let normalized_family = family.trim().to_lowercase();
+                                if normalized_family.is_empty() {
+                                    latin_family_authority = false;
+                                    continue;
+                                }
+                                let fingerprint = format!(
+                                    "{:x}",
+                                    Sha256::digest(normalized_family.as_bytes())
+                                );
+                                let authority = (entry.source_font_index, fingerprint);
+                                match current_latin_authority.as_ref() {
+                                    None => current_latin_authority = Some(authority),
+                                    Some(existing) if *existing == authority => {}
+                                    Some(_) => latin_family_authority = false,
+                                }
+                            }
+                            match (
+                                selected_latin_authority.as_ref(),
+                                current_latin_authority.as_ref(),
+                            ) {
+                                (None, Some(current)) => {
+                                    selected_latin_authority = Some(current.clone());
+                                }
+                                (Some(existing), Some(current)) if existing == current => {}
+                                (_, None) | (Some(_), Some(_)) => {
+                                    latin_family_authority = false;
+                                }
+                            }
+
                             for entry in &map.entries {
                                 let disposition = match entry.disposition {
                                     ViewerScriptFontEntryDisposition::Resolved => "resolved",
@@ -1479,6 +1556,15 @@ mod tests {
                                 }
                             }
                         }
+
+                        contiguous_script_cover &=
+                            script_cursor == text.scalar_end && script_cursor > text.scalar_start;
+                        latin_family_authority &= contiguous_script_cover
+                            && selected_latin_authority.is_some();
+                        projected_zero_typography_contiguous_script_cover_nodes +=
+                            usize::from(contiguous_script_cover);
+                        projected_zero_typography_latin_family_authority_nodes +=
+                            usize::from(latin_family_authority);
                     }
 
                     let mut cursor = text.scalar_start;
@@ -1584,7 +1670,7 @@ mod tests {
             serde_json::to_string(&projected_zero_typography_script_family_fingerprints)
                 .expect("serialize zero-typography ScriptFonts family fingerprints");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={} projected_zero_typography_nodes={} projected_zero_typography_viewer_runs={} projected_zero_typography_inherited_font_runs={} projected_zero_typography_inherited_size_runs={} projected_zero_typography_script_maps={} projected_zero_typography_full_story_script_maps={} projected_zero_typography_script_entries={} projected_zero_typography_script_family_fingerprints={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={} projected_zero_typography_nodes={} projected_zero_typography_viewer_runs={} projected_zero_typography_inherited_font_runs={} projected_zero_typography_inherited_size_runs={} projected_zero_typography_script_maps={} projected_zero_typography_full_story_script_maps={} projected_zero_typography_ascii_nodes={} projected_zero_typography_contiguous_script_cover_nodes={} projected_zero_typography_latin_family_authority_nodes={} projected_zero_typography_script_entries={} projected_zero_typography_script_family_fingerprints={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1612,6 +1698,9 @@ mod tests {
             projected_zero_typography_inherited_size_runs,
             projected_zero_typography_script_maps,
             projected_zero_typography_full_story_script_maps,
+            projected_zero_typography_ascii_nodes,
+            projected_zero_typography_contiguous_script_cover_nodes,
+            projected_zero_typography_latin_family_authority_nodes,
             projected_zero_typography_script_entries_json,
             projected_zero_typography_script_family_fingerprints_json,
         );
