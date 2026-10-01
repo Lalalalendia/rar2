@@ -4536,6 +4536,9 @@ mod tests {
         let mut ambiguous_top_group_escher = 0_usize;
         let mut max_depth = 0_usize;
         let mut visible_descendants_by_top_group = BTreeMap::<u32, usize>::new();
+        let mut child_escher_indices_by_top_group = BTreeMap::<u32, Vec<usize>>::new();
+        let mut grouped_nodes_with_exact_child_escher = 0_usize;
+        let mut grouped_nodes_with_ambiguous_child_escher = 0_usize;
 
         for node in build.graph.nodes.values() {
             let seq_num = node.payload.contents_seq_num;
@@ -4591,6 +4594,22 @@ mod tests {
             ambiguous_top_group_escher += usize::from(top_matches > 1);
             *visible_descendants_by_top_group.entry(top_group_seq).or_default() += 1;
 
+            let child_matches = escher_by_contents_seq
+                .get(&seq_num)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            match child_matches {
+                [index] => {
+                    grouped_nodes_with_exact_child_escher += 1;
+                    child_escher_indices_by_top_group
+                        .entry(top_group_seq)
+                        .or_default()
+                        .push(*index);
+                }
+                [] => {}
+                _ => grouped_nodes_with_ambiguous_child_escher += 1,
+            }
+
             let row = page_rows.entry(page_ordinal).or_default();
             *row.entry("grouped_visible_nodes".to_owned()).or_default() += 1;
             *row.entry(format!("depth_{depth}")).or_default() += 1;
@@ -4612,12 +4631,32 @@ mod tests {
                 .or_default() += 1;
         }
 
+        let mut carriers_with_unique_child_source_order = 0_usize;
+        let mut carriers_with_incomplete_or_ambiguous_child_source_order = 0_usize;
+        for (top_group_seq, descendant_count) in &visible_descendants_by_top_group {
+            let mut indices = child_escher_indices_by_top_group
+                .get(top_group_seq)
+                .cloned()
+                .unwrap_or_default();
+            indices.sort_unstable();
+            indices.dedup();
+            if indices.len() == *descendant_count {
+                carriers_with_unique_child_source_order += 1;
+            } else {
+                carriers_with_incomplete_or_ambiguous_child_source_order += 1;
+            }
+        }
+
         let receipt = serde_json::json!({
             "schema": "chaptera.newsletter-group-stack-carrier-census.v1",
             "source_sha256": source_hash,
             "page_count": build.graph.document.pages.len(),
             "top_group_carrier_count": visible_descendants_by_top_group.len(),
             "visible_descendants_per_top_group_histogram": descendants_per_carrier_histogram,
+            "grouped_nodes_with_exact_child_escher_count": grouped_nodes_with_exact_child_escher,
+            "grouped_nodes_with_ambiguous_child_escher_count": grouped_nodes_with_ambiguous_child_escher,
+            "carriers_with_unique_child_source_order_count": carriers_with_unique_child_source_order,
+            "carriers_with_incomplete_or_ambiguous_child_source_order_count": carriers_with_incomplete_or_ambiguous_child_source_order,
             "grouped_visible_node_count": total_grouped_nodes,
             "grouped_image_node_count": total_grouped_images,
             "grouped_story_node_count": total_grouped_story_nodes,
