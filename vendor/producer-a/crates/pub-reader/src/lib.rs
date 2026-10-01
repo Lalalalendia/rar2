@@ -3481,6 +3481,31 @@ fn index_escher_by_contents_seq(inventory: &SpContainerInventory) -> BTreeMap<u3
     index
 }
 
+fn materialized_node_source_page_v1(
+    node: &Node<PubNodePayload>,
+    references: &BTreeMap<u32, Contents0x2cChunkReference>,
+    page_seq_to_id: &BTreeMap<u32, PageId>,
+) -> Option<PageId> {
+    let mut parent_seq = single_parent_seq(references.get(&node.payload.contents_seq_num)?)?;
+
+    // Direct page-owned objects close immediately. Grouped Story/image/TABLE
+    // nodes are already admitted only after project_grouped_object_shape()
+    // validated their bounded raw0x30 ancestry against OfficeArt parent links.
+    // Rewalk only that proven Contents ancestry here to recover the page stack
+    // lane; do not invent a new group identity or transform law.
+    for depth in 0..=2 {
+        if let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() {
+            return (node.header.parent_id == page_id.into_canonical()).then_some(page_id);
+        }
+        let parent = references.get(&parent_seq)?;
+        if single_raw_type(parent) != Some(RAW_TYPE_GROUP) || depth == 2 {
+            return None;
+        }
+        parent_seq = single_parent_seq(parent)?;
+    }
+    None
+}
+
 fn source_page_paint_orders_v1(
     source_hash: Sha256Digest,
     graph: &PubSourceGraph,
@@ -3490,19 +3515,11 @@ fn source_page_paint_orders_v1(
 ) -> Vec<PubSourcePagePaintOrderV1> {
     let mut expected = BTreeMap::<PageId, BTreeSet<NodeId>>::new();
     for node in graph.nodes.values() {
-        let seq_num = node.payload.contents_seq_num;
-        let Some(reference) = references.get(&seq_num) else {
+        let Some(page_id) = materialized_node_source_page_v1(node, references, page_seq_to_id)
+        else {
             continue;
         };
-        let Some(parent_seq) = single_parent_seq(reference) else {
-            continue;
-        };
-        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
-            continue;
-        };
-        if node.header.parent_id == page_id.into_canonical() {
-            expected.entry(page_id).or_default().insert(node.header.id);
-        }
+        expected.entry(page_id).or_default().insert(node.header.id);
     }
 
     let mut ordered = BTreeMap::<PageId, Vec<NodeId>>::new();
@@ -3510,7 +3527,10 @@ fn source_page_paint_orders_v1(
     let mut seen_seq = BTreeSet::<u32>::new();
 
     // inspect_sp_containers preserves serialized traversal order. Do not sort
-    // SPIDs here: serialized page SpContainer order is the bounded authority.
+    // SPIDs here. For a grouped materialized child, its own serialized
+    // SpContainer position remains inside the already-proven top GROUP slot,
+    // so the same traversal supplies both page-relative carrier order and
+    // bounded child order without painting the GROUP carrier itself.
     for shape in &inventory.shapes {
         let Some(client_data) = shape.client_data.as_ref() else {
             continue;
@@ -3519,22 +3539,16 @@ fn source_page_paint_orders_v1(
             continue;
         };
         let seq_num = shape_id.value;
-        let Some(reference) = references.get(&seq_num) else {
-            continue;
-        };
-        let Some(parent_seq) = single_parent_seq(reference) else {
-            continue;
-        };
-        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
-            continue;
-        };
         let Ok(node_id) = derive_pub_node_id(&source_hash, seq_num) else {
-            rejected.insert(page_id);
             continue;
         };
-        if !graph.nodes.contains_key(&node_id) {
+        let Some(node) = graph.nodes.get(&node_id) else {
             continue;
-        }
+        };
+        let Some(page_id) = materialized_node_source_page_v1(node, references, page_seq_to_id)
+        else {
+            continue;
+        };
         if !seen_seq.insert(seq_num) {
             rejected.insert(page_id);
             continue;
@@ -4535,6 +4549,62 @@ fn add_missing_link_target_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires CHAPTERA_SOURCE_STACK_FIXTURE and CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS"]
+    fn exact_public_source_stack_order_covers_materialized_grouped_nodes() {
+        let fixture = std::env::var_os("CHAPTERA_SOURCE_STACK_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_SOURCE_STACK_FIXTURE");
+        let expected = std::env::var("CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS")
+            .expect("CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS")
+            .split(',')
+            .map(|value| value.parse::<usize>().expect("page count"))
+            .collect::<Vec<_>>();
+        let bytes = std::fs::read(fixture).expect("read exact public PUB");
+        let source_hash: Sha256Digest = std::env::var("CHAPTERA_SOURCE_STACK_SHA256")
+            .expect("CHAPTERA_SOURCE_STACK_SHA256")
+            .parse()
+            .expect("valid source SHA-256");
+        let build = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
+            .expect("build mature source graph");
+
+        let page_ordinals = build
+            .graph
+            .document
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(ordinal, page_id)| (*page_id, ordinal))
+            .collect::<BTreeMap<_, _>>();
+        let mut actual = build
+            .source_page_paint_orders
+            .iter()
+            .filter_map(|order| {
+                page_ordinals
+                    .get(&order.page_id)
+                    .copied()
+                    .map(|ordinal| (ordinal, order.node_ids.len()))
+            })
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        let actual_counts = actual.iter().map(|(_, count)| *count).collect::<Vec<_>>();
+
+        assert_eq!(
+            actual_counts, expected,
+            "source stack order must cover all already-materialized page visuals in exact serialized OfficeArt order"
+        );
+        let unique = build
+            .source_page_paint_orders
+            .iter()
+            .flat_map(|order| order.node_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique.len(),
+            expected.iter().sum::<usize>(),
+            "one materialized node may occupy exactly one source stack slot"
+        );
+    }
 
     fn source_hash() -> Sha256Digest {
         "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
