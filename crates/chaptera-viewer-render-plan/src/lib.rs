@@ -2152,6 +2152,27 @@ mod tests {
 
     #[cfg(feature = "projected-scene-instances")]
     #[test]
+    fn text_vertical_alignment_offsets_are_bounded() {
+        assert_eq!(resolved_vertical_offset_emu_v1(None, 1_000, 400), 0);
+        assert_eq!(
+            resolved_vertical_offset_emu_v1(Some(ViewerTextVerticalAlignment::Top), 1_000, 400),
+            0
+        );
+        assert_eq!(
+            resolved_vertical_offset_emu_v1(Some(ViewerTextVerticalAlignment::Center), 1_000, 400),
+            300
+        );
+        assert_eq!(
+            resolved_vertical_offset_emu_v1(Some(ViewerTextVerticalAlignment::Bottom), 1_000, 400),
+            600
+        );
+        assert_eq!(
+            resolved_vertical_offset_emu_v1(Some(ViewerTextVerticalAlignment::Bottom), 300, 400),
+            0
+        );
+    }
+
+    #[test]
     fn projected_cmo_layout_admits_hidden_carrier_with_single_target_frame() {
         let mut visual = fixture();
         let carrier_node_id = visual.scene.nodes[0].origin;
@@ -2195,11 +2216,15 @@ mod tests {
                 story_id: target_story_id,
                 frame_id: target_frame_node_id,
                 ordinal: 0,
+                text_content_bounds: None,
+                vertical_alignment: None,
             },
             pub_viewer::ViewerStoryFrame {
                 story_id: target_story_id,
                 frame_id: NodeId::from_canonical(canonical(10)),
                 ordinal: 1,
+                text_content_bounds: None,
+                vertical_alignment: None,
             },
         ]);
 
