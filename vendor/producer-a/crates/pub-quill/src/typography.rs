@@ -1224,6 +1224,19 @@ fn build_effective_runs(
                 .iter()
                 .find(|candidate| candidate.logical_style_index == style_index)
         });
+        let implicit_style_zero_default = if paragraph.selected_style_index.is_none()
+            && !paragraph.default_style_selector_present
+        {
+            let mut candidates = defaults
+                .iter()
+                .filter(|candidate| candidate.logical_style_index == 0);
+            match (candidates.next(), candidates.next()) {
+                (Some(candidate), None) => Some(candidate),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         let (font_index, font_name, font_source) =
             if let [(font_index, font_name)] = explicit_font_pairs.as_slice() {
@@ -1248,19 +1261,28 @@ fn build_effective_runs(
                 continue;
             };
 
-        let (text_size_emu, text_size_source) = if let [text_size_emu] = explicit_sizes.as_slice() {
-            (*text_size_emu, QuillTypographyValueSource::ExplicitFdpc)
-        } else if !explicit_size_present {
-            let Some(default) = default else {
+        let (text_size_emu, text_size_source, inherited_size_default) =
+            if let [text_size_emu] = explicit_sizes.as_slice() {
+                (
+                    *text_size_emu,
+                    QuillTypographyValueSource::ExplicitFdpc,
+                    None,
+                )
+            } else if !explicit_size_present {
+                let Some(size_default) = default.or(implicit_style_zero_default) else {
+                    continue;
+                };
+                let [text_size_emu] = size_default.text_sizes_emu.as_slice() else {
+                    continue;
+                };
+                (
+                    *text_size_emu,
+                    QuillTypographyValueSource::InheritedStsh1,
+                    Some(size_default),
+                )
+            } else {
                 continue;
             };
-            let [text_size_emu] = default.text_sizes_emu.as_slice() else {
-                continue;
-            };
-            (*text_size_emu, QuillTypographyValueSource::InheritedStsh1)
-        } else {
-            continue;
-        };
 
         if text_size_emu == 0 || font_name.is_empty() {
             continue;
@@ -1274,20 +1296,34 @@ fn build_effective_runs(
             fdpp_style_source,
             stsh_character_default_source,
         ) = if uses_inheritance {
-            let Some(style_index) = paragraph.selected_style_index else {
-                continue;
-            };
-            let Some(selector_source) = paragraph.selector_source else {
-                continue;
-            };
-            let Some(default) = default else {
-                continue;
-            };
+            let (style_index, selector_source, inherited_default) =
+                if let (Some(style_index), Some(selector_source), Some(default)) = (
+                    paragraph.selected_style_index,
+                    paragraph.selector_source,
+                    default,
+                ) {
+                    (style_index, selector_source, default)
+                } else if font_source == QuillTypographyValueSource::ExplicitFdpc
+                    && text_size_source == QuillTypographyValueSource::InheritedStsh1
+                    && paragraph.selected_style_index.is_none()
+                    && !paragraph.default_style_selector_present
+                {
+                    let Some(size_default) = inherited_size_default else {
+                        continue;
+                    };
+                    (
+                        0,
+                        QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
+                        size_default,
+                    )
+                } else {
+                    continue;
+                };
             (
                 Some(style_index),
                 Some(selector_source),
                 Some(paragraph.style_source.clone()),
-                Some(default.style_source.clone()),
+                Some(inherited_default.style_source.clone()),
             )
         } else {
             (None, None, None, None)
@@ -2395,6 +2431,32 @@ mod tests {
             .expect("full effective run evaluation")
             .is_empty(),
             "multiple defaults must not authorize full family inheritance"
+        );
+
+        let mut explicit_family_fdpc = fdpc.clone();
+        explicit_family_fdpc.font_indices = vec![3];
+        explicit_family_fdpc.font_names = vec!["Arial".to_owned()];
+        let full_with_explicit_family = build_effective_runs(
+            &[explicit_family_fdpc],
+            std::slice::from_ref(&paragraph),
+            &defaults,
+            &[story],
+        )
+        .expect("explicit family plus implicit style-zero size");
+        let [run] = full_with_explicit_family.as_slice() else {
+            panic!("expected one full effective run");
+        };
+        assert_eq!(run.font_name, "Arial");
+        assert_eq!(run.font_source, QuillTypographyValueSource::ExplicitFdpc);
+        assert_eq!(run.text_size_emu, 10 * QUILL_TEXT_SIZE_EMU_PER_POINT);
+        assert_eq!(
+            run.text_size_source,
+            QuillTypographyValueSource::InheritedStsh1
+        );
+        assert_eq!(run.inherited_style_index, Some(0));
+        assert_eq!(
+            run.inherited_selector_source,
+            Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
         );
 
         let mut direct_fdpc = fdpc.clone();
