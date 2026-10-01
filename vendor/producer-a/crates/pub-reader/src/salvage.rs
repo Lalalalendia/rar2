@@ -555,6 +555,37 @@ mod tests {
         compound.into_inner().into_inner()
     }
 
+    fn synthetic_pub_cfb_with_delay_png() -> Vec<u8> {
+        let mut compound =
+            cfb::CompoundFile::create(Cursor::new(Vec::new())).expect("synthetic Publisher CFB");
+        compound.create_storage("/Escher").expect("Escher storage");
+
+        let mut contents = vec![0_u8; 5_000];
+        contents[..4].copy_from_slice(&[0xe8, 0xac, 0x2c, 0x00]);
+        compound
+            .create_stream(CONTENTS_STREAM)
+            .expect("Contents stream")
+            .write_all(&contents)
+            .expect("write Contents");
+
+        let mut payload = vec![0_u8; 17];
+        payload.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        payload.extend_from_slice(b"salvage-image");
+        let mut record = Vec::new();
+        record.extend_from_slice(&0x6e00u16.to_le_bytes());
+        record.extend_from_slice(&pub_escher::OFFICE_ART_BLIP_PNG.to_le_bytes());
+        record.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        record.extend_from_slice(&payload);
+        compound
+            .create_stream(ESCHER_DELAY_STREAM)
+            .expect("Escher delay stream")
+            .write_all(&record)
+            .expect("write Escher delay");
+
+        compound.flush().expect("flush synthetic CFB");
+        compound.into_inner().into_inner()
+    }
+
     fn corrupt_first_minifat_entry(mut bytes: Vec<u8>) -> Vec<u8> {
         let sector_shift = u16::from_le_bytes([bytes[30], bytes[31]]);
         let sector_len = 1usize << sector_shift;
@@ -643,6 +674,53 @@ mod tests {
         );
         assert_eq!(proven.contents_family.as_deref(), Some("0x2c"));
         assert!(proven.has_surviving_evidence());
+    }
+
+    #[test]
+    fn partial_source_graph_carries_verified_delayed_image_without_layout_join() {
+        let bytes = synthetic_pub_cfb_with_delay_png();
+        let probe = probe_reader_salvage_candidate_with_trigger(
+            &bytes,
+            ReaderSalvageTrigger::ProvenStructuralCorruption,
+        );
+        assert_eq!(
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleKnownPublisherCorruption
+        );
+        assert_eq!(
+            probe.subsystems.escher_delay,
+            ReaderSalvageStreamState::Readable
+        );
+
+        let graph =
+            build_reader_partial_source_graph(&bytes, &probe).expect("partial salvage graph");
+        let images = graph
+            .facts
+            .iter()
+            .filter_map(|fact| match fact {
+                ReaderPartialSourceFact::VerifiedImage {
+                    resource_key,
+                    sha256,
+                    byte_len,
+                } => Some((resource_key, sha256, *byte_len)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(images.len(), 1);
+        assert!(images[0].0.starts_with("escher-delay:0:"));
+        assert_eq!(images[0].1.len(), 64);
+        assert!(images[0].2 > 8);
+        assert!(
+            !graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::ImageFactsUnavailable)
+        );
+        assert!(
+            graph
+                .gaps
+                .contains(&ReaderPartialSourceGap::GeometryFactsUnavailable)
+        );
     }
 
     #[test]
