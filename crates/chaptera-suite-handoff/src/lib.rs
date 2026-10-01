@@ -561,13 +561,8 @@ mod tests {
         let admitted_sha = admitted.sha256().to_owned();
         fs::write(&source, b"replacement after sender admission").expect("mutate path");
 
-        let packet = create_reader_handoff_from_admitted(
-            &admitted,
-            EDITOR_PRODUCT_ID,
-            true,
-            false,
-        )
-        .expect("packet from admitted source");
+        let packet = create_reader_handoff_from_admitted(&admitted, EDITOR_PRODUCT_ID, true, false)
+            .expect("packet from admitted source");
         assert_eq!(packet.source.sha256, admitted_sha);
         fs::remove_file(source).ok();
     }
