@@ -5498,6 +5498,21 @@ mod mature_officeart_wmf_exact_product_tests {
                 counts
             },
         );
+        let graph_image_slot_bindings = source
+            .graph
+            .nodes
+            .values()
+            .filter_map(|node| {
+                node.payload
+                    .image_slot
+                    .map(|slot| (node.payload.contents_seq_num, slot))
+            })
+            .collect::<Vec<_>>();
+        eprintln!(
+            "EXACT_MATURE_WMF_SOURCE_BINDINGS bindings={:?} bridge_diagnostics={:?}",
+            graph_image_slot_bindings,
+            source.diagnostics,
+        );
 
         let geometry = open_mature_0x2c_geometry(&before, viewer_geometry_environment_v0_1())
             .expect("exact mature OfficeArt WMF fixture must open through Viewer product boundary");
