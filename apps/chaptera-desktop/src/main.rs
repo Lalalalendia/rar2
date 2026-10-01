@@ -362,6 +362,59 @@ impl SceneSelectionState {
         self.selected.insert(instance_id.clone());
         self.primary = Some(instance_id);
     }
+
+    fn toggle(&mut self, instance_id: String) {
+        if self.selected.remove(&instance_id) {
+            if self.primary.as_deref() == Some(instance_id.as_str()) {
+                self.primary = self.selected.iter().next().cloned();
+            }
+            return;
+        }
+
+        self.selected.insert(instance_id.clone());
+        self.primary = Some(instance_id);
+    }
+
+    fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.selected.iter().map(String::as_str)
+    }
+}
+
+#[cfg(test)]
+mod scene_selection_state_tests {
+    use super::SceneSelectionState;
+
+    #[test]
+    fn shift_toggle_preserves_instance_identity_and_primary_policy() {
+        let mut selection = SceneSelectionState::default();
+
+        selection.select_only("instance:b".to_owned());
+        selection.toggle("instance:a".to_owned());
+        assert_eq!(selection.len(), 2);
+        assert_eq!(selection.primary(), Some("instance:a"));
+
+        selection.toggle("instance:a".to_owned());
+        assert_eq!(selection.len(), 1);
+        assert_eq!(selection.primary(), Some("instance:b"));
+
+        selection.toggle("instance:b".to_owned());
+        assert_eq!(selection.len(), 0);
+        assert_eq!(selection.primary(), None);
+    }
+
+    #[test]
+    fn repeated_origin_instances_remain_distinct_selection_entries() {
+        let mut selection = SceneSelectionState::default();
+
+        selection.select_only("origin:42/page:1/use:0".to_owned());
+        selection.toggle("origin:42/page:1/use:1".to_owned());
+
+        assert_eq!(
+            selection.iter().collect::<Vec<_>>(),
+            vec!["origin:42/page:1/use:0", "origin:42/page:1/use:1"]
+        );
+        assert_eq!(selection.primary(), Some("origin:42/page:1/use:1"));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4284,6 +4337,7 @@ impl ViewerApp {
         self.preview_clipped_story_keys.clear();
 
         let ctrl_held = ui.ctx().input(|input| input.modifiers.ctrl);
+        let shift_held = ui.ctx().input(|input| input.modifiers.shift);
 
         if !reader_only_mode() {
             ui.horizontal_wrapped(|ui| {
@@ -4861,6 +4915,23 @@ impl ViewerApp {
                     );
                 }
 
+                for selected_instance_id in self.canvas_selection.iter().filter(|instance_id| {
+                    Some(*instance_id) != selected_canvas_instance.as_deref()
+                }) {
+                    if let Some(hit) = hit_index.entry_for_instance(selected_instance_id)
+                        && let Some(selected_rect) = render_backend::physical_rect_to_egui(
+                            page_rect,
+                            scene_scale,
+                            hit.bounds.x.get(),
+                            hit.bounds.y.get(),
+                            hit.bounds.width.get(),
+                            hit.bounds.height.get(),
+                        )
+                    {
+                        paint_selection_overlay(&painter, selected_rect, false);
+                    }
+                }
+
                 if let Some(selected_instance_id) = selected_canvas_instance.as_deref()
                     && let Some(selected_node_id) =
                         hit_index.node_for_instance(selected_instance_id)
@@ -4987,20 +5058,26 @@ impl ViewerApp {
                 .instance_for_node(resize.node_id)
                 .map(str::to_owned)
         });
-        if canvas_clicked
-            || drag_commit.is_some()
+        if canvas_clicked {
+            if let Some(instance_id) = canvas_hit {
+                if shift_held {
+                    self.canvas_selection.toggle(instance_id);
+                } else {
+                    self.canvas_selection.select_only(instance_id);
+                }
+            } else if !shift_held {
+                self.canvas_selection.clear();
+            }
+        } else if drag_commit.is_some()
             || next_canvas_drag.is_some()
             || resize_commit.is_some()
             || next_canvas_resize.is_some()
         {
-            if let Some(instance_id) = canvas_hit
-                .or(resize_instance)
+            if let Some(instance_id) = resize_instance
                 .or(resize_commit_instance)
                 .or(drag_instance)
             {
                 self.canvas_selection.select_only(instance_id);
-            } else if canvas_clicked {
-                self.canvas_selection.clear();
             }
         }
 
