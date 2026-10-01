@@ -5313,8 +5313,7 @@ impl ViewerApp {
             || next_canvas_drag.is_some()
             || resize_commit.is_some()
             || next_canvas_resize.is_some())
-            && let Some(instance_id) =
-                resize_instance.or(resize_commit_instance).or(drag_instance)
+            && let Some(instance_id) = resize_instance.or(resize_commit_instance).or(drag_instance)
         {
             self.canvas_selection.select_only(instance_id);
         }
