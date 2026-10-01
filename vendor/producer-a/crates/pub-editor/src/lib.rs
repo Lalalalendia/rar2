@@ -4716,10 +4716,8 @@ mod asset_reachability_tests {
     #[test]
     fn non_asset_operations_emit_no_durable_asset_refs() {
         let operation = EditOperation::MoveNode {
-            node_id: serde_json::from_str(
-                "\"22000000-0000-4000-8000-000000000001\"",
-            )
-            .expect("canonical NodeId"),
+            node_id: serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId"),
             before: RectEmu::new(
                 LengthEmu::ZERO,
                 LengthEmu::ZERO,
