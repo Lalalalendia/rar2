@@ -685,3 +685,96 @@ fn span(stream: StreamPath, offset: usize, len: usize) -> RawSpan {
         len: len as u64,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_span(offset: u64) -> RawSpan {
+        RawSpan {
+            stream: StreamPath("Quill/QuillSub/CONTENTS".into()),
+            offset,
+            len: 6,
+        }
+    }
+
+    fn field(id: u8, value: u32, offset: u64) -> QuillMcldField {
+        QuillMcldField {
+            id,
+            wire_type: 0x22,
+            source: test_span(offset),
+            value: QuillMcldFieldValue::U32(value),
+        }
+    }
+
+    fn chunk(values: &[[u32; 4]]) -> QuillMcldChunk {
+        let children = values
+            .iter()
+            .enumerate()
+            .map(|(child_index, values)| QuillMcldChild {
+                source: test_span(100 + child_index as u64 * 40),
+                fields: (0..4)
+                    .map(|side| {
+                        field(
+                            0x06 + side as u8,
+                            values[side],
+                            200 + child_index as u64 * 40 + side as u64 * 6,
+                        )
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let count = u32::try_from(children.len()).expect("test child count");
+        QuillMcldChunk {
+            source: test_span(0),
+            record_count: Decoded {
+                value: 1,
+                source: test_span(1),
+                raw: Vec::new(),
+            },
+            record_id_count: Decoded {
+                value: 1,
+                source: test_span(2),
+                raw: Vec::new(),
+            },
+            record_ids: vec![Decoded {
+                value: 4,
+                source: test_span(3),
+                raw: Vec::new(),
+            }],
+            records: vec![QuillMcldRecord {
+                record_id: 4,
+                source: test_span(10),
+                header_source: test_span(11),
+                child_count: Decoded {
+                    value: count,
+                    source: test_span(12),
+                    raw: Vec::new(),
+                },
+                children,
+            }],
+        }
+    }
+
+    #[test]
+    fn uniform_text_inset_preserves_all_four_side_sources() {
+        let mcld = chunk(&[[36_576; 4], [36_576; 4]]);
+        let inset = bounded_mcld_uniform_text_inset(&mcld, 4).expect("uniform MCLD inset");
+
+        assert_eq!(inset.inset_emu, 36_576);
+        assert_eq!(inset.child_count, 2);
+        assert_eq!(inset.sources.len(), 8);
+    }
+
+    #[test]
+    fn non_uniform_text_inset_fails_closed() {
+        let mcld = chunk(&[[36_576, 36_576, 40_000, 36_576]]);
+        assert!(matches!(
+            bounded_mcld_uniform_text_inset(&mcld, 4),
+            Err(QuillMcldReadError::NonUniformRequiredField {
+                record_id: 4,
+                ..
+            })
+        ));
+    }
+}
