@@ -84,6 +84,17 @@ pub fn run(config_path: Option<&Path>, staging_root: Option<&Path>) -> Result<()
     install_from(&source_exe, root, BUILD_IDENTITY, staging)?;
 
     if staging {
+        let staged_config = rooted(root, CANONICAL_CONFIG)?;
+        let config_bytes = fs::read(config_path).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("cannot read validated config {}: {error}", config_path.display()),
+            )
+        })?;
+        atomic_write(&staged_config, &config_bytes, 0o640)?;
+    }
+
+    if staging {
         println!(
             "chaptera install: staged build {BUILD_IDENTITY} under {}",
             root.display()
