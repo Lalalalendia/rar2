@@ -780,17 +780,18 @@ mod tests {
     }
 
     #[test]
-    fn partial_source_graph_replays_auto_detected_corruption_evidence() {
+    fn partial_source_graph_replays_damaged_publisher_probe_exactly() {
         let bytes = corrupt_first_minifat_entry(synthetic_pub_cfb());
         let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(probe.trigger, ReaderSalvageTrigger::IntakeOnly);
+        assert!(probe.corruption_evidence.is_none());
         assert_eq!(
-            probe.trigger,
-            ReaderSalvageTrigger::ProvenStructuralCorruption
+            probe.eligibility,
+            ReaderSalvageEligibility::EligibleDamagedPublisher
         );
-        assert!(probe.corruption_evidence.is_some());
 
         let graph = build_reader_partial_source_graph(&bytes, &probe)
-            .expect("auto-detected corruption evidence must replay exactly");
+            .expect("damaged Publisher probe must replay exactly");
         assert_eq!(graph.source_sha256, probe.source_sha256);
     }
 
