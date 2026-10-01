@@ -276,7 +276,7 @@ struct PreparedSalvageOpen {
 }
 
 enum PreparedOpen {
-    Normal(PreparedDocumentOpen),
+    Normal(Box<PreparedDocumentOpen>),
     Salvage(PreparedSalvageOpen),
 }
 
@@ -1414,14 +1414,14 @@ impl ViewerApp {
             }
         };
 
-        Ok(PreparedOpen::Normal(PreparedDocumentOpen {
+        Ok(PreparedOpen::Normal(Box::new(PreparedDocumentOpen {
             source_path: path,
             source_file_stamp,
             visual,
             editor,
             editor_load_error,
             project_status,
-        }))
+        })))
     }
 
     fn commit_prepared_document_open(
@@ -1590,7 +1590,7 @@ impl ViewerApp {
         match Self::prepare_document_open(path) {
             Ok(PreparedOpen::Normal(prepared)) => {
                 if self.open_state.commit_if_current(generation) {
-                    self.commit_prepared_document_open(generation, prepared);
+                    self.commit_prepared_document_open(generation, *prepared);
                 }
             }
             Ok(PreparedOpen::Salvage(prepared)) => {
