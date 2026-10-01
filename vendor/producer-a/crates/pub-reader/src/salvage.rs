@@ -766,6 +766,13 @@ mod tests {
             build_reader_partial_source_graph(&changed, &probe),
             Err(ReaderPartialSourceGraphError::SourceIdentityMismatch)
         );
+
+        let mut forged_probe = probe.clone();
+        forged_probe.subsystems.quill = ReaderSalvageStreamState::Readable;
+        assert_eq!(
+            build_reader_partial_source_graph(&bytes, &forged_probe),
+            Err(ReaderPartialSourceGraphError::ProbeMismatch)
+        );
     }
 
     #[test]
