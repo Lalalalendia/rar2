@@ -1230,17 +1230,59 @@ mod tests {
     };
 
     use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
+        RenderTextFragmentV1, RenderTextLayoutDispositionV1,
+        build_page_render_plan_with_text_layout_v1,
     };
     use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
     use sha2::{Digest, Sha256};
 
     use super::{
         MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1, ReaderRectV1, ReaderTransformV1,
-        base64_encode, bind_visible_paint, from_viewer_geometry, inline_image_data_url,
-        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
-        take_direct_render_text,
+        base64_encode, bind_visible_paint, complete_single_family_sha256, from_viewer_geometry,
+        inline_image_data_url, insert_projected_nodes_after_targets, reader_image_resource,
+        shared_text_font_resource, take_direct_render_text,
     };
+
+    fn probe_fragment(runs: serde_json::Value) -> RenderTextFragmentV1 {
+        serde_json::from_value(serde_json::json!({
+            "story_id": "00000000-0000-0000-0000-000000000001",
+            "scalar_start": 0,
+            "scalar_end": 4,
+            "text": "ABCD",
+            "line_count": 1,
+            "typography": runs
+        }))
+        .expect("probe fragment")
+    }
+
+    #[test]
+    fn font_probe_family_gate_requires_complete_single_family_coverage() {
+        let complete = probe_fragment(serde_json::json!([
+            {"scalar_start":0,"scalar_end":2,"source_font_name":" Arial ","text_size_emu":114300,"font_inherited":false,"size_inherited":false},
+            {"scalar_start":2,"scalar_end":4,"source_font_name":"ARIAL","text_size_emu":114300,"font_inherited":false,"size_inherited":false}
+        ]));
+        assert_eq!(
+            complete_single_family_sha256(&complete),
+            Some(format!("{:x}", Sha256::digest(b"arial")))
+        );
+
+        let gap = probe_fragment(serde_json::json!([
+            {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":114300,"font_inherited":false,"size_inherited":false},
+            {"scalar_start":3,"scalar_end":4,"source_font_name":"Arial","text_size_emu":114300,"font_inherited":false,"size_inherited":false}
+        ]));
+        assert_eq!(complete_single_family_sha256(&gap), None);
+
+        let mixed = probe_fragment(serde_json::json!([
+            {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":114300,"font_inherited":false,"size_inherited":false},
+            {"scalar_start":2,"scalar_end":4,"source_font_name":"Times New Roman","text_size_emu":114300,"font_inherited":false,"size_inherited":false}
+        ]));
+        assert_eq!(complete_single_family_sha256(&mixed), None);
+
+        let blank = probe_fragment(serde_json::json!([
+            {"scalar_start":0,"scalar_end":4,"source_font_name":" ","text_size_emu":114300,"font_inherited":false,"size_inherited":false}
+        ]));
+        assert_eq!(complete_single_family_sha256(&blank), None);
+    }
 
     #[test]
     #[ignore = "requires an explicitly pinned external PUB path"]
