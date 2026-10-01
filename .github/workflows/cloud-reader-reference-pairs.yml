@@ -14,6 +14,8 @@ on:
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
+      - "tools/cloud_reader_manual_oracle_bundle_v1.py"
+      - "tools/test_cloud_reader_manual_oracle_bundle_v1.py"
       - "tools/pdf_reference_diff_v1.py"
       - "tools/census_embedded_eot.py"
       - ".github/workflows/cloud-reader-reference-pairs.yml"
@@ -30,6 +32,8 @@ on:
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/cloud_reader_reference_pdf_raster_v1.py"
+      - "tools/cloud_reader_manual_oracle_bundle_v1.py"
+      - "tools/test_cloud_reader_manual_oracle_bundle_v1.py"
       - "tools/pdf_reference_diff_v1.py"
       - "tools/census_embedded_eot.py"
       - ".github/workflows/cloud-reader-reference-pairs.yml"
@@ -77,7 +81,8 @@ jobs:
       - name: Install pinned pair/oracle dependencies
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir             "requests==2.32.5" "PyMuPDF==1.24.14" "olefile==0.47"
-          python -m py_compile             tools/acquire_carlton_march_pair.py             tools/acquire_virginia_pub_pdf_pairs.py             tools/pdf_reference_diff_v1.py             tools/cloud_reader_reference_pdf_raster_v1.py             tools/census_embedded_eot.py
+          python -m py_compile             tools/acquire_carlton_march_pair.py             tools/acquire_virginia_pub_pdf_pairs.py             tools/pdf_reference_diff_v1.py             tools/cloud_reader_reference_pdf_raster_v1.py             tools/cloud_reader_manual_oracle_bundle_v1.py             tools/test_cloud_reader_manual_oracle_bundle_v1.py             tools/census_embedded_eot.py
+          python -m unittest tools/test_cloud_reader_manual_oracle_bundle_v1.py
 
       - name: Reacquire exact Carlton PUB-PDF pair
         run: |
