@@ -69,6 +69,21 @@ pub struct QuillMcldUniformTextInset {
     pub sources: Vec<RawSpan>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuillMcldVerticalAlignment {
+    Top,
+    Center,
+    Bottom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillMcldTextFrameVerticalAlignment {
+    pub record_id: u32,
+    pub alignment: QuillMcldVerticalAlignment,
+    pub source: RawSpan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuillMcldReadError {
     MissingMcldDescriptor,
@@ -145,6 +160,10 @@ pub enum QuillMcldReadError {
         expected: u32,
         found: u32,
         child_index: u32,
+    },
+    UnsupportedVerticalAlignmentValue {
+        record_id: u32,
+        value: u32,
     },
 }
 
@@ -294,6 +313,48 @@ pub fn bounded_mcld_uniform_text_inset(
         record_id,
         inset_emu: expected,
         sources: values.into_iter().map(|(_, source)| source).collect(),
+    })
+}
+
+/// Promotes the confirmed ordinary-TextFrame MCLD vertical-alignment field.
+///
+/// The admitted profile is deliberately narrow: one keyed child, exactly one
+/// u32 field 0x18, and only the corpus-proven Publisher values
+/// 0=Top, 1=Center, 2=Bottom.
+pub fn bounded_mcld_text_frame_vertical_alignment(
+    mcld: &QuillMcldChunk,
+    record_id: u32,
+) -> Result<QuillMcldTextFrameVerticalAlignment, QuillMcldReadError> {
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == record_id)
+        .ok_or(QuillMcldReadError::RecordIdNotFound { record_id })?;
+    if record.children.len() != 1 {
+        return Err(QuillMcldReadError::UnexpectedChildCount {
+            record_id,
+            expected: 1,
+            found: u32::try_from(record.children.len()).unwrap_or(u32::MAX),
+        });
+    }
+
+    let (value, source) = required_u32_field(record_id, 0, &record.children[0], 0x18)?;
+    let alignment = match value {
+        0 => QuillMcldVerticalAlignment::Top,
+        1 => QuillMcldVerticalAlignment::Center,
+        2 => QuillMcldVerticalAlignment::Bottom,
+        value => {
+            return Err(QuillMcldReadError::UnsupportedVerticalAlignmentValue {
+                record_id,
+                value,
+            });
+        }
+    };
+
+    Ok(QuillMcldTextFrameVerticalAlignment {
+        record_id,
+        alignment,
+        source,
     })
 }
 
