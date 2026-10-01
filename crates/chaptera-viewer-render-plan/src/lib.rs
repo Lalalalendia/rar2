@@ -943,17 +943,17 @@ where
     Ok(plan)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn resolved_line_x_offset_emu_v1(
     fragment: &RenderTextFragmentV1,
     node_id: NodeId,
     bounds: &RectEmu,
     line_index: u32,
-    scalar_start: u32,
-    scalar_end: u32,
+    scalar_range: std::ops::Range<u32>,
     measured_width_emu: i64,
     layout_environment_fingerprint: &str,
 ) -> i64 {
+    let scalar_start = scalar_range.start;
+    let scalar_end = scalar_range.end;
     let mut matching = fragment.paragraph_alignments.iter().filter(|run| {
         run.scalar_start <= scalar_start
             && run.scalar_end >= scalar_end
@@ -1240,8 +1240,7 @@ fn resolve_text_layout_v1(
                 node_id,
                 &bounds,
                 line.frame_line_index,
-                line.scalar_start,
-                line.scalar_end,
+                line.scalar_start..line.scalar_end,
                 line.measured_width.get(),
                 &fingerprint,
             ),
@@ -1518,8 +1517,7 @@ fn resolve_mixed_size_text_layout_v1(
             node_id,
             bounds,
             line_index,
-            cursor,
-            chosen.scalar_end,
+            cursor..chosen.scalar_end,
             chosen.measured_width_emu,
             fingerprint,
         );
@@ -1796,7 +1794,7 @@ mod tests {
 
         // Missing authority keeps the existing leading origin.
         assert_eq!(
-            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0, 5, 100, "layout:test",),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0..5, 100, "layout:test"),
             0
         );
 
@@ -1807,7 +1805,7 @@ mod tests {
             source_value: 1,
         }];
         assert_eq!(
-            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0, 5, 100, "layout:test",),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0..5, 100, "layout:test"),
             10
         );
 
@@ -1821,7 +1819,7 @@ mod tests {
                 source_value: 2,
             });
         assert_eq!(
-            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0, 5, 100, "layout:test",),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0..5, 100, "layout:test"),
             0
         );
 
@@ -1841,7 +1839,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 1, 4, 60, "layout:test",),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 1..4, 60, "layout:test"),
             0
         );
 
