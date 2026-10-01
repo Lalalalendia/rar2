@@ -4656,6 +4656,63 @@ fn add_missing_link_target_diagnostics(
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "requires CHAPTERA_SOURCE_STACK_FIXTURE and CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS"]
+    fn exact_public_source_stack_order_covers_materialized_grouped_nodes() {
+        let fixture = std::env::var_os("CHAPTERA_SOURCE_STACK_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_SOURCE_STACK_FIXTURE");
+        let expected = std::env::var("CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS")
+            .expect("CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS")
+            .split(',')
+            .map(|value| value.parse::<usize>().expect("page count"))
+            .collect::<Vec<_>>();
+        let bytes = std::fs::read(fixture).expect("read exact public PUB");
+        let source_hash: Sha256Digest = std::env::var("CHAPTERA_SOURCE_STACK_SHA256")
+            .expect("CHAPTERA_SOURCE_STACK_SHA256")
+            .parse()
+            .expect("valid source SHA-256");
+        let build = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
+            .expect("build mature source graph");
+
+        let page_ordinals = build
+            .graph
+            .document
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(ordinal, page_id)| (*page_id, ordinal))
+            .collect::<BTreeMap<_, _>>();
+        let mut actual = build
+            .source_page_paint_orders
+            .iter()
+            .filter_map(|order| {
+                page_ordinals
+                    .get(&order.page_id)
+                    .copied()
+                    .map(|ordinal| (ordinal, order.node_ids.len()))
+            })
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        let actual_counts = actual.iter().map(|(_, count)| *count).collect::<Vec<_>>();
+
+        assert_eq!(
+            actual_counts, expected,
+            "source stack order must cover all already-materialized page visuals in exact serialized OfficeArt order"
+        );
+        let unique = build
+            .source_page_paint_orders
+            .iter()
+            .flat_map(|order| order.node_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            unique.len(),
+            expected.iter().sum::<usize>(),
+            "one materialized node may occupy exactly one source stack slot"
+        );
+    }
+
+
     fn source_hash() -> Sha256Digest {
         "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
             .parse()
