@@ -59,6 +59,7 @@ const savePubButton=document.querySelector("#save-pub");
 const textTools=document.querySelector("#text-tools");
 const textValue=document.querySelector("#text-value");
 let editingStory=null;
+let editableStoryIds=new Set();
 let seq=0;
 const observability=new BrowserObservabilityV1({
   sessionIncarnation:"session:local-editor",
@@ -79,7 +80,7 @@ function selectedStory(){
 }
 function syncTextControls(){
   const selected=selectedStory();
-  editTextButton.disabled=!selected;
+  editTextButton.disabled=!selected||!editableStoryIds.has(selected.story.story_id);
   if(editingStory && (!selected || selected.story.story_id!==editingStory.story_id)){
     editingStory=null;
     textTools.hidden=true;
@@ -93,10 +94,13 @@ function showState(state){
 
 async function disclosure(){
   const scene=shell.snapshot;
-  const [preview,pubPreview]=await Promise.all([
+  const [preview,pubPreview,editorCaps]=await Promise.all([
     service.exportPreview(document.querySelector("#target").value),
     service.nativePubPreview(),
+    service.editorCapabilities(),
   ]);
+  editableStoryIds=new Set(editorCaps.editable_story_ids??[]);
+  syncTextControls();
   const caps=scene.capabilities ?? [];
   document.querySelector("#fidelity").textContent="Fidelity: "+scene.fidelity.state+
     (scene.fidelity.reasons?.length?" — "+scene.fidelity.reasons.join(", "):"");
@@ -118,7 +122,7 @@ async function disclosure(){
 
 function openTextEditor(){
   const selected=selectedStory();
-  if(!selected) return;
+  if(!selected||!editableStoryIds.has(selected.story.story_id)) return;
   const original=selected.story.text;
   const terminalCr=original.endsWith("\r");
   editingStory={
