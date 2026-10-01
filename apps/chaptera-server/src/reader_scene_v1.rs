@@ -1127,7 +1127,7 @@ mod tests {
         env, fs,
     };
 
-    use chaptera_cdm_model::Sha256Digest;
+    use pub_editor::Sha256Digest;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
     };
@@ -1194,10 +1194,6 @@ mod tests {
             actual_sha256, expected_sha256,
             "probe source identity drift"
         );
-        let source_hash: Sha256Digest = expected_sha256
-            .parse()
-            .expect("probe source SHA-256 must be canonical lowercase hex");
-
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
 
@@ -1556,6 +1552,9 @@ mod tests {
             actual_sha256, expected_sha256,
             "probe source identity drift"
         );
+        let source_hash: Sha256Digest = expected_sha256
+            .parse()
+            .expect("probe source SHA-256 must be canonical lowercase hex");
 
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
