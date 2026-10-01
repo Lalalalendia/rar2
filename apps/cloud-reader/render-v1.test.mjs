@@ -6,6 +6,7 @@ import {
   imagePaintGeometry,
   imageResourcePaintPlan,
   resolvedTextLinePaintPlan,
+  tableCellFillPaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
 
@@ -102,6 +103,26 @@ test("table cell geometry preserves authoritative page-space bounds", () => {
   );
 });
 
+
+test("table cell fill plan uses source-neutral fill on authoritative bounds", () => {
+  assert.deepEqual(
+    tableCellFillPaintPlan({
+      cell_id: "cell-fill",
+      bounds: { x: 100, y: 200, width: 300, height: 400 },
+      fill_rgb: [10, 20, 30]
+    }),
+    {
+      geometry: { x: 100, y: 200, width: 300, height: 400 },
+      fill: "rgb(10 20 30)"
+    }
+  );
+  assert.equal(
+    tableCellFillPaintPlan({
+      bounds: { x: 100, y: 200, width: 300, height: 400 }
+    }),
+    null
+  );
+});
 
 test("shared resolved text paint plan rejects negative line x offsets", () => {
   assert.equal(resolvedTextLinePaintPlan({
