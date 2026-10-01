@@ -204,7 +204,12 @@ pub fn build_reader_partial_source_graph(
     if probe.source_modified {
         return Err(ReaderPartialSourceGraphError::SourceModified);
     }
-    let current_probe = probe_reader_salvage_candidate_with_trigger(bytes, probe.trigger);
+    let replay_trigger = if probe.corruption_evidence.is_some() {
+        ReaderSalvageTrigger::IntakeOnly
+    } else {
+        probe.trigger
+    };
+    let current_probe = probe_reader_salvage_candidate_with_trigger(bytes, replay_trigger);
     if current_probe != *probe {
         return Err(ReaderPartialSourceGraphError::ProbeMismatch);
     }
@@ -772,6 +777,21 @@ mod tests {
             build_reader_partial_source_graph(&bytes, &forged_probe),
             Err(ReaderPartialSourceGraphError::ProbeMismatch)
         );
+    }
+
+    #[test]
+    fn partial_source_graph_replays_auto_detected_corruption_evidence() {
+        let bytes = corrupt_first_minifat_entry(synthetic_pub_cfb());
+        let probe = probe_reader_salvage_candidate(&bytes);
+        assert_eq!(
+            probe.trigger,
+            ReaderSalvageTrigger::ProvenStructuralCorruption
+        );
+        assert!(probe.corruption_evidence.is_some());
+
+        let graph = build_reader_partial_source_graph(&bytes, &probe)
+            .expect("auto-detected corruption evidence must replay exactly");
+        assert_eq!(graph.source_sha256, probe.source_sha256);
     }
 
     #[test]
