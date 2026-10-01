@@ -22,6 +22,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Install this exact executable as an immutable Linux release.
+    Install {
+        /// Populate a staging root instead of mutating the live host.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Start the private HTTP runtime.
     Serve,
     /// Start the durable background worker runtime.
@@ -78,6 +84,19 @@ mod tests {
 
     #[test]
     fn parses_all_operator_commands() {
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "install",
+                "--config",
+                "/etc/chaptera/chaptera.toml",
+                "--root",
+                "/tmp/chaptera-root",
+            ])
+            .unwrap()
+            .command,
+            Command::Install { root: Some(_) }
+        ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "serve"]).unwrap().command,
             Command::Serve
