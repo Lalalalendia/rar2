@@ -182,6 +182,7 @@ pub struct ReaderPartialSourceGraph {
 pub enum ReaderPartialSourceGraphError {
     SourceIdentityMismatch,
     SourceModified,
+    ProbeMismatch,
     Ineligible,
 }
 
@@ -202,6 +203,10 @@ pub fn build_reader_partial_source_graph(
     }
     if probe.source_modified {
         return Err(ReaderPartialSourceGraphError::SourceModified);
+    }
+    let current_probe = probe_reader_salvage_candidate_with_trigger(bytes, probe.trigger);
+    if current_probe != *probe {
+        return Err(ReaderPartialSourceGraphError::ProbeMismatch);
     }
     if !probe.eligibility.is_eligible() || !probe.has_surviving_evidence() {
         return Err(ReaderPartialSourceGraphError::Ineligible);
