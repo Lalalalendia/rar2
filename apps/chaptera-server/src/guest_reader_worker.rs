@@ -9,7 +9,7 @@ use std::{
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
-use pub_editor::{EditorEditableTarget, EditorSession, Sha256Digest, open_mature_0x2c_editor};
+use pub_editor::{EditorEditableTarget, EditorSession, Sha256Digest};
 use pub_viewer::{
     ViewerProductOpenOutcome, open_pub_bundle, open_pub_or_salvage,
     viewer_geometry_environment_v0_1,
@@ -476,37 +476,62 @@ pub fn run_guest_scene_worker(
         )
     })?;
 
-    let (classification, terminal_code, scene, salvage) =
+    let (classification, terminal_code, scene, salvage, editable_routes) =
         match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(bundle) => match from_viewer_geometry_with_fonts(
-                session_id.to_owned(),
-                expected_sha256.to_owned(),
-                "guest:source".to_owned(),
-                &bundle.geometry,
-                &bundle.source_page_paint_orders,
-                &configured_fonts,
-            ) {
-                Ok(scene) => {
-                    let classification = if scene.fidelity.state == "supported" {
-                        "supported"
-                    } else {
-                        "partial"
-                    };
-                    let scene = serde_json::to_value(scene).map_err(|_| {
-                        GuestSceneWorkerError::new(
-                            "guest_scene_worker_output_failed",
-                            "Reader scene serialization failed",
+            Ok(bundle) => {
+                let mature_editable_profile =
+                    bundle.resolved_graph.source.format_version.as_deref() == Some("0x2c");
+                match from_viewer_geometry_with_fonts(
+                    session_id.to_owned(),
+                    expected_sha256.to_owned(),
+                    "guest:source".to_owned(),
+                    &bundle.geometry,
+                    &bundle.source_page_paint_orders,
+                    &configured_fonts,
+                ) {
+                    Ok(scene) => {
+                        let classification = if scene.fidelity.state == "supported" {
+                            "supported"
+                        } else {
+                            "partial"
+                        };
+                        let scene = serde_json::to_value(scene).map_err(|_| {
+                            GuestSceneWorkerError::new(
+                                "guest_scene_worker_output_failed",
+                                "Reader scene serialization failed",
+                            )
+                        })?;
+                        let editable_routes = if mature_editable_profile {
+                            match EditorSession::new(bundle.resolved_graph) {
+                                Ok(session) => Some(assess_editable_routes_from_session(
+                                    &session,
+                                    expected_sha256,
+                                )),
+                                Err(_) => Some(unverified_routes(
+                                    expected_sha256,
+                                    "assessment_failed",
+                                )),
+                            }
+                        } else {
+                            Some(profile_unavailable_routes(expected_sha256))
+                        };
+                        (
+                            classification.to_owned(),
+                            None,
+                            Some(scene),
+                            None,
+                            editable_routes,
                         )
-                    })?;
-                    (classification.to_owned(), None, Some(scene), None)
+                    }
+                    Err(_) => (
+                        "unsupported".to_owned(),
+                        Some("reader_scene_projection_failed".to_owned()),
+                        None,
+                        None,
+                        None,
+                    ),
                 }
-                Err(_) => (
-                    "unsupported".to_owned(),
-                    Some("reader_scene_projection_failed".to_owned()),
-                    None,
-                    None,
-                ),
-            },
+            }
             Err(_) => {
                 match open_pub_or_salvage(&source_bytes, viewer_geometry_environment_v0_1()) {
                     Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
@@ -516,20 +541,24 @@ pub fn run_guest_scene_worker(
                                 "Reader salvage observation serialization failed",
                             )
                         })?;
-                        ("salvage".to_owned(), None, None, Some(observation))
+                        (
+                            "salvage".to_owned(),
+                            None,
+                            None,
+                            Some(observation),
+                            None,
+                        )
                     }
                     Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
                         "unsupported".to_owned(),
                         Some("reader_scene_open_failed".to_owned()),
                         None,
                         None,
+                        None,
                     ),
                 }
             }
         };
-
-    let editable_routes =
-        assess_editable_routes(&source_bytes, expected_sha256, &classification);
 
     let failure_classification =
         guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
@@ -551,44 +580,33 @@ pub fn run_guest_scene_worker(
     write_receipt(output, &receipt)
 }
 
-fn assess_editable_routes(
-    source_bytes: &[u8],
+fn assess_editable_routes_from_session(
+    session: &EditorSession,
     expected_sha256: &str,
-    classification: &str,
-) -> Option<ReaderEditableRoutesAssessmentV1> {
-    if !matches!(classification, "supported" | "partial") {
-        return None;
-    }
-
+) -> ReaderEditableRoutesAssessmentV1 {
     let source_hash = match Sha256Digest::from_str(expected_sha256) {
         Ok(source_hash) => source_hash,
-        Err(_) => {
-            return Some(unverified_routes(expected_sha256, "source_identity_mismatch"));
-        }
+        Err(_) => return unverified_routes(expected_sha256, "source_identity_mismatch"),
     };
-
-    let session = match open_mature_0x2c_editor(source_bytes, source_hash) {
-        Ok(session) => session,
-        Err(_) => {
-            return Some(ReaderEditableRoutesAssessmentV1 {
-                protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
-                source_sha256: expected_sha256.to_owned(),
-                idml: unavailable_route("editor_profile_unavailable"),
-                odg: unavailable_route("editor_profile_unavailable"),
-            });
-        }
-    };
-
     if session.source_hash() != source_hash {
-        return Some(unverified_routes(expected_sha256, "source_identity_mismatch"));
+        return unverified_routes(expected_sha256, "source_identity_mismatch");
     }
 
-    Some(ReaderEditableRoutesAssessmentV1 {
+    ReaderEditableRoutesAssessmentV1 {
         protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
         source_sha256: expected_sha256.to_owned(),
-        idml: assess_editable_target(&session, EditorEditableTarget::Idml),
-        odg: assess_editable_target(&session, EditorEditableTarget::Odg),
-    })
+        idml: assess_editable_target(session, EditorEditableTarget::Idml),
+        odg: assess_editable_target(session, EditorEditableTarget::Odg),
+    }
+}
+
+fn profile_unavailable_routes(source_sha256: &str) -> ReaderEditableRoutesAssessmentV1 {
+    ReaderEditableRoutesAssessmentV1 {
+        protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+        source_sha256: source_sha256.to_owned(),
+        idml: unavailable_route("editor_profile_unavailable"),
+        odg: unavailable_route("editor_profile_unavailable"),
+    }
 }
 
 fn assess_editable_target(
