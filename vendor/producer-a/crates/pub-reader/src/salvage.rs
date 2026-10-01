@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::io::Cursor;
 
 pub const READER_SALVAGE_PROBE_SCHEMA_V1: &str = "chaptera.reader-salvage-probe.v1";
+pub const READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1: &str = "chaptera.reader-partial-source-graph.v1";
 
 const READER_SALVAGE_MAX_INPUT_BYTES: usize = 256 * 1024 * 1024;
 const READER_SALVAGE_MAX_STREAM_BYTES: u64 = 64 * 1024 * 1024;
@@ -130,6 +131,138 @@ impl ReaderSalvageProbe {
     pub const fn has_surviving_evidence(&self) -> bool {
         self.subsystems.has_surviving_evidence()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReaderPartialSourceFact {
+    TextRange {
+        story_key: String,
+        utf16_start: u32,
+        utf16_end: u32,
+        text: String,
+    },
+    VerifiedImage {
+        resource_key: String,
+        sha256: String,
+        byte_len: u64,
+    },
+    GroundedGeometry {
+        node_key: String,
+        parent_key: Option<String>,
+        x_emu: i64,
+        y_emu: i64,
+        width_emu: i64,
+        height_emu: i64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaderPartialSourceGap {
+    TextUnavailable,
+    TextSemanticAmbiguity,
+    ImageFactsUnavailable,
+    GeometryFactsUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReaderPartialSourceGraph {
+    pub schema_version: String,
+    pub source_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contents_family: Option<String>,
+    pub subsystems: ReaderSalvageSubsystemProbe,
+    pub facts: Vec<ReaderPartialSourceFact>,
+    pub gaps: Vec<ReaderPartialSourceGap>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReaderPartialSourceGraphError {
+    SourceIdentityMismatch,
+    SourceModified,
+    Ineligible,
+}
+
+impl std::fmt::Display for ReaderPartialSourceGraphError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for ReaderPartialSourceGraphError {}
+
+pub fn build_reader_partial_source_graph(
+    bytes: &[u8],
+    probe: &ReaderSalvageProbe,
+) -> Result<ReaderPartialSourceGraph, ReaderPartialSourceGraphError> {
+    if probe.source_sha256 != source_sha256(bytes) {
+        return Err(ReaderPartialSourceGraphError::SourceIdentityMismatch);
+    }
+    if probe.source_modified {
+        return Err(ReaderPartialSourceGraphError::SourceModified);
+    }
+    if !probe.eligibility.is_eligible() || !probe.has_surviving_evidence() {
+        return Err(ReaderPartialSourceGraphError::Ineligible);
+    }
+
+    let mut facts = Vec::new();
+    let mut gaps = Vec::new();
+
+    if probe.subsystems.quill == ReaderSalvageStreamState::Readable {
+        match pub_cfb::read_stream_reader(Cursor::new(bytes), QUILL_STREAM)
+            .ok()
+            .and_then(|quill| {
+                parse_confirmed_story_catalog(StreamPath(QUILL_STREAM.into()), &quill).ok()
+            }) {
+            Some(catalog) => {
+                for story in catalog.stories {
+                    let mut units = Vec::with_capacity(story.utf16le.len() / 2);
+                    let mut chunks = story.utf16le.chunks_exact(2);
+                    units.extend(chunks.by_ref().map(|pair| u16::from_le_bytes([pair[0], pair[1]])));
+                    if !chunks.remainder().is_empty() {
+                        gaps.push(ReaderPartialSourceGap::TextSemanticAmbiguity);
+                        continue;
+                    }
+                    let Ok(text) = String::from_utf16(&units) else {
+                        gaps.push(ReaderPartialSourceGap::TextSemanticAmbiguity);
+                        continue;
+                    };
+                    facts.push(ReaderPartialSourceFact::TextRange {
+                        story_key: format!("quill-syid:{:08x}", story.syid.0),
+                        utf16_start: 0,
+                        utf16_end: story.utf16_code_units,
+                        text,
+                    });
+                }
+            }
+            None => gaps.push(ReaderPartialSourceGap::TextSemanticAmbiguity),
+        }
+    } else {
+        gaps.push(ReaderPartialSourceGap::TextUnavailable);
+    }
+
+    // The current shared salvage probe can prove Escher stream survival, but it
+    // does not yet prove a source-neutral image or geometry join. Preserve that
+    // absence explicitly instead of inventing identities or bounds.
+    gaps.push(ReaderPartialSourceGap::ImageFactsUnavailable);
+    gaps.push(ReaderPartialSourceGap::GeometryFactsUnavailable);
+    gaps.sort_by_key(|gap| match gap {
+        ReaderPartialSourceGap::TextUnavailable => 0,
+        ReaderPartialSourceGap::TextSemanticAmbiguity => 1,
+        ReaderPartialSourceGap::ImageFactsUnavailable => 2,
+        ReaderPartialSourceGap::GeometryFactsUnavailable => 3,
+    });
+    gaps.dedup();
+
+    Ok(ReaderPartialSourceGraph {
+        schema_version: READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1.to_owned(),
+        source_sha256: probe.source_sha256.clone(),
+        contents_family: probe.contents_family.clone(),
+        subsystems: probe.subsystems,
+        facts,
+        gaps,
+    })
 }
 
 pub fn probe_reader_salvage_candidate(bytes: &[u8]) -> ReaderSalvageProbe {
@@ -468,6 +601,31 @@ mod tests {
         );
         assert_eq!(proven.contents_family.as_deref(), Some("0x2c"));
         assert!(proven.has_surviving_evidence());
+    }
+
+    #[test]
+    fn partial_source_graph_preserves_identity_and_explicit_gaps() {
+        let bytes = synthetic_pub_cfb();
+        let probe = probe_reader_salvage_candidate_with_trigger(
+            &bytes,
+            ReaderSalvageTrigger::ProvenStructuralCorruption,
+        );
+        let graph = build_reader_partial_source_graph(&bytes, &probe)
+            .expect("eligible surviving evidence must project");
+
+        assert_eq!(graph.schema_version, READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1);
+        assert_eq!(graph.source_sha256, source_sha256(&bytes));
+        assert!(graph.facts.is_empty(), "fixture has no Quill text or grounded graphics");
+        assert!(graph.gaps.contains(&ReaderPartialSourceGap::TextUnavailable));
+        assert!(graph.gaps.contains(&ReaderPartialSourceGap::ImageFactsUnavailable));
+        assert!(graph.gaps.contains(&ReaderPartialSourceGap::GeometryFactsUnavailable));
+
+        let mut changed = bytes.clone();
+        changed.push(0);
+        assert_eq!(
+            build_reader_partial_source_graph(&changed, &probe),
+            Err(ReaderPartialSourceGraphError::SourceIdentityMismatch)
+        );
     }
 
     #[test]
