@@ -1,14 +1,13 @@
 use crate::{
     ESCHER_DELAY_STREAM_PATH, ESCHER_STREAM_PATH, PubAssetUse, PubSourceGraph,
-    build_pub_asset_manifest, bounded_wmf_metafile,
+    bounded_wmf_metafile, build_pub_asset_manifest,
 };
 use anyhow::{Context, Result, bail};
 use flate2::read::ZlibDecoder;
 use pub_escher::{BlipKind, OFFICE_ART_BLIP_WMF, inspect_delayed_blips};
 use std::io::{Cursor, Read};
 
-pub const MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1: &str =
-    "mature-officeart-wmf-preview-source-v1";
+pub const MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1: &str = "mature-officeart-wmf-preview-source-v1";
 
 const OFFICEART_WMF_ONE_UID_INSTANCE: u16 = 0x0216;
 const OFFICEART_WMF_ONE_UID_PREFIX_BYTES: usize = 50;
@@ -84,9 +83,9 @@ pub fn build_mature_0x2c_wmf_preview_bundle_from_bytes(
             continue;
         };
 
-        let payload = match slice_span(&delayed, &record.payload_source)
-            .and_then(|payload| decode_officeart_wmf_payload(payload, record.rec_type, record.rec_instance))
-        {
+        let payload = match slice_span(&delayed, &record.payload_source).and_then(|payload| {
+            decode_officeart_wmf_payload(payload, record.rec_type, record.rec_instance)
+        }) {
             Ok(payload) => payload,
             Err(_) => {
                 rejected_source_count += 1;
@@ -151,9 +150,7 @@ fn decode_officeart_wmf_payload(
     let cb_save = read_u32(payload, 44).context("missing OfficeArt WMF cbSave")?;
     let compression = payload[48];
     let filter = payload[49];
-    if compression != OFFICEART_WMF_COMPRESSION_DEFLATE
-        || filter != OFFICEART_WMF_FILTER_NONE
-    {
+    if compression != OFFICEART_WMF_COMPRESSION_DEFLATE || filter != OFFICEART_WMF_FILTER_NONE {
         bail!("unsupported OfficeArt WMF compression/filter profile");
     }
     let compressed = &payload[OFFICEART_WMF_ONE_UID_PREFIX_BYTES..];
@@ -172,8 +169,8 @@ fn decode_officeart_wmf_payload(
         bail!("OfficeArt WMF inflated byte length differs from cbSize");
     }
 
-    let bounded = bounded_wmf_metafile(&inflated)
-        .context("validate bounded OfficeArt WMF metafile")?;
+    let bounded =
+        bounded_wmf_metafile(&inflated).context("validate bounded OfficeArt WMF metafile")?;
     if bounded.source_len != inflated.len() {
         bail!("OfficeArt WMF contains bytes after the first bounded META_EOF");
     }
@@ -280,9 +277,7 @@ mod tests {
     fn rejects_wrong_instance_filter_and_declared_compressed_length() {
         let wmf = minimal_wmf();
         let payload = one_uid_wmf_payload(&wmf);
-        assert!(
-            decode_officeart_wmf_payload(&payload, OFFICE_ART_BLIP_WMF, 0x0217).is_err()
-        );
+        assert!(decode_officeart_wmf_payload(&payload, OFFICE_ART_BLIP_WMF, 0x0217).is_err());
 
         let mut wrong_filter = payload.clone();
         wrong_filter[49] = 0;
