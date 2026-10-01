@@ -1600,8 +1600,6 @@ impl ViewerApp {
             }
             Err(error) => {
                 if self.open_state.finish_without_commit_if_current(generation) {
-                    self.visual = None;
-                    self.salvage = None;
                     self.load_error = Some(error);
                     self.exact_file_consent_open = false;
                     self.exact_file_consent_status = None;
