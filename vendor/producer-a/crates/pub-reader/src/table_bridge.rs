@@ -1432,7 +1432,7 @@ mod tests {
             utf16_start: 0,
             utf16_end: 1,
             bounds: None,
-                paint: None,
+            paint: None,
             source_refs: Vec::new(),
         }];
 
