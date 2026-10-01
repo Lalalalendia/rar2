@@ -49,7 +49,7 @@ jobs:
           PY
 
       - name: Build measurement test
-        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader exact_group_stack_carrier_census_is_source_safe --no-run
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --lib exact_group_stack_carrier_census_is_source_safe --no-run
 
       - name: Measure grouped stack carriers
         shell: bash
