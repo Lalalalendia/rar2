@@ -2,6 +2,62 @@ import { assertReaderSceneSourceNeutral } from "./render-v1.mjs";
 
 export const EMU_PER_CSS_PX = 9525;
 
+const SALVAGE_STREAM_STATES = new Set([
+  "not_attempted", "readable", "recovered_root_regular", "absent",
+  "present_over_limit", "present_unreadable", "container_unavailable"
+]);
+const SALVAGE_GAPS = new Set([
+  "text_unavailable", "text_semantic_ambiguity",
+  "image_facts_unavailable", "geometry_facts_unavailable"
+]);
+
+export function assertSalvageObservation(value) {
+  assertReaderSceneSourceNeutral(value);
+  if (!value || value.schema_version !== "chaptera.reader-partial-source-graph.v1"
+      || typeof value.source_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.source_sha256)
+      || !value.subsystems || typeof value.subsystems !== "object"
+      || !Array.isArray(value.facts) || !Array.isArray(value.gaps)) {
+    throw new Error("salvage_protocol_mismatch");
+  }
+  for (const name of ["contents", "quill", "escher", "escher_delay"]) {
+    if (!SALVAGE_STREAM_STATES.has(value.subsystems[name])) {
+      throw new Error("salvage_protocol_mismatch");
+    }
+  }
+  for (const gap of value.gaps) {
+    if (!SALVAGE_GAPS.has(gap)) throw new Error("salvage_protocol_mismatch");
+  }
+  for (const fact of value.facts) {
+    if (!fact || typeof fact !== "object") throw new Error("salvage_protocol_mismatch");
+    if (fact.kind === "text_range") {
+      if (typeof fact.story_key !== "string" || !fact.story_key
+          || !Number.isSafeInteger(fact.utf16_start) || fact.utf16_start < 0
+          || !Number.isSafeInteger(fact.utf16_end) || fact.utf16_end < fact.utf16_start
+          || typeof fact.text !== "string") {
+        throw new Error("salvage_protocol_mismatch");
+      }
+    } else if (fact.kind === "verified_image") {
+      if (typeof fact.resource_key !== "string" || !fact.resource_key
+          || typeof fact.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(fact.sha256)
+          || !Number.isSafeInteger(fact.byte_len) || fact.byte_len <= 0) {
+        throw new Error("salvage_protocol_mismatch");
+      }
+    } else if (fact.kind === "grounded_geometry") {
+      if (typeof fact.node_key !== "string" || !fact.node_key
+          || (fact.parent_key !== null && fact.parent_key !== undefined
+              && typeof fact.parent_key !== "string")
+          || !["x_emu", "y_emu", "width_emu", "height_emu"]
+            .every((key) => Number.isSafeInteger(fact[key]))
+          || fact.width_emu <= 0 || fact.height_emu <= 0) {
+        throw new Error("salvage_protocol_mismatch");
+      }
+    } else {
+      throw new Error("salvage_protocol_mismatch");
+    }
+  }
+  return value;
+}
+
 export function orderedPages(scene) {
   assertReaderSceneSourceNeutral(scene);
   if (scene?.protocol_version !== "chaptera.reader-scene.v1") {
@@ -115,6 +171,7 @@ export function classificationMessage(classification, failureClass = null) {
   return ({
     supported: "Opened read-only.",
     partial: "Opened with display limitations. Check the details before relying on the page appearance.",
+    salvage: "Opened in recovery mode. Only source-backed recovered facts are available; page layout is not claimed.",
     unsupported: "This Publisher file is not supported yet. Choose another file to continue.",
     damaged: "This Publisher file could not be opened completely. Keep the original; choose another file or use a recovery tool.",
     not_pub: "This file is not a Publisher document. Choose a .PUB file.",
@@ -131,7 +188,7 @@ export function errorMessage(error) {
   if ([401, 403].includes(error?.status)) return "Access is unavailable or has expired. Reopen the file or check access to the saved document.";
   if ([404, 410].includes(error?.status)) return "The document or temporary viewing session is no longer available. Open the file again.";
   if (error?.status >= 500) return "The service is temporarily unavailable. Keep your original file and retry shortly.";
-  if (["scene_protocol_mismatch", "guest_path_invalid", "guest_protocol_mismatch"].includes(error?.code ?? error?.message)) {
+  if (["scene_protocol_mismatch", "salvage_protocol_mismatch", "guest_path_invalid", "guest_protocol_mismatch"].includes(error?.code ?? error?.message)) {
     return "The website and viewing service are incompatible. Reload the page and retry.";
   }
   return "Opening failed. Check your connection and try again; your original file is unchanged.";
