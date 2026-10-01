@@ -565,7 +565,7 @@ def _first_scene_difference(left: Any, right: Any, path: str = "$") -> str:
                 return diff
         return ""
     if left != right:
-        return f"{path}: value mismatch"
+        return f"{path}: {left!r} != {right!r}"
     return ""
 
 
