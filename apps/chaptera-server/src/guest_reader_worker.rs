@@ -3,7 +3,7 @@ use std::{
     fs::{self as stdfs, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
@@ -64,6 +64,8 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub scene: Option<Value>,
     pub failure_classification: Option<FailureClassificationV1>,
     pub filesystem_confinement: bool,
+    pub structural_scan_duration_us: u64,
+    pub scene_duration_us: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -347,15 +349,21 @@ pub fn run_guest_scene_worker(
         )
     })?;
 
-    let (classification, terminal_code, scene) =
-        match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(bundle) => match from_viewer_geometry(
+    let structural_scan_started = Instant::now();
+    let opened = open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1());
+    let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
+
+    let (classification, terminal_code, scene, scene_duration_us) = match opened {
+        Ok(bundle) => {
+            let scene_started = Instant::now();
+            let projected = from_viewer_geometry(
                 session_id.to_owned(),
                 expected_sha256.to_owned(),
                 "guest:source".to_owned(),
                 &bundle.geometry,
                 &bundle.source_page_paint_orders,
-            ) {
+            );
+            match projected {
                 Ok(scene) => {
                     let classification = if scene.fidelity.state == "supported" {
                         "supported"
@@ -368,20 +376,28 @@ pub fn run_guest_scene_worker(
                             "Reader scene serialization failed",
                         )
                     })?;
-                    (classification.to_owned(), None, Some(scene))
+                    (
+                        classification.to_owned(),
+                        None,
+                        Some(scene),
+                        Some(duration_us(scene_started.elapsed())),
+                    )
                 }
                 Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_projection_failed".to_owned()),
                     None,
+                    Some(duration_us(scene_started.elapsed())),
                 ),
-            },
-            Err(_) => (
-                "unsupported".to_owned(),
-                Some("reader_scene_open_failed".to_owned()),
-                None,
-            ),
-        };
+            }
+        }
+        Err(_) => (
+            "unsupported".to_owned(),
+            Some("reader_scene_open_failed".to_owned()),
+            None,
+            None,
+        ),
+    };
 
     let failure_classification =
         guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
@@ -397,6 +413,8 @@ pub fn run_guest_scene_worker(
         scene,
         failure_classification,
         filesystem_confinement: true,
+        structural_scan_duration_us,
+        scene_duration_us,
     };
     write_receipt(output, &receipt)
 }
@@ -412,6 +430,10 @@ fn validate_receipt(
         || receipt.source_sha256 != expected_sha256
         || receipt.source_byte_len != expected_byte_len
         || !receipt.filesystem_confinement
+        || (receipt.terminal_code.as_deref() == Some("reader_scene_open_failed")
+            && receipt.scene_duration_us.is_some())
+        || (receipt.terminal_code.as_deref() != Some("reader_scene_open_failed")
+            && receipt.scene_duration_us.is_none())
     {
         return Err(GuestSceneWorkerError::new(
             "guest_scene_receipt_identity_mismatch",
@@ -475,6 +497,10 @@ fn validate_receipt(
         }
     }
     Ok(())
+}
+
+fn duration_us(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 fn write_receipt(
@@ -621,6 +647,8 @@ mod tests {
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
             failure_classification: None,
             filesystem_confinement: true,
+            structural_scan_duration_us: 1,
+            scene_duration_us: None,
         };
         assert!(validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1,).is_err());
     }
