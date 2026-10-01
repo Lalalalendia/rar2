@@ -48,9 +48,6 @@ jobs:
               (root / f"{name}.pub").write_bytes(data)
           PY
 
-      - name: Normalize measurement file
-        run: rustfmt --edition 2024 vendor/producer-a/crates/pub-reader/src/lib.rs
-
       - name: Build measurement test
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader exact_group_stack_carrier_census_is_source_safe --no-run
 
