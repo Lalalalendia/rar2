@@ -517,8 +517,10 @@ def project_resolved_graph_scene(
         )
     )
 
-    # Match pub-layout first: origin mapping is canonical and is not reordered
-    # when the Viewer later restores bounded source-backed paint order.
+    # Match pub-layout first: origin_mapping is created from canonical node
+    # identity order. Viewer paint-order restoration happens only afterwards
+    # and must not mutate that mapping order.
+    origin_mapping_nodes = list(nodes)
     if source_page_paint_orders:
         apply_source_page_paint_orders(nodes, source_page_paint_orders)
 
@@ -545,7 +547,7 @@ def project_resolved_graph_scene(
             raise ResolvedGraphSceneError(f"layout environment {key} must be non-empty")
 
     origin_mapping = []
-    for item in nodes:
+    for item in origin_mapping_nodes:
         mapping = {
             "authoring_origin": item["origin"],
             "resolved_node_origin": item["origin"],
