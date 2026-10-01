@@ -150,6 +150,7 @@ fn graph() -> PubResolvedGraph {
                     explicit_paint: PubExplicitShapePaintSource::default(),
                     effective_paint: None,
                     story_frame: None,
+                    text_frame_inset: None,
                     table_story: None,
                     table: Some(table),
                 },
