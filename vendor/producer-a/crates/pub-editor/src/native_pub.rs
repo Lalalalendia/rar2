@@ -244,8 +244,11 @@ mod tests {
             .nodes
             .iter()
             .find_map(|(node_id, node)| {
-                (node.header.bounds.width.get() > 0 && node.header.bounds.height.get() > 0)
-                    .then_some(*node_id)
+                let next_x = LengthEmu::new(node.header.bounds.x.get().checked_add(1)?);
+                session
+                    .can_move_node_to(*node_id, next_x, node.header.bounds.y)
+                    .ok()
+                    .map(|_| *node_id)
             })
             .expect("movable geometry candidate");
         let before_bounds = session.graph().nodes[&node_id].header.bounds;
