@@ -31,7 +31,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Format probe
-        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -- --check
+        run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/bin/page_extent_authority_census.rs
 
       - name: Check probe
         run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page_extent_authority_census -- -D warnings
