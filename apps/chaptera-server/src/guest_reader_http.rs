@@ -1644,9 +1644,8 @@ fn stored_public_payload(
     match session.classification.as_deref() {
         Some("supported") | Some("partial") => Ok((payload, None)),
         Some("salvage") => {
-            let observation = payload.ok_or_else(|| {
-                GuestReaderError::internal("guest_salvage_observation_missing")
-            })?;
+            let observation = payload
+                .ok_or_else(|| GuestReaderError::internal("guest_salvage_observation_missing"))?;
             if observation.get("schema_version").and_then(Value::as_str)
                 != Some("chaptera.reader-partial-source-graph.v1")
                 || observation.get("source_sha256").and_then(Value::as_str)
@@ -1660,9 +1659,7 @@ fn stored_public_payload(
         }
         Some("unsupported") | Some("rejected") | None => {
             if payload.is_some() {
-                return Err(GuestReaderError::internal(
-                    "guest_terminal_payload_invalid",
-                ));
+                return Err(GuestReaderError::internal("guest_terminal_payload_invalid"));
             }
             Ok((None, None))
         }
