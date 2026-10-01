@@ -440,6 +440,9 @@ pub fn from_viewer_geometry(
         .map_err(|error| format!("shared fallback font validation failed: {error}"))?;
     let fallback_font = shared_text_font_resource();
     let mut text_layout_by_node = HashMap::new();
+    let mut projected_nodes = Vec::<(String, ReaderNodeV1)>::new();
+    let mut projected_instance_ids = HashSet::new();
+    let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
     for page_index in 0..geometry.document.pages.len() {
         let plan = match build_page_render_plan_with_text_layout_v1(
@@ -453,72 +456,239 @@ pub fn from_viewer_geometry(
                 continue;
             }
         };
+        let plan_page_id = serialized_string(&plan.page_id, "render-plan page id")?;
         for node in plan.nodes {
-            let Some(text) = node.text else {
-                continue;
-            };
-            let Some(layout) = text.layout else {
-                text_layout_partial = true;
-                continue;
-            };
-            let RenderTextLayoutDispositionV1::SharedResolved {
-                font_resource_id,
-                font_fingerprint_sha256,
-                font_size_emu,
-                line_height_emu,
-            } = layout.disposition
-            else {
-                text_layout_partial = true;
-                continue;
-            };
-            if layout.lines.iter().any(|line| !line.spans.is_empty()) {
-                // Mixed-size layout is deterministic and shared, but paragraph-level
-                // vertical metrics are not yet Publisher-exact. Keep the document Partial.
-                text_layout_partial = true;
+            let node_id = serialized_string(&node.node_id, "render-plan node id")?;
+            let text = node.text.as_ref().map(|text| text.text.clone());
+            let mut mapped_layout = None;
+            if let Some(text_fragment) = node.text.as_ref() {
+                let Some(layout) = text_fragment.layout.as_ref() else {
+                    text_layout_partial = true;
+                    if node.projected_scene_instance.is_none() {
+                        continue;
+                    }
+                    mapped_layout = None;
+                    if let Some(instance) = node.projected_scene_instance.as_ref() {
+                        if instance.target_page_id != plan_page_id {
+                            return Err(format!(
+                                "projected instance {} targets page {} but render plan is page {}",
+                                instance.instance_id, instance.target_page_id, plan_page_id
+                            ));
+                        }
+                    }
+                    // Keep the projected visual node source-safe even when its text
+                    // layout is unavailable; fidelity remains Partial.
+                    if node.projected_scene_instance.is_none() {
+                        continue;
+                    }
+                    // Fall through to projected-node materialization below.
+                    // Ordinary direct nodes retain the existing no-layout behavior.
+                    
+                };
+                if let Some(layout) = text_fragment.layout.as_ref() {
+                    match &layout.disposition {
+                        RenderTextLayoutDispositionV1::SharedResolved {
+                            font_resource_id,
+                            font_fingerprint_sha256,
+                            font_size_emu,
+                            line_height_emu,
+                        } => {
+                            if layout.lines.iter().any(|line| !line.spans.is_empty()) {
+                                // Mixed-size layout is deterministic and shared, but paragraph-level
+                                // vertical metrics are not yet Publisher-exact. Keep the document Partial.
+                                text_layout_partial = true;
+                            }
+                            mapped_layout = Some(ReaderTextLayoutV1 {
+                                disposition: "shared_resolved",
+                                font_resource_id: font_resource_id.clone(),
+                                font_fingerprint_sha256: font_fingerprint_sha256.clone(),
+                                font_size_emu: *font_size_emu,
+                                line_height_emu: *line_height_emu,
+                                lines: layout
+                                    .lines
+                                    .iter()
+                                    .map(|line| ReaderTextLineV1 {
+                                        line_index: line.line_index,
+                                        scalar_start: line.scalar_start,
+                                        scalar_end: line.scalar_end,
+                                        consumed_scalar_end: line.consumed_scalar_end,
+                                        text: line.text.clone(),
+                                        measured_width_emu: line.measured_width_emu,
+                                        line_height_emu: line.line_height_emu,
+                                        spans: line
+                                            .spans
+                                            .iter()
+                                            .map(|span| ReaderTextSpanV1 {
+                                                scalar_start: span.scalar_start,
+                                                scalar_end: span.scalar_end,
+                                                text: span.text.clone(),
+                                                x_offset_emu: span.x_offset_emu,
+                                                measured_width_emu: span.measured_width_emu,
+                                                font_size_emu: span.font_size_emu,
+                                            })
+                                            .collect(),
+                                    })
+                                    .collect(),
+                            });
+                        }
+                        RenderTextLayoutDispositionV1::BackendFallback { .. } => {
+                            text_layout_partial = true;
+                        }
+                    }
+                }
             }
-            let node_id = serialized_string(&node.node_id, "text layout node id")?;
-            let mapped = ReaderTextLayoutV1 {
-                disposition: "shared_resolved",
-                font_resource_id,
-                font_fingerprint_sha256,
-                font_size_emu,
-                line_height_emu,
-                lines: layout
-                    .lines
-                    .into_iter()
-                    .map(|line| ReaderTextLineV1 {
-                        line_index: line.line_index,
-                        scalar_start: line.scalar_start,
-                        scalar_end: line.scalar_end,
-                        consumed_scalar_end: line.consumed_scalar_end,
-                        text: line.text,
-                        measured_width_emu: line.measured_width_emu,
-                        line_height_emu: line.line_height_emu,
-                        spans: line
-                            .spans
-                            .into_iter()
-                            .map(|span| ReaderTextSpanV1 {
-                                scalar_start: span.scalar_start,
-                                scalar_end: span.scalar_end,
-                                text: span.text,
-                                x_offset_emu: span.x_offset_emu,
-                                measured_width_emu: span.measured_width_emu,
-                                font_size_emu: span.font_size_emu,
-                            })
-                            .collect(),
-                    })
-                    .collect(),
+
+            let Some(instance) = node.projected_scene_instance.as_ref() else {
+                if let Some(mapped) = mapped_layout {
+                    if text_layout_by_node
+                        .insert(node_id.clone(), mapped)
+                        .is_some()
+                    {
+                        return Err(format!("duplicate text layout binding for node {node_id}"));
+                    }
+                }
+                continue;
             };
-            if text_layout_by_node
-                .insert(node_id.clone(), mapped)
-                .is_some()
+
+            if instance.target_page_id != plan_page_id || !page_ids.contains(&instance.target_page_id)
             {
-                return Err(format!("duplicate text layout binding for node {node_id}"));
+                return Err(format!(
+                    "projected instance {} targets unknown or mismatched page {}",
+                    instance.instance_id, instance.target_page_id
+                ));
             }
+            if instance.origin_node_id != node_id {
+                return Err(format!(
+                    "projected instance {} origin {} differs from render-plan origin {}",
+                    instance.instance_id, instance.origin_node_id, node_id
+                ));
+            }
+            if !projected_instance_ids.insert(instance.instance_id.clone())
+                || node_ids.contains(&instance.instance_id)
+            {
+                return Err(format!(
+                    "projected instance id {} collides with existing Scene identity",
+                    instance.instance_id
+                ));
+            }
+
+            let mut projected_matches = geometry
+                .projected_instances
+                .iter()
+                .filter(|projected| projected.scene_instance.instance_id == instance.instance_id);
+            let projected = projected_matches.next().ok_or_else(|| {
+                format!(
+                    "render-plan projected instance {} is absent from Viewer projected instances",
+                    instance.instance_id
+                )
+            })?;
+            if projected_matches.next().is_some() {
+                return Err(format!(
+                    "duplicate Viewer projected instance {}",
+                    instance.instance_id
+                ));
+            }
+            let target_frame_id =
+                serialized_string(&projected.target_frame_node_id, "projected target frame id")?;
+            let target_page_id = page_cache.get(&target_frame_id).ok_or_else(|| {
+                format!(
+                    "projected instance {} targets unknown frame {}",
+                    instance.instance_id, target_frame_id
+                )
+            })?;
+            if target_page_id != &instance.target_page_id {
+                return Err(format!(
+                    "projected instance {} target frame {} resolves to page {} instead of {}",
+                    instance.instance_id, target_frame_id, target_page_id, instance.target_page_id
+                ));
+            }
+
+            if node.table.is_some() {
+                return Err(format!(
+                    "projected instance {} unexpectedly carries table content",
+                    instance.instance_id
+                ));
+            }
+            let kind = match (node.text.is_some(), node.image.is_some()) {
+                (true, false) => "text_frame",
+                (false, true) => "picture_frame",
+                (false, false) => {
+                    projected_kind_partial = true;
+                    "unknown"
+                }
+                (true, true) => {
+                    return Err(format!(
+                        "projected instance {} has conflicting text and image kinds",
+                        instance.instance_id
+                    ));
+                }
+            };
+
+            let (resource_id, image_source_window) = if let Some(image) = node.image.as_ref() {
+                let resource_id =
+                    serialized_string(&image.resource_id, "projected image resource id")?;
+                if !resource_ids.contains(&resource_id) {
+                    return Err(format!(
+                        "projected instance {} references unknown image resource {}",
+                        instance.instance_id, resource_id
+                    ));
+                }
+                let source_window = image.source_window.as_ref().map(|window| {
+                    ReaderImageSourceWindowV1 {
+                        left_q16: window.left_q16,
+                        top_q16: window.top_q16,
+                        right_q16: window.right_q16,
+                        bottom_q16: window.bottom_q16,
+                    }
+                });
+                (Some(resource_id), source_window)
+            } else {
+                (None, None)
+            };
+            let paint = if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
+                Some(ReaderPaintV1 {
+                    fill_rgb: node.solid_fill_rgb,
+                    line: node.solid_line.as_ref().map(|line| ReaderLineV1 {
+                        rgb: line.rgb,
+                        width_emu: line.width_emu,
+                    }),
+                })
+            } else {
+                None
+            };
+            let bounds = rect_from_serialized(&node.bounds)?;
+            if bounds.width <= 0 || bounds.height <= 0 {
+                return Err(format!(
+                    "projected instance {} has non-positive bounds",
+                    instance.instance_id
+                ));
+            }
+
+            projected_nodes.push((
+                target_frame_id,
+                ReaderNodeV1 {
+                    node_id: instance.instance_id.clone(),
+                    page_id: instance.target_page_id.clone(),
+                    parent_node_id: None,
+                    kind,
+                    bounds,
+                    transform: transform_from_serialized(&node.transform)?,
+                    paint,
+                    resource_id,
+                    image_source_window,
+                    table: None,
+                    text,
+                    text_layout: mapped_layout,
+                },
+            ));
         }
     }
-    let text_layout_count = text_layout_by_node.len();
-    if text_by_node.len() > text_layout_count {
+    let projected_text_layout_count = projected_nodes
+        .iter()
+        .filter(|(_, node)| node.text_layout.is_some())
+        .count();
+    let text_layout_count = text_layout_by_node.len() + projected_text_layout_count;
+    if text_by_node.len() > text_layout_by_node.len() {
         text_layout_partial = true;
     }
 
@@ -548,8 +718,16 @@ pub fn from_viewer_geometry(
         });
     }
 
-    let stacking_known =
+    let mut stacking_known =
         apply_source_page_paint_order(&mut nodes, &pages, source_page_paint_orders)?;
+    if !projected_nodes.is_empty() {
+        // Persisted source page-paint receipts do not claim a total order across
+        // projected Cmo visuals. Preserve proven raw-node order, insert each
+        // projected visual at its existing render-plan anchor, and keep the
+        // overall stacking claim conservative.
+        stacking_known = false;
+        insert_projected_reader_nodes_after_targets(&mut nodes, projected_nodes)?;
+    }
 
     let stories = geometry
         .document
@@ -602,7 +780,7 @@ pub fn from_viewer_geometry(
     if !nodes.is_empty() && !stacking_known {
         reasons.push("stacking_order_unavailable");
     }
-    if kind_by_node.values().any(|kind| *kind == "unknown") {
+    if kind_by_node.values().any(|kind| *kind == "unknown") || projected_kind_partial {
         reasons.push("node_kind_partial");
     }
     if resources
@@ -647,6 +825,40 @@ pub fn from_viewer_geometry(
         fonts,
         diagnostics,
     })
+}
+
+fn insert_projected_reader_nodes_after_targets(
+    nodes: &mut Vec<ReaderNodeV1>,
+    projected_nodes: Vec<(String, ReaderNodeV1)>,
+) -> Result<(), String> {
+    let mut ids = nodes
+        .iter()
+        .map(|node| node.node_id.clone())
+        .collect::<HashSet<_>>();
+    let mut inserted_per_target = HashMap::<String, usize>::new();
+
+    for (target_frame_id, node) in projected_nodes {
+        if !ids.insert(node.node_id.clone()) {
+            return Err(format!(
+                "projected Scene identity {} collides with an existing node",
+                node.node_id
+            ));
+        }
+        let target_index = nodes
+            .iter()
+            .position(|candidate| candidate.node_id == target_frame_id)
+            .ok_or_else(|| {
+                format!(
+                    "projected Scene node {} targets missing frame {}",
+                    node.node_id, target_frame_id
+                )
+            })?;
+        let offset = inserted_per_target.entry(target_frame_id).or_default();
+        let insert_at = target_index + 1 + *offset;
+        nodes.insert(insert_at, node);
+        *offset += 1;
+    }
+    Ok(())
 }
 
 fn apply_source_page_paint_order(
@@ -902,8 +1114,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderPaintV1, base64_encode, bind_visible_paint,
-        from_viewer_geometry, inline_image_data_url, reader_image_resource,
+        MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
+        ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
+        inline_image_data_url, insert_projected_reader_nodes_after_targets, reader_image_resource,
         shared_text_font_resource,
     };
 
@@ -1060,6 +1273,19 @@ mod tests {
                             .is_some_and(|line| line.rgb == [0, 0, 0])
                     })
                     .count();
+                let projected_scene_nodes = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| node.node_id.starts_with("sha256:"))
+                    .count();
+                let projected_shared_lines = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| node.node_id.starts_with("sha256:"))
+                    .filter_map(|node| node.text_layout.as_ref())
+                    .flat_map(|layout| &layout.lines)
+                    .filter(|line| !line.text.trim().is_empty())
+                    .count();
                 let page_line_nodes = scene
                     .pages
                     .iter()
@@ -1079,7 +1305,7 @@ mod tests {
                     })
                     .collect::<Vec<_>>();
                 println!(
-                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} projected_scene_nodes={} projected_shared_lines={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
                     scene.fidelity.state,
                     scene.stacking_fidelity,
                     scene.pages.len(),
@@ -1088,6 +1314,8 @@ mod tests {
                     table_cells,
                     spanning_cells,
                     bounded_table_cells,
+                    projected_scene_nodes,
+                    projected_shared_lines,
                     source_explicit_line_any,
                     source_explicit_line_color,
                     source_explicit_line_width,
@@ -1184,6 +1412,88 @@ mod tests {
             layout_none,
             backend_fallbacks_json,
         );
+    }
+
+    fn projection_test_node(node_id: &str) -> ReaderNodeV1 {
+        ReaderNodeV1 {
+            node_id: node_id.to_owned(),
+            page_id: "page".to_owned(),
+            parent_node_id: None,
+            kind: "text_frame",
+            bounds: ReaderRectV1 {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+            transform: ReaderTransformV1 {
+                a: "1".to_owned(),
+                b: "0".to_owned(),
+                c: "0".to_owned(),
+                d: "1".to_owned(),
+                tx: 0,
+                ty: 0,
+            },
+            paint: None,
+            resource_id: None,
+            image_source_window: None,
+            table: None,
+            text: None,
+            text_layout: None,
+        }
+    }
+
+    #[test]
+    fn projected_reader_nodes_insert_after_target_without_cloning_origin_identity() {
+        let mut nodes = vec![
+            projection_test_node("before"),
+            projection_test_node("target"),
+            projection_test_node("after"),
+        ];
+        insert_projected_reader_nodes_after_targets(
+            &mut nodes,
+            vec![
+                ("target".to_owned(), projection_test_node("sha256:projected-a")),
+                ("target".to_owned(), projection_test_node("sha256:projected-b")),
+            ],
+        )
+        .expect("projected nodes should bind to existing target frame");
+
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.node_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "before",
+                "target",
+                "sha256:projected-a",
+                "sha256:projected-b",
+                "after"
+            ]
+        );
+    }
+
+    #[test]
+    fn projected_reader_node_missing_target_or_identity_collision_fails_closed() {
+        let mut missing_target = vec![projection_test_node("target")];
+        let error = insert_projected_reader_nodes_after_targets(
+            &mut missing_target,
+            vec![(
+                "absent".to_owned(),
+                projection_test_node("sha256:projected"),
+            )],
+        )
+        .expect_err("dangling projected target must fail");
+        assert!(error.contains("targets missing frame"));
+
+        let mut collision = vec![projection_test_node("target")];
+        let error = insert_projected_reader_nodes_after_targets(
+            &mut collision,
+            vec![("target".to_owned(), projection_test_node("target"))],
+        )
+        .expect_err("projected identity collision must fail");
+        assert!(error.contains("collides"));
     }
 
     #[test]
