@@ -37,6 +37,18 @@ S3_HOST = "s3.chaptera.test"
 QUARANTINE_BUCKET = "chaptera-quarantine"
 PRIVATE_BUCKET = "chaptera-private"
 FIXTURE_MAX_BYTES = 8 * 1024 * 1024
+TRACE_PROTOCOL_VERSION = "chaptera.trace-context.v1"
+TRACE_ID = "trace:cloud-reader-live-00000001"
+INTERACTION_ID = "interaction:cloud-reader-live-00000001"
+SESSION_INCARNATION = "session:cloud-reader-live-00000001"
+TRACE_HEADERS = [
+    "x-chaptera-trace-version: " + TRACE_PROTOCOL_VERSION,
+    "x-chaptera-trace-id: " + TRACE_ID,
+    "x-chaptera-interaction-id: " + INTERACTION_ID,
+    "x-chaptera-session-incarnation: " + SESSION_INCARNATION,
+    "x-chaptera-operation-class: open",
+    "x-chaptera-browser-family: chromium",
+]
 
 
 def sha256_file(path: pathlib.Path) -> str:
@@ -667,6 +679,91 @@ def parse_header_file(path: pathlib.Path) -> dict[str, str]:
     return result
 
 
+def parse_reader_trace_events(path: pathlib.Path) -> list[dict[str, Any]]:
+    marker = "chaptera_reader_trace "
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        offset = line.find(marker)
+        if offset < 0:
+            continue
+        event = json.loads(line[offset + len(marker):])
+        if event.get("trace_id") == TRACE_ID:
+            events.append(event)
+    return events
+
+
+def validate_reader_trace_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    expected_stages = [
+        "reader.session_create",
+        "reader.upload",
+        "reader.scan",
+        "reader.structural_scan",
+        "reader.scene",
+        "reader.open",
+        "reader.cleanup",
+    ]
+    stages = [event.get("metric_labels", {}).get("stage") for event in events]
+    if stages != expected_stages:
+        raise AssertionError("Reader trace stage sequence drifted: " + repr(stages))
+
+    expected_label_keys = {
+        "stage",
+        "operation_class",
+        "outcome",
+        "region",
+        "protocol_major",
+        "browser_family",
+    }
+    prohibited = {
+        "session_id",
+        "upload_id",
+        "source_sha256",
+        "filename",
+        "document_id",
+        "story_id",
+        "storage_locator",
+        "token",
+        "ip",
+    }
+    for event in events:
+        if event.get("protocol_version") != TRACE_PROTOCOL_VERSION:
+            raise AssertionError("Reader trace protocol drifted")
+        if event.get("trace_id") != TRACE_ID:
+            raise AssertionError("Reader trace id drifted")
+        if event.get("interaction_id") != INTERACTION_ID:
+            raise AssertionError("Reader interaction id drifted")
+        if event.get("session_incarnation") != SESSION_INCARNATION:
+            raise AssertionError("Reader session incarnation drifted")
+        labels = event.get("metric_labels")
+        if not isinstance(labels, dict) or set(labels) != expected_label_keys:
+            raise AssertionError("Reader metric label allowlist drifted: " + repr(labels))
+        if prohibited.intersection(labels):
+            raise AssertionError("Reader metric labels contain prohibited high-cardinality identity")
+        if labels.get("operation_class") != "open":
+            raise AssertionError("Reader trace operation class drifted")
+        if labels.get("browser_family") != "chromium":
+            raise AssertionError("Reader trace browser family drifted")
+        if labels.get("protocol_major") != "v1" or labels.get("region") != "unknown":
+            raise AssertionError("Reader bounded metric dimensions drifted")
+        if labels.get("outcome") != "success":
+            raise AssertionError("Reader acceptance stage failed: " + repr(labels))
+        duration_ms = event.get("duration_ms")
+        if not isinstance(duration_ms, (int, float)) or duration_ms < 0:
+            raise AssertionError("Reader trace duration is invalid")
+
+    return {
+        "protocol_version": TRACE_PROTOCOL_VERSION,
+        "trace_id": TRACE_ID,
+        "interaction_id": INTERACTION_ID,
+        "session_incarnation": SESSION_INCARNATION,
+        "stage_sequence": expected_stages,
+        "event_count": len(events),
+        "metric_label_keys": sorted(expected_label_keys),
+        "contains_document_payload": False,
+        "semantic_authority": False,
+    }
+
+
 def terminate(process: subprocess.Popen[str] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -838,6 +935,7 @@ def main() -> int:
             path="/v1/reader/guest-sessions",
             output=response_path,
             dump_headers=header_path,
+            headers=TRACE_HEADERS,
             body_json={"expected_byte_len": fixture_bytes},
         )
         if status != 200:
@@ -864,7 +962,7 @@ def main() -> int:
             method="PUT",
             path=issued["upload_path"],
             output=response_path,
-            headers=[session_header],
+            headers=[session_header, *TRACE_HEADERS],
             upload=fixture,
         )
         if upload_status != 200:
@@ -875,7 +973,7 @@ def main() -> int:
             method="POST",
             path=issued["open_path"],
             output=response_path,
-            headers=[session_header],
+            headers=[session_header, *TRACE_HEADERS],
         )
         if open_status != 200:
             raise AssertionError(f"guest open returned HTTP {open_status}")
@@ -894,7 +992,7 @@ def main() -> int:
             method="GET",
             path=issued["scene_path"],
             output=response_path,
-            headers=[session_header],
+            headers=[session_header, *TRACE_HEADERS],
         )
         if scene_status != 200:
             raise AssertionError(f"guest scene returned HTTP {scene_status}")
@@ -939,7 +1037,7 @@ def main() -> int:
             method="GET",
             path=issued["scene_path"],
             output=response_path,
-            headers=[session_header],
+            headers=[session_header, *TRACE_HEADERS],
         )
         if expired_status not in {404, 410}:
             raise AssertionError(
@@ -966,6 +1064,9 @@ def main() -> int:
             raise AssertionError("expired guest session row was not deleted")
         if active_reservations_after != 0:
             raise AssertionError("expired guest upload admission remained active")
+
+        trace_events = parse_reader_trace_events(server_log_path)
+        observability_receipt = validate_reader_trace_events(trace_events)
 
         caddy_version = run([str(caddy), "version"]).stdout.strip()
         receipt = {
@@ -1000,6 +1101,7 @@ def main() -> int:
                 "isolated_structural_scan_count": isolation_kinds.count("structural_scan"),
                 "isolated_guest_scene_count": isolation_kinds.count("guest_scene"),
             },
+            "observability": observability_receipt,
             "ttl_cleanup": {
                 "issued_at_ms": issued_at_ms,
                 "expires_at_ms": expires_at_ms,
@@ -1033,6 +1135,7 @@ def main() -> int:
                     "classification": receipt["service_path"]["classification"],
                     "expired_access_status": expired_status,
                     "backing_state_deleted": True,
+                    "trace_event_count": observability_receipt["event_count"],
                     "receipt": str(out / "receipt.json"),
                 },
                 sort_keys=True,
