@@ -2681,9 +2681,6 @@ pub fn build_mature_0x2c_from_streams(
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
             .flatten();
-        let effective_text_margins = (raw_type == Some(RAW_TYPE_SHAPE) && dgg_defaults_unambiguous)
-            .then(|| resolve_bounded_effective_officeart_text_margins(shape, dgg_defaults))
-            .flatten();
         let story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
             build_story_frame(
                 source_hash,
@@ -2695,6 +2692,9 @@ pub fn build_mature_0x2c_from_streams(
         } else {
             None
         };
+        let effective_text_margins = (story_frame.is_some() && dgg_defaults_unambiguous)
+            .then(|| resolve_bounded_effective_officeart_text_margins(shape, dgg_defaults))
+            .flatten();
         let (table_story, table) = if raw_type == Some(RAW_TYPE_TABLE) {
             if let Some(quill_catalog) = quill_catalog.as_ref() {
                 let context = table_bridge::TableBridgeContext {
