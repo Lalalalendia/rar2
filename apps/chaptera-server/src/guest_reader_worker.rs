@@ -65,6 +65,7 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub classification: String,
     pub terminal_code: Option<String>,
     pub scene: Option<Value>,
+    pub salvage: Option<Value>,
     pub failure_classification: Option<FailureClassificationV1>,
     pub filesystem_confinement: bool,
 }
@@ -350,7 +351,7 @@ pub fn run_guest_scene_worker(
         )
     })?;
 
-    let (classification, terminal_code, scene) =
+    let (classification, terminal_code, scene, salvage) =
         match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
             Ok(bundle) => match from_viewer_geometry(
                 session_id.to_owned(),
@@ -371,11 +372,12 @@ pub fn run_guest_scene_worker(
                             "Reader scene serialization failed",
                         )
                     })?;
-                    (classification.to_owned(), None, Some(scene))
+                    (classification.to_owned(), None, Some(scene), None)
                 }
                 Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_projection_failed".to_owned()),
+                    None,
                     None,
                 ),
             },
@@ -390,16 +392,12 @@ pub fn run_guest_scene_worker(
                             "Reader salvage observation serialization failed",
                         )
                     })?;
-                    ("salvage".to_owned(), None, Some(observation))
+                    ("salvage".to_owned(), None, None, Some(observation))
                 }
-                Ok(ViewerProductOpenOutcome::Normal(_)) => (
-                    "unsupported".to_owned(),
-                    Some("reader_scene_open_inconsistent".to_owned()),
-                    None,
-                ),
-                Err(_) => (
+                Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_open_failed".to_owned()),
+                    None,
                     None,
                 ),
             },
@@ -417,6 +415,7 @@ pub fn run_guest_scene_worker(
         classification,
         terminal_code,
         scene,
+        salvage,
         failure_classification,
         filesystem_confinement: true,
     };
@@ -456,7 +455,10 @@ fn validate_receipt(
                     "worker scene uses an unsupported Reader scene protocol",
                 ));
             }
-            if receipt.terminal_code.is_some() || receipt.failure_classification.is_some() {
+            if receipt.salvage.is_some()
+                || receipt.terminal_code.is_some()
+                || receipt.failure_classification.is_some()
+            {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
                     "supported/partial receipt cannot carry terminal failure evidence",
@@ -464,7 +466,13 @@ fn validate_receipt(
             }
         }
         "salvage" => {
-            let observation = receipt.scene.as_ref().ok_or_else(|| {
+            if receipt.scene.is_some() {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt cannot masquerade as Reader scene",
+                ));
+            }
+            let observation = receipt.salvage.as_ref().ok_or_else(|| {
                 GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
                     "salvage receipt is missing Reader partial source graph",
@@ -491,13 +499,10 @@ fn validate_receipt(
         }
         "unsupported" => {
             if receipt.scene.is_some()
+                || receipt.salvage.is_some()
                 || !matches!(
                     receipt.terminal_code.as_deref(),
-                    Some(
-                        "reader_scene_open_failed"
-                            | "reader_scene_projection_failed"
-                            | "reader_scene_open_inconsistent"
-                    )
+                    Some("reader_scene_open_failed" | "reader_scene_projection_failed")
                 )
             {
                 return Err(GuestSceneWorkerError::new(
@@ -670,7 +675,8 @@ mod tests {
             source_byte_len: 1,
             classification: "salvage".to_owned(),
             terminal_code: None,
-            scene: Some(serde_json::json!({
+            scene: None,
+            salvage: Some(serde_json::json!({
                 "schema_version":"chaptera.reader-partial-source-graph.v1",
                 "source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "contents_family":null,
@@ -705,6 +711,7 @@ mod tests {
             classification: "unsupported".to_owned(),
             terminal_code: Some("reader_scene_open_failed".to_owned()),
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
+            salvage: None,
             failure_classification: None,
             filesystem_confinement: true,
         };
