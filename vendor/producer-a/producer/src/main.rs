@@ -89,6 +89,47 @@ fn emit_editable_export(
     Ok(())
 }
 
+
+fn emit_native_pub_save(
+    fixture: &str,
+    project_path: &str,
+    output_path: &str,
+    report_path: &str,
+) -> Result<()> {
+    let bytes = fs::read(fixture).context("read source PUB fixture")?;
+    let project: EditorProject =
+        serde_json::from_slice(&fs::read(project_path).context("read canonical EditorProject")?)
+            .context("parse canonical EditorProject")?;
+    let mut session = pub_editor::open_mature_0x2c_editor(&bytes, project.source_hash)
+        .context("open bounded native PUB editor")?;
+    session
+        .apply_project(&project)
+        .context("replay canonical EditorProject")?;
+
+    let candidate = session
+        .materialize_mature_0x2c_native_pub_candidate(&bytes)
+        .context("materialize bounded native PUB candidate")?;
+
+    let report = serde_json::json!({
+        "protocol_version": "chaptera.native-pub-save.v1",
+        "source_hash": candidate.source_hash,
+        "output_hash": candidate.output_hash,
+        "source_story_id": candidate.source_story_id,
+        "output_story_id": candidate.output_story_id,
+        "byte_len": candidate.bytes.len(),
+        "chaptera_reopen_verified": true,
+        "native_publisher_acceptance": "not_evaluated",
+    });
+    fs::write(Path::new(output_path), &candidate.bytes).context("write native PUB candidate")?;
+    fs::write(
+        Path::new(report_path),
+        serde_json::to_vec_pretty(&report).context("serialize native PUB save report")?,
+    )
+    .context("write native PUB save report")?;
+    print!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let first = args
@@ -117,6 +158,16 @@ fn main() -> Result<()> {
             anyhow::bail!("unexpected extra arguments");
         }
         return emit_editable_export(&fixture, &project, &target, &output, &report);
+    }
+    if first == "native-pub-save" {
+        let fixture = args.next().context("fixture path missing")?;
+        let project = args.next().context("project path missing")?;
+        let output = args.next().context("output path missing")?;
+        let report = args.next().context("report path missing")?;
+        if args.next().is_some() {
+            anyhow::bail!("unexpected extra arguments");
+        }
+        return emit_native_pub_save(&fixture, &project, &output, &report);
     }
     if args.next().is_some() {
         anyhow::bail!("unexpected extra arguments");
