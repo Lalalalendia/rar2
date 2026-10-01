@@ -9302,19 +9302,45 @@ mod tests {
             !visual.typography_runs.is_empty(),
             "Reader must expose bounded source typography"
         );
-        let inherited_typography_run_count = visual
+        let full_family_typography_run_count = visual
             .typography_runs
             .iter()
-            .filter(|run| run.font_inherited || run.size_inherited)
+            .filter(|run| !run.source_font_name.trim().is_empty())
+            .count();
+        let inherited_full_family_run_count = visual
+            .typography_runs
+            .iter()
+            .filter(|run| {
+                !run.source_font_name.trim().is_empty()
+                    && (run.font_inherited || run.size_inherited)
+            })
+            .count();
+        let size_only_typography_run_count = visual
+            .typography_runs
+            .iter()
+            .filter(|run| {
+                run.source_font_name.trim().is_empty()
+                    && !run.font_inherited
+                    && run.size_inherited
+                    && run.text_size_emu > 0
+            })
             .count();
         assert_eq!(
-            visual.typography_runs.len(),
-            106,
-            "current main source authority proves 106 product-safe SampleNewsletter effective typography runs; Reader/Viewer projection must preserve them 1:1"
+            full_family_typography_run_count, 106,
+            "the pre-size-only source authority must preserve all 106 full-family SampleNewsletter typography runs"
         );
         assert_eq!(
-            inherited_typography_run_count, 88,
-            "current main source authority proves 88 explicit-FDPP-selector inherited SampleNewsletter runs; projection must not drop inheritance provenance"
+            inherited_full_family_run_count, 88,
+            "the pre-size-only authority must preserve all 88 explicit-FDPP-selector inherited full-family runs"
+        );
+        assert_eq!(
+            size_only_typography_run_count, 17,
+            "bounded implicit style-zero size authority adds exactly 17 family-absent SampleNewsletter size-only runs on this pinned fixture"
+        );
+        assert_eq!(
+            visual.typography_runs.len(),
+            full_family_typography_run_count + size_only_typography_run_count,
+            "SampleNewsletter typography must contain only proven full-family or bounded size-only runs"
         );
         assert!(
             visual
@@ -9376,7 +9402,9 @@ mod tests {
             "page_selection_basis": "pinned_same_source_crosswalk_only",
             "generic_page_role_claimed": false,
             "typography_run_count": visual.typography_runs.len(),
-            "inherited_typography_run_count": inherited_typography_run_count,
+            "full_family_typography_run_count": full_family_typography_run_count,
+            "inherited_full_family_run_count": inherited_full_family_run_count,
+            "size_only_typography_run_count": size_only_typography_run_count,
             "render_plan_typography_sections": typography_sections,
             "shared_resolved_layout_frames": shared_resolved_layout_frames,
             "backend_fallback_frames": backend_fallback_frames,
