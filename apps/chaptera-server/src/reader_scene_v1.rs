@@ -1217,10 +1217,11 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1,
-        ReaderRectV1, ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
-        inline_image_data_url, insert_projected_nodes_after_targets, reader_image_resource,
-        shared_text_font_resource, take_direct_render_text,
+        MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
+        ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
+        ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
+        from_viewer_geometry_with_fonts, inline_image_data_url, insert_projected_nodes_after_targets,
+        reader_image_resource, shared_text_font_resource, take_direct_render_text,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1637,6 +1638,66 @@ mod tests {
 
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
+
+        if actual_sha256 == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" {
+            let configured_resource_id = format!(
+                "chaptera.cloud.configured-font.{}.face0",
+                chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+            );
+            let configured = ReaderConfiguredFontResourceV1 {
+                source_family: "Arial".to_owned(),
+                resource_id: configured_resource_id.clone(),
+                expected_sha256:
+                    chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
+                face_index: 0,
+                mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+                bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
+            };
+            let configured_scene = from_viewer_geometry_with_fonts(
+                "probe:configured-font".to_owned(),
+                actual_sha256.clone(),
+                "probe:source".to_owned(),
+                &bundle.geometry,
+                &bundle.source_page_paint_orders,
+                &[configured],
+            )
+            .expect("exact Carlton configured-font consumer must project");
+
+            let projected_configured_layouts = configured_scene
+                .nodes
+                .iter()
+                .filter(|node| node.origin_node_id.is_some())
+                .filter_map(|node| node.text_layout.as_ref())
+                .filter(|layout| layout.font_resource_id == configured_resource_id)
+                .count();
+            assert!(
+                projected_configured_layouts >= 3,
+                "the three exact Carlton source-typography-complete carriers must consume the configured resource"
+            );
+            let scene_font = configured_scene
+                .fonts
+                .iter()
+                .find(|font| font.resource_id == configured_resource_id)
+                .expect("configured physical resource must be serialized for browser paint");
+            assert_eq!(scene_font.family_name, "Arial");
+            assert_eq!(
+                scene_font.expected_sha256,
+                chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+            );
+            assert!(
+                scene_font
+                    .inline_data_url
+                    .starts_with("data:font/ttf;base64,"),
+                "browser font bytes must use the same configured resource"
+            );
+            println!(
+                "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} resource_id={} sha256={}",
+                projected_configured_layouts,
+                configured_resource_id,
+                scene_font.expected_sha256
+            );
+        }
+
         let font = shared_text_font_resource();
 
         let mut text_nodes = 0_usize;
