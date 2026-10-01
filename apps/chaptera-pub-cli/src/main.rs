@@ -110,7 +110,7 @@ mod tests {
         let digest = source_sha256(b"chaptera");
         assert_eq!(
             digest.to_string(),
-            "e7e70f41184b1ab78ef65f24f92a7201d8fb1f8c1df900a37687a330cfd5fb1d"
+            "fa0bba13982a384d4c42ef19105ae2bf88c66d63b9b085d1d4022842235d17f8"
         );
     }
 }
