@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from cloud_reader_manual_oracle_bundle_v1 import (
     CFB_MAGIC,
+    MAX_BUNDLE_MEMBERS,
     compare_bundle,
     prepare_bundle,
 )
@@ -120,6 +121,20 @@ class ManualOracleBundleTests(unittest.TestCase):
             with zipfile.ZipFile(archive, "w") as zipped:
                 zipped.writestr("../PAIRS.csv", "bad")
             with self.assertRaisesRegex(ValueError, "unsafe path"):
+                prepare_bundle(
+                    archive,
+                    Path(temporary) / "extract",
+                    Path(temporary) / "reader.json",
+                    Path(temporary) / "registry.json",
+                )
+
+    def test_prepare_rejects_excessive_zip_member_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "too-many.zip"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                for index in range(MAX_BUNDLE_MEMBERS + 1):
+                    zipped.writestr(f"member-{index}.txt", b"")
+            with self.assertRaisesRegex(ValueError, "too many members"):
                 prepare_bundle(
                     archive,
                     Path(temporary) / "extract",
