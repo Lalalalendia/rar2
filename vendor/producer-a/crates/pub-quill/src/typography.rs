@@ -21,6 +21,7 @@ const FBOLD_ID: u16 = 0x0202;
 const FBOLD_CS_ID: u16 = 0x0237;
 const FONT_INDEX_CONTAINER_ID: u16 = 0x0224;
 const TEXT_SIZE_ID: u16 = 0x020C;
+const PARAGRAPH_ALIGNMENT_ID: u16 = 0x0204;
 const PARAGRAPH_DEFAULT_CHAR_STYLE_ID: u16 = 0x0219;
 
 pub const QUILL_TEXT_SIZE_EMU_PER_POINT: u32 = 12_700;
@@ -35,6 +36,8 @@ pub struct QuillTypographyCatalog {
     pub explicit_runs: Vec<QuillExplicitTypographyRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effective_runs: Vec<QuillEffectiveTypographyRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_alignment_runs: Vec<QuillParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_block_types_assumed_zero_length: Vec<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -173,6 +176,40 @@ impl QuillEffectiveTypographyRun {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuillParagraphAlignment {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
+}
+
+impl QuillParagraphAlignment {
+    fn from_explicit_fdpp_value(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Self::Center),
+            2 => Some(Self::Right),
+            3 => Some(Self::InterWord),
+            4 => Some(Self::Distribute),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillParagraphAlignmentRun {
+    pub story_index: u32,
+    pub story_syid: QuillSyid,
+    pub story_start_utf16: u32,
+    pub story_end_utf16: u32,
+    pub alignment: QuillParagraphAlignment,
+    pub raw_value: u32,
+    pub fdpp_descriptor_ordinal: u32,
+    pub fdpp_style_ordinal: u32,
+    pub fdpp_style_source: RawSpan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuillTypographyReadError {
     message: String,
@@ -216,6 +253,7 @@ struct ParagraphStyleObservation {
     text_offset_source: RawSpan,
     style_source: RawSpan,
     default_style_indices: Vec<u32>,
+    paragraph_alignment_values: Vec<u32>,
 }
 
 #[allow(dead_code)]
@@ -228,6 +266,7 @@ struct ParagraphTypographyRange {
     style_source: RawSpan,
     selected_style_index: Option<u32>,
     selector_source: Option<QuillParagraphSelectorSource>,
+    paragraph_alignment_value: Option<u32>,
 }
 
 #[allow(dead_code)]
@@ -469,6 +508,7 @@ pub fn parse_bounded_typography(
     }
 
     let mut effective_runs = Vec::new();
+    let mut paragraph_alignment_runs = Vec::new();
     let mut inheritance_unknown_block_types = BTreeSet::new();
     let mut effective_inheritance_unavailable_reason = None;
 
@@ -490,6 +530,11 @@ pub fn parse_bounded_typography(
             &mut inheritance_unknown_block_types,
         )?;
         apply_bounded_implicit_style_zero(&mut paragraph_ranges, &character_defaults);
+
+        if explicit_run_projection_allowed(&inheritance_unknown_block_types) {
+            paragraph_alignment_runs =
+                build_paragraph_alignment_runs(&paragraph_ranges, &story_extents);
+        }
 
         if explicit_run_projection_allowed(&unknown_block_types)
             && explicit_run_projection_allowed(&inheritance_unknown_block_types)
@@ -519,6 +564,7 @@ pub fn parse_bounded_typography(
         script_font_maps,
         explicit_runs,
         effective_runs,
+        paragraph_alignment_runs,
         unknown_block_types_assumed_zero_length: unknown_block_types.into_iter().collect(),
         inheritance_unknown_block_types_assumed_zero_length: inheritance_unknown_block_types
             .into_iter()
@@ -621,12 +667,18 @@ fn parse_fdpp_styles(
             let style_end = checked_end(style_start, style_len, end, "FDPP style")?;
             let mut cursor = style_start + 4;
             let mut selectors = Vec::new();
+            let mut paragraph_alignments = Vec::new();
 
             while cursor < style_end {
                 let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
                 if block.id == PARAGRAPH_DEFAULT_CHAR_STYLE_ID {
                     if let Some(value) = block.value {
                         selectors.push(value);
+                    }
+                }
+                if block.id == PARAGRAPH_ALIGNMENT_ID {
+                    if let Some(value) = block.value {
+                        paragraph_alignments.push(value);
                     }
                 }
                 cursor = next;
@@ -639,6 +691,8 @@ fn parse_fdpp_styles(
 
             selectors.sort_unstable();
             selectors.dedup();
+            paragraph_alignments.sort_unstable();
+            paragraph_alignments.dedup();
             styles.push(ParagraphStyleObservation {
                 fdpp_descriptor_ordinal: u32::try_from(descriptor_ordinal)
                     .map_err(|_| QuillTypographyReadError::new("descriptor ordinal exceeds u32"))?,
@@ -656,6 +710,7 @@ fn parse_fdpp_styles(
                     len: style_len as u64,
                 },
                 default_style_indices: selectors,
+                paragraph_alignment_values: paragraph_alignments,
             });
         }
     }
@@ -708,6 +763,11 @@ fn materialize_paragraph_ranges(
             _ => (None, None),
         };
 
+        let paragraph_alignment_value = match style.paragraph_alignment_values.as_slice() {
+            [value] => Some(*value),
+            _ => None,
+        };
+
         ranges.push(ParagraphTypographyRange {
             global_start_utf16: previous_end_utf16,
             global_end_utf16,
@@ -716,6 +776,7 @@ fn materialize_paragraph_ranges(
             style_source: style.style_source.clone(),
             selected_style_index,
             selector_source,
+            paragraph_alignment_value,
         });
         previous_end_utf16 = global_end_utf16;
     }
@@ -726,6 +787,41 @@ fn materialize_paragraph_ranges(
         )));
     }
     Ok(ranges)
+}
+
+fn build_paragraph_alignment_runs(
+    paragraph_ranges: &[ParagraphTypographyRange],
+    story_extents: &[StoryExtent],
+) -> Vec<QuillParagraphAlignmentRun> {
+    let mut runs = Vec::new();
+    for range in paragraph_ranges {
+        let Some(raw_value) = range.paragraph_alignment_value else {
+            continue;
+        };
+        let Some(alignment) = QuillParagraphAlignment::from_explicit_fdpp_value(raw_value) else {
+            continue;
+        };
+
+        for extent in story_extents {
+            let global_start = range.global_start_utf16.max(extent.global_start_utf16);
+            let global_end = range.global_end_utf16.min(extent.global_end_utf16);
+            if global_start >= global_end {
+                continue;
+            }
+            runs.push(QuillParagraphAlignmentRun {
+                story_index: extent.story_index,
+                story_syid: extent.story_syid,
+                story_start_utf16: global_start - extent.global_start_utf16,
+                story_end_utf16: global_end - extent.global_start_utf16,
+                alignment,
+                raw_value,
+                fdpp_descriptor_ordinal: range.fdpp_descriptor_ordinal,
+                fdpp_style_ordinal: range.fdpp_style_ordinal,
+                fdpp_style_source: range.style_source.clone(),
+            });
+        }
+    }
+    runs
 }
 
 fn parse_stsh1_character_defaults(
@@ -1759,6 +1855,7 @@ mod tests {
             },
             selected_style_index: Some(2),
             selector_source: Some(QuillParagraphSelectorSource::ExplicitFdpp0x19),
+            paragraph_alignment_value: None,
         };
         let default = CharacterDefaultObservation {
             logical_style_index: 2,
@@ -2034,6 +2131,7 @@ mod tests {
                     len: 8,
                 },
                 default_style_indices: vec![3],
+                paragraph_alignment_values: Vec::new(),
             },
             ParagraphStyleObservation {
                 fdpp_descriptor_ordinal: 1,
@@ -2050,6 +2148,7 @@ mod tests {
                     len: 8,
                 },
                 default_style_indices: Vec::new(),
+                paragraph_alignment_values: Vec::new(),
             },
         ];
         let ranges = materialize_paragraph_ranges(&styles, 100, 140, 20).expect("paragraph ranges");
@@ -2086,6 +2185,85 @@ mod tests {
         let mut non_exact = exact;
         non_exact.text_size_emu += 1;
         assert_eq!(non_exact.text_size_points_exact(), None);
+    }
+
+    #[test]
+    fn packed_fdpp_explicit_paragraph_alignment_uses_proven_values() {
+        for (value, expected) in [
+            (1_u32, QuillParagraphAlignment::Center),
+            (2_u32, QuillParagraphAlignment::Right),
+            (3_u32, QuillParagraphAlignment::InterWord),
+            (4_u32, QuillParagraphAlignment::Distribute),
+        ] {
+            let bytes = [0x04, 0x12, value as u8, 0x00];
+            let mut unknown = BTreeSet::new();
+            let (block, end) =
+                parse_block(&bytes, 0, bytes.len(), &mut unknown).expect("parse alignment");
+            assert_eq!(block.id, PARAGRAPH_ALIGNMENT_ID);
+            assert_eq!(block.block_type, 0x10);
+            assert_eq!(block.value, Some(value));
+            assert_eq!(
+                QuillParagraphAlignment::from_explicit_fdpp_value(value),
+                Some(expected)
+            );
+            assert_eq!(end, bytes.len());
+            assert!(unknown.is_empty());
+        }
+        assert_eq!(
+            QuillParagraphAlignment::from_explicit_fdpp_value(0),
+            None
+        );
+        assert_eq!(
+            QuillParagraphAlignment::from_explicit_fdpp_value(5),
+            None
+        );
+    }
+
+    #[test]
+    fn paragraph_alignment_runs_preserve_only_explicit_fdpp_ranges() {
+        let stream = pub_core::StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let ranges = vec![
+            ParagraphTypographyRange {
+                global_start_utf16: 0,
+                global_end_utf16: 4,
+                fdpp_descriptor_ordinal: 2,
+                fdpp_style_ordinal: 0,
+                style_source: RawSpan {
+                    stream: stream.clone(),
+                    offset: 10,
+                    len: 8,
+                },
+                selected_style_index: None,
+                selector_source: None,
+                paragraph_alignment_value: Some(2),
+            },
+            ParagraphTypographyRange {
+                global_start_utf16: 4,
+                global_end_utf16: 8,
+                fdpp_descriptor_ordinal: 2,
+                fdpp_style_ordinal: 1,
+                style_source: RawSpan {
+                    stream,
+                    offset: 18,
+                    len: 8,
+                },
+                selected_style_index: None,
+                selector_source: None,
+                paragraph_alignment_value: None,
+            },
+        ];
+        let extents = vec![StoryExtent {
+            story_index: 0,
+            story_syid: QuillSyid(9),
+            global_start_utf16: 0,
+            global_end_utf16: 8,
+        }];
+        let runs = build_paragraph_alignment_runs(&ranges, &extents);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].story_start_utf16, 0);
+        assert_eq!(runs[0].story_end_utf16, 4);
+        assert_eq!(runs[0].alignment, QuillParagraphAlignment::Right);
+        assert_eq!(runs[0].raw_value, 2);
     }
 
     #[test]
