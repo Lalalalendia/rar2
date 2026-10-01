@@ -70,7 +70,8 @@ use pub_reader::{
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_table_cells,
+    build_mature_0x2c_source_graph, derive_pub_page_id,
+    materialize_bounded_table_cells, materialize_mature_0x2c_wmf_assets_from_bytes,
     rasterize_wmf_preview, read_legacy_0x22_image_wmfs, resolve_pub_source_graph,
     scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
 };
@@ -1060,6 +1061,144 @@ fn viewer_legacy_ole_preview_image_from_scan(
     })
 }
 
+fn mature_wmf_preview_resource_id(
+    source_hash: &Sha256Digest,
+    slot: u32,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let digest = Sha256::digest(wmf_bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
+        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    let source_object_key = format!(
+        "mature-wmf-preview/slot-{slot}/wmf-sha256-{wmf_sha256}/{}",
+        LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &source_object_key,
+        semantic_role: "viewer.mature-wmf-preview-v1",
+    })
+    .map_err(|error| anyhow!("derive mature WMF preview resource identity: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+fn viewer_mature_wmf_preview_images(
+    bytes: &[u8],
+    source_hash: &Sha256Digest,
+    graph: &PubResolvedGraph,
+    scene: &BoundedResolvedScene,
+    diagnostics: &mut Vec<ViewerDiagnostic>,
+) -> Vec<ViewerEmbeddedImage> {
+    let renderable_node_ids = scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let assets = match materialize_mature_0x2c_wmf_assets_from_bytes(bytes, graph) {
+        Ok(assets) => assets,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.image.mature_wmf_materialization_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "A mature Publisher WMF image is present but its bounded OfficeArt metafile carrier could not be materialized."
+                        .to_owned(),
+            });
+            return Vec::new();
+        }
+    };
+
+    let mut images = Vec::new();
+    for asset in assets {
+        let mut node_ids = asset
+            .uses
+            .iter()
+            .map(|usage| usage.node_id)
+            .filter(|node_id| renderable_node_ids.contains(node_id))
+            .collect::<Vec<_>>();
+        node_ids.sort();
+        node_ids.dedup();
+        if node_ids.is_empty() {
+            continue;
+        }
+
+        let Some(node) = node_ids
+            .iter()
+            .find_map(|node_id| graph.nodes.get(node_id))
+        else {
+            continue;
+        };
+        let Some((width_hint, height_hint)) = legacy_image_raster_hints(
+            node.header.bounds.width.get(),
+            node.header.bounds.height.get(),
+        ) else {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.image.mature_wmf_bounds_unsupported".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "A mature Publisher WMF image has bounds outside the bounded preview raster profile."
+                        .to_owned(),
+            });
+            continue;
+        };
+
+        let preview = match rasterize_wmf_preview(&asset.bytes, width_hint, height_hint) {
+            Ok(preview) => preview,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.image.mature_wmf_raster_unsupported".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A validated mature Publisher WMF is outside the bounded Viewer raster profile."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let png = match encode_wmf_preview_png(&preview) {
+            Ok(png) => png,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.image.mature_wmf_encode_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded mature Publisher WMF preview could not be encoded as a Viewer image resource."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let resource_id = match mature_wmf_preview_resource_id(source_hash, asset.slot, &asset.bytes)
+        {
+            Ok(resource_id) => resource_id,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.image.mature_wmf_identity_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded mature Publisher WMF preview could not receive a deterministic Viewer resource identity."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+
+        images.push(ViewerEmbeddedImage {
+            resource_id,
+            mime: "image/png".to_owned(),
+            node_ids,
+            placements: Vec::new(),
+            bytes: png,
+        });
+    }
+    images
+}
+
 fn legacy_image_preview_resource_id(
     source_hash: &Sha256Digest,
     image_object_id: u16,
@@ -1559,6 +1698,35 @@ fn open_legacy_0x22_noquill_bundle(
             .map(map_scene_diagnostic),
     );
 
+    let existing_image_nodes = images
+        .iter()
+        .flat_map(|image| image.node_ids.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let mut mature_wmf_images = viewer_mature_wmf_preview_images(
+        bytes,
+        &pipeline.source_hash,
+        &pipeline.resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    );
+    for image in &mut mature_wmf_images {
+        image
+            .node_ids
+            .retain(|node_id| !existing_image_nodes.contains(node_id));
+    }
+    mature_wmf_images.retain(|image| !image.node_ids.is_empty());
+    if !mature_wmf_images.is_empty() {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.image.mature_wmf_preview_applied".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "{} bounded mature Publisher WMF image resource(s) were rasterized from validated OfficeArt metafile carriers.",
+                mature_wmf_images.len()
+            ),
+        });
+        images.extend(mature_wmf_images);
+    }
+
     let preview_source_hash = document.source.source_hash;
     let mut images = viewer_legacy_ole_cached_preview_images(
         bytes,
@@ -1894,7 +2062,7 @@ fn open_mature_0x2c_bundle(
         viewer_tables_from_resolved(&pipeline.resolved.graph, &projection);
     document.diagnostics.extend(table_diagnostics);
 
-    let images = match build_mature_0x2c_asset_export_bundle_from_bytes(
+    let mut images = match build_mature_0x2c_asset_export_bundle_from_bytes(
         bytes,
         &pipeline.source.graph,
     ) {
@@ -2044,7 +2212,7 @@ fn open_mature_0x2c_bundle(
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, admitted source typography sizing, exact embedded PNG/JPEG bytes, persisted bounded image source-window crop, and admitted solid fill/line state. Publisher-exact typography/reflow, unsupported or ambiguous image crop, gradients/patterns, effects, and broader transforms are not faithfully painted yet."
+            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, admitted source typography sizing, exact embedded PNG/JPEG bytes, bounded mature WMF previews, persisted bounded image source-window crop, and admitted solid fill/line state. Publisher-exact typography/reflow, unsupported or ambiguous image crop, gradients/patterns, effects, and broader transforms are not faithfully painted yet."
                 .to_owned(),
         });
     }
