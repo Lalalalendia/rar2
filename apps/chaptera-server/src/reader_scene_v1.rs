@@ -130,6 +130,8 @@ pub struct ReaderTableCellV1 {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<ReaderRectV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill_rgb: Option<[u8; 3]>,
 }
 
 fn table_span_is_one(value: &u32) -> bool {
@@ -549,6 +551,7 @@ pub fn from_viewer_geometry_with_fonts(
                 column_span: cell.column_span,
                 text: cell.text.clone(),
                 bounds,
+                fill_rgb: cell.solid_fill_rgb,
             });
         }
 
