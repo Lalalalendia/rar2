@@ -103,6 +103,25 @@ test("table cell geometry preserves authoritative page-space bounds", () => {
 });
 
 
+test("shared resolved text paint plan rejects negative line x offsets", () => {
+  assert.equal(resolvedTextLinePaintPlan({
+    bounds: { x: 100, y: 200, width: 1000, height: 600 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 120,
+      line_height_emu: 150,
+      lines: [{
+        line_index: 0,
+        text: "bad",
+        x_offset_emu: -1,
+        measured_width_emu: 300,
+        line_height_emu: 150
+      }]
+    }
+  }), null);
+});
+
 test("shared resolved text paint plan preserves server line breaks", () => {
   const plan = resolvedTextLinePaintPlan({
     bounds: { x: 100, y: 200, width: 1000, height: 600 },
@@ -121,6 +140,7 @@ test("shared resolved text paint plan preserves server line breaks", () => {
         {
           line_index: 0,
           text: "first",
+          x_offset_emu: 200,
           measured_width_emu: 300,
           line_height_emu: 150
         }
@@ -131,8 +151,8 @@ test("shared resolved text paint plan preserves server line breaks", () => {
   assert.equal(plan.font_resource_id, "font-1");
   assert.equal(plan.font_size_emu, 120);
   assert.deepEqual(
-    plan.lines.map((line) => [line.line_index, line.y, line.text]),
-    [[0, 200, "first"], [1, 350, "second"]]
+    plan.lines.map((line) => [line.line_index, line.x, line.y, line.text]),
+    [[0, 300, 200, "first"], [1, 100, 350, "second"]]
   );
 });
 
