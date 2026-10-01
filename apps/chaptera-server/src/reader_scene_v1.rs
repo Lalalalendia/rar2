@@ -650,11 +650,9 @@ pub fn from_viewer_geometry_with_font_probe(
                         .flatten()
                 },
             ),
-            None => build_page_render_plan_with_text_layout_v1(
-                geometry,
-                page_index,
-                &fallback_font,
-            ),
+            None => {
+                build_page_render_plan_with_text_layout_v1(geometry, page_index, &fallback_font)
+            }
         };
         let plan = match plan {
             Ok(plan) => plan,
@@ -667,8 +665,8 @@ pub fn from_viewer_geometry_with_font_probe(
 
         for node in plan.nodes {
             if let (Some(probe), Some(text)) = (font_probe, node.text.as_ref()) {
-                probe_font_used |= text.backend_font_resource_id.as_deref()
-                    == Some(probe.resource_id);
+                probe_font_used |=
+                    text.backend_font_resource_id.as_deref() == Some(probe.resource_id);
             }
             let (mapped_layout, layout_partial) = match node.text.as_ref() {
                 Some(text) => reader_text_layout_from_render_text(text),
