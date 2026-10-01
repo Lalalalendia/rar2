@@ -1429,9 +1429,11 @@ mod tests {
                         let left = text_bounds.x.get() - node.bounds.x.get();
                         let top = text_bounds.y.get() - node.bounds.y.get();
                         let right = node.bounds.x.get() + node.bounds.width.get()
-                            - text_bounds.x.get() - text_bounds.width.get();
+                            - text_bounds.x.get()
+                            - text_bounds.width.get();
                         let bottom = node.bounds.y.get() + node.bounds.height.get()
-                            - text_bounds.y.get() - text_bounds.height.get();
+                            - text_bounds.y.get()
+                            - text_bounds.height.get();
                         if left >= 0 && left == top && left == right && left == bottom {
                             *projected_uniform_insets_emu.entry(left).or_default() += 1;
                         }
