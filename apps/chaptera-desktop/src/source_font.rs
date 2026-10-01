@@ -1,6 +1,6 @@
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, RenderTextFragmentV1,
-    admitted_single_family_source_font_v1, normalize_source_font_family_v1,
+    ExplicitRenderTextFontResourceV1, RenderTextFragmentV1, admitted_single_family_source_font_v1,
+    normalize_source_font_family_v1,
 };
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(target_os = "windows")]
@@ -174,7 +174,8 @@ impl DesktopSourceFontRegistry {
 
     #[cfg(not(target_os = "windows"))]
     fn ensure_family(&mut self, family: &str) -> bool {
-        self.unavailable.insert(normalize_source_font_family_v1(family));
+        self.unavailable
+            .insert(normalize_source_font_family_v1(family));
         false
     }
 }
