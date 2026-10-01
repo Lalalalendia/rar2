@@ -225,6 +225,7 @@ jobs:
           READER_REAL_MANIFEST: ${{ runner.temp }}/cloud-reader-reference-fixtures.json
           READER_REAL_OUTPUT: ${{ runner.temp }}/cloud-reader-reference-real
           READER_REFERENCE_RASTER_DPI: "144"
+          READER_PROJECTED_TEXT_INSET_PROBE: "publisher_officeart_defaults_v1"
         run: node apps/cloud-reader/real-browser.test.mjs
 
       - name: Compare Cloud Reader rasters with author-supplied PDFs
