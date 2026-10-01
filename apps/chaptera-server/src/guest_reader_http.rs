@@ -1636,6 +1636,7 @@ fn open_response_from_stored(
     let classification = match session.classification.as_deref() {
         Some("supported") => "supported",
         Some("partial") => "partial",
+        Some("salvage") => "salvage",
         Some("unsupported") => "unsupported",
         Some("rejected") | None => "rejected",
         Some(_) => return Err(GuestReaderError::internal("guest_classification_invalid")),
@@ -2179,6 +2180,44 @@ mod tests {
 
         store.close().await;
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn stored_salvage_session_round_trips_source_neutral_observation() {
+        let mut stored = session(1_000);
+        stored.state = GuestSessionState::Opened;
+        stored.classification = Some("salvage".to_owned());
+        stored.source_sha256 = Some("a".repeat(64));
+        stored.scene_json = Some(
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version":"chaptera.reader-partial-source-graph.v1",
+                "source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "subsystems":{
+                    "contents":"readable",
+                    "quill":"absent",
+                    "escher":"absent",
+                    "escher_delay":"absent"
+                },
+                "facts":[],
+                "gaps":["text_unavailable","image_facts_unavailable","geometry_facts_unavailable"]
+            }))
+            .unwrap(),
+        );
+
+        let response = open_response_from_stored(&stored)
+            .expect("salvage observation should round-trip through guest API")
+            .0;
+        assert_eq!(response.classification, "salvage");
+        assert_eq!(
+            response
+                .scene
+                .as_ref()
+                .and_then(|value| value.get("schema_version"))
+                .and_then(Value::as_str),
+            Some("chaptera.reader-partial-source-graph.v1")
+        );
+        assert!(response.terminal_code.is_none());
+        assert!(response.failure_classification.is_none());
     }
 
     #[test]
