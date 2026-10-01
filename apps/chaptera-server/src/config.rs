@@ -200,6 +200,24 @@ pub struct CloudReaderGuestRuntimeConfig {
     pub max_concurrent_uploads: i64,
     pub max_reserved_bytes: i64,
     pub rate_subject_secret: SecretRef,
+    #[serde(default)]
+    pub font_resources: Vec<CloudReaderFontResourceConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudReaderFontResourceConfig {
+    pub source_family: String,
+    pub path: PathBuf,
+    pub expected_sha256: String,
+    #[serde(default)]
+    pub face_index: u32,
+    #[serde(default = "default_cloud_reader_font_mime")]
+    pub mime: String,
+}
+
+fn default_cloud_reader_font_mime() -> String {
+    "font/ttf".to_owned()
 }
 
 impl CloudReaderGuestRuntimeConfig {
@@ -612,7 +630,12 @@ impl ChapteraConfig {
         }
 
         if let Some(guest) = &self.cloud_reader_guest {
-            validate_cloud_reader_guest(guest, &self.source_validation, &self.edge)?;
+            validate_cloud_reader_guest(
+                self.environment,
+                guest,
+                &self.source_validation,
+                &self.edge,
+            )?;
         }
 
         match (&self.auth, self.environment) {
@@ -663,6 +686,7 @@ impl ChapteraConfig {
 }
 
 fn validate_cloud_reader_guest(
+    mode: EnvironmentMode,
     guest: &CloudReaderGuestRuntimeConfig,
     source_validation: &SourceValidationRuntimeConfig,
     edge: &EdgeConfig,
@@ -710,6 +734,64 @@ fn validate_cloud_reader_guest(
         .public_rate_limit()
         .validate()
         .map_err(|error| ConfigError::new(error.code, error.message))?;
+
+    if guest.font_resources.len() > 16 {
+        return Err(ConfigError::new(
+            "cloud_reader_font_resource_count_invalid",
+            "cloud_reader_guest.font_resources must contain at most 16 configured resources",
+        ));
+    }
+    let mut font_families = BTreeSet::new();
+    for font in &guest.font_resources {
+        let family = font.source_family.trim().to_lowercase();
+        if family.is_empty() || family.len() > 128 {
+            return Err(ConfigError::new(
+                "cloud_reader_font_family_invalid",
+                "configured Reader font source_family must be 1..=128 characters",
+            ));
+        }
+        if !font_families.insert(family) {
+            return Err(ConfigError::new(
+                "cloud_reader_font_family_duplicate",
+                "configured Reader font source_family entries must be unique",
+            ));
+        }
+        if font.path.as_os_str().is_empty() {
+            return Err(ConfigError::new(
+                "cloud_reader_font_path_required",
+                "configured Reader font path must be non-empty",
+            ));
+        }
+        if mode == EnvironmentMode::Prod && !font.path.is_absolute() {
+            return Err(ConfigError::new(
+                "cloud_reader_font_path_not_absolute",
+                "configured Reader font path must be absolute in production",
+            ));
+        }
+        if font.expected_sha256.len() != 64
+            || !font
+                .expected_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ConfigError::new(
+                "cloud_reader_font_sha256_invalid",
+                "configured Reader font expected_sha256 must be 64 lowercase hex characters",
+            ));
+        }
+        if font.face_index > 31 {
+            return Err(ConfigError::new(
+                "cloud_reader_font_face_index_invalid",
+                "configured Reader font face_index must be <=31",
+            ));
+        }
+        if !matches!(font.mime.as_str(), "font/ttf" | "font/otf") {
+            return Err(ConfigError::new(
+                "cloud_reader_font_mime_invalid",
+                "configured Reader font mime must be font/ttf or font/otf",
+            ));
+        }
+    }
     Ok(())
 }
 
