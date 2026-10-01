@@ -1,6 +1,6 @@
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, RenderTextFragmentV1, build_page_render_plan_v1,
-    effective_source_font_family_v1,
+    complete_scalar_source_font_family_v1, effective_source_font_family_v1,
 };
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(target_os = "windows")]
@@ -22,6 +22,7 @@ pub struct DesktopSourceFontRegistry {
     database: fontdb::Database,
     resolved: BTreeMap<String, ResolvedDesktopFont>,
     unavailable: BTreeSet<String>,
+    effective_fragment_families: BTreeMap<(String, u32, u32, String), String>,
 }
 
 impl Default for DesktopSourceFontRegistry {
@@ -44,6 +45,7 @@ impl DesktopSourceFontRegistry {
             database,
             resolved: BTreeMap::new(),
             unavailable: BTreeSet::new(),
+            effective_fragment_families: BTreeMap::new(),
         }
     }
 
@@ -56,13 +58,18 @@ impl DesktopSourceFontRegistry {
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
 
+        self.effective_fragment_families.clear();
         for page_index in 0..visual.document.pages.len() {
             let Ok(plan) = build_page_render_plan_v1(visual, page_index) else {
                 continue;
             };
             for fragment in plan.nodes.iter().filter_map(|node| node.text.as_ref()) {
                 if let Some(family) = effective_source_font_family_v1(visual, fragment) {
-                    families.insert(family);
+                    families.insert(family.clone());
+                    if complete_scalar_source_font_family_v1(fragment).is_none() {
+                        self.effective_fragment_families
+                            .insert(fragment_family_key(fragment), family);
+                    }
                 }
             }
         }
@@ -87,10 +94,13 @@ impl DesktopSourceFontRegistry {
 
     pub fn resource_for_fragment<'a>(
         &'a self,
-        visual: &ViewerGeometryDocument,
         fragment: &RenderTextFragmentV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
-        let family = effective_source_font_family_v1(visual, fragment)?;
+        let family = complete_scalar_source_font_family_v1(fragment).or_else(|| {
+            self.effective_fragment_families
+                .get(&fragment_family_key(fragment))
+                .cloned()
+        })?;
         self.resource_for_family(&family)
     }
 
@@ -200,6 +210,15 @@ impl DesktopSourceFontRegistry {
 
 fn normalize_family(name: &str) -> String {
     name.trim().to_lowercase()
+}
+
+fn fragment_family_key(fragment: &RenderTextFragmentV1) -> (String, u32, u32, String) {
+    (
+        format!("{:?}", fragment.story_id),
+        fragment.scalar_start,
+        fragment.scalar_end,
+        fragment.text.clone(),
+    )
 }
 
 #[cfg(test)]
