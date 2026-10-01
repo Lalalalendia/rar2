@@ -211,9 +211,15 @@ mod tests {
 
     fn headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(TRACE_VERSION_HEADER, HeaderValue::from_static(TRACE_PROTOCOL_VERSION));
+        headers.insert(
+            TRACE_VERSION_HEADER,
+            HeaderValue::from_static(TRACE_PROTOCOL_VERSION),
+        );
         headers.insert(TRACE_ID_HEADER, HeaderValue::from_static("trace:12345678"));
-        headers.insert(INTERACTION_ID_HEADER, HeaderValue::from_static("interaction:12345678"));
+        headers.insert(
+            INTERACTION_ID_HEADER,
+            HeaderValue::from_static("interaction:12345678"),
+        );
         headers.insert(
             SESSION_INCARNATION_HEADER,
             HeaderValue::from_static("session:12345678"),
