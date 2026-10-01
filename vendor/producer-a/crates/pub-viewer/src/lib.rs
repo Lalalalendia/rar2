@@ -5443,52 +5443,6 @@ mod mature_officeart_wmf_exact_product_tests {
     use super::*;
     use std::{fs, path::PathBuf};
 
-    fn exact_escher_pib_bindings(bytes: &[u8]) -> Vec<(Vec<u32>, Vec<u32>, bool, bool)> {
-        let escher =
-            pub_cfb::read_stream_reader(Cursor::new(bytes), pub_reader::ESCHER_STREAM_PATH)
-                .expect("read exact mature Escher stream");
-        let inventory = pub_escher::inspect_sp_containers(
-            pub_core::StreamPath(pub_reader::ESCHER_STREAM_PATH.into()),
-            &escher,
-        )
-        .expect("inspect exact mature SpContainers");
-
-        inventory
-            .shapes
-            .iter()
-            .filter_map(|shape| {
-                let slots = shape
-                    .fopts
-                    .iter()
-                    .flat_map(|record| record.properties.iter())
-                    .filter(|property| {
-                        property.property_id() == pub_escher::OFFICE_ART_PROPERTY_PIB
-                            && property.op_is_blip_id()
-                    })
-                    .map(|property| property.op)
-                    .collect::<BTreeSet<_>>();
-                if slots.is_empty() {
-                    return None;
-                }
-                let seq_nums = shape
-                    .client_data
-                    .as_ref()
-                    .map(|fields| {
-                        fields
-                            .values(pub_escher::PUBLISHER_FIELD_SHAPE_ID)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                Some((
-                    seq_nums,
-                    slots.into_iter().collect(),
-                    shape.client_anchor.is_some(),
-                    shape.child_anchor.is_some(),
-                ))
-            })
-            .collect()
-    }
-
     fn exact_wmf_fixture(env_name: &str, expected_sha256: &str, expected_counts: [usize; 6]) {
         let [
             expected_source_wmf_resources,
@@ -5503,9 +5457,6 @@ mod mature_officeart_wmf_exact_product_tests {
             .unwrap_or_else(|| panic!("{env_name} is required"));
         let before = fs::read(&path).expect("read exact mature OfficeArt WMF fixture");
         assert_eq!(sha256_digest(&before).unwrap().to_string(), expected_sha256);
-
-        let raw_pib_bindings = exact_escher_pib_bindings(&before);
-        eprintln!("EXACT_MATURE_WMF_RAW_PIB bindings={raw_pib_bindings:?}");
 
         let source_hash = sha256_digest(&before).expect("hash exact WMF fixture");
         let source = build_mature_0x2c_source_graph(Cursor::new(before.as_slice()), source_hash)
