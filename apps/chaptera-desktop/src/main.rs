@@ -382,7 +382,7 @@ impl SceneSelectionState {
 
 #[cfg(test)]
 mod scene_selection_state_tests {
-    use super::SceneSelectionState;
+    use super::*;
 
     #[test]
     fn shift_toggle_preserves_instance_identity_and_primary_policy() {
@@ -456,7 +456,8 @@ mod scene_selection_state_tests {
                         .filter(|node| node.parent_origin == page_origin)
                         .enumerate()
                         .filter_map(|(paint_order, node)| {
-                            let instance = direct_scene_instance(editor, &page_id_text, node.origin)?;
+                            let instance =
+                                direct_scene_instance(editor, &page_id_text, node.origin)?;
                             Some(SceneHitEntry {
                                 instance_id: instance.instance_id,
                                 node_id: node.origin,
