@@ -195,10 +195,10 @@ fn scalar_source_font_family_authority_v1(
     }
 }
 
-fn one_resolved_script_font_entry_v1<'a>(
-    entries: &'a [pub_viewer::ViewerScriptFontEntry],
+fn one_resolved_script_font_entry_v1(
+    entries: &[pub_viewer::ViewerScriptFontEntry],
     script_slot: u16,
-) -> Option<&'a pub_viewer::ViewerScriptFontEntry> {
+) -> Option<&pub_viewer::ViewerScriptFontEntry> {
     let mut matches = entries
         .iter()
         .filter(|entry| entry.script_slot == script_slot);
@@ -219,7 +219,7 @@ fn ascii_latin_script_font_family_v1(
     visual: &ViewerGeometryDocument,
     fragment: &RenderTextFragmentV1,
 ) -> Option<String> {
-    if fragment.text.is_empty() || fragment.text.chars().any(|ch| !ch.is_ascii()) {
+    if fragment.text.is_empty() || !fragment.text.is_ascii() {
         return None;
     }
 
