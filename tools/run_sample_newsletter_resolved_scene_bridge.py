@@ -30,6 +30,7 @@ from resolved_graph_scene_bridge_v1 import (
     apply_project_to_resolved_graph,
     compact_scene_state,
     compare_viewer_and_adapter_scene,
+    normalize_source_page_paint_orders,
     project_resolved_graph_scene,
     source_hash_from_graph,
 )
@@ -114,12 +115,14 @@ def project_for_scene(
     projection_context: dict[str, Any],
     *,
     page_ids: list[str] | None = None,
+    source_page_paint_orders: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     current_graph = apply_project_to_resolved_graph(graph, project)
     scene = project_resolved_graph_scene(
         current_graph,
         context=scene_supported_context(projection_context),
         page_ids=page_ids,
+        source_page_paint_orders=source_page_paint_orders,
     )
     return current_graph, scene
 
@@ -225,6 +228,7 @@ def main() -> int:
     parser.add_argument("--state-dir", required=True, type=pathlib.Path)
     parser.add_argument("--fixture", type=pathlib.Path)
     parser.add_argument("--projection-context-sidecar", type=pathlib.Path)
+    parser.add_argument("--source-page-paint-orders", type=pathlib.Path)
     args = parser.parse_args()
 
     try:
@@ -256,6 +260,16 @@ def main() -> int:
             )
         projection_context = sidecar["context"]
         projection_context_state = sidecar_state(sidecar)
+        if args.source_page_paint_orders is None:
+            source_page_paint_orders: list[dict[str, Any]] = []
+        else:
+            source_page_paint_orders = normalize_source_page_paint_orders(
+                load_json(
+                    args.source_page_paint_orders.expanduser().resolve(strict=True),
+                    "source page paint-order sidecar",
+                ),
+                expected_source_hash=source_hash,
+            )
         viewer_pages = viewer.get("document", {}).get("pages")
         if not isinstance(viewer_pages, list):
             raise SampleNewsletterSceneEngineError(
@@ -281,6 +295,7 @@ def main() -> int:
                 project,
                 projection_context,
                 page_ids=viewer_page_ids,
+                source_page_paint_orders=source_page_paint_orders,
             )
             equivalence = compare_viewer_and_adapter_scene(viewer, scene)
             candidate = move_candidate(
@@ -348,6 +363,7 @@ def main() -> int:
                 result,
                 projection_context,
                 page_ids=viewer_page_ids,
+                source_page_paint_orders=source_page_paint_orders,
             )
             (args.state_dir / REDO_STATE).write_text(
                 json.dumps(operation, sort_keys=True, separators=(",", ":")) + "\n",
@@ -407,6 +423,7 @@ def main() -> int:
                 result,
                 projection_context,
                 page_ids=viewer_page_ids,
+                source_page_paint_orders=source_page_paint_orders,
             )
             return emit({
                 "resulting_project": result,
@@ -433,6 +450,7 @@ def main() -> int:
                 project,
                 projection_context,
                 page_ids=viewer_page_ids,
+                source_page_paint_orders=source_page_paint_orders,
             )
         return emit({
             "replayed_project": copy.deepcopy(project),
