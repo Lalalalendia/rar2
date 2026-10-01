@@ -58,6 +58,8 @@ pub struct ReaderNodeV1 {
     pub parent_node_id: Option<String>,
     pub kind: &'static str,
     pub bounds: ReaderRectV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_bounds: Option<ReaderRectV1>,
     pub transform: ReaderTransformV1,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paint: Option<ReaderPaintV1>,
@@ -633,6 +635,20 @@ pub fn from_viewer_geometry(
                 let kind = projected_node_kind(&node)?;
                 projected_kind_partial |= kind == "unknown";
                 let bounds = rect_from_serialized(&node.bounds)?;
+                let text_bounds = node
+                    .text_bounds
+                    .as_ref()
+                    .map(rect_from_serialized)
+                    .transpose()?;
+                if text_bounds
+                    .as_ref()
+                    .is_some_and(|bounds| bounds.width <= 0 || bounds.height <= 0)
+                {
+                    return Err(format!(
+                        "projected Scene instance {} has non-positive text bounds",
+                        instance.instance_id
+                    ));
+                }
                 if bounds.width <= 0 || bounds.height <= 0 {
                     return Err(format!(
                         "projected Scene instance {} has non-positive bounds",
@@ -688,6 +704,7 @@ pub fn from_viewer_geometry(
                         parent_node_id: None,
                         kind,
                         bounds,
+                        text_bounds,
                         transform: transform_from_serialized(&node.transform)?,
                         paint,
                         resource_id,
@@ -751,6 +768,7 @@ pub fn from_viewer_geometry(
             page_id,
             parent_node_id,
             bounds,
+            text_bounds: None,
             transform,
         });
     }
@@ -1556,6 +1574,8 @@ mod tests {
         let mut projected_layout_fingerprints = BTreeMap::<String, usize>::new();
         let mut projected_line_counts = BTreeMap::<usize, usize>::new();
         let mut projected_line_heights_emu = BTreeMap::<i64, usize>::new();
+        let mut projected_text_bounds_nodes = 0_usize;
+        let mut projected_uniform_insets_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
 
         for page_index in 0..bundle.geometry.document.pages.len() {
@@ -1573,6 +1593,20 @@ mod tests {
                 if projected {
                     projected_text_nodes += 1;
                     projected_typography_runs += text.typography.len();
+                    if let Some(text_bounds) = node.text_bounds {
+                        projected_text_bounds_nodes += 1;
+                        let left = text_bounds.x.get() - node.bounds.x.get();
+                        let top = text_bounds.y.get() - node.bounds.y.get();
+                        let right = node.bounds.x.get() + node.bounds.width.get()
+                            - text_bounds.x.get()
+                            - text_bounds.width.get();
+                        let bottom = node.bounds.y.get() + node.bounds.height.get()
+                            - text_bounds.y.get()
+                            - text_bounds.height.get();
+                        if left >= 0 && left == top && left == right && left == bottom {
+                            *projected_uniform_insets_emu.entry(left).or_default() += 1;
+                        }
+                    }
 
                     let mut cursor = text.scalar_start;
                     let mut complete_coverage = !text.typography.is_empty();
@@ -1670,8 +1704,52 @@ mod tests {
             serde_json::to_string(&projected_line_counts).expect("serialize projected line counts");
         let projected_line_heights_json = serde_json::to_string(&projected_line_heights_emu)
             .expect("serialize projected line heights");
+        let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
+            .expect("serialize projected uniform text insets");
+
+        match actual_sha256.as_str() {
+            "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
+                assert_eq!(
+                    projected_text_nodes, 4,
+                    "exact Carlton projected carrier count drift"
+                );
+                assert_eq!(
+                    projected_text_bounds_nodes, 4,
+                    "exact Carlton must retain source-backed text bounds on every projected carrier"
+                );
+                assert_eq!(
+                    projected_uniform_insets_emu,
+                    BTreeMap::from([(36_576_i64, 4_usize)]),
+                    "exact Carlton projected carrier inset authority drift"
+                );
+                let projected_line_total = projected_line_counts
+                    .iter()
+                    .map(|(line_count, node_count)| line_count * node_count)
+                    .sum::<usize>();
+                assert_eq!(
+                    projected_line_total, 31,
+                    "exact Carlton projected source-backed line count drift"
+                );
+            }
+            "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e" => {
+                assert_eq!(
+                    projected_text_nodes, 0,
+                    "Virginia Devinettes must remain a zero-projected control"
+                );
+                assert_eq!(
+                    projected_text_bounds_nodes, 0,
+                    "Virginia Devinettes must not acquire projected carrier text bounds"
+                );
+                assert!(
+                    projected_uniform_insets_emu.is_empty(),
+                    "Virginia Devinettes must not acquire projected carrier inset authority"
+                );
+            }
+            _ => {}
+        }
+
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1692,6 +1770,8 @@ mod tests {
             projected_layout_fingerprints_json,
             projected_line_counts_json,
             projected_line_heights_json,
+            projected_text_bounds_nodes,
+            projected_uniform_insets_json,
             projected_measured_width_total_emu,
         );
     }
@@ -1709,6 +1789,7 @@ mod tests {
                 width: 1,
                 height: 1,
             },
+            text_bounds: None,
             transform: ReaderTransformV1 {
                 a: "1".to_owned(),
                 b: "0".to_owned(),

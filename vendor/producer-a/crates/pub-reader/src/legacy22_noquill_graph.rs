@@ -656,6 +656,7 @@ fn materialize_legacy_noquill_child(
                     next_seq_num: None,
                     next_frame: None,
                 }),
+                text_frame_inset: None,
                 table_story,
                 table: table_source,
             },

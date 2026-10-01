@@ -598,14 +598,15 @@ jobs:
           assert len(perlost_candidates) == 2, len(perlost_candidates)
           assert len(legacy_existing) == 226, len(legacy_existing)
           assert len(existing_with_scene) == 224, len(existing_with_scene)
-          # Exact pinned-625 grouped-IMAGE receipt from run 36641738977:
-          # 131 admitted positive-geometry IMAGE frames are present in the Viewer scene.
-          # Existing image resources rise from 301 to 362: exactly 61 new legacy IMAGE PNG previews.
+          # Current-main replay supersedes the older run 36641738977 image-depth pin:
+          # geometry/text totals remain unchanged, while later bounded legacy-image support
+          # adds 68 resources/placements across 7 existing files with zero per-file losses.
+          # preview_raster_unsupported correspondingly falls from 8 files to 1.
           assert existing_scene_nodes == 2831, existing_scene_nodes
-          assert existing_image_resources == 362, existing_image_resources
-          assert existing_image_placements == 362, existing_image_placements
+          assert existing_image_resources == 430, existing_image_resources
+          assert existing_image_placements == 430, existing_image_placements
           assert existing_files_with_images == 114, existing_files_with_images
-          assert legacy_image_raster_unsupported_files == 8, legacy_image_raster_unsupported_files
+          assert legacy_image_raster_unsupported_files == 1, legacy_image_raster_unsupported_files
           assert existing_story_frames == 1430, existing_story_frames
           assert existing_text_fragments == 1383, existing_text_fragments
           assert existing_unresolved_encoding_files == 58, existing_unresolved_encoding_files

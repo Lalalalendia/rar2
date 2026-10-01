@@ -53,8 +53,8 @@ fn graph() -> PubResolvedGraph {
         story_id: Some(story_id),
         rows: 1,
         columns: 2,
-        cells_seq_num: 88,
-        tcd_story_ordinal: 0,
+        cells_seq_num: Some(88),
+        tcd_story_ordinal: Some(0),
         cells: vec![
             PubTableCellSource {
                 id: cell0,
@@ -67,6 +67,7 @@ fn graph() -> PubResolvedGraph {
                 }),
                 utf16_start: 0,
                 utf16_end: 1,
+                bounds: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -80,6 +81,7 @@ fn graph() -> PubResolvedGraph {
                 }),
                 utf16_start: 1,
                 utf16_end: 4,
+                bounds: None,
                 source_refs: Vec::new(),
             },
         ],
@@ -150,6 +152,7 @@ fn graph() -> PubResolvedGraph {
                     explicit_paint: PubExplicitShapePaintSource::default(),
                     effective_paint: None,
                     story_frame: None,
+                    text_frame_inset: None,
                     table_story: None,
                     table: Some(table),
                 },

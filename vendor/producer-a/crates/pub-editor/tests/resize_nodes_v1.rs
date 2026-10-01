@@ -41,6 +41,7 @@ fn payload(seq: u32) -> PubResolvedNodePayload {
         explicit_paint: PubExplicitShapePaintSource::default(),
         effective_paint: None,
         story_frame: None,
+        text_frame_inset: None,
         table_story: None,
         table: None,
     }

@@ -160,6 +160,25 @@ pub fn paint_document_node_base(
     }
 }
 
+fn text_clip_rect_for_node(
+    node: &NodeRenderPlanV1,
+    node_rect: egui::Rect,
+    scene_scale: f32,
+) -> egui::Rect {
+    if let Some(bounds) = node.text_bounds {
+        let relative_x = (bounds.x.get() - node.bounds.x.get()) as f32 * scene_scale;
+        let relative_y = (bounds.y.get() - node.bounds.y.get()) as f32 * scene_scale;
+        return egui::Rect::from_min_size(
+            egui::pos2(node_rect.left() + relative_x, node_rect.top() + relative_y),
+            egui::vec2(
+                bounds.width.get() as f32 * scene_scale,
+                bounds.height.get() as f32 * scene_scale,
+            ),
+        );
+    }
+    node_rect.shrink(2.0)
+}
+
 /// Paints document-owned layers that occur after shell/debug overlays.
 ///
 /// Text overflow is returned as a fact. The product shell still owns the
@@ -196,7 +215,10 @@ pub fn paint_document_node_foreground(
         return NodePaintOutcome::default();
     };
 
-    let text_clip_rect = node_rect.shrink(2.0);
+    let text_clip_rect = text_clip_rect_for_node(node, node_rect, scene_scale);
+    if !text_clip_rect.is_positive() {
+        return NodePaintOutcome::default();
+    }
     let text_painter = painter.with_clip_rect(text_clip_rect);
 
     if let Some(layout) = fragment.layout.as_ref()

@@ -57,7 +57,7 @@ jobs:
           from pathlib import Path
           p=Path(".web-v0/resolved-graph.json")
           digest=hashlib.sha256(p.read_bytes()).hexdigest()
-          expected="8e20a4ad7e05350605471a731b7140568744ec94e630ac00d02774895198fc23"
+          expected="cae2b1576e32b7bf204bbaa8436a8ee2a12b118895736e92f20da1cd9b8048cf"
           assert digest==expected, (digest, expected)
           print({"resolved_graph_sha256":digest,"byte_len":p.stat().st_size})
           PY

@@ -103,6 +103,114 @@ def require_transform(value: Any, label: str) -> dict[str, Any]:
 
 
 PROJECTION_CONTEXT_SCHEMA_V1 = "chaptera.pub-projection-context.v1"
+SOURCE_PAGE_PAINT_ORDERS_SIDECAR_SCHEMA_V1 = (
+    "chaptera.pub-source-page-paint-orders-sidecar.v1"
+)
+SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1 = "chaptera.pub-source-page-paint-order.v1"
+
+
+def normalize_source_page_paint_orders(
+    value: Any,
+    *,
+    expected_source_hash: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "source_hash",
+        "orders",
+    }:
+        raise ResolvedGraphSceneError("source page paint-order sidecar fields mismatch")
+    if value["schema_version"] != SOURCE_PAGE_PAINT_ORDERS_SIDECAR_SCHEMA_V1:
+        raise ResolvedGraphSceneError(
+            "source page paint-order sidecar schema_version mismatch"
+        )
+    if value["source_hash"] != expected_source_hash:
+        raise ResolvedGraphSceneError(
+            "source page paint-order sidecar source identity mismatch"
+        )
+    orders = value["orders"]
+    if not isinstance(orders, list):
+        raise ResolvedGraphSceneError("source page paint-order sidecar orders must be an array")
+
+    normalized: list[dict[str, Any]] = []
+    seen_pages: set[str] = set()
+    for index, order in enumerate(orders):
+        if not isinstance(order, dict) or set(order) != {
+            "schema_version",
+            "page_id",
+            "node_ids",
+        }:
+            raise ResolvedGraphSceneError(
+                f"source page paint order[{index}] fields mismatch"
+            )
+        if order["schema_version"] != SOURCE_PAGE_PAINT_ORDER_SCHEMA_V1:
+            raise ResolvedGraphSceneError(
+                f"source page paint order[{index}] schema_version mismatch"
+            )
+        page_id = require_uuid(
+            order["page_id"],
+            f"source page paint order[{index}].page_id",
+        )
+        if page_id in seen_pages:
+            raise ResolvedGraphSceneError(
+                f"duplicate source page paint order for page {page_id}"
+            )
+        seen_pages.add(page_id)
+        node_ids = order["node_ids"]
+        if not isinstance(node_ids, list):
+            raise ResolvedGraphSceneError(
+                f"source page paint order[{index}].node_ids must be an array"
+            )
+        seen_nodes: set[str] = set()
+        normalized_nodes: list[str] = []
+        for node_index, node_id_raw in enumerate(node_ids):
+            node_id = require_uuid(
+                node_id_raw,
+                f"source page paint order[{index}].node_ids[{node_index}]",
+            )
+            if node_id in seen_nodes:
+                raise ResolvedGraphSceneError(
+                    f"source page paint order[{index}] contains duplicate node {node_id}"
+                )
+            seen_nodes.add(node_id)
+            normalized_nodes.append(node_id)
+        normalized.append({"page_id": page_id, "node_ids": normalized_nodes})
+    return normalized
+
+
+def apply_source_page_paint_orders(
+    nodes: list[dict[str, Any]],
+    source_orders: list[dict[str, Any]],
+) -> None:
+    for order in source_orders:
+        rank = {
+            node_id: stack_rank
+            for stack_rank, node_id in enumerate(order["node_ids"])
+        }
+        if not rank:
+            continue
+
+        expected_parent = order["page_id"]
+        seen: set[str] = set()
+        slots: list[int] = []
+        covered: list[tuple[int, dict[str, Any]]] = []
+        invalid_order = False
+        for slot, node in enumerate(nodes):
+            stack_rank = rank.get(node["origin"])
+            if stack_rank is None:
+                continue
+            if node["parent_origin"] != expected_parent or node["origin"] in seen:
+                invalid_order = True
+                break
+            seen.add(node["origin"])
+            slots.append(slot)
+            covered.append((stack_rank, node))
+
+        if invalid_order or not covered:
+            continue
+        covered.sort(key=lambda item: item[0])
+        for slot, (_, node) in zip(slots, covered):
+            nodes[slot] = node
 
 
 def _projection_context(context: Any) -> dict[str, Any]:
@@ -229,6 +337,7 @@ def project_resolved_graph_scene(
     context: dict[str, Any] | None = None,
     environment: dict[str, str] | None = None,
     page_ids: list[str] | None = None,
+    source_page_paint_orders: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(graph, dict):
         raise ResolvedGraphSceneError("resolved graph must be an object")
@@ -408,6 +517,13 @@ def project_resolved_graph_scene(
         )
     )
 
+    # Match pub-layout first: origin_mapping is created from canonical node
+    # identity order. Viewer paint-order restoration happens only afterwards
+    # and must not mutate that mapping order.
+    origin_mapping_nodes = list(nodes)
+    if source_page_paint_orders:
+        apply_source_page_paint_orders(nodes, source_page_paint_orders)
+
     story_ids: list[str] = []
     for story_key, story in stories_in.items():
         require_uuid(story_key, "stories key")
@@ -431,7 +547,7 @@ def project_resolved_graph_scene(
             raise ResolvedGraphSceneError(f"layout environment {key} must be non-empty")
 
     origin_mapping = []
-    for item in nodes:
+    for item in origin_mapping_nodes:
         mapping = {
             "authoring_origin": item["origin"],
             "resolved_node_origin": item["origin"],
@@ -537,6 +653,38 @@ def scene_snapshot_id(scene: dict[str, Any]) -> str:
     return hash_id(scene)
 
 
+def _first_scene_difference(left: Any, right: Any, path: str = "$") -> str:
+    if type(left) is not type(right):
+        return f"{path}: type {type(left).__name__} != {type(right).__name__}"
+    if isinstance(left, dict):
+        left_keys = set(left)
+        right_keys = set(right)
+        if left_keys != right_keys:
+            missing = sorted(left_keys - right_keys)
+            extra = sorted(right_keys - left_keys)
+            return f"{path}: keys missing_in_adapter={missing} extra_in_adapter={extra}"
+        for key in sorted(left):
+            diff = _first_scene_difference(left[key], right[key], f"{path}.{key}")
+            if diff:
+                return diff
+        return ""
+    if isinstance(left, list):
+        if len(left) != len(right):
+            return f"{path}: length {len(left)} != {len(right)}"
+        for index, (left_item, right_item) in enumerate(zip(left, right)):
+            diff = _first_scene_difference(
+                left_item,
+                right_item,
+                f"{path}[{index}]",
+            )
+            if diff:
+                return diff
+        return ""
+    if left != right:
+        return f"{path}: {left!r} != {right!r}"
+    return ""
+
+
 def compare_viewer_and_adapter_scene(
     viewer_geometry: dict[str, Any],
     adapter_scene: dict[str, Any],
@@ -552,8 +700,10 @@ def compare_viewer_and_adapter_scene(
     # Baseline acceptance therefore requires exact source-neutral Scene equality,
     # not merely count/target-node parity.
     if viewer_scene != adapter_scene:
+        difference = _first_scene_difference(viewer_scene, adapter_scene)
         raise ResolvedGraphSceneError(
-            "real Viewer Scene differs from reusable resolved-graph adapter Scene"
+            "real Viewer Scene differs from reusable resolved-graph adapter Scene: "
+            + difference
         )
 
     return {
