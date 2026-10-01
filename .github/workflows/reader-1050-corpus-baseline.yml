@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - corpus/reader-1050-baseline
+      - validation/reader-salvage-1050-acceptance-01
     paths:
       - '.github/workflows/reader-1050-corpus-baseline.yml'
       - 'tools/corpus/pub_container_extract.py'
@@ -139,7 +140,8 @@ jobs:
             --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-viewer \
             --release \
-            --bin corpus-reader-receipt
+            --bin corpus-reader-receipt \
+            --bin corpus-reader-salvage-acceptance
 
       - name: Save Reader 1050 Cargo build cache
         if: steps.reader-1050-cargo-cache.outputs.cache-hit != 'true'
@@ -297,6 +299,80 @@ jobs:
             --out out/reader1050 \
             --workers 8
 
+      - name: Classify exact 1050 Reader salvage outcomes
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/release/corpus-reader-salvage-acceptance" \
+            out/materialized/native \
+            out/reader1050/salvage-acceptance.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("out/reader1050/salvage-acceptance.json").read_text())
+          rows = {row["source_sha256"]: row for row in payload["rows"]}
+
+          assert payload["schema"] == "chaptera.reader-salvage-1050-acceptance.v1", payload["schema"]
+          assert payload["corpus_file_count"] == 1050, payload["corpus_file_count"]
+          assert payload["outcome_counts"] == {
+              "normal_open": 1041,
+              "salvage_open": 3,
+              "unsupported": 6,
+          }, payload["outcome_counts"]
+          assert payload["salvage_eligibility_counts"] == {
+              "awaiting_typed_corruption_evidence": 6,
+              "eligible_damaged_publisher": 1,
+              "eligible_known_publisher_corruption": 2,
+          }, payload["salvage_eligibility_counts"]
+
+          expected_corrupt = {
+              "c96df4b2d4ce3d5bb238b2b31d8021501495b9bd15ff44eb9d918495c342430b":
+                  "quill_descriptor_node_truncated",
+              "b29ed1e9227e67256a58d23cbea58b9bcfb38943dd9ed07a4110f4cf8959dbe4":
+                  "quill_strs_service_span_out_of_bounds",
+          }
+          for sha256, evidence in expected_corrupt.items():
+              row = rows[sha256]
+              assert row["outcome"] == "salvage_open", row
+              assert row["salvage_eligibility"] == "eligible_known_publisher_corruption", row
+              assert row["corruption_evidence"] == evidence, row
+              assert row["has_surviving_evidence"] is True, row
+              assert row["source_modified"] is False, row
+
+          opcls = rows["6cb88d4e02f823876a23d7f7414c7d370ca30996c30f145ec92b62f519b22170"]
+          assert opcls["outcome"] == "salvage_open", opcls
+          assert opcls["salvage_eligibility"] == "eligible_damaged_publisher", opcls
+          assert opcls.get("corruption_evidence") is None, opcls
+          assert opcls["has_surviving_evidence"] is True, opcls
+          assert opcls["source_modified"] is False, opcls
+
+          opnhous = rows["227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"]
+          assert opnhous["outcome"] == "unsupported", opnhous
+          assert opnhous["salvage_eligibility"] == "awaiting_typed_corruption_evidence", opnhous
+          assert opnhous["has_surviving_evidence"] is False, opnhous
+          assert opnhous["source_modified"] is False, opnhous
+
+          assert payload["corruption_evidence_counts"] == {
+              "quill_descriptor_node_truncated": 1,
+              "quill_strs_service_span_out_of_bounds": 1,
+          }, payload["corruption_evidence_counts"]
+
+          print(json.dumps({
+              "outcome_counts": payload["outcome_counts"],
+              "salvage_eligibility_counts": payload["salvage_eligibility_counts"],
+              "corruption_evidence_counts": payload["corruption_evidence_counts"],
+              "mandatory_witnesses": {
+                  sha: {
+                      "outcome": rows[sha]["outcome"],
+                      "salvage_eligibility": rows[sha].get("salvage_eligibility"),
+                      "corruption_evidence": rows[sha].get("corruption_evidence"),
+                  }
+                  for sha in [*expected_corrupt, "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"]
+              },
+          }, indent=2, sort_keys=True))
+          PY
+
       - name: Census persisted OlePres WMF records
         run: |
           set -euo pipefail
@@ -403,11 +479,11 @@ jobs:
           assert materialized["rejections"] == 0, materialized
 
           reader = summary["reader"]
-          assert reader["opened_count"] == 1038, reader
-          assert reader["failed_count"] == 12, reader
-          assert reader["opened_by_family"] == {"0x22": 652, "0x2c": 386}, reader["opened_by_family"]
-          assert reader["failed_by_family"] == {"0x22": 1, "0x2c": 10, "unknown": 1}, reader["failed_by_family"]
-          assert reader["failure_signature_count"] == 12, reader["failure_signature_count"]
+          assert reader["opened_count"] == 1041, reader
+          assert reader["failed_count"] == 9, reader
+          assert reader["opened_by_family"] == {"0x22": 652, "0x2c": 389}, reader["opened_by_family"]
+          assert reader["failed_by_family"] == {"0x22": 1, "0x2c": 7, "unknown": 1}, reader["failed_by_family"]
+          assert reader["failure_signature_count"] == 9, reader["failure_signature_count"]
           assert summary["contents_family_physical_counts"] == {"0x22": 653, "0x2c": 396, "unknown": 1}, summary["contents_family_physical_counts"]
           assert summary["structural_cluster_count"] == 565, summary["structural_cluster_count"]
           assert summary["path_cluster_count"] == 273, summary["path_cluster_count"]
