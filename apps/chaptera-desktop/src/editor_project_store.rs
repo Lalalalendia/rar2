@@ -21,6 +21,7 @@ pub enum StoreDisposition {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct OpenedEditorProject {
     pub project: EditorProject,
     pub asset_bytes: BTreeMap<Sha256Digest, Vec<u8>>,
@@ -30,6 +31,7 @@ pub struct OpenedEditorProject {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct EditorProjectStoreReceipt {
     pub visible_path: PathBuf,
     pub generation_manifest_path: PathBuf,
@@ -198,7 +200,12 @@ fn namespace(source_path: &Path) -> Result<String, EditorProjectStoreError> {
     let sidecar = sidecar_path(source_path).ok_or(EditorProjectStoreError::Path(
         "source path must have a file name",
     ))?;
-    let digest = Sha256::digest(sidecar.to_string_lossy().as_bytes());
+    let file_name = sidecar
+        .file_name()
+        .ok_or(EditorProjectStoreError::Path(
+            "sidecar path must have a file name",
+        ))?;
+    let digest = Sha256::digest(file_name.to_string_lossy().as_bytes());
     Ok(format!("{:x}", digest)[..24].to_owned())
 }
 
@@ -467,6 +474,7 @@ fn inspect_envelope(
         ));
     }
     let asset_dir = source_parent(source_path)?.join(&envelope.asset_directory);
+    validate_generation_asset_directory(&asset_dir, &envelope.project.assets)?;
     let asset_bytes = load_assets(&envelope.project.assets, asset_dir)?;
 
     Ok(OpenedEditorProject {
@@ -712,7 +720,7 @@ fn validate_generation_asset_directory(
                 "generation asset directory contains a non-file entry",
             ));
         }
-        found.insert(entry.file_name());
+        found.insert(entry.file_name().to_string_lossy().into_owned());
     }
     if found != expected {
         return Err(corrupt(
@@ -940,7 +948,9 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pub_editor::{EditorProjectIdentity, EDITOR_PROJECT_VERSION_V0_11};
+    use pub_editor::{
+        EDITOR_PROJECT_VERSION_V0_11, EditOperation, EditorProjectIdentity, NodeId,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -1055,5 +1065,94 @@ mod tests {
         assert_eq!(opened.generation, Some(1));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn generation_contains_only_project_required_assets() {
+        let root = temp_root("assets");
+        let (source, mut project) = source_and_project(&root);
+        let required_bytes = [b"\x89PNG\r\n\x1a\n".as_slice(), b"required"].concat();
+        let unused_bytes = [b"\x89PNG\r\n\x1a\n".as_slice(), b"unused"].concat();
+
+        let required_sha = digest_value(&required_bytes);
+        let unused_sha = digest_value(&unused_bytes);
+        project.assets.push(EditorProjectAsset {
+            sha256: required_sha,
+            mime: "image/png".to_owned(),
+            byte_len: u64::try_from(required_bytes.len()).expect("bounded test asset"),
+        });
+        project.operations.push(EditOperation::ReplaceImage {
+            node_id: serde_json::from_str::<NodeId>(
+                "\"22000000-0000-4000-8000-000000000001\"",
+            )
+            .expect("canonical NodeId"),
+            before_asset: None,
+            after_asset: required_sha,
+        });
+
+        let runtime = BTreeMap::from([
+            (required_sha, required_bytes),
+            (unused_sha, unused_bytes),
+        ]);
+        let receipt = commit(&source, &project, &runtime).expect("asset generation commit");
+        let entries = fs::read_dir(&receipt.generation_asset_dir)
+            .expect("list generation")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read entries");
+        assert_eq!(entries.len(), 1, "unused runtime cache asset must not persist");
+
+        let opened = inspect(&source, project.source_hash)
+            .expect("inspect")
+            .expect("saved project");
+        assert_eq!(opened.asset_bytes.len(), 1);
+        assert!(opened.asset_bytes.contains_key(&required_sha));
+        assert!(!opened.asset_bytes.contains_key(&unused_sha));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_raw_sidecar_remains_explicit_read_compatibility() {
+        let root = temp_root("legacy");
+        let (source, project) = source_and_project(&root);
+        let visible = sidecar_path(&source).expect("visible path");
+        fs::write(
+            &visible,
+            serde_json::to_vec_pretty(&project).expect("serialize legacy project"),
+        )
+        .expect("write legacy sidecar");
+
+        let opened = inspect(&source, project.source_hash)
+            .expect("inspect legacy")
+            .expect("legacy project");
+        assert_eq!(opened.disposition, StoreDisposition::Legacy);
+        assert_eq!(opened.generation, None);
+        assert_eq!(opened.project, project);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn live_lock_handle_blocks_concurrent_save_but_stale_name_does_not() {
+        let root = temp_root("lock");
+        let (source, _) = source_and_project(&root);
+
+        let first = acquire_lock(&source).expect("first lock");
+        assert!(matches!(
+            acquire_lock(&source),
+            Err(EditorProjectStoreError::ConcurrentSave { .. })
+        ));
+        drop(first);
+        acquire_lock(&source).expect("stale lock filename must not block a new live handle");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn digest_value(bytes: &[u8]) -> Sha256Digest {
+        let digest = Sha256::digest(bytes);
+        let mut value = [0_u8; 32];
+        value.copy_from_slice(&digest);
+        Sha256Digest::from_bytes(value)
     }
 }
