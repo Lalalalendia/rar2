@@ -1112,7 +1112,9 @@ mod tests {
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
     };
-    use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+    use pub_viewer::{
+        ViewerScriptFontEntryDisposition, open_pub_bundle, viewer_geometry_environment_v0_1,
+    };
     use sha2::{Digest, Sha256};
 
     use super::{
@@ -1388,6 +1390,15 @@ mod tests {
         let mut projected_line_counts = BTreeMap::<usize, usize>::new();
         let mut projected_line_heights_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
+        let mut projected_zero_typography_nodes = 0_usize;
+        let mut projected_zero_typography_viewer_runs = 0_usize;
+        let mut projected_zero_typography_inherited_font_runs = 0_usize;
+        let mut projected_zero_typography_inherited_size_runs = 0_usize;
+        let mut projected_zero_typography_script_maps = 0_usize;
+        let mut projected_zero_typography_full_story_script_maps = 0_usize;
+        let mut projected_zero_typography_script_entries = BTreeMap::<&'static str, usize>::new();
+        let mut projected_zero_typography_script_family_fingerprints =
+            BTreeMap::<String, usize>::new();
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
@@ -1404,6 +1415,71 @@ mod tests {
                 if projected {
                     projected_text_nodes += 1;
                     projected_typography_runs += text.typography.len();
+
+                    if text.typography.is_empty() {
+                        projected_zero_typography_nodes += 1;
+                        let story = bundle
+                            .geometry
+                            .document
+                            .stories
+                            .iter()
+                            .find(|story| story.id == text.story_id)
+                            .expect("projected Story authority must exist in Viewer document");
+                        for run in bundle
+                            .geometry
+                            .typography_runs
+                            .iter()
+                            .filter(|run| run.story_id == text.story_id)
+                            .filter(|run| run.applies_to_story_text(&story.text))
+                        {
+                            projected_zero_typography_viewer_runs += 1;
+                            projected_zero_typography_inherited_font_runs +=
+                                usize::from(run.font_inherited);
+                            projected_zero_typography_inherited_size_runs +=
+                                usize::from(run.size_inherited);
+                        }
+                        for map in bundle
+                            .geometry
+                            .script_font_maps
+                            .iter()
+                            .filter(|map| map.story_id == text.story_id)
+                            .filter(|map| map.applies_to_story_text(&story.text))
+                        {
+                            projected_zero_typography_script_maps += 1;
+                            projected_zero_typography_full_story_script_maps += usize::from(
+                                map.scalar_start <= text.scalar_start
+                                    && map.scalar_end >= text.scalar_end,
+                            );
+                            for entry in &map.entries {
+                                let disposition = match entry.disposition {
+                                    ViewerScriptFontEntryDisposition::Resolved => "resolved",
+                                    ViewerScriptFontEntryDisposition::UnresolvedSentinel => {
+                                        "unresolved_sentinel"
+                                    }
+                                    ViewerScriptFontEntryDisposition::InvalidFontOrdinal => {
+                                        "invalid_font_ordinal"
+                                    }
+                                };
+                                *projected_zero_typography_script_entries
+                                    .entry(disposition)
+                                    .or_default() += 1;
+                                if entry.disposition == ViewerScriptFontEntryDisposition::Resolved {
+                                    if let Some(family) = entry.source_font_name.as_deref() {
+                                        let normalized_family = family.trim().to_lowercase();
+                                        if !normalized_family.is_empty() {
+                                            let fingerprint = format!(
+                                                "{:x}",
+                                                Sha256::digest(normalized_family.as_bytes())
+                                            );
+                                            *projected_zero_typography_script_family_fingerprints
+                                                .entry(fingerprint)
+                                                .or_default() += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     let mut cursor = text.scalar_start;
                     let mut complete_coverage = !text.typography.is_empty();
@@ -1501,8 +1577,14 @@ mod tests {
             serde_json::to_string(&projected_line_counts).expect("serialize projected line counts");
         let projected_line_heights_json = serde_json::to_string(&projected_line_heights_emu)
             .expect("serialize projected line heights");
+        let projected_zero_typography_script_entries_json =
+            serde_json::to_string(&projected_zero_typography_script_entries)
+                .expect("serialize zero-typography ScriptFonts disposition census");
+        let projected_zero_typography_script_family_fingerprints_json =
+            serde_json::to_string(&projected_zero_typography_script_family_fingerprints)
+                .expect("serialize zero-typography ScriptFonts family fingerprints");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={} projected_zero_typography_nodes={} projected_zero_typography_viewer_runs={} projected_zero_typography_inherited_font_runs={} projected_zero_typography_inherited_size_runs={} projected_zero_typography_script_maps={} projected_zero_typography_full_story_script_maps={} projected_zero_typography_script_entries={} projected_zero_typography_script_family_fingerprints={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1524,6 +1606,14 @@ mod tests {
             projected_line_counts_json,
             projected_line_heights_json,
             projected_measured_width_total_emu,
+            projected_zero_typography_nodes,
+            projected_zero_typography_viewer_runs,
+            projected_zero_typography_inherited_font_runs,
+            projected_zero_typography_inherited_size_runs,
+            projected_zero_typography_script_maps,
+            projected_zero_typography_full_story_script_maps,
+            projected_zero_typography_script_entries_json,
+            projected_zero_typography_script_family_fingerprints_json,
         );
     }
 
