@@ -92,7 +92,10 @@ impl fmt::Display for EditorProjectStoreError {
             ),
             Self::Destination(error) => write!(formatter, "durable destination rejected: {error}"),
             Self::Serialize(message) => {
-                write!(formatter, "serialize EditorProject storage envelope: {message}")
+                write!(
+                    formatter,
+                    "serialize EditorProject storage envelope: {message}"
+                )
             }
             Self::Corrupt { path, reason } => write!(
                 formatter,
@@ -160,11 +163,7 @@ struct StoreLock {
     _file: File,
 }
 
-fn io_error(
-    operation: &'static str,
-    path: &Path,
-    source: io::Error,
-) -> EditorProjectStoreError {
+fn io_error(operation: &'static str, path: &Path, source: io::Error) -> EditorProjectStoreError {
     EditorProjectStoreError::Io {
         operation,
         path: path.to_path_buf(),
@@ -200,17 +199,18 @@ fn namespace(source_path: &Path) -> Result<String, EditorProjectStoreError> {
     let sidecar = sidecar_path(source_path).ok_or(EditorProjectStoreError::Path(
         "source path must have a file name",
     ))?;
-    let file_name = sidecar
-        .file_name()
-        .ok_or(EditorProjectStoreError::Path(
-            "sidecar path must have a file name",
-        ))?;
+    let file_name = sidecar.file_name().ok_or(EditorProjectStoreError::Path(
+        "sidecar path must have a file name",
+    ))?;
     let digest = Sha256::digest(file_name.to_string_lossy().as_bytes());
     Ok(format!("{:x}", digest)[..24].to_owned())
 }
 
 fn generation_prefix(source_path: &Path) -> Result<String, EditorProjectStoreError> {
-    Ok(format!(".chaptera-editor-project-{}-g", namespace(source_path)?))
+    Ok(format!(
+        ".chaptera-editor-project-{}-g",
+        namespace(source_path)?
+    ))
 }
 
 fn generation_manifest_name(
@@ -237,20 +237,14 @@ fn generation_manifest_path(
     source_path: &Path,
     generation: u64,
 ) -> Result<PathBuf, EditorProjectStoreError> {
-    Ok(source_parent(source_path)?.join(generation_manifest_name(
-        source_path,
-        generation,
-    )?))
+    Ok(source_parent(source_path)?.join(generation_manifest_name(source_path, generation)?))
 }
 
 fn generation_asset_dir_path(
     source_path: &Path,
     generation: u64,
 ) -> Result<PathBuf, EditorProjectStoreError> {
-    Ok(source_parent(source_path)?.join(generation_asset_dir_name(
-        source_path,
-        generation,
-    )?))
+    Ok(source_parent(source_path)?.join(generation_asset_dir_name(source_path, generation)?))
 }
 
 fn recovery_path(source_path: &Path) -> Result<PathBuf, EditorProjectStoreError> {
@@ -378,12 +372,11 @@ fn inspect_manifest(
         );
     }
 
-    let project: EditorProject = serde_json::from_slice(&bytes).map_err(|error| {
-        EditorProjectStoreError::Corrupt {
+    let project: EditorProject =
+        serde_json::from_slice(&bytes).map_err(|error| EditorProjectStoreError::Corrupt {
             path: manifest_path.to_path_buf(),
             reason: format!("neither storage envelope nor legacy EditorProject JSON: {error}"),
-        }
-    })?;
+        })?;
     if project.source_hash != expected_source_hash {
         return Err(EditorProjectStoreError::Corrupt {
             path: manifest_path.to_path_buf(),
@@ -465,8 +458,7 @@ fn inspect_envelope(
         ));
     }
 
-    let expected_asset_directory =
-        generation_asset_dir_name(source_path, envelope.generation)?;
+    let expected_asset_directory = generation_asset_dir_name(source_path, envelope.generation)?;
     if envelope.asset_directory != expected_asset_directory {
         return Err(corrupt(
             manifest_path,
@@ -512,17 +504,22 @@ pub fn commit(
 
     let generation = next_available_generation(source_path)?;
     let asset_dir = generation_asset_dir_path(source_path, generation)?;
-    fs::create_dir(&asset_dir)
-        .map_err(|error| io_error("create EditorProject generation asset directory", &asset_dir, error))?;
+    fs::create_dir(&asset_dir).map_err(|error| {
+        io_error(
+            "create EditorProject generation asset directory",
+            &asset_dir,
+            error,
+        )
+    })?;
     reject_reparse_existing(&asset_dir)?;
 
     let expected_asset_dir_identity = identify_existing_path(&asset_dir)?;
     for metadata in &project.assets {
-        let bytes = runtime_assets
-            .get(&metadata.sha256)
-            .ok_or(EditorProjectStoreError::RequiredAssetMissing {
+        let bytes = runtime_assets.get(&metadata.sha256).ok_or(
+            EditorProjectStoreError::RequiredAssetMissing {
                 sha256: metadata.sha256,
-            })?;
+            },
+        )?;
         validate_asset_bytes(metadata, bytes)?;
 
         let file_name = metadata
@@ -732,7 +729,10 @@ fn validate_generation_asset_directory(
 }
 
 fn next_available_generation(source_path: &Path) -> Result<u64, EditorProjectStoreError> {
-    let max = observed_generations(source_path)?.into_iter().max().unwrap_or(0);
+    let max = observed_generations(source_path)?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
     let mut generation = max
         .checked_add(1)
         .ok_or(EditorProjectStoreError::GenerationOverflow)?;
@@ -792,8 +792,8 @@ fn generation_manifests(
     for entry in fs::read_dir(&parent)
         .map_err(|error| io_error("list EditorProject recovery manifests", &parent, error))?
     {
-        let entry = entry
-            .map_err(|error| io_error("read EditorProject recovery entry", &parent, error))?;
+        let entry =
+            entry.map_err(|error| io_error("read EditorProject recovery entry", &parent, error))?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let Some(rest) = name.strip_prefix(&prefix) else {
@@ -841,28 +841,25 @@ fn remove_generated_asset_dir(path: &Path) -> Result<(), EditorProjectStoreError
         return Ok(());
     }
     reject_reparse_existing(path)?;
-    let metadata =
-        fs::metadata(path).map_err(|error| io_error("stat old generation directory", path, error))?;
+    let metadata = fs::metadata(path)
+        .map_err(|error| io_error("stat old generation directory", path, error))?;
     if !metadata.is_dir() {
-        return Err(corrupt(path, "old generation asset path is not a directory"));
+        return Err(corrupt(
+            path,
+            "old generation asset path is not a directory",
+        ));
     }
 
-    for entry in
-        fs::read_dir(path).map_err(|error| io_error("list old generation directory", path, error))?
+    for entry in fs::read_dir(path)
+        .map_err(|error| io_error("list old generation directory", path, error))?
     {
-        let entry =
-            entry.map_err(|error| io_error("read old generation entry", path, error))?;
+        let entry = entry.map_err(|error| io_error("read old generation entry", path, error))?;
         let child = entry.path();
         reject_reparse_existing(&child)?;
         let metadata = entry
             .metadata()
             .map_err(|error| io_error("stat old generation entry", &child, error))?;
-        if !metadata.is_file()
-            || !entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("asset-")
-        {
+        if !metadata.is_file() || !entry.file_name().to_string_lossy().starts_with("asset-") {
             return Err(corrupt(
                 &child,
                 "refusing cleanup of unexpected generation entry",
@@ -898,10 +895,9 @@ fn path_exists(path: &Path) -> Result<bool, EditorProjectStoreError> {
 
 fn reject_reparse_path_if_present(path: &Path) -> Result<(), EditorProjectStoreError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if is_reparse_or_symlink(&metadata) => Err(corrupt(
-            path,
-            "store path is a symlink/reparse point",
-        )),
+        Ok(metadata) if is_reparse_or_symlink(&metadata) => {
+            Err(corrupt(path, "store path is a symlink/reparse point"))
+        }
         Ok(_) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error("stat EditorProject store path", path, error)),
@@ -948,9 +944,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pub_editor::{
-        EDITOR_PROJECT_VERSION_V0_11, EditOperation, EditorProjectIdentity, NodeId,
-    };
+    use pub_editor::{EDITOR_PROJECT_VERSION_V0_11, EditOperation, EditorProjectIdentity, NodeId};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -1019,8 +1013,7 @@ mod tests {
         let root = temp_root("recover");
         let (source, project) = source_and_project(&root);
         let receipt = commit(&source, &project, &BTreeMap::new()).expect("commit");
-        fs::write(&receipt.visible_path, b"{ definitely corrupt")
-            .expect("corrupt visible sidecar");
+        fs::write(&receipt.visible_path, b"{ definitely corrupt").expect("corrupt visible sidecar");
 
         let opened = inspect(&source, project.source_hash)
             .expect("recovery inspect")
@@ -1082,24 +1075,23 @@ mod tests {
             byte_len: u64::try_from(required_bytes.len()).expect("bounded test asset"),
         });
         project.operations.push(EditOperation::ReplaceImage {
-            node_id: serde_json::from_str::<NodeId>(
-                "\"22000000-0000-4000-8000-000000000001\"",
-            )
-            .expect("canonical NodeId"),
+            node_id: serde_json::from_str::<NodeId>("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId"),
             before_asset: None,
             after_asset: required_sha,
         });
 
-        let runtime = BTreeMap::from([
-            (required_sha, required_bytes),
-            (unused_sha, unused_bytes),
-        ]);
+        let runtime = BTreeMap::from([(required_sha, required_bytes), (unused_sha, unused_bytes)]);
         let receipt = commit(&source, &project, &runtime).expect("asset generation commit");
         let entries = fs::read_dir(&receipt.generation_asset_dir)
             .expect("list generation")
             .collect::<Result<Vec<_>, _>>()
             .expect("read entries");
-        assert_eq!(entries.len(), 1, "unused runtime cache asset must not persist");
+        assert_eq!(
+            entries.len(),
+            1,
+            "unused runtime cache asset must not persist"
+        );
 
         let opened = inspect(&source, project.source_hash)
             .expect("inspect")
