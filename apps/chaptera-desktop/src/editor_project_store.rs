@@ -944,7 +944,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pub_editor::{EDITOR_PROJECT_VERSION_V0_11, EditOperation, EditorProjectIdentity, NodeId};
+    use pub_editor::{EDITOR_PROJECT_VERSION_V0_11, EditOperation, EditorProjectIdentity};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -1075,7 +1075,7 @@ mod tests {
             byte_len: u64::try_from(required_bytes.len()).expect("bounded test asset"),
         });
         project.operations.push(EditOperation::ReplaceImage {
-            node_id: serde_json::from_str::<NodeId>("\"22000000-0000-4000-8000-000000000001\"")
+            node_id: serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
                 .expect("canonical NodeId"),
             before_asset: None,
             after_asset: required_sha,
