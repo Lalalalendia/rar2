@@ -24,13 +24,22 @@ use tokio::{
 };
 
 use crate::{
-    blob_store::BlobStoreService, guest_intake_classifier::guest_failure_intake_evidence,
-    reader_scene_v1::from_viewer_geometry, source_ingress_security::SourceSecurityScannerConfig,
+    blob_store::BlobStoreService,
+    config::CloudReaderFontResourceConfig,
+    guest_intake_classifier::guest_failure_intake_evidence,
+    reader_scene_v1::{
+        ReaderConfiguredFontResourceV1, from_viewer_geometry_with_fonts,
+    },
+    source_ingress_security::SourceSecurityScannerConfig,
 };
 
 pub const GUEST_SCENE_WORKER_V1: &str = "chaptera.reader-guest-scene-worker.v1";
 const MAX_RECEIPT_BYTES: u64 = 18 * 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const MAX_CONFIGURED_FONT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CONFIGURED_FONT_TOTAL_BYTES: usize = 4 * 1024 * 1024;
+const MAX_FONT_MANIFEST_BYTES: u64 = 64 * 1024;
+const GUEST_FONT_MANIFEST_V1: &str = "chaptera.reader-configured-font-manifest.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestSceneWorkerError {
@@ -57,6 +66,23 @@ impl std::error::Error for GuestSceneWorkerError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct GuestSceneFontManifestV1 {
+    protocol_version: String,
+    resources: Vec<GuestSceneFontManifestResourceV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuestSceneFontManifestResourceV1 {
+    source_family: String,
+    expected_sha256: String,
+    face_index: u32,
+    mime: String,
+    file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GuestSceneWorkerReceiptV1 {
     pub protocol_version: String,
     pub session_id: String,
@@ -74,10 +100,18 @@ pub struct GuestSceneWorkerReceiptV1 {
 pub struct IsolatedGuestSceneProducer {
     config: SourceSecurityScannerConfig,
     worker_binary: PathBuf,
+    configured_fonts: Vec<ReaderConfiguredFontResourceV1>,
 }
 
 impl IsolatedGuestSceneProducer {
     pub fn new(config: SourceSecurityScannerConfig) -> Result<Self, GuestSceneWorkerError> {
+        Self::new_with_fonts(config, &[])
+    }
+
+    pub fn new_with_fonts(
+        config: SourceSecurityScannerConfig,
+        font_configs: &[CloudReaderFontResourceConfig],
+    ) -> Result<Self, GuestSceneWorkerError> {
         config
             .validate()
             .map_err(|error| GuestSceneWorkerError::new(error.code, error.message))?;
@@ -87,10 +121,90 @@ impl IsolatedGuestSceneProducer {
                 "current chaptera executable path is unavailable",
             )
         })?;
+        let configured_fonts = load_configured_font_resources(font_configs)?;
         Ok(Self {
             config,
             worker_binary,
+            configured_fonts,
         })
+    }
+
+    async fn materialize_font_manifest(
+        &self,
+        temp_root: &Path,
+    ) -> Result<Option<PathBuf>, GuestSceneWorkerError> {
+        if self.configured_fonts.is_empty() {
+            return Ok(None);
+        }
+
+        let font_root = temp_root.join("fonts");
+        fs::create_dir(&font_root).await.map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_temp_failed",
+                "private configured font directory could not be created",
+            )
+        })?;
+        let mut resources = Vec::with_capacity(self.configured_fonts.len());
+        for (index, font) in self.configured_fonts.iter().enumerate() {
+            let file_name = format!("font-{index}.bin");
+            let path = font_root.join(&file_name);
+            let mut output = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .await
+                .map_err(|_| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_font_temp_failed",
+                        "private configured font file could not be created",
+                    )
+                })?;
+            output.write_all(&font.bytes).await.map_err(|_| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_font_temp_failed",
+                    "private configured font file could not be written",
+                )
+            })?;
+            output.flush().await.map_err(|_| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_font_temp_failed",
+                    "private configured font file could not be flushed",
+                )
+            })?;
+            drop(output);
+            resources.push(GuestSceneFontManifestResourceV1 {
+                source_family: font.source_family.clone(),
+                expected_sha256: font.expected_sha256.clone(),
+                face_index: font.face_index,
+                mime: font.mime.clone(),
+                file_name,
+            });
+        }
+
+        let manifest = GuestSceneFontManifestV1 {
+            protocol_version: GUEST_FONT_MANIFEST_V1.to_owned(),
+            resources,
+        };
+        let bytes = serde_json::to_vec(&manifest).map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_manifest_failed",
+                "configured font manifest could not be serialized",
+            )
+        })?;
+        if bytes.len() as u64 > MAX_FONT_MANIFEST_BYTES {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_manifest_failed",
+                "configured font manifest exceeds its bounded size",
+            ));
+        }
+        let path = font_root.join("manifest.json");
+        fs::write(&path, bytes).await.map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_manifest_failed",
+                "configured font manifest could not be written",
+            )
+        })?;
+        Ok(Some(path))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -191,9 +305,11 @@ impl IsolatedGuestSceneProducer {
             ));
         }
         let expected_sha256 = format!("{:x}", hasher.finalize());
+        let font_manifest = self.materialize_font_manifest(temp.path()).await?;
 
         let timeout_seconds = self.config.worker_wall_timeout.as_secs_f64().to_string();
-        let child = Command::new(&self.config.isolation_python)
+        let mut command = Command::new(&self.config.isolation_python);
+        command
             .arg(&self.config.isolation_harness)
             .arg("run")
             .arg("--output-dir")
@@ -219,9 +335,11 @@ impl IsolatedGuestSceneProducer {
             .arg("--expected-sha256")
             .arg(&expected_sha256)
             .arg("--expected-byte-len")
-            .arg(expected_byte_len.to_string())
-            .kill_on_drop(true)
-            .output();
+            .arg(expected_byte_len.to_string());
+        if let Some(font_manifest) = font_manifest.as_ref() {
+            command.arg("--font-registry").arg(font_manifest);
+        }
+        let child = command.kill_on_drop(true).output();
 
         let process_timeout = self
             .config
@@ -288,6 +406,7 @@ pub fn run_guest_scene_worker(
     session_id: &str,
     expected_sha256: &str,
     expected_byte_len: u64,
+    font_registry_path: Option<&Path>,
 ) -> Result<(), GuestSceneWorkerError> {
     require_ident(session_id, "session_id")?;
     require_sha256(expected_sha256)?;
@@ -343,6 +462,7 @@ pub fn run_guest_scene_worker(
             "authorized guest scene input hash differs from expected identity",
         ));
     }
+    let configured_fonts = load_worker_font_manifest(font_registry_path)?;
 
     install_post_read_filesystem_default_deny().map_err(|_| {
         GuestSceneWorkerError::new(
@@ -353,12 +473,13 @@ pub fn run_guest_scene_worker(
 
     let (classification, terminal_code, scene, salvage) =
         match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(bundle) => match from_viewer_geometry(
+            Ok(bundle) => match from_viewer_geometry_with_fonts(
                 session_id.to_owned(),
                 expected_sha256.to_owned(),
                 "guest:source".to_owned(),
                 &bundle.geometry,
                 &bundle.source_page_paint_orders,
+                &configured_fonts,
             ) {
                 Ok(scene) => {
                     let classification = if scene.fidelity.state == "supported" {
@@ -419,6 +540,174 @@ pub fn run_guest_scene_worker(
         filesystem_confinement: true,
     };
     write_receipt(output, &receipt)
+}
+
+fn configured_font_resource_id(expected_sha256: &str, face_index: u32) -> String {
+    format!("chaptera.cloud.configured-font.{expected_sha256}.face{face_index}")
+}
+
+fn load_configured_font_resources(
+    configs: &[CloudReaderFontResourceConfig],
+) -> Result<Vec<ReaderConfiguredFontResourceV1>, GuestSceneWorkerError> {
+    let mut total_bytes = 0_usize;
+    let mut resources = Vec::with_capacity(configs.len());
+    for config in configs {
+        require_sha256(&config.expected_sha256)?;
+        let bytes = stdfs::read(&config.path).map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_read_failed",
+                "configured Reader font resource could not be read",
+            )
+        })?;
+        if bytes.is_empty() || bytes.len() > MAX_CONFIGURED_FONT_BYTES {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_size_invalid",
+                "configured Reader font resource exceeds bounded size",
+            ));
+        }
+        total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_size_invalid",
+                "configured Reader font byte count overflowed",
+            )
+        })?;
+        if total_bytes > MAX_CONFIGURED_FONT_TOTAL_BYTES {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_size_invalid",
+                "configured Reader fonts exceed total bounded size",
+            ));
+        }
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        if actual_sha256 != config.expected_sha256 {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_hash_mismatch",
+                "configured Reader font resource differs from expected SHA-256",
+            ));
+        }
+        resources.push(ReaderConfiguredFontResourceV1 {
+            source_family: config.source_family.trim().to_owned(),
+            resource_id: configured_font_resource_id(&config.expected_sha256, config.face_index),
+            expected_sha256: config.expected_sha256.clone(),
+            face_index: config.face_index,
+            mime: config.mime.clone(),
+            bytes,
+        });
+    }
+    Ok(resources)
+}
+
+fn load_worker_font_manifest(
+    manifest_path: Option<&Path>,
+) -> Result<Vec<ReaderConfiguredFontResourceV1>, GuestSceneWorkerError> {
+    let Some(manifest_path) = manifest_path else {
+        return Ok(Vec::new());
+    };
+    let metadata = stdfs::metadata(manifest_path).map_err(|_| {
+        GuestSceneWorkerError::new(
+            "guest_scene_font_manifest_failed",
+            "configured font manifest is unavailable",
+        )
+    })?;
+    if metadata.len() == 0 || metadata.len() > MAX_FONT_MANIFEST_BYTES {
+        return Err(GuestSceneWorkerError::new(
+            "guest_scene_font_manifest_failed",
+            "configured font manifest size is invalid",
+        ));
+    }
+    let bytes = stdfs::read(manifest_path).map_err(|_| {
+        GuestSceneWorkerError::new(
+            "guest_scene_font_manifest_failed",
+            "configured font manifest could not be read",
+        )
+    })?;
+    let manifest: GuestSceneFontManifestV1 = serde_json::from_slice(&bytes).map_err(|_| {
+        GuestSceneWorkerError::new(
+            "guest_scene_font_manifest_failed",
+            "configured font manifest is malformed",
+        )
+    })?;
+    if manifest.protocol_version != GUEST_FONT_MANIFEST_V1 || manifest.resources.len() > 16 {
+        return Err(GuestSceneWorkerError::new(
+            "guest_scene_font_manifest_failed",
+            "configured font manifest protocol or resource count is invalid",
+        ));
+    }
+    let root = manifest_path.parent().ok_or_else(|| {
+        GuestSceneWorkerError::new(
+            "guest_scene_font_manifest_failed",
+            "configured font manifest has no private root",
+        )
+    })?;
+    let mut total_bytes = 0_usize;
+    let mut families = std::collections::HashSet::new();
+    let mut resources = Vec::with_capacity(manifest.resources.len());
+    for entry in manifest.resources {
+        require_sha256(&entry.expected_sha256)?;
+        let normalized_family = entry.source_family.trim().to_lowercase();
+        if normalized_family.is_empty() || !families.insert(normalized_family) {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_manifest_failed",
+                "configured font manifest contains invalid or duplicate source family",
+            ));
+        }
+        if entry.file_name.is_empty()
+            || entry.file_name.contains('/')
+            || entry.file_name.contains('\\')
+            || entry.file_name == "."
+            || entry.file_name == ".."
+        {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_manifest_failed",
+                "configured font manifest contains an unsafe file name",
+            ));
+        }
+        if !matches!(entry.mime.as_str(), "font/ttf" | "font/otf") || entry.face_index > 31 {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_manifest_failed",
+                "configured font manifest resource metadata is invalid",
+            ));
+        }
+        let font_bytes = stdfs::read(root.join(&entry.file_name)).map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_read_failed",
+                "private configured font resource could not be read",
+            )
+        })?;
+        if font_bytes.is_empty() || font_bytes.len() > MAX_CONFIGURED_FONT_BYTES {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_size_invalid",
+                "private configured font resource exceeds bounded size",
+            ));
+        }
+        total_bytes = total_bytes.checked_add(font_bytes.len()).ok_or_else(|| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_size_invalid",
+                "private configured font byte count overflowed",
+            )
+        })?;
+        if total_bytes > MAX_CONFIGURED_FONT_TOTAL_BYTES {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_size_invalid",
+                "private configured fonts exceed total bounded size",
+            ));
+        }
+        let actual_sha256 = format!("{:x}", Sha256::digest(&font_bytes));
+        if actual_sha256 != entry.expected_sha256 {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_hash_mismatch",
+                "private configured font resource differs from expected SHA-256",
+            ));
+        }
+        resources.push(ReaderConfiguredFontResourceV1 {
+            source_family: entry.source_family.trim().to_owned(),
+            resource_id: configured_font_resource_id(&entry.expected_sha256, entry.face_index),
+            expected_sha256: entry.expected_sha256,
+            face_index: entry.face_index,
+            mime: entry.mime,
+            bytes: font_bytes,
+        });
+    }
+    Ok(resources)
 }
 
 fn validate_receipt(
