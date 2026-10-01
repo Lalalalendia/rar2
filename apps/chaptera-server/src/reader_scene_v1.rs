@@ -1463,18 +1463,18 @@ mod tests {
                                 *projected_zero_typography_script_entries
                                     .entry(disposition)
                                     .or_default() += 1;
-                                if entry.disposition == ViewerScriptFontEntryDisposition::Resolved {
-                                    if let Some(family) = entry.source_font_name.as_deref() {
-                                        let normalized_family = family.trim().to_lowercase();
-                                        if !normalized_family.is_empty() {
-                                            let fingerprint = format!(
-                                                "{:x}",
-                                                Sha256::digest(normalized_family.as_bytes())
-                                            );
-                                            *projected_zero_typography_script_family_fingerprints
-                                                .entry(fingerprint)
-                                                .or_default() += 1;
-                                        }
+                                if entry.disposition == ViewerScriptFontEntryDisposition::Resolved
+                                    && let Some(family) = entry.source_font_name.as_deref()
+                                {
+                                    let normalized_family = family.trim().to_lowercase();
+                                    if !normalized_family.is_empty() {
+                                        let fingerprint = format!(
+                                            "{:x}",
+                                            Sha256::digest(normalized_family.as_bytes())
+                                        );
+                                        *projected_zero_typography_script_family_fingerprints
+                                            .entry(fingerprint)
+                                            .or_default() += 1;
                                     }
                                 }
                             }
