@@ -800,8 +800,7 @@ fn build_paragraph_alignment_runs(
 ) -> Vec<QuillParagraphAlignmentRun> {
     let mut runs = Vec::new();
     for range in ranges {
-        let (Some(alignment), Some(source_value)) =
-            (range.alignment, range.alignment_source_value)
+        let (Some(alignment), Some(source_value)) = (range.alignment, range.alignment_source_value)
         else {
             continue;
         };
@@ -2240,8 +2239,7 @@ mod tests {
                 alignment_values: Vec::new(),
             },
         ];
-        let ranges =
-            materialize_paragraph_ranges(&styles, 100, 140, 20).expect("paragraph ranges");
+        let ranges = materialize_paragraph_ranges(&styles, 100, 140, 20).expect("paragraph ranges");
         assert_eq!(ranges[0].alignment, Some(QuillParagraphAlignment::Right));
         assert_eq!(ranges[0].alignment_source_value, Some(2));
         assert_eq!(ranges[1].alignment, None);
