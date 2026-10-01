@@ -1,3 +1,10 @@
+mod destination;
+
+pub use destination::{
+    AdmittedDestination, DestinationCommitReceipt, DestinationWriteError, FileIdentity,
+    identify_existing_path,
+};
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
