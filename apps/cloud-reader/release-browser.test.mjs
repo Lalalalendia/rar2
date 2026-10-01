@@ -16,12 +16,32 @@ const caddyBinary = process.env.READER_CADDY ?? "caddy";
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const assets = ["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs"];
 const fixtureBytes = Buffer.from("public synthetic release fixture");
+const fixtureSha = hash(fixtureBytes);
 const scene = {
   protocol_version: "chaptera.reader-scene.v1",
+  source_hash: fixtureSha,
   fidelity: { state: "partial", reasons: ["text_layout_partial"] },
   pages: [{ page_id: "p", order: 0, width_emu: 3810000, height_emu: 4762500 }],
   nodes: [{ node_id: "n", page_id: "p", kind: "text", bounds: { x: 190500, y: 190500, width: 3429000, height: 952500 }, text: "Released Reader preview." }],
   stories: [{ story_id: "s", text: "Released Reader preview.", text_fidelity: "partial" }], resources: []
+};
+const compatibilityReport = {
+  protocol_version: "chaptera.reader-compatibility-report.v1",
+  source_sha256: fixtureSha,
+  state: "needs_review",
+  engine_classification: "partial",
+  content_summary: { page_count: 1, text_frame_count: 0, picture_frame_count: 0 },
+  limitations: [{
+    code: "text_layout_may_differ",
+    message: "Some text layout may differ from Microsoft Publisher."
+  }],
+  output_routes: {
+    read_only_preview: "available_with_limitations",
+    salvage_recovery: "not_applicable",
+    editable_idml: "not_verified",
+    editable_odg: "not_verified"
+  },
+  recommended_next_step: "review_preview_before_migration"
 };
 const seen = [];
 let site;
@@ -54,7 +74,14 @@ const api = createServer(async (request, response) => {
       upload_path: "/v1/reader/guest-sessions/guest:release/content", open_path: "/v1/reader/guest-sessions/guest:release/open"
     };
     else if (request.url.endsWith("/content")) payload = { protocol_version: "chaptera.reader-guest-session.v1", session_id: "guest:release", state: "uploaded" };
-    else if (request.url.endsWith("/open")) payload = { protocol_version: "chaptera.reader-guest-session.v1", session_id: "guest:release", classification: "partial", scene };
+    else if (request.url.endsWith("/open")) payload = {
+      protocol_version: "chaptera.reader-guest-session.v1",
+      session_id: "guest:release",
+      classification: "partial",
+      source_sha256: fixtureSha,
+      compatibility_report: compatibilityReport,
+      scene
+    };
     else payload = scene;
     response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     response.end(JSON.stringify(payload));

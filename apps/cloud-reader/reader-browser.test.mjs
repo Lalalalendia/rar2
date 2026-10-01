@@ -12,10 +12,11 @@ const output = resolve(process.env.READER_UI_OUTPUT ?? join(root, "../../target/
 const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
 const emu = (px) => px * 9525;
 const original = Buffer.from("public synthetic reader UI fixture");
+const sourceSha = "c".repeat(64);
 const text = "😀 Привет 🌍 ПРИВЕТ\nLiteral [a]+ stays literal.\nRecovered text <script>never executes</script>.";
 function fixture(label = text) {
   return {
-    protocol_version: "chaptera.reader-scene.v1", document_id: "synthetic", revision_id: "synthetic-ui-only",
+    protocol_version: "chaptera.reader-scene.v1", document_id: "synthetic", source_hash: sourceSha, revision_id: "synthetic-ui-only",
     fidelity: { state: "partial", reasons: ["stacking_order_unavailable", "text_layout_partial"] },
     pages: [{ page_id: "p2", order: 1, width_emu: emu(600), height_emu: emu(760) },
       { page_id: "p1", order: 0, width_emu: emu(600), height_emu: emu(760) }],
@@ -30,6 +31,54 @@ function fixture(label = text) {
       { resource_id: "r2", mime: "image/svg+xml", availability: "descriptor_only" }],
     diagnostics: [{ message: "Synthetic UI fixture; this is not real-PUB fidelity evidence." }]
   };
+}
+
+function compatibilityReport(classification, sha = sourceSha) {
+  const states = {
+    supported: "opens_normally",
+    partial: "needs_review",
+    salvage: "opens_with_salvage",
+    unsupported: "unsupported"
+  };
+  const next = {
+    supported: "migration_pilot_preview",
+    partial: "review_preview_before_migration",
+    salvage: "rescue_review",
+    unsupported: "unsupported_or_manual_review"
+  };
+  const preview = {
+    supported: "available",
+    partial: "available_with_limitations",
+    salvage: "unavailable",
+    unsupported: "unavailable"
+  };
+  const report = {
+    protocol_version: "chaptera.reader-compatibility-report.v1",
+    source_sha256: sha,
+    state: states[classification],
+    engine_classification: classification,
+    limitations: classification === "partial"
+      ? [{ code: "text_layout_may_differ", message: "Some text layout may differ from Microsoft Publisher." }]
+      : classification === "salvage"
+        ? [{ code: "recovery_mode", message: "Only source-backed recovered facts are available; normal page layout is not claimed." }]
+        : classification === "unsupported"
+          ? [{ code: "automatic_open_unavailable", message: "Chaptera cannot currently produce a trustworthy preview for this file." }]
+          : [],
+    output_routes: {
+      read_only_preview: preview[classification],
+      salvage_recovery: classification === "salvage" ? "available"
+        : ["supported", "partial"].includes(classification) ? "not_applicable" : "unavailable",
+      editable_idml: "not_verified",
+      editable_odg: "not_verified"
+    },
+    recommended_next_step: next[classification]
+  };
+  if (classification !== "unsupported") {
+    report.content_summary = classification === "salvage"
+      ? { recovered_text_range_count: 1 }
+      : { page_count: 2, text_frame_count: 0, picture_frame_count: 0 };
+  }
+  return report;
 }
 
 const requests = [];
@@ -74,7 +123,11 @@ const server = createServer(async (req, res) => {
         } else if (action === "open") {
           if (scenario.wait) await scenario.wait;
           status = scenario.openStatus ?? 200;
-          Object.assign(payload, { classification: "partial", scene: fixture() }, scenario.open);
+          Object.assign(payload, { classification: "partial", source_sha256: sourceSha, scene: fixture() }, scenario.open);
+          if (payload.classification !== "rejected" && payload.compatibility_report === undefined) {
+            if (typeof payload.source_sha256 !== "string") payload.source_sha256 = sourceSha;
+            payload.compatibility_report = compatibilityReport(payload.classification, payload.source_sha256);
+          }
           redirect = scenario.openRedirect;
         } else if (action === "contribution-capability") {
           if (scenario.capabilityWait) await scenario.capabilityWait;
