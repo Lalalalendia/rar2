@@ -258,8 +258,7 @@ pub fn build_reader_partial_source_graph(
         && u64::try_from(delay.len())
             .ok()
             .is_some_and(|len| len <= READER_SALVAGE_MAX_STREAM_BYTES)
-        && let Ok(inventory) =
-            inspect_delayed_blips(StreamPath(ESCHER_DELAY_STREAM.into()), &delay)
+        && let Ok(inventory) = inspect_delayed_blips(StreamPath(ESCHER_DELAY_STREAM.into()), &delay)
     {
         for record in inventory.records {
             let Some(source) = record.image_payload_source else {
