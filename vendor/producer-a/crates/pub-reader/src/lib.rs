@@ -2792,6 +2792,33 @@ pub fn build_mature_0x2c_from_streams(
                 ));
             }
         }
+        if let (Some(story_frame), Some(margins)) = (&story_frame, &effective_text_margins)
+            && margins.left_emu.authority == PubEffectivePaintAuthority::QuillMcld
+        {
+            if let Some((layout_key, layout_key_source)) = story_layout_keys.get(&story_frame.text_id)
+            {
+                source_refs.push(source_ref(
+                    &graph.source,
+                    layout_key_source,
+                    Some(format!("contents/0x65/story/{}", story_frame.text_id)),
+                    Some(format!("story/layout_key/mcld/{layout_key}")),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+            source_refs.extend(margins.mcld_sources.iter().map(|source| {
+                source_ref(
+                    &graph.source,
+                    source,
+                    Some(quill_story_object_key(story_frame.text_id)),
+                    Some("MCLD/text-inset/fields06-09".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                )
+            }));
+        }
         if effective_paint
             .as_ref()
             .is_some_and(effective_paint_has_dgg_authority)
@@ -3666,6 +3693,9 @@ fn resolve_bounded_story_mcld_text_margins(
 ) -> Option<PubEffectiveTextMarginsSource> {
     let (layout_key, _) = story_layout_keys.get(&story_frame.text_id)?;
     let inset = bounded_mcld_uniform_text_inset(mcld?, *layout_key).ok()?;
+    if inset.inset_emu > MAX_TEXT_MARGIN_EMU {
+        return None;
+    }
     let value = i64::from(inset.inset_emu);
     let margin_value = || PubEffectivePaintValue {
         value,
