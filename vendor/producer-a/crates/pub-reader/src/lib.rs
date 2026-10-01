@@ -279,10 +279,12 @@ pub struct PubSourcePagePaintOrderV1 {
 pub struct PubSourceGraphBuild {
     pub graph: PubSourceGraph,
     pub effective_pages: PubEffectivePageProjection,
-    /// Page-local back-to-front order for the bounded direct source-backed
-    /// object class whose persisted OfficeArt SpContainer order can be joined
-    /// unambiguously to canonical Nodes. Pages with incomplete/ambiguous
-    /// coverage are omitted rather than assigned an invented order.
+    /// Page-local back-to-front order for bounded source-backed paint
+    /// participants whose persisted OfficeArt SpContainer position can be
+    /// joined unambiguously to canonical Nodes. This includes direct page
+    /// objects and exact depth-1 grouped descendants at their proven top-level
+    /// GROUP carrier rank. Pages/classes with incomplete or ambiguous coverage
+    /// remain partial rather than receiving an invented order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_page_paint_orders: Vec<PubSourcePagePaintOrderV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3436,7 +3438,18 @@ fn source_page_paint_orders_v1(
     page_seq_to_id: &BTreeMap<u32, PageId>,
     inventory: &SpContainerInventory,
 ) -> Vec<PubSourcePagePaintOrderV1> {
+    let escher_by_contents_seq = index_escher_by_contents_seq(inventory);
     let mut expected = BTreeMap::<PageId, BTreeSet<NodeId>>::new();
+
+    // Depth-1 grouped descendants are projected as page-owned canonical Nodes,
+    // but their persisted Contents parent remains the GROUP carrier. Admit that
+    // class into page paint order only when every participating descendant on
+    // the page has one exact child Escher shape, one exact top-level GROUP
+    // Escher carrier, and the OfficeArt parent-group source link agrees.
+    let mut grouped_pending =
+        BTreeMap::<PageId, Vec<(u32, usize, NodeId)>>::new();
+    let mut grouped_invalid_pages = BTreeSet::<PageId>::new();
+
     for node in graph.nodes.values() {
         let seq_num = node.payload.contents_seq_num;
         let Some(reference) = references.get(&seq_num) else {
@@ -3445,12 +3458,75 @@ fn source_page_paint_orders_v1(
         let Some(parent_seq) = single_parent_seq(reference) else {
             continue;
         };
-        let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() else {
+
+        if let Some(page_id) = page_seq_to_id.get(&parent_seq).copied() {
+            if node.header.parent_id == page_id.into_canonical() {
+                expected.entry(page_id).or_default().insert(node.header.id);
+            }
+            continue;
+        }
+
+        let Some(group_reference) = references.get(&parent_seq) else {
             continue;
         };
-        if node.header.parent_id == page_id.into_canonical() {
-            expected.entry(page_id).or_default().insert(node.header.id);
+        if single_raw_type(group_reference) != Some(RAW_TYPE_GROUP) {
+            continue;
         }
+        let Some(group_parent_seq) = single_parent_seq(group_reference) else {
+            continue;
+        };
+        let Some(page_id) = page_seq_to_id.get(&group_parent_seq).copied() else {
+            // Nested groups remain outside this first bounded stack-order slice.
+            continue;
+        };
+        if node.header.parent_id != page_id.into_canonical() {
+            continue;
+        }
+
+        let child_matches = escher_by_contents_seq
+            .get(&seq_num)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let group_matches = escher_by_contents_seq
+            .get(&parent_seq)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let ([child_index], [group_index]) = (child_matches, group_matches) else {
+            grouped_invalid_pages.insert(page_id);
+            continue;
+        };
+        let child_shape = &inventory.shapes[*child_index];
+        let group_shape = &inventory.shapes[*group_index];
+        if child_shape.parent_group_shape_source.as_ref() != Some(&group_shape.source) {
+            grouped_invalid_pages.insert(page_id);
+            continue;
+        }
+
+        grouped_pending
+            .entry(page_id)
+            .or_default()
+            .push((parent_seq, *child_index, node.header.id));
+    }
+
+    let mut grouped_by_carrier = BTreeMap::<u32, (PageId, Vec<(usize, NodeId)>)>::new();
+    for (page_id, entries) in grouped_pending {
+        if grouped_invalid_pages.contains(&page_id) {
+            continue;
+        }
+        for (carrier_seq, child_index, node_id) in entries {
+            expected.entry(page_id).or_default().insert(node_id);
+            let entry = grouped_by_carrier
+                .entry(carrier_seq)
+                .or_insert_with(|| (page_id, Vec::new()));
+            if entry.0 != page_id {
+                grouped_invalid_pages.insert(page_id);
+                continue;
+            }
+            entry.1.push((child_index, node_id));
+        }
+    }
+    for (_, grouped) in grouped_by_carrier.values_mut() {
+        grouped.sort_by_key(|(child_index, _)| *child_index);
     }
 
     let mut ordered = BTreeMap::<PageId, Vec<NodeId>>::new();
@@ -3459,6 +3535,9 @@ fn source_page_paint_orders_v1(
 
     // inspect_sp_containers preserves serialized traversal order. Do not sort
     // SPIDs here: serialized page SpContainer order is the bounded authority.
+    // Exact depth-1 grouped descendants occupy the serialized position of their
+    // top-level GROUP carrier; their internal order remains the already-proven
+    // child SpContainer traversal order.
     for shape in &inventory.shapes {
         let Some(client_data) = shape.client_data.as_ref() else {
             continue;
@@ -3467,6 +3546,19 @@ fn source_page_paint_orders_v1(
             continue;
         };
         let seq_num = shape_id.value;
+
+        if let Some((page_id, grouped_nodes)) = grouped_by_carrier.get(&seq_num) {
+            if !seen_seq.insert(seq_num) {
+                rejected.insert(*page_id);
+                continue;
+            }
+            ordered
+                .entry(*page_id)
+                .or_default()
+                .extend(grouped_nodes.iter().map(|(_, node_id)| *node_id));
+            continue;
+        }
+
         let Some(reference) = references.get(&seq_num) else {
             continue;
         };
