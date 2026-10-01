@@ -25,12 +25,83 @@ use tokio::{
 
 use crate::{
     blob_store::BlobStoreService, guest_intake_classifier::guest_failure_intake_evidence,
-    reader_scene_v1::from_viewer_geometry, source_ingress_security::SourceSecurityScannerConfig,
+    reader_scene_v1::{
+        ReaderTextFontProbeResource, from_viewer_geometry, from_viewer_geometry_with_font_probe,
+    },
+    source_ingress_security::SourceSecurityScannerConfig,
 };
 
 pub const GUEST_SCENE_WORKER_V1: &str = "chaptera.reader-guest-scene-worker.v1";
 const MAX_RECEIPT_BYTES: u64 = 18 * 1024 * 1024;
+const MAX_FONT_PROBE_BYTES: u64 = 4 * 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const GUEST_SCENE_FONT_PROBE_FAMILY_NAME: &str = "Liberation Sans";
+
+#[derive(Debug, Clone)]
+pub struct GuestSceneFontProbeConfig {
+    pub path: PathBuf,
+    pub expected_sha256: String,
+    pub source_family_sha256: String,
+    pub resource_id: String,
+}
+
+#[derive(Debug)]
+struct LoadedGuestSceneFontProbe {
+    expected_sha256: String,
+    source_family_sha256: String,
+    resource_id: String,
+    bytes: Vec<u8>,
+}
+
+impl LoadedGuestSceneFontProbe {
+    fn load(config: &GuestSceneFontProbeConfig) -> Result<Self, GuestSceneWorkerError> {
+        require_sha256(&config.expected_sha256)?;
+        require_sha256(&config.source_family_sha256)?;
+        require_ident(&config.resource_id, "probe_font_resource_id")?;
+        let metadata = stdfs::metadata(&config.path).map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_probe_missing",
+                "font probe input is unavailable",
+            )
+        })?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_FONT_PROBE_BYTES {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_probe_invalid",
+                "font probe input size is invalid",
+            ));
+        }
+        let bytes = stdfs::read(&config.path).map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_font_probe_missing",
+                "font probe input could not be read",
+            )
+        })?;
+        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        if actual_sha256 != config.expected_sha256 {
+            return Err(GuestSceneWorkerError::new(
+                "guest_scene_font_probe_hash_mismatch",
+                "font probe bytes differ from expected fingerprint",
+            ));
+        }
+        Ok(Self {
+            expected_sha256: config.expected_sha256.clone(),
+            source_family_sha256: config.source_family_sha256.clone(),
+            resource_id: config.resource_id.clone(),
+            bytes,
+        })
+    }
+
+    fn as_scene_resource(&self) -> ReaderTextFontProbeResource<'_> {
+        ReaderTextFontProbeResource {
+            resource_id: &self.resource_id,
+            family_name: GUEST_SCENE_FONT_PROBE_FAMILY_NAME,
+            expected_sha256: &self.expected_sha256,
+            source_family_sha256: &self.source_family_sha256,
+            face_index: 0,
+            bytes: &self.bytes,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestSceneWorkerError {
@@ -288,6 +359,7 @@ pub fn run_guest_scene_worker(
     session_id: &str,
     expected_sha256: &str,
     expected_byte_len: u64,
+    font_probe: Option<&GuestSceneFontProbeConfig>,
 ) -> Result<(), GuestSceneWorkerError> {
     require_ident(session_id, "session_id")?;
     require_sha256(expected_sha256)?;
@@ -343,6 +415,12 @@ pub fn run_guest_scene_worker(
             "authorized guest scene input hash differs from expected identity",
         ));
     }
+    let loaded_font_probe = font_probe
+        .map(LoadedGuestSceneFontProbe::load)
+        .transpose()?;
+    let scene_font_probe = loaded_font_probe
+        .as_ref()
+        .map(LoadedGuestSceneFontProbe::as_scene_resource);
 
     install_post_read_filesystem_default_deny().map_err(|_| {
         GuestSceneWorkerError::new(
@@ -353,13 +431,23 @@ pub fn run_guest_scene_worker(
 
     let (classification, terminal_code, scene, salvage) =
         match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(bundle) => match from_viewer_geometry(
-                session_id.to_owned(),
-                expected_sha256.to_owned(),
-                "guest:source".to_owned(),
-                &bundle.geometry,
-                &bundle.source_page_paint_orders,
-            ) {
+            Ok(bundle) => match match scene_font_probe.as_ref() {
+                Some(probe) => from_viewer_geometry_with_font_probe(
+                    session_id.to_owned(),
+                    expected_sha256.to_owned(),
+                    "guest:source".to_owned(),
+                    &bundle.geometry,
+                    &bundle.source_page_paint_orders,
+                    Some(probe),
+                ),
+                None => from_viewer_geometry(
+                    session_id.to_owned(),
+                    expected_sha256.to_owned(),
+                    "guest:source".to_owned(),
+                    &bundle.geometry,
+                    &bundle.source_page_paint_orders,
+                ),
+            } {
                 Ok(scene) => {
                     let classification = if scene.fidelity.state == "supported" {
                         "supported"
