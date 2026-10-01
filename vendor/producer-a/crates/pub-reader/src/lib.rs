@@ -3643,14 +3643,7 @@ pub fn resolve_bounded_effective_officeart_paint(
         })
     };
 
-    let fill_visible = resolve_effective_officeart_boolean(
-        shape,
-        dgg_defaults,
-        OFFICE_ART_FILL_BOOLEANS,
-        FILL_USE_FILLED_BIT,
-        FILL_FILLED_BIT,
-        true,
-    );
+    let fill_visible = resolve_effective_officeart_fill_visibility(shape, dgg_defaults);
 
     let line_color = resolve_effective_officeart_scalar(
         shape,
@@ -3758,50 +3751,70 @@ fn resolve_effective_officeart_scalar(
     })
 }
 
-fn resolve_effective_officeart_boolean(
+fn resolve_effective_officeart_fill_visibility(
     shape: &pub_escher::SpContainerObservation,
     dgg_defaults: Option<&pub_escher::DggDefaultOptionsObservation>,
-    property_id: u16,
-    use_bit: u32,
-    value_bit: u32,
-    normative_default: bool,
 ) -> Option<PubEffectivePaintValue<bool>> {
-    let mut layers = vec![paint_scalar_from_records(
+    let mut layers = vec![fill_visibility_from_records(
         &shape.fopts,
-        property_id,
         PubEffectivePaintAuthority::ShapeLocal,
     )];
     if let Some(dgg) = dgg_defaults {
-        layers.push(paint_scalar_from_records(
+        layers.push(fill_visibility_from_records(
             &dgg.primary_options,
-            property_id,
             PubEffectivePaintAuthority::DrawingGroupPrimary,
         ));
-        layers.push(paint_scalar_from_records(
+        layers.push(fill_visibility_from_records(
             &dgg.tertiary_options,
-            property_id,
             PubEffectivePaintAuthority::DrawingGroupTertiary,
         ));
     }
 
     for layer in layers {
         match layer {
-            PaintScalarLayer::Absent => {}
-            PaintScalarLayer::Unresolved => return None,
-            PaintScalarLayer::Value(value) => {
-                if value.value & use_bit == 0 {
-                    continue;
-                }
-                return Some(value.map(|raw| raw & value_bit != 0));
-            }
+            PaintLineVisibilityLayer::Absent => {}
+            PaintLineVisibilityLayer::Unresolved => return None,
+            PaintLineVisibilityLayer::Value(value) => return Some(value),
         }
     }
 
     Some(PubEffectivePaintValue {
-        value: normative_default,
+        value: true,
         authority: PubEffectivePaintAuthority::NormativeDefault,
         source: None,
     })
+}
+
+fn fill_visibility_from_records(
+    records: &[pub_escher::FoptObservation],
+    authority: PubEffectivePaintAuthority,
+) -> PaintLineVisibilityLayer {
+    let mut candidates = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICE_ART_FILL_BOOLEANS);
+
+    let mut resolved = None;
+    for property in candidates.by_ref() {
+        if property.f_bid() || property.f_complex() {
+            return PaintLineVisibilityLayer::Unresolved;
+        }
+        if property.op & FILL_USE_FILLED_BIT == 0 {
+            continue;
+        }
+        if resolved.is_some() {
+            return PaintLineVisibilityLayer::Unresolved;
+        }
+        resolved = Some(PubEffectivePaintValue {
+            value: property.op & FILL_FILLED_BIT != 0,
+            authority,
+            source: Some(property.source.clone()),
+        });
+    }
+
+    resolved
+        .map(PaintLineVisibilityLayer::Value)
+        .unwrap_or(PaintLineVisibilityLayer::Absent)
 }
 
 fn resolve_effective_officeart_line_visibility(
@@ -4946,6 +4959,122 @@ mod tests {
         assert_eq!(line_width.value, 30_000);
         assert_eq!(line_width.authority, PubEffectivePaintAuthority::ShapeLocal);
         assert!(paint.line.visible.unwrap().value);
+    }
+
+    #[test]
+    fn split_shape_fill_boolean_records_resolve_only_the_ffilled_subfield() {
+        let mut visible = crop_test_shape(Vec::new());
+        visible.fopts = vec![
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_FOPT,
+                source: crop_test_span(10, 8),
+                properties: vec![crop_test_property(
+                    OFFICE_ART_FILL_BOOLEANS,
+                    FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+                )],
+            },
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+                source: crop_test_span(20, 8),
+                properties: vec![crop_test_property(OFFICE_ART_FILL_BOOLEANS, 0x0060_0020)],
+            },
+        ];
+
+        assert_eq!(explicit_officeart_paint(&visible, None).fill.visible, None);
+        let effective = resolve_bounded_effective_officeart_paint(&visible, None, None, true)
+            .expect("bounded 2-D paint");
+        let fill = effective.fill.visible.expect("shape-local fill visibility");
+        assert!(fill.value);
+        assert_eq!(fill.authority, PubEffectivePaintAuthority::ShapeLocal);
+
+        let mut hidden = visible.clone();
+        hidden.fopts[0].properties[0] =
+            crop_test_property(OFFICE_ART_FILL_BOOLEANS, FILL_USE_FILLED_BIT);
+        assert!(
+            !resolve_bounded_effective_officeart_paint(&hidden, None, None, true)
+                .expect("bounded 2-D paint")
+                .fill
+                .visible
+                .expect("shape-local hidden fill")
+                .value
+        );
+    }
+
+    #[test]
+    fn non_participating_fill_boolean_records_fall_through_to_dgg_or_normative_default() {
+        let mut shape = crop_test_shape(Vec::new());
+        shape.fopts = vec![
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_FOPT,
+                source: crop_test_span(10, 8),
+                properties: vec![crop_test_property(OFFICE_ART_FILL_BOOLEANS, FILL_FILLED_BIT)],
+            },
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+                source: crop_test_span(20, 8),
+                properties: vec![crop_test_property(OFFICE_ART_FILL_BOOLEANS, 0x0060_0020)],
+            },
+        ];
+
+        let normative = resolve_bounded_effective_officeart_paint(&shape, None, None, true)
+            .expect("bounded 2-D paint")
+            .fill
+            .visible
+            .expect("normative fill visibility");
+        assert!(normative.value);
+        assert_eq!(
+            normative.authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+
+        let dgg = dgg_test_defaults(
+            vec![crop_test_property(
+                OFFICE_ART_FILL_BOOLEANS,
+                FILL_USE_FILLED_BIT,
+            )],
+            Vec::new(),
+        );
+        let inherited = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("bounded 2-D paint")
+            .fill
+            .visible
+            .expect("DGG fill visibility");
+        assert!(!inherited.value);
+        assert_eq!(
+            inherited.authority,
+            PubEffectivePaintAuthority::DrawingGroupPrimary
+        );
+    }
+
+    #[test]
+    fn conflicting_ffilled_use_records_remain_fail_closed() {
+        let mut shape = crop_test_shape(Vec::new());
+        shape.fopts = vec![
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_FOPT,
+                source: crop_test_span(10, 8),
+                properties: vec![crop_test_property(
+                    OFFICE_ART_FILL_BOOLEANS,
+                    FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+                )],
+            },
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+                source: crop_test_span(20, 8),
+                properties: vec![crop_test_property(
+                    OFFICE_ART_FILL_BOOLEANS,
+                    FILL_USE_FILLED_BIT,
+                )],
+            },
+        ];
+
+        assert_eq!(
+            resolve_bounded_effective_officeart_paint(&shape, None, None, true)
+                .expect("bounded 2-D paint")
+                .fill
+                .visible,
+            None
+        );
     }
 
     #[test]
