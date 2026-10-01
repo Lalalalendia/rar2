@@ -87,12 +87,14 @@ fn main() -> ExitCode {
         session_id,
         expected_sha256,
         expected_byte_len,
+        font_registry,
     } = &cli.command
     {
         return match guest_reader_worker::run_guest_scene_worker(
             session_id,
             expected_sha256,
             *expected_byte_len,
+            font_registry.as_deref(),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -278,8 +280,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         let guest_scan_config = config.source_validation.materialize();
                         let guest_scanner =
                             ProductionSourceSecurityScanner::new(guest_scan_config.clone())?;
-                        let guest_scene_worker =
-                            IsolatedGuestSceneProducer::new(guest_scan_config)?;
+                        let guest_scene_worker = IsolatedGuestSceneProducer::new_with_fonts(
+                            guest_scan_config,
+                            &guest_config.font_resources,
+                        )?;
                         let guest_state = GuestReaderHttpState::new(
                             guest_rate,
                             guest_admission,
