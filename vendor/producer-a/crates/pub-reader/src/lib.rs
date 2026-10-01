@@ -108,9 +108,10 @@ use pub_model::{
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillScriptFontEntryDisposition,
     QuillStoryReadError, QuillTypographyValueSource, bounded_mcld_uniform_text_inset,
-    parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    diagnose_bounded_text_size_authority, parse_bounded_fdpp_exact_story_catalog,
+    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
 };
+pub use pub_quill::QuillTextSizeAuthorityDiagnostic as PubTextSizeAuthorityDiagnostic;
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
     PubResolvedNodePayload, PubResolvedStoryFrame, resolve_pub_source_graph,
@@ -984,6 +985,79 @@ pub fn derive_pub_story_id(source_hash: &Sha256Digest, syid: u32) -> Result<Stor
         &quill_story_object_key(syid),
         ROLE_STORY,
     )?))
+}
+
+/// Research-only source-safe discriminator for one already-identified Story fragment.
+///
+/// This does not change Reader semantics. It reuses the bounded Quill FDPC/FDPP/STSH1
+/// parser and reports only aggregate numeric text-size authority for the requested
+/// canonical Story fragment.
+pub fn analyze_mature_0x2c_text_size_authority<R: Read + Seek>(
+    mut reader: R,
+    source_hash: Sha256Digest,
+    story_id: StoryId,
+    story_scalar_start: u32,
+    story_scalar_end: u32,
+) -> Result<PubTextSizeAuthorityDiagnostic> {
+    if story_scalar_start >= story_scalar_end {
+        bail!("text-size diagnostic requires a non-empty scalar range");
+    }
+
+    reader.seek(SeekFrom::Start(0))?;
+    let mut pub_bytes = Vec::new();
+    reader.read_to_end(&mut pub_bytes)?;
+    let quill = pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), QUILL_STREAM_PATH)
+        .with_context(|| format!("read {QUILL_STREAM_PATH} for text-size diagnostic"))?;
+    let story_catalog = parse_confirmed_story_catalog(
+        StreamPath(QUILL_STREAM_PATH.into()),
+        &quill,
+    )
+    .context("parse bounded Quill Story catalog for text-size diagnostic")?;
+
+    let mut target_story = None;
+    for story in &story_catalog.stories {
+        if derive_pub_story_id(&source_hash, story.syid.0)? == story_id {
+            if target_story.is_some() {
+                bail!("canonical Story identity matched more than one Quill Story");
+            }
+            target_story = Some(story);
+        }
+    }
+    let target_story =
+        target_story.ok_or_else(|| anyhow!("canonical Story identity has no Quill Story owner"))?;
+    let text = decode_utf16le_strict(&target_story.utf16le)
+        .context("decode target Story for scalar-to-UTF16 diagnostic mapping")?;
+    let scalar_count = u32::try_from(text.chars().count())
+        .map_err(|_| anyhow!("target Story scalar count exceeds u32"))?;
+    if story_scalar_end > scalar_count {
+        bail!(
+            "text-size diagnostic scalar range {}..{} exceeds Story scalar count {}",
+            story_scalar_start,
+            story_scalar_end,
+            scalar_count
+        );
+    }
+
+    let scalar_to_utf16 = |scalar: u32| -> Result<u32> {
+        let scalar = usize::try_from(scalar)
+            .map_err(|_| anyhow!("scalar offset exceeds usize"))?;
+        text.chars().take(scalar).try_fold(0_u32, |total, character| {
+            total
+                .checked_add(character.len_utf16() as u32)
+                .ok_or_else(|| anyhow!("UTF-16 offset overflow"))
+        })
+    };
+    let story_start_utf16 = scalar_to_utf16(story_scalar_start)?;
+    let story_end_utf16 = scalar_to_utf16(story_scalar_end)?;
+
+    diagnose_bounded_text_size_authority(
+        &quill,
+        &story_catalog,
+        target_story.syid,
+        story_start_utf16,
+        story_end_utf16,
+    )
+    .context("diagnose bounded Quill text-size authority")
 }
 
 /// Builds a bounded mature-0x2C SourceGraph from one complete CFB file.
