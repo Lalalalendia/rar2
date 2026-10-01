@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use pub_viewer::{
-    ReaderPartialSourceFact, ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility,
-    ViewerProductOpenOutcome, classify_pub_family, open_pub_or_salvage,
-    probe_reader_salvage_candidate, viewer_geometry_environment_v0_1,
+    classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
+    viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderSalvageCorruptionEvidence,
+    ReaderSalvageEligibility, ViewerProductOpenOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -97,9 +97,7 @@ fn failed_outcome(eligibility: ReaderSalvageEligibility) -> AcceptanceOutcome {
     }
 }
 
-fn fact_counts(
-    facts: &[ReaderPartialSourceFact],
-) -> BTreeMap<&'static str, usize> {
+fn fact_counts(facts: &[ReaderPartialSourceFact]) -> BTreeMap<&'static str, usize> {
     let mut counts = BTreeMap::new();
     for fact in facts {
         let key = match fact {
@@ -201,9 +199,7 @@ fn main() -> Result<()> {
             .context("usage: corpus-reader-salvage-acceptance CORPUS_DIR OUTPUT.json")?,
     );
     if args.next().is_some() {
-        anyhow::bail!(
-            "corpus-reader-salvage-acceptance accepts exactly CORPUS_DIR OUTPUT.json"
-        );
+        anyhow::bail!("corpus-reader-salvage-acceptance accepts exactly CORPUS_DIR OUTPUT.json");
     }
 
     let paths = pub_paths(&root)?;
@@ -217,10 +213,14 @@ fn main() -> Result<()> {
         let row = classify(&bytes);
         *outcome_counts.entry(row.outcome).or_default() += 1;
         if let Some(eligibility) = row.salvage_eligibility {
-            *eligibility_counts.entry(eligibility.to_owned()).or_default() += 1;
+            *eligibility_counts
+                .entry(eligibility.to_owned())
+                .or_default() += 1;
         }
         if let Some(evidence) = row.corruption_evidence {
-            *corruption_evidence_counts.entry(evidence.to_owned()).or_default() += 1;
+            *corruption_evidence_counts
+                .entry(evidence.to_owned())
+                .or_default() += 1;
         }
         rows.push(row);
     }
@@ -239,7 +239,10 @@ fn main() -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     fs::write(&output, serde_json::to_vec_pretty(&report)?)?;
-    println!("{}", serde_json::to_string_pretty(&report["outcome_counts"])?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report["outcome_counts"])?
+    );
     Ok(())
 }
 
@@ -267,10 +270,7 @@ mod tests {
             ReaderSalvageEligibility::AwaitingTypedCorruptionEvidence,
             ReaderSalvageEligibility::IneligibleUnproven,
         ] {
-            assert_eq!(
-                failed_outcome(eligibility),
-                AcceptanceOutcome::Unsupported
-            );
+            assert_eq!(failed_outcome(eligibility), AcceptanceOutcome::Unsupported);
         }
     }
 }
