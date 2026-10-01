@@ -4553,6 +4553,9 @@ mod tests {
         let mut page_shape_id_records = BTreeMap::<PageId, usize>::new();
         let mut page_exact_shape_id_records = BTreeMap::<PageId, usize>::new();
         let mut page_exact_graph_joins = BTreeMap::<PageId, usize>::new();
+        let mut page_unmaterialized_shape_id_records = BTreeMap::<PageId, usize>::new();
+        let mut page_unmaterialized_raw_type_counts =
+            BTreeMap::<PageId, BTreeMap<String, usize>>::new();
         let mut client_data_shape_count = 0_usize;
         let mut exact_shape_id_shape_count = 0_usize;
 
@@ -4590,6 +4593,12 @@ mod tests {
                 continue;
             };
             if !build.graph.nodes.contains_key(&node_id) {
+                *page_unmaterialized_shape_id_records.entry(page_id).or_default() += 1;
+                *page_unmaterialized_raw_type_counts
+                    .entry(page_id)
+                    .or_default()
+                    .entry(format!("{:?}", single_raw_type(reference)))
+                    .or_default() += 1;
                 continue;
             }
             *page_exact_graph_joins.entry(page_id).or_default() += 1;
@@ -4672,6 +4681,8 @@ mod tests {
                 "current_emitted_source_paint_order_count": emitted.get(page_id).copied().unwrap_or(0),
                 "exact_shape_id_record_count": page_exact_shape_id_records.get(page_id).copied().unwrap_or(0),
                 "exact_graph_join_record_count": page_exact_graph_joins.get(page_id).copied().unwrap_or(0),
+                "unmaterialized_exact_shape_id_record_count": page_unmaterialized_shape_id_records.get(page_id).copied().unwrap_or(0),
+                "unmaterialized_raw_type_counts": page_unmaterialized_raw_type_counts.get(page_id).cloned().unwrap_or_default(),
                 "graph_nodes_zero_join": zero_join,
                 "graph_nodes_one_join": one_join,
                 "graph_nodes_multiple_joins": multi_join,
