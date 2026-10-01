@@ -11,7 +11,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub const STORAGE_SCHEMA_V1: &str = "chaptera.editor-project-storage.v1";
-const MAX_RECOVERY_GENERATIONS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreDisposition {
@@ -334,20 +333,6 @@ pub fn inspect(
         return Ok(Some(opened));
     }
 
-    for (_, path) in generation_manifests(source_path)?
-        .into_iter()
-        .take(MAX_RECOVERY_GENERATIONS)
-    {
-        if let Ok(opened) = inspect_manifest(
-            source_path,
-            &path,
-            expected_source_hash,
-            StoreDisposition::Recovery,
-        ) {
-            return Ok(Some(opened));
-        }
-    }
-
     if let Some(error) = primary_error {
         return Err(error);
     }
@@ -492,6 +477,7 @@ pub fn commit(
     let previous = inspect(source_path, project.source_hash)?;
     let previous_generation = previous.as_ref().and_then(|opened| opened.generation);
 
+    let mut recovery_replace_backup = None;
     if let Some(previous) = previous.as_ref() {
         let bytes = fs::read(&previous.manifest_path).map_err(|error| {
             io_error(
@@ -500,8 +486,9 @@ pub fn commit(
                 error,
             )
         })?;
-        AdmittedDestination::admit(&recovery_path(source_path)?, &protected)?
+        let receipt = AdmittedDestination::admit(&recovery_path(source_path)?, &protected)?
             .commit_bytes(&bytes)?;
+        recovery_replace_backup = receipt.backup_path;
     }
 
     let generation = next_available_generation(source_path)?;
@@ -579,7 +566,22 @@ pub fn commit(
         });
     }
 
+    // First durable save has no previous committed generation. Seed the
+    // deterministic recovery slot only after the visible generation has been
+    // reopened and admitted. On later saves, the recovery slot intentionally
+    // remains the previous committed generation.
+    if previous.is_none() {
+        let receipt = AdmittedDestination::admit(&recovery_path(source_path)?, &protected)?
+            .commit_bytes(&envelope_bytes)?;
+        if let Some(backup) = receipt.backup_path {
+            let _ = remove_regular_non_reparse_file(&backup);
+        }
+    }
+
     if let Some(backup) = visible_receipt.backup_path {
+        let _ = remove_regular_non_reparse_file(&backup);
+    }
+    if let Some(backup) = recovery_replace_backup {
         let _ = remove_regular_non_reparse_file(&backup);
     }
     cleanup_old_generations(source_path, generation, previous_generation);
@@ -784,51 +786,23 @@ fn observed_generations(source_path: &Path) -> Result<Vec<u64>, EditorProjectSto
     Ok(generations)
 }
 
-fn generation_manifests(
-    source_path: &Path,
-) -> Result<Vec<(u64, PathBuf)>, EditorProjectStoreError> {
-    let parent = source_parent(source_path)?;
-    let prefix = generation_prefix(source_path)?;
-    let mut manifests = Vec::new();
-
-    for entry in fs::read_dir(&parent)
-        .map_err(|error| io_error("list EditorProject recovery manifests", &parent, error))?
-    {
-        let entry =
-            entry.map_err(|error| io_error("read EditorProject recovery entry", &parent, error))?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let Some(rest) = name.strip_prefix(&prefix) else {
-            continue;
-        };
-        let Some(digits) = rest.strip_suffix(".json") else {
-            continue;
-        };
-        if digits.len() != 20 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-            continue;
-        }
-        if let Ok(generation) = digits.parse::<u64>() {
-            manifests.push((generation, entry.path()));
-        }
-    }
-    manifests.sort_by(|left, right| right.0.cmp(&left.0));
-    Ok(manifests)
-}
-
 fn cleanup_old_generations(
     source_path: &Path,
     current_generation: u64,
     previous_generation: Option<u64>,
 ) {
-    let Ok(manifests) = generation_manifests(source_path) else {
+    let Ok(generations) = observed_generations(source_path) else {
         return;
     };
 
-    for (generation, manifest) in manifests {
+    for generation in generations.into_iter().collect::<BTreeSet<_>>() {
         if generation == current_generation || Some(generation) == previous_generation {
             continue;
         }
         let Ok(asset_dir) = generation_asset_dir_path(source_path, generation) else {
+            continue;
+        };
+        let Ok(manifest) = generation_manifest_path(source_path, generation) else {
             continue;
         };
         if remove_generated_asset_dir(&asset_dir).is_err() {
