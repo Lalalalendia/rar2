@@ -133,7 +133,7 @@ pub use structural_base::{
     structural_base_manifest_json,
 };
 pub use table_bridge::{
-    PubMaterializedTableCell, PubTableCellCoordinates, PubTableCellSource,
+    PubMaterializedTableCell, PubTableCellCoordinates, PubTableCellPaintSource, PubTableCellSource,
     PubTableLayoutMetricsSource, PubTableSource, PubTableStoryOwnershipSource, PubTableTextError,
     RAW_TYPE_TABLE, materialize_bounded_simple_table_cells, materialize_bounded_table_cells,
 };
@@ -2919,6 +2919,9 @@ pub fn build_mature_0x2c_from_streams(
                     story_layout_keys: &story_layout_keys,
                     mcld: mcld.as_ref(),
                     table_bounds: &bounds,
+                    officeart_owner_shape: shape,
+                    officeart_inventory: &escher_inventory,
+                    color_scheme: color_scheme.as_ref().map(|scheme| &scheme.scheme),
                 };
                 (
                     table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
