@@ -5446,6 +5446,8 @@ mod mature_officeart_wmf_exact_product_tests {
     fn exact_wmf_fixture(
         env_name: &str,
         expected_sha256: &str,
+        expected_source_wmf_resources: usize,
+        expected_source_wmf_uses: usize,
         expected_image_resources: usize,
         expected_image_uses: usize,
         expected_wmf_preview_resources: usize,
@@ -5457,9 +5459,102 @@ mod mature_officeart_wmf_exact_product_tests {
         let before = fs::read(&path).expect("read exact mature OfficeArt WMF fixture");
         assert_eq!(sha256_digest(&before).unwrap().to_string(), expected_sha256);
 
+        let source_hash = sha256_digest(&before).expect("hash exact WMF fixture");
+        let source = build_mature_0x2c_source_graph(Cursor::new(before.as_slice()), source_hash)
+            .expect("build exact mature OfficeArt source graph");
+        let source_wmf = build_mature_0x2c_wmf_preview_bundle_from_bytes(&before, &source.graph)
+            .expect("materialize exact mature OfficeArt WMF source bundle");
+        assert_eq!(
+            source_wmf.sources.len(),
+            expected_source_wmf_resources,
+            "exact fixture source WMF resource count drift"
+        );
+        assert_eq!(
+            source_wmf
+                .sources
+                .iter()
+                .map(|source| source.uses.len())
+                .sum::<usize>(),
+            expected_source_wmf_uses,
+            "exact fixture source WMF grounded-use count drift"
+        );
+        assert_eq!(
+            source_wmf.rejected_source_count, 0,
+            "exact fixture contains a WMF source outside the bounded decode profile"
+        );
+
         let geometry = open_mature_0x2c_geometry(&before, viewer_geometry_environment_v0_1())
             .expect("exact mature OfficeArt WMF fixture must open through Viewer product boundary");
+        let scene_node_ids = geometry
+            .scene
+            .nodes
+            .iter()
+            .map(|node| node.origin)
+            .collect::<BTreeSet<_>>();
+        let scene_bound_wmf_resources = source_wmf
+            .sources
+            .iter()
+            .filter(|source| {
+                source
+                    .uses
+                    .iter()
+                    .any(|usage| scene_node_ids.contains(&usage.node_id))
+            })
+            .count();
+        let scene_bound_wmf_uses = source_wmf
+            .sources
+            .iter()
+            .flat_map(|source| &source.uses)
+            .filter(|usage| scene_node_ids.contains(&usage.node_id))
+            .count();
 
+        let wmf_previews = geometry
+            .images
+            .iter()
+            .filter(|image| image.mime == "image/png")
+            .collect::<Vec<_>>();
+        let wmf_preview_uses = wmf_previews
+            .iter()
+            .map(|image| image.node_ids.len())
+            .sum::<usize>();
+        let diagnostic_counts = geometry
+            .document
+            .diagnostics
+            .iter()
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, diagnostic| {
+                *counts.entry(diagnostic.code.as_str()).or_default() += 1;
+                counts
+            });
+        eprintln!(
+            "EXACT_MATURE_WMF_ACCEPTANCE source_resources={} source_uses={} scene_bound_resources={} scene_bound_uses={} viewer_wmf_resources={} viewer_wmf_uses={} viewer_images={} viewer_image_uses={} diagnostics={:?}",
+            source_wmf.sources.len(),
+            source_wmf
+                .sources
+                .iter()
+                .map(|source| source.uses.len())
+                .sum::<usize>(),
+            scene_bound_wmf_resources,
+            scene_bound_wmf_uses,
+            wmf_previews.len(),
+            wmf_preview_uses,
+            geometry.images.len(),
+            geometry
+                .images
+                .iter()
+                .map(|image| image.node_ids.len())
+                .sum::<usize>(),
+            diagnostic_counts,
+        );
+        assert_eq!(
+            wmf_previews.len(),
+            expected_wmf_preview_resources,
+            "bounded mature OfficeArt WMF preview-resource count drift"
+        );
+        assert_eq!(
+            wmf_preview_uses,
+            expected_wmf_preview_uses,
+            "bounded mature OfficeArt WMF preview-use count drift"
+        );
         assert_eq!(
             geometry.images.len(),
             expected_image_resources,
@@ -5473,25 +5568,6 @@ mod mature_officeart_wmf_exact_product_tests {
                 .sum::<usize>(),
             expected_image_uses,
             "exact fixture grounded image-use count drift"
-        );
-
-        let wmf_previews = geometry
-            .images
-            .iter()
-            .filter(|image| image.mime == "image/png")
-            .collect::<Vec<_>>();
-        assert_eq!(
-            wmf_previews.len(),
-            expected_wmf_preview_resources,
-            "bounded mature OfficeArt WMF preview-resource count drift"
-        );
-        assert_eq!(
-            wmf_previews
-                .iter()
-                .map(|image| image.node_ids.len())
-                .sum::<usize>(),
-            expected_wmf_preview_uses,
-            "bounded mature OfficeArt WMF preview-use count drift"
         );
         assert!(
             wmf_previews.iter().all(|image| !image.bytes.is_empty()),
@@ -5514,6 +5590,8 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_NEWSLETTER",
             "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            8,
+            9,
             9,
             10,
             8,
@@ -5527,6 +5605,8 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_BROCHURE",
             "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
+            5,
+            5,
             6,
             6,
             5,
