@@ -126,13 +126,21 @@ fn inspect_fixture(path: &Path) -> Result<FixtureReceipt> {
         RAW_TYPE_IMPOSITION_HELPER_A,
         RAW_TYPE_IMPOSITION_HELPER_B,
     ];
+    let document_seq_num = references
+        .values()
+        .find(|reference| single_raw_type(reference) == Some(RAW_TYPE_DOCUMENT))
+        .map(|reference| u32::try_from(reference.seq_num))
+        .transpose()
+        .context("DOCUMENT seqNum does not fit u32")?
+        .context("missing raw0x44 DOCUMENT reference")?;
 
     let mut carriers = Vec::new();
     for reference in references.values() {
         let Some(raw_type) = single_raw_type(reference) else {
             continue;
         };
-        if !interesting.contains(&raw_type) {
+        let parent_seq_num = single_parent_seq(reference);
+        if !interesting.contains(&raw_type) && parent_seq_num != Some(document_seq_num) {
             continue;
         }
 
@@ -180,7 +188,7 @@ fn inspect_fixture(path: &Path) -> Result<FixtureReceipt> {
         carriers.push(CarrierReceipt {
             seq_num,
             raw_type,
-            parent_seq_num: single_parent_seq(reference),
+            parent_seq_num,
             declared_length: chunk.declared_length,
             fully_decoded_prefix: chunk.is_fully_decoded(),
             supported_u32_fields,
