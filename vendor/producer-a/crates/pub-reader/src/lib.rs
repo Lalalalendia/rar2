@@ -4712,7 +4712,6 @@ mod tests {
         );
     }
 
-
     fn source_hash() -> Sha256Digest {
         "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
             .parse()
