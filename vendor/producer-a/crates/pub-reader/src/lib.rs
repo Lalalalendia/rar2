@@ -20,6 +20,7 @@ mod legacy22_graph;
 mod legacy22_noquill_graph;
 mod ole_presentation;
 mod resolve;
+mod salvage;
 mod structural_base;
 mod table_bridge;
 mod wmf;
@@ -107,6 +108,11 @@ use pub_quill::{
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
     PubResolvedNodePayload, PubResolvedStoryFrame, resolve_pub_source_graph,
+};
+pub use salvage::{
+    READER_SALVAGE_PROBE_SCHEMA_V1, ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility,
+    ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
+    probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

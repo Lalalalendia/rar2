@@ -133,6 +133,12 @@ pub enum QuillStoryReadError {
         requested: usize,
         available: usize,
     },
+    DescriptorNodeTruncated {
+        offset: u32,
+        declared_count: u16,
+        requested: usize,
+        available: usize,
+    },
     DescriptorListPointerOutOfBounds {
         offset: u32,
         stream_len: usize,
@@ -451,8 +457,9 @@ fn parse_descriptor_nodes(
             .checked_mul(QUILL_DESCRIPTOR_SIZE)
             .ok_or(QuillStoryReadError::TextLengthOverflow)?;
         if cursor.remaining() < descriptor_bytes {
-            return Err(QuillStoryReadError::TooShort {
-                offset: cursor.position(),
+            return Err(QuillStoryReadError::DescriptorNodeTruncated {
+                offset: current,
+                declared_count: count.value,
                 requested: descriptor_bytes,
                 available: cursor.remaining(),
             });
@@ -1188,6 +1195,24 @@ mod tests {
             Err(QuillStoryReadError::TextLengthMismatch {
                 expected_bytes: 8,
                 actual_bytes: 6
+            })
+        );
+    }
+
+    #[test]
+    fn declared_descriptor_array_must_fit_inside_node_tail() {
+        let stream = StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let mut bytes = vec![0; 0x40];
+        w16(&mut bytes, 0x18, 0x18);
+        w16(&mut bytes, 0x1a, 2);
+        w32(&mut bytes, 0x1c, QUILL_DESCRIPTOR_LIST_END);
+        assert_eq!(
+            parse_confirmed_story_catalog(stream, &bytes),
+            Err(QuillStoryReadError::DescriptorNodeTruncated {
+                offset: QUILL_DESCRIPTOR_LIST_ROOT_OFFSET,
+                declared_count: 2,
+                requested: 2 * QUILL_DESCRIPTOR_SIZE,
+                available: 0x20
             })
         );
     }
