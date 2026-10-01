@@ -522,6 +522,52 @@ class RealAcceptanceState:
             rect,
         )
 
+    def editor_capabilities(self) -> dict:
+        current = self.kernel.current_revision(self.document_id)
+        record = self.kernel.read_revision(
+            document_id=self.document_id,
+            revision_id=current.revision_id,
+        )
+        token = current.revision_id.removeprefix("sha256:")[:20]
+        project_path = self.work_dir / f"{token}.capabilities.project.json"
+        project_path.write_bytes(canonical_json(record.project) + b"\n")
+        completed = subprocess.run(
+            [
+                str(self.exporter),
+                "editor-capabilities",
+                str(self.fixture),
+                str(project_path),
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("editor capabilities producer failed")
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("editor capabilities producer returned invalid JSON") from error
+        editable = result.get("editable_story_ids")
+        if (
+            not isinstance(result, dict)
+            or result.get("protocol_version") != "chaptera.editor-capabilities.v1"
+            or result.get("source_hash") != self.source_hash
+            or not isinstance(editable, list)
+            or any(not isinstance(story_id, str) for story_id in editable)
+            or editable != sorted(set(editable))
+        ):
+            raise RuntimeError("editor capabilities result is invalid")
+        return {
+            "protocol_version": "chaptera.editor-capabilities.v1",
+            "document_id": self.document_id,
+            "source_hash": self.source_hash,
+            "revision_id": current.revision_id,
+            "editable_story_ids": editable,
+        }
+
     def _native_pub_for_revision(self, revision_id: str) -> dict:
         if revision_id in self.native_pub_cache:
             return self.native_pub_cache[revision_id]
@@ -728,6 +774,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._authorize(CAP_EXPORT)
                 target = query.get("target", [""])[0]
                 self._json(STATE.export_preview(target))
+                return
+            if path == "/v1/editor/capabilities":
+                self._authorize(CAP_VIEW)
+                self._json(STATE.editor_capabilities())
                 return
             if path == "/v1/scenes/current":
                 self._authorize(CAP_VIEW)
