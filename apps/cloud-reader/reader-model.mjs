@@ -143,6 +143,68 @@ export function contributionEligible(failureClassification) {
     && ["PUB_HIGH_VALUE", "PUB_DAMAGED"].includes(failureClassification.class);
 }
 
+export function assertCompatibilityReport(value, sourceSha256, classification) {
+  const stateByClassification = {
+    supported: "opens_normally",
+    partial: "needs_review",
+    salvage: "opens_with_salvage",
+    unsupported: "unsupported"
+  };
+  const expectedState = stateByClassification[classification];
+  if (!expectedState || !value || typeof value !== "object"
+      || value.protocol_version !== "chaptera.reader-compatibility-report.v1"
+      || typeof value.source_sha256 !== "string"
+      || !/^[0-9a-f]{64}$/.test(value.source_sha256)
+      || value.source_sha256 !== sourceSha256
+      || value.engine_classification !== classification
+      || value.state !== expectedState
+      || !Array.isArray(value.limitations) || value.limitations.length > 16
+      || !value.output_routes || typeof value.output_routes !== "object"
+      || typeof value.recommended_next_step !== "string") {
+    throw new Error("compatibility_report_protocol_mismatch");
+  }
+
+  for (const item of value.limitations) {
+    if (!item || typeof item !== "object"
+        || typeof item.code !== "string" || !item.code
+        || typeof item.message !== "string" || !item.message) {
+      throw new Error("compatibility_report_protocol_mismatch");
+    }
+  }
+
+  if (value.content_summary !== undefined) {
+    if (!value.content_summary || typeof value.content_summary !== "object") {
+      throw new Error("compatibility_report_protocol_mismatch");
+    }
+    for (const count of Object.values(value.content_summary)) {
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new Error("compatibility_report_protocol_mismatch");
+      }
+    }
+  } else if (classification !== "unsupported") {
+    throw new Error("compatibility_report_protocol_mismatch");
+  }
+
+  const routes = value.output_routes;
+  if (!["available", "available_with_limitations", "unavailable"].includes(routes.read_only_preview)
+      || !["not_applicable", "available", "unavailable"].includes(routes.salvage_recovery)
+      || routes.editable_idml !== "not_verified"
+      || routes.editable_odg !== "not_verified") {
+    throw new Error("compatibility_report_protocol_mismatch");
+  }
+
+  const nextByState = {
+    opens_normally: "migration_pilot_preview",
+    needs_review: "review_preview_before_migration",
+    opens_with_salvage: "rescue_review",
+    unsupported: "unsupported_or_manual_review"
+  };
+  if (value.recommended_next_step !== nextByState[value.state]) {
+    throw new Error("compatibility_report_protocol_mismatch");
+  }
+  return value;
+}
+
 export function extractableImages(scene) {
   let totalBytes = 0;
   return (scene.resources ?? []).filter((resource) => {
@@ -188,7 +250,7 @@ export function errorMessage(error) {
   if ([401, 403].includes(error?.status)) return "Access is unavailable or has expired. Reopen the file or check access to the saved document.";
   if ([404, 410].includes(error?.status)) return "The document or temporary viewing session is no longer available. Open the file again.";
   if (error?.status >= 500) return "The service is temporarily unavailable. Keep your original file and retry shortly.";
-  if (["scene_protocol_mismatch", "salvage_protocol_mismatch", "guest_path_invalid", "guest_protocol_mismatch"].includes(error?.code ?? error?.message)) {
+  if (["scene_protocol_mismatch", "salvage_protocol_mismatch", "compatibility_report_protocol_mismatch", "guest_path_invalid", "guest_protocol_mismatch"].includes(error?.code ?? error?.message)) {
     return "The website and viewing service are incompatible. Reload the page and retry.";
   }
   return "Opening failed. Check your connection and try again; your original file is unchanged.";
