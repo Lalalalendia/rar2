@@ -223,6 +223,7 @@ fn fragment_family_key(fragment: &RenderTextFragmentV1) -> (String, u32, u32, St
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
     use super::*;
 
     #[cfg(target_os = "windows")]

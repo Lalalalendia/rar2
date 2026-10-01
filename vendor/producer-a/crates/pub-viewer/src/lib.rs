@@ -2038,7 +2038,7 @@ fn open_mature_0x2c_bundle(
             .push(viewer_fallback_flow_metrics_diagnostic());
     }
 
-    let typography_runs = pipeline
+    let mut typography_runs = pipeline
         .source
         .typography_runs
         .iter()
@@ -2056,6 +2056,26 @@ fn open_mature_0x2c_bundle(
             })
         })
         .collect::<Vec<_>>();
+    typography_runs.extend(
+        pipeline
+            .source
+            .typography_size_runs
+            .iter()
+            .filter_map(|run| {
+                let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
+                Some(ViewerTypographyRun {
+                    story_id: run.story_id,
+                    scalar_start: run.story_scalar_start,
+                    scalar_end: run.story_scalar_end,
+                    source_font_name: String::new(),
+                    text_size_emu: run.text_size_emu,
+                    font_inherited: false,
+                    size_inherited: run.size_inherited,
+                    source_story_text_sha256: viewer_story_text_sha256(&story.text),
+                })
+            }),
+    );
+    typography_runs.sort_by_key(|run| (run.story_id, run.scalar_start, run.scalar_end));
     if !typography_runs.is_empty() {
         let inherited = typography_runs
             .iter()
