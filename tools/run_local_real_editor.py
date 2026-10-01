@@ -222,6 +222,35 @@ def json_request(path: str, *, method: str = "GET", body=None):
 
 
 def interactive_smoke() -> None:
+    baseline_scene = json_request("/v1/scenes/current")
+    capabilities = json_request("/v1/editor/capabilities")
+    editable_story_ids = capabilities.get("editable_story_ids")
+    if (
+        capabilities.get("protocol_version") != "chaptera.editor-capabilities.v1"
+        or capabilities.get("source_hash") != FIXTURE_SHA
+        or capabilities.get("revision_id") != baseline_scene.get("revision_id")
+        or not isinstance(editable_story_ids, list)
+        or editable_story_ids != sorted(set(editable_story_ids))
+        or any(not isinstance(story_id, str) for story_id in editable_story_ids)
+    ):
+        raise RuntimeError(f"invalid editor capabilities response: {capabilities}")
+
+    pub_preview = json_request("/v1/pub-save/preview")
+    if (
+        pub_preview.get("protocol_version") != "chaptera.native-pub-save-preview.v1"
+        or pub_preview.get("source_hash") != FIXTURE_SHA
+        or pub_preview.get("revision_id") != baseline_scene.get("revision_id")
+        or pub_preview.get("can_serialize") is not False
+        or pub_preview.get("blocker_code") != "editor_pub_story_mutation_count"
+        or pub_preview.get("chaptera_reopen_verified") is not False
+    ):
+        raise RuntimeError(f"invalid baseline native PUB preview: {pub_preview}")
+
+    print(json.dumps({
+        "local_editor_text_capability_count": len(editable_story_ids),
+        "baseline_native_pub_save": "blocked_no_effective_story_mutation",
+    }, sort_keys=True))
+
     receipt = json.loads(
         (
             ROOT
