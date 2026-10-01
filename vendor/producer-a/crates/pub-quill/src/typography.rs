@@ -1861,6 +1861,9 @@ mod tests {
             },
             selected_style_index: Some(2),
             selector_source: Some(QuillParagraphSelectorSource::ExplicitFdpp0x19),
+        
+            paragraph_alignment: None,
+            paragraph_alignment_source: None,
         };
         let default = CharacterDefaultObservation {
             logical_style_index: 2,
@@ -1937,6 +1940,9 @@ mod tests {
             selector_source: Some(
                 QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
             ),
+        
+            paragraph_alignment: None,
+            paragraph_alignment_source: None,
         };
         let default = CharacterDefaultObservation {
             logical_style_index: 0,
@@ -1972,6 +1978,9 @@ mod tests {
                 },
                 selected_style_index: None,
                 selector_source: None,
+            
+                paragraph_alignment: None,
+                paragraph_alignment_source: None,
             },
             ParagraphTypographyRange {
                 global_start_utf16: 5,
@@ -1985,6 +1994,9 @@ mod tests {
                 },
                 selected_style_index: None,
                 selector_source: None,
+            
+                paragraph_alignment: None,
+                paragraph_alignment_source: None,
             },
         ];
         let defaults = vec![CharacterDefaultObservation {
@@ -2085,6 +2097,9 @@ mod tests {
             selector_source: Some(
                 QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
             ),
+        
+            paragraph_alignment: None,
+            paragraph_alignment_source: None,
         };
         let default = CharacterDefaultObservation {
             logical_style_index: 0,
@@ -2136,6 +2151,9 @@ mod tests {
                     len: 8,
                 },
                 default_style_indices: vec![3],
+            
+                paragraph_alignment: None,
+                paragraph_alignment_ambiguous: false,
             },
             ParagraphStyleObservation {
                 fdpp_descriptor_ordinal: 1,
@@ -2152,6 +2170,9 @@ mod tests {
                     len: 8,
                 },
                 default_style_indices: Vec::new(),
+            
+                paragraph_alignment: None,
+                paragraph_alignment_ambiguous: false,
             },
         ];
         let ranges = materialize_paragraph_ranges(&styles, 100, 140, 20).expect("paragraph ranges");
