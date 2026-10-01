@@ -1358,8 +1358,9 @@ impl ViewerApp {
                         return Err(ViewerLoadFailure {
                             kind: ViewerLoadFailureKind::Unsupported,
                             attempted_path: Some(path),
-                            message: "Recovered evidence did not match the admitted source identity."
-                                .to_owned(),
+                            message:
+                                "Recovered evidence did not match the admitted source identity."
+                                    .to_owned(),
                             classification: Some(classify_failure_candidate(bytes)),
                             diagnostic_json: None,
                         });
@@ -2203,8 +2204,7 @@ impl ViewerApp {
         if let Some(visual) = &self.visual {
             self.search_results = visual.document.search_text(&self.search_query);
         } else if let Some(salvage) = &self.salvage {
-            self.salvage_search_results =
-                reader_salvage::search_text(salvage, &self.search_query);
+            self.salvage_search_results = reader_salvage::search_text(salvage, &self.search_query);
         }
 
         let result_count = if self.salvage.is_some() {
@@ -2265,11 +2265,8 @@ impl ViewerApp {
                 if salvage_mode {
                     for (index, result) in self.salvage_search_results.iter().enumerate() {
                         let selected = self.selected_search_result == Some(index);
-                        let label = format!(
-                            "{}. {}",
-                            index + 1,
-                            search_result_preview(&result.text)
-                        );
+                        let label =
+                            format!("{}. {}", index + 1, search_result_preview(&result.text));
                         if ui.selectable_label(selected, label).clicked() {
                             clicked = Some(index);
                         }
@@ -2622,7 +2619,9 @@ impl ViewerApp {
             ui.label(
                 "Chaptera could not establish trustworthy page geometry, but source-backed recovery evidence is available.",
             );
-            ui.small("The original PUB is unchanged. Reader does not create or save a repaired PUB.");
+            ui.small(
+                "The original PUB is unchanged. Reader does not create or save a repaired PUB.",
+            );
             ui.add_space(10.0);
 
             reader_product_ui::section_label(ui, "Recovered subsystems");
@@ -2666,9 +2665,7 @@ impl ViewerApp {
                 if reader_only_mode() && error.kind == ViewerLoadFailureKind::Unsupported {
                     ui.add_space(8.0);
                     ui.strong("Cannot safely display");
-                    ui.label(
-                        "No source-neutral Salvage View could be established for this file.",
-                    );
+                    ui.label("No source-neutral Salvage View could be established for this file.");
                 }
                 if error.kind == ViewerLoadFailureKind::FileAccess {
                     ui.add_space(8.0);
