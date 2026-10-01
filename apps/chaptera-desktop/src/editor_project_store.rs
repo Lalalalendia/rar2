@@ -271,6 +271,7 @@ fn acquire_lock(source_path: &Path) -> Result<StoreLock, EditorProjectStoreError
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .share_mode(0)
         .open(&path)
         .map_err(|error| {
@@ -294,6 +295,7 @@ fn acquire_lock(source_path: &Path) -> Result<StoreLock, EditorProjectStoreError
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&path)
         .map_err(|error| io_error("open EditorProject test lock", &path, error))?;
     Ok(StoreLock { _file: file })
