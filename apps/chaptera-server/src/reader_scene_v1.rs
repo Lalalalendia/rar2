@@ -737,9 +737,15 @@ pub fn from_viewer_geometry(
         });
     }
 
-    let mut nodes = insert_projected_nodes_after_targets(nodes, projected_nodes_by_target)?;
-    let stacking_known =
+    let mut stacking_known =
         apply_source_page_paint_order(&mut nodes, &pages, source_page_paint_orders)?;
+    if !projected_nodes_by_target.is_empty() {
+        nodes = insert_projected_nodes_after_targets(nodes, projected_nodes_by_target)?;
+        // Persisted source page-paint receipts do not claim a total order across
+        // projected Cmo visuals. Preserve direct-node source order and the
+        // render-plan target-frame anchor while keeping the overall claim partial.
+        stacking_known = false;
+    }
 
     let stories = geometry
         .document
