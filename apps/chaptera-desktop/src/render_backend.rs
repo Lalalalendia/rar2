@@ -331,7 +331,9 @@ fn paint_bounded_table_text(
             continue;
         }
 
-        if let Some(rgb) = cell.solid_fill_rgb {
+        if cell.fill_visible == Some(true)
+            && let Some(rgb) = cell.fill_rgb
+        {
             painter.rect_filled(
                 cell_rect,
                 0.0,
