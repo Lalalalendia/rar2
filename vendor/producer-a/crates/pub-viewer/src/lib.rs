@@ -212,6 +212,10 @@ pub struct ViewerProjectedSceneInstanceV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_frame_paint_scalar_end: Option<u32>,
     pub bounds: RectEmu,
+    /// Source-backed inner text composition box. Outer projected geometry,
+    /// paint, hit-test and slot identity remain on `bounds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_content_bounds: Option<RectEmu>,
     pub transform: Affine2D,
 }
 
@@ -3327,6 +3331,22 @@ fn project_carlton_march_cmo_instances(
                 LengthEmu::new(slot.resolved_width_emu),
                 LengthEmu::new(slot.resolved_height_emu),
             );
+            let text_content_bounds = carrier.payload.text_frame_inset.as_ref().and_then(|source| {
+                let inset = i64::from(source.uniform_emu);
+                let double = inset.checked_mul(2)?;
+                let content_x = bounds.x.get().checked_add(inset)?;
+                let content_y = bounds.y.get().checked_add(inset)?;
+                let content_width = bounds.width.get().checked_sub(double)?;
+                let content_height = bounds.height.get().checked_sub(double)?;
+                (content_width > 0 && content_height > 0).then(|| {
+                    RectEmu::new(
+                        LengthEmu::new(content_x),
+                        LengthEmu::new(content_y),
+                        LengthEmu::new(content_width),
+                        LengthEmu::new(content_height),
+                    )
+                })
+            });
 
             let relation = relations.get(slot.slot_index).copied().with_context(|| {
                 format!(
@@ -3357,6 +3377,7 @@ fn project_carlton_march_cmo_instances(
                 target_frame_node_id,
                 target_frame_paint_scalar_end,
                 bounds,
+                text_content_bounds,
                 transform: carrier.header.transform.clone(),
             });
         }
