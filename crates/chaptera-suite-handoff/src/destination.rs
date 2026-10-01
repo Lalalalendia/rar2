@@ -678,7 +678,10 @@ mod tests {
         let receipt = admitted.commit_bytes(b"chaptera").expect("commit");
 
         assert_eq!(fs::read(&target).unwrap(), b"chaptera");
-        assert_eq!(receipt.target_path, target);
+        assert_eq!(
+            fs::canonicalize(&receipt.target_path).unwrap(),
+            fs::canonicalize(&target).unwrap()
+        );
         assert!(receipt.backup_path.is_none());
         assert_eq!(receipt.byte_len, 8);
         assert_eq!(
