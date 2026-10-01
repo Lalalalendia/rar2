@@ -1375,6 +1375,18 @@ mod tests {
         let mut shared_nonempty_lines = 0_usize;
         let mut layout_none = 0_usize;
         let mut backend_fallbacks = BTreeMap::<&'static str, usize>::new();
+        let mut projected_text_nodes = 0_usize;
+        let mut projected_typography_runs = 0_usize;
+        let mut projected_complete_typography_nodes = 0_usize;
+        let mut projected_single_family_nodes = 0_usize;
+        let mut projected_source_families = BTreeMap::<String, usize>::new();
+        let mut projected_source_sizes_emu = BTreeMap::<u32, usize>::new();
+        let mut projected_backend_resources = BTreeMap::<String, usize>::new();
+        let mut projected_layout_resources = BTreeMap::<String, usize>::new();
+        let mut projected_layout_fingerprints = BTreeMap::<String, usize>::new();
+        let mut projected_line_counts = BTreeMap::<usize, usize>::new();
+        let mut projected_line_heights_emu = BTreeMap::<i64, usize>::new();
+        let mut projected_measured_width_total_emu = 0_i128;
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
@@ -1382,16 +1394,54 @@ mod tests {
                     .expect("exact reference render plan must build");
 
             for node in plan.nodes {
+                let projected = node.projected_scene_instance.is_some();
                 let Some(text) = node.text else {
                     continue;
                 };
                 text_nodes += 1;
+
+                if projected {
+                    projected_text_nodes += 1;
+                    projected_typography_runs += text.typography.len();
+
+                    let mut cursor = text.scalar_start;
+                    let mut complete_coverage = !text.typography.is_empty();
+                    let mut families = std::collections::BTreeSet::<String>::new();
+                    for run in &text.typography {
+                        complete_coverage &= run.scalar_start == cursor
+                            && run.scalar_end >= run.scalar_start
+                            && run.scalar_end <= text.scalar_end;
+                        cursor = run.scalar_end;
+                        families.insert(run.source_font_name.clone());
+                        *projected_source_families
+                            .entry(run.source_font_name.clone())
+                            .or_default() += 1;
+                        *projected_source_sizes_emu
+                            .entry(run.text_size_emu)
+                            .or_default() += 1;
+                    }
+                    complete_coverage &= cursor == text.scalar_end;
+                    projected_complete_typography_nodes += usize::from(complete_coverage);
+                    projected_single_family_nodes +=
+                        usize::from(complete_coverage && families.len() == 1);
+
+                    if let Some(resource_id) = text.backend_font_resource_id.as_ref() {
+                        *projected_backend_resources
+                            .entry(resource_id.clone())
+                            .or_default() += 1;
+                    }
+                }
+
                 let Some(layout) = text.layout else {
                     layout_none += 1;
                     continue;
                 };
                 match layout.disposition {
-                    RenderTextLayoutDispositionV1::SharedResolved { .. } => {
+                    RenderTextLayoutDispositionV1::SharedResolved {
+                        font_resource_id,
+                        font_fingerprint_sha256,
+                        ..
+                    } => {
                         shared_frames += 1;
                         shared_lines += layout.lines.len();
                         shared_nonempty_lines += layout
@@ -1399,6 +1449,23 @@ mod tests {
                             .iter()
                             .filter(|line| !line.text.trim().is_empty())
                             .count();
+
+                        if projected {
+                            *projected_layout_resources
+                                .entry(font_resource_id)
+                                .or_default() += 1;
+                            *projected_layout_fingerprints
+                                .entry(font_fingerprint_sha256)
+                                .or_default() += 1;
+                            *projected_line_counts.entry(layout.lines.len()).or_default() += 1;
+                            for line in &layout.lines {
+                                *projected_line_heights_emu
+                                    .entry(line.line_height_emu)
+                                    .or_default() += 1;
+                                projected_measured_width_total_emu +=
+                                    i128::from(line.measured_width_emu);
+                            }
+                        }
                     }
                     RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                         *backend_fallbacks.entry(reason.code()).or_default() += 1;
@@ -1409,8 +1476,23 @@ mod tests {
 
         let backend_fallbacks_json =
             serde_json::to_string(&backend_fallbacks).expect("serialize fallback census");
+        let projected_source_families_json =
+            serde_json::to_string(&projected_source_families).expect("serialize projected families");
+        let projected_source_sizes_json = serde_json::to_string(&projected_source_sizes_emu)
+            .expect("serialize projected source sizes");
+        let projected_backend_resources_json = serde_json::to_string(&projected_backend_resources)
+            .expect("serialize projected backend resources");
+        let projected_layout_resources_json = serde_json::to_string(&projected_layout_resources)
+            .expect("serialize projected layout resources");
+        let projected_layout_fingerprints_json =
+            serde_json::to_string(&projected_layout_fingerprints)
+                .expect("serialize projected layout fingerprints");
+        let projected_line_counts_json =
+            serde_json::to_string(&projected_line_counts).expect("serialize projected line counts");
+        let projected_line_heights_json = serde_json::to_string(&projected_line_heights_emu)
+            .expect("serialize projected line heights");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_families={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1419,6 +1501,18 @@ mod tests {
             shared_nonempty_lines,
             layout_none,
             backend_fallbacks_json,
+            projected_text_nodes,
+            projected_typography_runs,
+            projected_complete_typography_nodes,
+            projected_single_family_nodes,
+            projected_source_families_json,
+            projected_source_sizes_json,
+            projected_backend_resources_json,
+            projected_layout_resources_json,
+            projected_layout_fingerprints_json,
+            projected_line_counts_json,
+            projected_line_heights_json,
+            projected_measured_width_total_emu,
         );
     }
 
