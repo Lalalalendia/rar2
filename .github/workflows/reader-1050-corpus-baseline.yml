@@ -315,7 +315,16 @@ jobs:
 
           assert payload["schema"] == "chaptera.reader-salvage-1050-acceptance.v1", payload["schema"]
           assert payload["corpus_file_count"] == 1050, payload["corpus_file_count"]
-          assert sum(payload["outcome_counts"].values()) == 1050, payload["outcome_counts"]
+          assert payload["outcome_counts"] == {
+              "normal_open": 1041,
+              "salvage_open": 3,
+              "unsupported": 6,
+          }, payload["outcome_counts"]
+          assert payload["salvage_eligibility_counts"] == {
+              "awaiting_typed_corruption_evidence": 6,
+              "eligible_damaged_publisher": 1,
+              "eligible_known_publisher_corruption": 2,
+          }, payload["salvage_eligibility_counts"]
 
           expected_corrupt = {
               "c96df4b2d4ce3d5bb238b2b31d8021501495b9bd15ff44eb9d918495c342430b":
@@ -330,6 +339,13 @@ jobs:
               assert row["corruption_evidence"] == evidence, row
               assert row["has_surviving_evidence"] is True, row
               assert row["source_modified"] is False, row
+
+          opcls = rows["6cb88d4e02f823876a23d7f7414c7d370ca30996c30f145ec92b62f519b22170"]
+          assert opcls["outcome"] == "salvage_open", opcls
+          assert opcls["salvage_eligibility"] == "eligible_damaged_publisher", opcls
+          assert opcls.get("corruption_evidence") is None, opcls
+          assert opcls["has_surviving_evidence"] is True, opcls
+          assert opcls["source_modified"] is False, opcls
 
           opnhous = rows["227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"]
           assert opnhous["outcome"] == "unsupported", opnhous
