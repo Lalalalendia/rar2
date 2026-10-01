@@ -1354,9 +1354,7 @@ mod tests {
     ) -> &'static str {
         match authority {
             pub_reader::PubEffectivePaintAuthority::ShapeLocal => "shape_local",
-            pub_reader::PubEffectivePaintAuthority::DrawingGroupPrimary => {
-                "drawing_group_primary"
-            }
+            pub_reader::PubEffectivePaintAuthority::DrawingGroupPrimary => "drawing_group_primary",
             pub_reader::PubEffectivePaintAuthority::DrawingGroupTertiary => {
                 "drawing_group_tertiary"
             }
@@ -1484,13 +1482,19 @@ mod tests {
                 source_effective_fill_incomplete += 1;
                 source_effective_fill_incomplete_presence[fill_presence] += 1;
                 if fill.solid.is_none() {
-                    *source_effective_fill_missing_components.entry("solid").or_default() += 1;
+                    *source_effective_fill_missing_components
+                        .entry("solid")
+                        .or_default() += 1;
                 }
                 if fill.color_rgb.is_none() {
-                    *source_effective_fill_missing_components.entry("color_rgb").or_default() += 1;
+                    *source_effective_fill_missing_components
+                        .entry("color_rgb")
+                        .or_default() += 1;
                 }
                 if fill.visible.is_none() {
-                    *source_effective_fill_missing_components.entry("visible").or_default() += 1;
+                    *source_effective_fill_missing_components
+                        .entry("visible")
+                        .or_default() += 1;
                 }
                 if let Some(value) = fill.solid.as_ref() {
                     *source_effective_fill_solid_authorities
