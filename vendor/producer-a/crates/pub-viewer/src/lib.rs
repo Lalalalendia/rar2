@@ -68,8 +68,7 @@ use pub_reader::{
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild,
-    PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
+    PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
@@ -2097,10 +2096,12 @@ fn open_mature_0x2c_bundle(
     if !paragraph_alignments.is_empty() {
         let unsupported = paragraph_alignments
             .iter()
-            .filter(|run| matches!(
-                run.alignment,
-                ViewerParagraphAlignment::InterWord | ViewerParagraphAlignment::Distribute
-            ))
+            .filter(|run| {
+                matches!(
+                    run.alignment,
+                    ViewerParagraphAlignment::InterWord | ViewerParagraphAlignment::Distribute
+                )
+            })
             .count();
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.text.paragraph_alignment_partial".to_owned(),
