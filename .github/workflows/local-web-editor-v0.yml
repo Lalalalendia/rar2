@@ -7,6 +7,7 @@ on:
       - "services/editor-api/web_real_acceptance_service.py"
       - "tools/run_local_real_editor.py"
       - "tools/run_local_full_stack.py"
+      - "tools/resolved_graph_scene_bridge_v1.py"
       - "apps/chaptera-server/assets/local-dashboard.html"
       - ".github/workflows/local-web-editor-v0.yml"
   workflow_dispatch:
