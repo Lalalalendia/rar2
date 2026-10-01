@@ -4685,10 +4685,8 @@ mod asset_reachability_tests {
 
     fn replace(before_asset: Option<Sha256Digest>, after_asset: Sha256Digest) -> EditOperation {
         EditOperation::ReplaceImage {
-            node_id: serde_json::from_str(
-                "\"22000000-0000-4000-8000-000000000001\"",
-            )
-            .expect("canonical NodeId"),
+            node_id: serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId"),
             before_asset,
             after_asset,
         }
@@ -4700,7 +4698,10 @@ mod asset_reachability_tests {
         let b = digest(0x22);
 
         assert_eq!(replace(None, a).durable_editor_asset_refs_v1(), vec![a]);
-        assert_eq!(replace(Some(a), b).durable_editor_asset_refs_v1(), vec![a, b]);
+        assert_eq!(
+            replace(Some(a), b).durable_editor_asset_refs_v1(),
+            vec![a, b]
+        );
 
         let refs = required_editor_asset_refs_v1(&[
             replace(None, a),
