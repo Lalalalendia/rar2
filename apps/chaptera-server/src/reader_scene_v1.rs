@@ -1097,7 +1097,10 @@ fn promote_inline_images_within_scene_cap(
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
         if image_by_resource
-            .insert(resource_id.clone(), (image.mime.as_str(), image.bytes.as_slice()))
+            .insert(
+                resource_id.clone(),
+                (image.mime.as_str(), image.bytes.as_slice()),
+            )
             .is_some()
         {
             return Err(format!("duplicate Viewer image resource {resource_id}"));
