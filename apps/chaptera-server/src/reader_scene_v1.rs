@@ -1803,27 +1803,15 @@ mod tests {
     #[test]
     fn descriptor_probe_classifier_matches_inline_admission_law() {
         assert_eq!(
-            classify_probe_image_inline_admission(
-                "image/png",
-                3,
-                MAX_INLINE_IMAGE_TOTAL_BYTES
-            ),
+            classify_probe_image_inline_admission("image/png", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
             ProbeImageInlineAdmission::Inline
         );
         assert_eq!(
-            classify_probe_image_inline_admission(
-                "image/svg+xml",
-                3,
-                MAX_INLINE_IMAGE_TOTAL_BYTES
-            ),
+            classify_probe_image_inline_admission("image/svg+xml", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
             ProbeImageInlineAdmission::UnsupportedMime
         );
         assert_eq!(
-            classify_probe_image_inline_admission(
-                "image/png",
-                0,
-                MAX_INLINE_IMAGE_TOTAL_BYTES
-            ),
+            classify_probe_image_inline_admission("image/png", 0, MAX_INLINE_IMAGE_TOTAL_BYTES),
             ProbeImageInlineAdmission::EmptyPayload
         );
         assert_eq!(
@@ -1841,10 +1829,7 @@ mod tests {
 
         let mut product_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
         assert!(inline_image_data_url("image/png", b"png", &mut product_budget).is_some());
-        assert_eq!(
-            product_budget,
-            MAX_INLINE_IMAGE_TOTAL_BYTES - b"png".len()
-        );
+        assert_eq!(product_budget, MAX_INLINE_IMAGE_TOTAL_BYTES - b"png".len());
 
         let unchanged = product_budget;
         assert!(inline_image_data_url("image/svg+xml", b"svg", &mut product_budget).is_none());
