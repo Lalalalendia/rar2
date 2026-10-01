@@ -51,6 +51,53 @@ export class HttpEditorServiceV1 {
     }, context, "browser.history_http");
   }
 
+  async nativePubPreview() {
+    const context = this.#context("export");
+    return this.#json(
+      "/v1/pub-save/preview",
+      {},
+      context,
+      "browser.native_pub_preview_http",
+    );
+  }
+
+  async nativePubDownload() {
+    const context = this.#context("export");
+    const execute = async () => {
+      const response = await fetch(this.baseUrl + "/v1/pub-save/download", {
+        cache: "no-store",
+        credentials: "omit",
+        headers: {
+          "x-chaptera-principal-id": this.principalId,
+          ...(context ? traceHeadersV1(context) : {}),
+        },
+      });
+      if (!response.ok) {
+        let detail = null;
+        try {
+          detail = await response.json();
+        } catch {}
+        throw new Error(
+          "editor native PUB download failed: " +
+          response.status + " " + JSON.stringify(detail),
+        );
+      }
+      return {
+        blob: await response.blob(),
+        content_disposition: response.headers.get("content-disposition"),
+      };
+    };
+
+    if (this.observability && context) {
+      return this.observability.measure(
+        "browser.native_pub_download_http",
+        context,
+        execute,
+      );
+    }
+    return execute();
+  }
+
   async exportPreview(target = "idml") {
     if (!["idml", "odg"].includes(target)) {
       throw new TypeError("export preview target must be idml or odg");
