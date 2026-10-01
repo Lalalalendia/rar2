@@ -15,6 +15,11 @@ const root = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(root, "../..");
 const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/cloud-reader-real"));
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
+const projectedTextInsetProbe = process.env.READER_PROJECTED_TEXT_INSET_PROBE ?? null;
+assert.ok(
+  projectedTextInsetProbe == null || projectedTextInsetProbe === "publisher_officeart_defaults_v1",
+  "projected text inset probe must be unset or the exact admitted measurement id"
+);
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const defaultFixtures = [
@@ -102,11 +107,13 @@ try {
     assert.equal(sha256(bytes), fixture.sha256);
     await writeFile(source, bytes);
     const workerOutput = join(temporary, fixture.name + "-worker");
-    const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
+    const workerCommand = [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
       "--output-dir", workerOutput, "--input", source, "--timeout", "60", "--address-space-mb", "512",
       "--cpu-seconds", "30", "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
       worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
-      "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)], { cwd: repo, timeout: 70000, maxBuffer: 1024 * 1024 });
+      "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)];
+    if (projectedTextInsetProbe) workerCommand.push("--probe-publisher-default-text-inset");
+    const { stdout } = await run("python3", workerCommand, { cwd: repo, timeout: 70000, maxBuffer: 1024 * 1024 });
     const isolation = JSON.parse(stdout);
     assert.equal(isolation.status, "success");
     assert.equal(isolation.network_policy, "seccomp_default_deny");
@@ -277,8 +284,13 @@ try {
     }
     const descriptorOnlyResourceCount = (scene.resources ?? [])
       .filter((resource) => resource.availability !== "inline_data_url").length;
+    const projectedTextInsetLayoutNodes = projectedTextInsetProbe
+      ? scene.nodes.filter((node) => node.origin_node_id != null && node.text_layout?.disposition === "shared_resolved").length
+      : 0;
     results.push({ fixture: fixture.name, source_sha256: fixture.sha256, source_byte_len: fixture.bytes,
       classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
+      projected_text_inset_probe: projectedTextInsetProbe,
+      projected_text_inset_layout_nodes: projectedTextInsetLayoutNodes,
       fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
