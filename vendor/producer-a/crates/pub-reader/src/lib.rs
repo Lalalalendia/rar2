@@ -3483,9 +3483,12 @@ fn index_escher_by_contents_seq(inventory: &SpContainerInventory) -> BTreeMap<u3
     index
 }
 
+type GroupedCarrierParticipant = (usize, NodeId);
+type GroupedCarrierMap = BTreeMap<u32, (PageId, Vec<GroupedCarrierParticipant>)>;
+
 fn append_grouped_carrier_participants(
     seq_num: u32,
-    grouped_by_carrier: &BTreeMap<u32, (PageId, Vec<(usize, NodeId)>)>,
+    grouped_by_carrier: &GroupedCarrierMap,
     seen_seq: &mut BTreeSet<u32>,
     rejected: &mut BTreeSet<PageId>,
     ordered: &mut BTreeMap<PageId, Vec<NodeId>>,
@@ -3587,7 +3590,7 @@ fn source_page_paint_orders_v1(
         ));
     }
 
-    let mut grouped_by_carrier = BTreeMap::<u32, (PageId, Vec<(usize, NodeId)>)>::new();
+    let mut grouped_by_carrier = GroupedCarrierMap::new();
     for (page_id, entries) in grouped_pending {
         if grouped_invalid_pages.contains(&page_id) {
             continue;
