@@ -1220,8 +1220,9 @@ mod tests {
         MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
         ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
         ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
-        from_viewer_geometry_with_fonts, inline_image_data_url, insert_projected_nodes_after_targets,
-        reader_image_resource, shared_text_font_resource, take_direct_render_text,
+        from_viewer_geometry_with_fonts, inline_image_data_url,
+        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
+        take_direct_render_text,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1647,8 +1648,8 @@ mod tests {
             let configured = ReaderConfiguredFontResourceV1 {
                 source_family: "Arial".to_owned(),
                 resource_id: configured_resource_id.clone(),
-                expected_sha256:
-                    chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
+                expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+                    .to_owned(),
                 face_index: 0,
                 mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
                 bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
@@ -1692,9 +1693,7 @@ mod tests {
             );
             println!(
                 "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} resource_id={} sha256={}",
-                projected_configured_layouts,
-                configured_resource_id,
-                scene_font.expected_sha256
+                projected_configured_layouts, configured_resource_id, scene_font.expected_sha256
             );
         }
 
