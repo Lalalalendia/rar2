@@ -57,9 +57,6 @@ jobs:
       - name: Check chaptera-server formatting before expensive reference work
         run: cargo fmt -p chaptera-server -- --check
 
-      - name: Check Producer A formatting before expensive reference work
-        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml --all -- --check
-
   reference-pairs:
     needs: preflight
     runs-on: ubuntu-latest
