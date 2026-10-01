@@ -3978,6 +3978,7 @@ mod tests {
                             ordinal: 0,
                             previous_frame: None,
                             next_frame: None,
+                            vertical_alignment: None,
                         }),
                         text_frame_inset: None,
                         table_story: None,
@@ -4319,6 +4320,7 @@ mod tests {
             ordinal: 1,
             previous_frame: Some(first_frame),
             next_frame: None,
+            vertical_alignment: None,
         });
 
         {
@@ -4334,6 +4336,7 @@ mod tests {
                 ordinal: 0,
                 previous_frame: None,
                 next_frame: Some(second_frame),
+                vertical_alignment: None,
             });
         }
         graph.nodes.insert(second_frame, second_node);
@@ -4545,6 +4548,7 @@ mod tests {
                     ordinal: 0,
                     previous_frame: None,
                     next_frame: None,
+                    vertical_alignment: None,
                 }),
                 text_frame_inset: None,
                 table_story: None,
