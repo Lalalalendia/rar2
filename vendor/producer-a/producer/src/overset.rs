@@ -122,6 +122,7 @@ fn synthetic_graph(source_hash_text: &str) -> Result<PubResolvedGraph> {
                 ordinal: 0,
                 previous_frame: None,
                 next_frame: None,
+                vertical_alignment: None,
             }),
             text_frame_inset: None,
             table_story: None,

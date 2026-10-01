@@ -334,6 +334,7 @@ pub fn build_legacy_0x22_quill_from_streams(
                             previous_frame: None,
                             next_seq_num: None,
                             next_frame: None,
+                            vertical_alignment: None,
                         }),
                         text_frame_inset: None,
                         table_story: None,

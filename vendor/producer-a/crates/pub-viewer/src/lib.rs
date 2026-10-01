@@ -17,8 +17,9 @@ use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1, cmo_story_
 use pub_layout::{
     BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput, BoundedTableInput,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
-    ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode, project_bounded,
-    resolve_bounded_geometry, resolve_bounded_text_flow, resolve_bounded_uniform_table_cells,
+    ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
+    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow,
+    resolve_bounded_uniform_table_cells,
 };
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 #[cfg(feature = "cmo-slot-compose")]
@@ -68,8 +69,8 @@ use pub_reader::{
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
-    build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
+    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
     derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
@@ -371,11 +372,7 @@ impl ViewerGeometryDocument {
         let story_frames = projection
             .story_frames
             .iter()
-            .map(|frame| ViewerStoryFrame {
-                story_id: frame.story_origin,
-                frame_id: frame.frame_origin,
-                ordinal: frame.ordinal,
-            })
+            .map(|frame| viewer_story_frame_from_projection(frame, graph))
             .collect::<Vec<_>>();
 
         let mut diagnostics = self.document.diagnostics.clone();
@@ -733,6 +730,67 @@ pub struct ViewerStoryFrame {
     pub story_id: StoryId,
     pub frame_id: NodeId,
     pub ordinal: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_content_bounds: Option<RectEmu>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_alignment: Option<ViewerTextVerticalAlignment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerTextVerticalAlignment {
+    Top,
+    Center,
+    Bottom,
+}
+
+fn uniform_text_content_bounds(bounds: RectEmu, inset_emu: u32) -> Option<RectEmu> {
+    let inset = i64::from(inset_emu);
+    let double = inset.checked_mul(2)?;
+    let width = bounds.width.get().checked_sub(double)?;
+    let height = bounds.height.get().checked_sub(double)?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(RectEmu::new(
+        LengthEmu::new(bounds.x.get().checked_add(inset)?),
+        LengthEmu::new(bounds.y.get().checked_add(inset)?),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
+fn viewer_story_frame_from_projection(
+    frame: &ProjectedStoryFrame,
+    graph: &PubResolvedGraph,
+) -> ViewerStoryFrame {
+    let node = graph.nodes.get(&frame.frame_origin);
+    let text_content_bounds = node
+        .and_then(|node| {
+            node.payload
+                .text_frame_inset
+                .as_ref()
+                .map(|inset| (node, inset))
+        })
+        .and_then(|(node, inset)| {
+            uniform_text_content_bounds(node.header.bounds, inset.uniform_emu)
+        });
+    let vertical_alignment = node
+        .and_then(|node| node.payload.story_frame.as_ref())
+        .and_then(|frame| frame.vertical_alignment)
+        .map(|alignment| match alignment {
+            PubTextFrameVerticalAlignment::Top => ViewerTextVerticalAlignment::Top,
+            PubTextFrameVerticalAlignment::Center => ViewerTextVerticalAlignment::Center,
+            PubTextFrameVerticalAlignment::Bottom => ViewerTextVerticalAlignment::Bottom,
+        });
+
+    ViewerStoryFrame {
+        story_id: frame.story_origin,
+        frame_id: frame.frame_origin,
+        ordinal: frame.ordinal,
+        text_content_bounds,
+        vertical_alignment,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1760,11 +1818,7 @@ fn open_legacy_0x22_noquill_bundle(
     let story_frames = projection
         .story_frames
         .iter()
-        .map(|frame| ViewerStoryFrame {
-            story_id: frame.story_origin,
-            frame_id: frame.frame_origin,
-            ordinal: frame.ordinal,
-        })
+        .map(|frame| viewer_story_frame_from_projection(frame, &resolved.graph))
         .collect::<Vec<_>>();
 
     let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
@@ -1900,11 +1954,7 @@ fn open_legacy_0x22_quill_bundle(
     let story_frames = projection
         .story_frames
         .iter()
-        .map(|frame| ViewerStoryFrame {
-            story_id: frame.story_origin,
-            frame_id: frame.frame_origin,
-            ordinal: frame.ordinal,
-        })
+        .map(|frame| viewer_story_frame_from_projection(frame, &resolved.graph))
         .collect::<Vec<_>>();
 
     let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
@@ -2021,11 +2071,7 @@ fn open_mature_0x2c_bundle(
     let story_frames = projection
         .story_frames
         .iter()
-        .map(|frame| ViewerStoryFrame {
-            story_id: frame.story_origin,
-            frame_id: frame.frame_origin,
-            ordinal: frame.ordinal,
-        })
+        .map(|frame| viewer_story_frame_from_projection(frame, &pipeline.resolved.graph))
         .collect::<Vec<_>>();
 
     let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
@@ -3952,6 +3998,7 @@ mod tests {
                             ordinal: 0,
                             previous_frame: None,
                             next_frame: None,
+                            vertical_alignment: None,
                         }),
                         text_frame_inset: None,
                         table_story: None,
@@ -4293,6 +4340,7 @@ mod tests {
             ordinal: 1,
             previous_frame: Some(first_frame),
             next_frame: None,
+            vertical_alignment: None,
         });
 
         {
@@ -4308,6 +4356,7 @@ mod tests {
                 ordinal: 0,
                 previous_frame: None,
                 next_frame: Some(second_frame),
+                vertical_alignment: None,
             });
         }
         graph.nodes.insert(second_frame, second_node);
@@ -4519,6 +4568,7 @@ mod tests {
                     ordinal: 0,
                     previous_frame: None,
                     next_frame: None,
+                    vertical_alignment: None,
                 }),
                 text_frame_inset: None,
                 table_story: None,
@@ -5148,6 +5198,8 @@ mod tests {
                 story_id: frame.story_origin,
                 frame_id: frame.frame_origin,
                 ordinal: frame.ordinal,
+                text_content_bounds: None,
+                vertical_alignment: None,
             })
             .collect::<Vec<_>>();
         let mut diagnostics = initial_flow_diagnostics

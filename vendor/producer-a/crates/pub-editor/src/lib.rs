@@ -3356,6 +3356,7 @@ fn authored_text_box_node_v1(
                 ordinal: 0,
                 previous_frame: None,
                 next_frame: None,
+                vertical_alignment: None,
             }),
             text_frame_inset: None,
             table_story: None,

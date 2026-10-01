@@ -1,7 +1,7 @@
 use crate::{
     PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
     PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource,
-    PubTableStoryOwnershipSource, PubTextFrameInsetSource,
+    PubTableStoryOwnershipSource, PubTextFrameInsetSource, PubTextFrameVerticalAlignment,
 };
 use anyhow::{Result, bail};
 use pub_model::{Node, NodeId, ResolvedGraph, StoryId, validate_source_graph_registries};
@@ -39,6 +39,8 @@ pub struct PubResolvedStoryFrame {
     pub ordinal: u32,
     pub previous_frame: Option<NodeId>,
     pub next_frame: Option<NodeId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_alignment: Option<PubTextFrameVerticalAlignment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +120,10 @@ fn resolve_node_payload(
             ordinal: frame.explicit_ordinal.unwrap_or(0),
             previous_frame: frame.previous_frame,
             next_frame: frame.next_frame,
+            vertical_alignment: frame
+                .vertical_alignment
+                .as_ref()
+                .map(|source| source.alignment),
         }
     });
 

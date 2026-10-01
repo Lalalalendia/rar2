@@ -93,6 +93,7 @@ fn text_frame(
                 ordinal,
                 previous_frame: previous,
                 next_frame: next,
+                vertical_alignment: None,
             }),
             text_frame_inset: None,
             table_story: None,
