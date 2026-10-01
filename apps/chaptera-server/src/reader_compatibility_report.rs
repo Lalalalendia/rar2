@@ -246,7 +246,10 @@ fn validate_target_assessment(value: &ReaderEditableTargetAssessmentV1) -> Resul
     );
     let valid_counts = match (value.state.as_str(), value.reason_code.as_str()) {
         ("available_with_declared_losses", "serializable") => value.blocking_loss_count == 0,
-        ("unavailable", "blocking_losses") => value.blocking_loss_count > 0,
+        ("unavailable", "blocking_losses") => {
+            value.blocking_loss_count > 0
+                && value.declared_loss_count >= value.blocking_loss_count
+        },
         ("unavailable", "editor_profile_unavailable")
         | ("not_verified", "assessment_failed")
         | ("not_verified", "source_identity_mismatch") => {
@@ -774,6 +777,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn impossible_editable_loss_counts_fail_closed() {
+        let routes = ReaderEditableRoutesAssessmentV1 {
+            protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+            source_sha256: SHA.to_owned(),
+            idml: ReaderEditableTargetAssessmentV1 {
+                state: "unavailable".to_owned(),
+                reason_code: "blocking_losses".to_owned(),
+                declared_loss_count: 1,
+                blocking_loss_count: 2,
+            },
+            odg: ReaderEditableTargetAssessmentV1 {
+                state: "not_verified".to_owned(),
+                reason_code: "assessment_failed".to_owned(),
+                declared_loss_count: 0,
+                blocking_loss_count: 0,
+            },
+        };
+
+        assert!(routes.validate_for_source(SHA).is_err());
     }
 
     #[test]
