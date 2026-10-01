@@ -3446,8 +3446,7 @@ fn source_page_paint_orders_v1(
     // class into page paint order only when every participating descendant on
     // the page has one exact child Escher shape, one exact top-level GROUP
     // Escher carrier, and the OfficeArt parent-group source link agrees.
-    let mut grouped_pending =
-        BTreeMap::<PageId, Vec<(u32, usize, NodeId)>>::new();
+    let mut grouped_pending = BTreeMap::<PageId, Vec<(u32, usize, NodeId)>>::new();
     let mut grouped_invalid_pages = BTreeSet::<PageId>::new();
 
     for node in graph.nodes.values() {
