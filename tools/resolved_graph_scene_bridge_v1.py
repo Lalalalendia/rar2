@@ -6,8 +6,10 @@ BoundedAuthoringSlice -> project_bounded -> resolve_bounded_geometry law used by
 pub-viewer. It deliberately reads only the semantic fields required by that
 law: page identity/size, node identity/parent/bounds/transform and Story ids.
 
-It does not read Story text, SourceRef, byte ranges, Quill, Contents, Escher,
-paint, resources or raw PUB bytes.
+The geometry projection does not read Story text, SourceRef, byte ranges, Quill,
+Contents, Escher, paint, resources or raw PUB bytes. The separate EditorProject
+replay seam may update canonical Story text so downstream browser snapshots can
+reflect an already-authorized semantic text edit without doing browser reflow.
 
 The context parameter is an explicit extension seam for immutable resolved
 projection context (for example future master/Cmo relations). V1 graph-only
@@ -485,35 +487,127 @@ def apply_project_to_resolved_graph(
 
     graph = copy.deepcopy(baseline_graph)
     nodes = graph.get("nodes")
+    stories = graph.get("stories")
     if not isinstance(nodes, dict):
         raise ResolvedGraphSceneError("resolved graph nodes must be an object")
+    if not isinstance(stories, dict):
+        raise ResolvedGraphSceneError("resolved graph stories must be an object")
 
     for index, operation in enumerate(operations):
-        if not isinstance(operation, dict) or operation.get("kind") != "move_node":
-            raise ResolvedGraphSceneError(
-                f"operation[{index}] is outside bounded MoveNode projection"
+        if not isinstance(operation, dict):
+            raise ResolvedGraphSceneError(f"operation[{index}] must be an object")
+
+        kind = operation.get("kind")
+        if kind == "move_node":
+            if set(operation) != {"kind", "node_id", "before", "after"}:
+                raise ResolvedGraphSceneError(f"operation[{index}] fields mismatch")
+            node_id = require_uuid(operation["node_id"], f"operation[{index}].node_id")
+            node = nodes.get(node_id)
+            if not isinstance(node, dict) or not isinstance(node.get("header"), dict):
+                raise ResolvedGraphSceneError(f"operation[{index}] references unknown node")
+            current = require_rect(
+                node["header"].get("bounds"),
+                f"nodes[{node_id}].header.bounds",
             )
-        if set(operation) != {"kind", "node_id", "before", "after"}:
-            raise ResolvedGraphSceneError(f"operation[{index}] fields mismatch")
-        node_id = require_uuid(operation["node_id"], f"operation[{index}].node_id")
-        node = nodes.get(node_id)
-        if not isinstance(node, dict) or not isinstance(node.get("header"), dict):
-            raise ResolvedGraphSceneError(f"operation[{index}] references unknown node")
-        current = require_rect(
-            node["header"].get("bounds"),
-            f"nodes[{node_id}].header.bounds",
+            before = require_rect(operation["before"], f"operation[{index}].before")
+            after = require_rect(operation["after"], f"operation[{index}].after")
+            if current != before:
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] before-state does not match current resolved graph"
+                )
+            if (before["width"], before["height"]) != (after["width"], after["height"]):
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] MoveNode must preserve width/height"
+                )
+            node["header"]["bounds"] = copy.deepcopy(after)
+            continue
+
+        if kind == "replace_story_range":
+            expected_fields = {
+                "kind",
+                "story_id",
+                "start_scalar",
+                "end_scalar",
+                "expected_before",
+                "replacement_text",
+                "before_story_state_id",
+                "after_story_state_id",
+            }
+            if set(operation) != expected_fields:
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] ReplaceStoryRange fields mismatch"
+                )
+            story_id = require_uuid(
+                operation["story_id"],
+                f"operation[{index}].story_id",
+            )
+            story = stories.get(story_id)
+            if not isinstance(story, dict) or story.get("id") != story_id:
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] references unknown Story"
+                )
+            text = story.get("text")
+            expected_before = operation.get("expected_before")
+            replacement_text = operation.get("replacement_text")
+            if not isinstance(text, str):
+                raise ResolvedGraphSceneError(
+                    f"stories[{story_id}].text must be a string"
+                )
+            if not isinstance(expected_before, str) or not isinstance(replacement_text, str):
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] Story replacement text must be strings"
+                )
+            if any(0xD800 <= ord(ch) <= 0xDFFF for ch in text + expected_before + replacement_text):
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] Story text contains a surrogate"
+                )
+            start_scalar = operation.get("start_scalar")
+            end_scalar = operation.get("end_scalar")
+            if (
+                isinstance(start_scalar, bool)
+                or not isinstance(start_scalar, int)
+                or isinstance(end_scalar, bool)
+                or not isinstance(end_scalar, int)
+                or start_scalar < 0
+                or end_scalar < start_scalar
+                or end_scalar > len(text)
+            ):
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] Story scalar range is invalid"
+                )
+            before_state = hash_id({
+                "protocol_version": "chaptera.story-state.v1",
+                "story_id": story_id,
+                "text": text,
+            })
+            if operation.get("before_story_state_id") != before_state:
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] before Story state identity mismatch"
+                )
+            if text[start_scalar:end_scalar] != expected_before:
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] expected Story text precondition mismatch"
+                )
+            after_text = (
+                text[:start_scalar]
+                + replacement_text
+                + text[end_scalar:]
+            )
+            after_state = hash_id({
+                "protocol_version": "chaptera.story-state.v1",
+                "story_id": story_id,
+                "text": after_text,
+            })
+            if operation.get("after_story_state_id") != after_state:
+                raise ResolvedGraphSceneError(
+                    f"operation[{index}] after Story state identity mismatch"
+                )
+            story["text"] = after_text
+            continue
+
+        raise ResolvedGraphSceneError(
+            f"operation[{index}] is outside bounded MoveNode/ReplaceStoryRange projection"
         )
-        before = require_rect(operation["before"], f"operation[{index}].before")
-        after = require_rect(operation["after"], f"operation[{index}].after")
-        if current != before:
-            raise ResolvedGraphSceneError(
-                f"operation[{index}] before-state does not match current resolved graph"
-            )
-        if (before["width"], before["height"]) != (after["width"], after["height"]):
-            raise ResolvedGraphSceneError(
-                f"operation[{index}] MoveNode must preserve width/height"
-            )
-        node["header"]["bounds"] = copy.deepcopy(after)
 
     return graph
 
