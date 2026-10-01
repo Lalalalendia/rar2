@@ -1397,6 +1397,14 @@ mod tests {
         let mut source_effective_line_complete_hidden = 0_usize;
         let mut source_effective_line_incomplete = 0_usize;
         let mut source_effective_line_presence = [0_usize; 8];
+        let mut source_effective_fill_any = 0_usize;
+        let mut source_effective_fill_solid = 0_usize;
+        let mut source_effective_fill_color = 0_usize;
+        let mut source_effective_fill_visible = 0_usize;
+        let mut source_effective_fill_complete_visible = 0_usize;
+        let mut source_effective_fill_complete_hidden = 0_usize;
+        let mut source_effective_fill_non_solid = 0_usize;
+        let mut source_effective_fill_incomplete = 0_usize;
         for node in bundle.resolved_graph.nodes.values() {
             let explicit = &node.payload.explicit_paint.line;
             let explicit_any = explicit.color_rgb.is_some()
@@ -1411,6 +1419,35 @@ mod tests {
                 source_explicit_line_any_effective_none += usize::from(explicit_any);
                 continue;
             };
+            let fill = &effective.fill;
+            let fill_presence = (usize::from(fill.solid.is_some()) << 2)
+                | (usize::from(fill.color_rgb.is_some()) << 1)
+                | usize::from(fill.visible.is_some());
+            if fill_presence != 0 {
+                source_effective_fill_any += 1;
+            }
+            source_effective_fill_solid += usize::from(fill.solid.is_some());
+            source_effective_fill_color += usize::from(fill.color_rgb.is_some());
+            source_effective_fill_visible += usize::from(fill.visible.is_some());
+            if fill.solid.as_ref().is_some_and(|solid| !solid.value) {
+                source_effective_fill_non_solid += 1;
+            }
+            if fill_presence != 0 {
+                match (
+                    fill.solid.as_ref(),
+                    fill.color_rgb.as_ref(),
+                    fill.visible.as_ref(),
+                ) {
+                    (Some(solid), Some(_), Some(visible)) if solid.value && visible.value => {
+                        source_effective_fill_complete_visible += 1;
+                    }
+                    (Some(solid), Some(_), Some(visible)) if solid.value && !visible.value => {
+                        source_effective_fill_complete_hidden += 1;
+                    }
+                    _ => source_effective_fill_incomplete += 1,
+                }
+            }
+
             let line = &effective.line;
             source_explicit_color_effective_missing +=
                 usize::from(explicit.color_rgb.is_some() && line.color_rgb.is_none());
@@ -1443,6 +1480,12 @@ mod tests {
             }
         }
 
+        let viewer_fill_paints = bundle
+            .geometry
+            .paints
+            .iter()
+            .filter(|paint| paint.solid_fill_rgb.is_some())
+            .count();
         let viewer_line_paints = bundle
             .geometry
             .paints
@@ -1491,6 +1534,34 @@ mod tests {
                     .flat_map(|table| &table.cells)
                     .filter(|cell| cell.bounds.is_some())
                     .count();
+                let scene_fill_nodes = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        node.paint
+                            .as_ref()
+                            .and_then(|paint| paint.fill_rgb.as_ref())
+                            .is_some()
+                    })
+                    .count();
+                let page_fill_nodes = scene
+                    .pages
+                    .iter()
+                    .map(|page| {
+                        scene
+                            .nodes
+                            .iter()
+                            .filter(|node| {
+                                node.page_id == page.page_id
+                                    && node
+                                        .paint
+                                        .as_ref()
+                                        .and_then(|paint| paint.fill_rgb.as_ref())
+                                        .is_some()
+                            })
+                            .count()
+                    })
+                    .collect::<Vec<_>>();
                 let scene_line_nodes = scene
                     .nodes
                     .iter()
@@ -1720,6 +1791,20 @@ mod tests {
                     scene_black_lines,
                     page_line_nodes,
                     scene.fidelity.reasons
+                );
+                println!(
+                    "CLOUD_READER_FILL_PROJECTION_PROBE source_effective_fill_any={} source_effective_fill_solid={} source_effective_fill_color={} source_effective_fill_visible={} source_effective_fill_complete_visible={} source_effective_fill_complete_hidden={} source_effective_fill_non_solid={} source_effective_fill_incomplete={} viewer_fill_paints={} scene_fill_nodes={} page_fill_nodes={:?}",
+                    source_effective_fill_any,
+                    source_effective_fill_solid,
+                    source_effective_fill_color,
+                    source_effective_fill_visible,
+                    source_effective_fill_complete_visible,
+                    source_effective_fill_complete_hidden,
+                    source_effective_fill_non_solid,
+                    source_effective_fill_incomplete,
+                    viewer_fill_paints,
+                    scene_fill_nodes,
+                    page_fill_nodes,
                 );
             }
             Err(error) => println!("CLOUD_READER_SCENE_PROJECTION_PROBE projection_error={error}"),
