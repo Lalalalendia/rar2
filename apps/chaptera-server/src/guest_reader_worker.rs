@@ -479,8 +479,9 @@ pub fn run_guest_scene_worker(
     let (classification, terminal_code, scene, salvage, editable_routes) =
         match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
             Ok(bundle) => {
-                let mature_editable_profile =
-                    bundle.resolved_graph.source.format_version.as_deref() == Some("0x2c");
+                let mature_editable_profile = is_mature_editable_profile(
+                    bundle.resolved_graph.source.format_version.as_deref(),
+                );
                 match from_viewer_geometry_with_fonts(
                     session_id.to_owned(),
                     expected_sha256.to_owned(),
@@ -578,6 +579,10 @@ pub fn run_guest_scene_worker(
         filesystem_confinement: true,
     };
     write_receipt(output, &receipt)
+}
+
+fn is_mature_editable_profile(format_version: Option<&str>) -> bool {
+    format_version == Some("0x2c")
 }
 
 fn assess_editable_routes_from_session(
@@ -1099,6 +1104,30 @@ impl Drop for GuestSceneTempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editable_route_profile_gate_matches_proven_physical_export_family() {
+        assert!(is_mature_editable_profile(Some("0x2c")));
+        assert!(!is_mature_editable_profile(Some("0x22-quill")));
+        assert!(!is_mature_editable_profile(Some("0x22-noquill")));
+        assert!(!is_mature_editable_profile(None));
+    }
+
+    #[test]
+    fn legacy_profile_route_assessment_is_explicitly_unavailable() {
+        let routes = profile_unavailable_routes(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        routes
+            .validate_for_source(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .expect("profile-unavailable route state should be valid");
+        assert_eq!(routes.idml.state, "unavailable");
+        assert_eq!(routes.idml.reason_code, "editor_profile_unavailable");
+        assert_eq!(routes.odg.state, "unavailable");
+        assert_eq!(routes.odg.reason_code, "editor_profile_unavailable");
+    }
 
     #[test]
     fn worker_receipt_accepts_source_bound_editable_routes() {
