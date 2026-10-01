@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
     RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
-    build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
+    effective_source_font_family_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
@@ -1217,7 +1217,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
+        MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES, SHARED_FALLBACK_FONT_MIME,
         ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
         ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
         from_viewer_geometry_with_fonts, inline_image_data_url,
