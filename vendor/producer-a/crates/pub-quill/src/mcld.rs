@@ -262,12 +262,7 @@ pub fn bounded_mcld_uniform_text_inset(
     for (child_index, child) in record.children.iter().enumerate() {
         let child_index = u32::try_from(child_index).unwrap_or(u32::MAX);
         for field_id in 0x06..=0x09 {
-            values.push(required_u32_field(
-                record_id,
-                child_index,
-                child,
-                field_id,
-            )?);
+            values.push(required_u32_field(record_id, child_index, child, field_id)?);
         }
     }
 
@@ -771,10 +766,7 @@ mod tests {
         let mcld = chunk(&[[36_576, 36_576, 40_000, 36_576]]);
         assert!(matches!(
             bounded_mcld_uniform_text_inset(&mcld, 4),
-            Err(QuillMcldReadError::NonUniformRequiredField {
-                record_id: 4,
-                ..
-            })
+            Err(QuillMcldReadError::NonUniformRequiredField { record_id: 4, .. })
         ));
     }
 }
