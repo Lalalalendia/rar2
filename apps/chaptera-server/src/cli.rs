@@ -65,6 +65,46 @@ pub enum Command {
         expected_sha256: String,
         #[arg(long)]
         expected_byte_len: u64,
+        #[arg(
+            long,
+            hide = true,
+            requires_all = [
+                "probe_font_sha256",
+                "probe_source_family_sha256",
+                "probe_font_resource_id"
+            ]
+        )]
+        probe_font_path: Option<PathBuf>,
+        #[arg(
+            long,
+            hide = true,
+            requires_all = [
+                "probe_font_path",
+                "probe_source_family_sha256",
+                "probe_font_resource_id"
+            ]
+        )]
+        probe_font_sha256: Option<String>,
+        #[arg(
+            long,
+            hide = true,
+            requires_all = [
+                "probe_font_path",
+                "probe_font_sha256",
+                "probe_font_resource_id"
+            ]
+        )]
+        probe_source_family_sha256: Option<String>,
+        #[arg(
+            long,
+            hide = true,
+            requires_all = [
+                "probe_font_path",
+                "probe_font_sha256",
+                "probe_source_family_sha256"
+            ]
+        )]
+        probe_font_resource_id: Option<String>,
     },
 }
 

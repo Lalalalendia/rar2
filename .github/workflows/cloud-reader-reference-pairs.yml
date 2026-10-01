@@ -94,6 +94,27 @@ jobs:
             --expected-pub-sha256 "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" \
             --receipt target/cloud-reader-reference-pairs/carlton-embedded-eot-census.json
 
+      - name: Acquire pinned Liberation Sans Arial-compatible probe
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/liberation-fonts-ttf-2.1.5.tar.gz"
+          root="$RUNNER_TEMP/liberation-fonts-ttf-2.1.5"
+          curl --fail --location --retry 3 \
+            "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz" \
+            --output "$archive"
+          echo "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0  $archive" | sha256sum --check -
+          mkdir -p "$root"
+          tar -xzf "$archive" -C "$root"
+          font="$(find "$root" -type f -name LiberationSans-Regular.ttf -print -quit)"
+          test -n "$font"
+          test -f "$font"
+          font_sha256="$(sha256sum "$font" | awk '{print $1}')"
+          echo "READER_FONT_PROBE_PATH=$font" >> "$GITHUB_ENV"
+          echo "READER_FONT_PROBE_SHA256=$font_sha256" >> "$GITHUB_ENV"
+          echo "READER_FONT_PROBE_SOURCE_FAMILY_SHA256=6fc0ee450e51f11f6bb59a4bff57484f6af40b3f93ba2a88bb1bfa6e7f5eaa82" >> "$GITHUB_ENV"
+          echo "READER_FONT_PROBE_RESOURCE_ID=chaptera.probe.substitute-font.liberation-sans-2.1.5" >> "$GITHUB_ENV"
+          printf 'LIBERATION_SANS_PROBE sha256=%s bytes=%s\n' "$font_sha256" "$(stat -c %s "$font")"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
@@ -225,6 +246,10 @@ jobs:
           READER_REAL_MANIFEST: ${{ runner.temp }}/cloud-reader-reference-fixtures.json
           READER_REAL_OUTPUT: ${{ runner.temp }}/cloud-reader-reference-real
           READER_REFERENCE_RASTER_DPI: "144"
+          READER_FONT_PROBE_PATH: ${{ env.READER_FONT_PROBE_PATH }}
+          READER_FONT_PROBE_SHA256: ${{ env.READER_FONT_PROBE_SHA256 }}
+          READER_FONT_PROBE_SOURCE_FAMILY_SHA256: ${{ env.READER_FONT_PROBE_SOURCE_FAMILY_SHA256 }}
+          READER_FONT_PROBE_RESOURCE_ID: ${{ env.READER_FONT_PROBE_RESOURCE_ID }}
         run: node apps/cloud-reader/real-browser.test.mjs
 
       - name: Compare Cloud Reader rasters with author-supplied PDFs

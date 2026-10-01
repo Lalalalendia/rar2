@@ -1,0 +1,40 @@
+name: Caladea local source-font probe binary
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/caladea-local-probe-binary.yml"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build measurement chaptera binary
+        run: |
+          set -euo pipefail
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+          sha256sum target/debug/chaptera > target/chaptera-caladea-probe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-caladea-local-probe-linux
+          path: |
+            target/debug/chaptera
+            target/chaptera-caladea-probe.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
