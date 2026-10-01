@@ -1405,6 +1405,8 @@ mod tests {
         let mut projected_layout_fingerprints = BTreeMap::<String, usize>::new();
         let mut projected_line_counts = BTreeMap::<usize, usize>::new();
         let mut projected_line_heights_emu = BTreeMap::<i64, usize>::new();
+        let mut projected_text_bounds_nodes = 0_usize;
+        let mut projected_uniform_insets_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
 
         for page_index in 0..bundle.geometry.document.pages.len() {
@@ -1422,6 +1424,18 @@ mod tests {
                 if projected {
                     projected_text_nodes += 1;
                     projected_typography_runs += text.typography.len();
+                    if let Some(text_bounds) = node.text_bounds {
+                        projected_text_bounds_nodes += 1;
+                        let left = text_bounds.x.get() - node.bounds.x.get();
+                        let top = text_bounds.y.get() - node.bounds.y.get();
+                        let right = node.bounds.x.get() + node.bounds.width.get()
+                            - text_bounds.x.get() - text_bounds.width.get();
+                        let bottom = node.bounds.y.get() + node.bounds.height.get()
+                            - text_bounds.y.get() - text_bounds.height.get();
+                        if left >= 0 && left == top && left == right && left == bottom {
+                            *projected_uniform_insets_emu.entry(left).or_default() += 1;
+                        }
+                    }
 
                     let mut cursor = text.scalar_start;
                     let mut complete_coverage = !text.typography.is_empty();
@@ -1519,8 +1533,10 @@ mod tests {
             serde_json::to_string(&projected_line_counts).expect("serialize projected line counts");
         let projected_line_heights_json = serde_json::to_string(&projected_line_heights_emu)
             .expect("serialize projected line heights");
+        let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
+            .expect("serialize projected uniform text insets");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1541,6 +1557,8 @@ mod tests {
             projected_layout_fingerprints_json,
             projected_line_counts_json,
             projected_line_heights_json,
+            projected_text_bounds_nodes,
+            projected_uniform_insets_json,
             projected_measured_width_total_emu,
         );
     }
