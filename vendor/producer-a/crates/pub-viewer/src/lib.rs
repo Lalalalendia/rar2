@@ -53,9 +53,11 @@ pub use pub_reader::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
     FailureIntakeClassification, FailureIntakeConfidence, FailureIntakeReason,
     PubFamilyClassification, PubFamilyConfidence, PubFamilyProfile, PubFamilyReason,
-    PubReaderRoute, READER_SALVAGE_PROBE_SCHEMA_V1, ReaderSalvageCorruptionEvidence,
-    ReaderSalvageEligibility, ReaderSalvageProbe, ReaderSalvageStreamState,
-    ReaderSalvageSubsystemProbe, ReaderSalvageTrigger, classify_failure_candidate,
+    PubReaderRoute, READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1, READER_SALVAGE_PROBE_SCHEMA_V1,
+    ReaderPartialSourceFact, ReaderPartialSourceGap, ReaderPartialSourceGraph,
+    ReaderPartialSourceGraphError, ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility,
+    ReaderSalvageProbe, ReaderSalvageStreamState, ReaderSalvageSubsystemProbe,
+    ReaderSalvageTrigger, build_reader_partial_source_graph, classify_failure_candidate,
     classify_pub_family, exact_file_intake_eligible, probe_reader_salvage_candidate,
     probe_reader_salvage_candidate_with_trigger,
 };
@@ -1389,14 +1391,13 @@ pub fn open_pub_geometry(
 
 /// Product-level Reader open outcome.
 ///
-/// Normal parsing always runs first. Salvage is returned only when the
-/// bounded read-only probe has both explicit eligibility and surviving source
-/// evidence. This type deliberately carries no repair plan or reconstructed
-/// document state.
+/// Normal parsing always runs first. Salvage is returned only when bounded
+/// surviving evidence can be projected into the shared source-neutral partial
+/// graph. The outcome carries no repair plan or reconstructed document state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewerProductOpenOutcome {
     Normal(Box<ViewerGeometryDocument>),
-    Salvage(ReaderSalvageProbe),
+    Salvage(ReaderPartialSourceGraph),
 }
 
 /// Opens a Publisher source normally first, then attempts the conservative
@@ -1428,7 +1429,10 @@ pub fn open_pub_or_salvage_with_trigger(
         Err(normal_error) => {
             let probe = probe_reader_salvage_candidate_with_trigger(bytes, trigger);
             if probe.eligibility.is_eligible() && probe.has_surviving_evidence() {
-                Ok(ViewerProductOpenOutcome::Salvage(probe))
+                match build_reader_partial_source_graph(bytes, &probe) {
+                    Ok(graph) => Ok(ViewerProductOpenOutcome::Salvage(graph)),
+                    Err(_) => Err(normal_error),
+                }
             } else {
                 Err(normal_error)
             }
@@ -3466,6 +3470,29 @@ mod tests {
         assert!(!json.contains("\"filename\""));
         assert!(!json.contains("\"source_hash\""));
         assert!(!json.contains("\"sha256\""));
+    }
+
+    #[test]
+    fn salvage_product_outcome_carries_partial_source_graph_not_probe() {
+        let graph = ReaderPartialSourceGraph {
+            schema_version: READER_PARTIAL_SOURCE_GRAPH_SCHEMA_V1.to_owned(),
+            source_sha256: "a".repeat(64),
+            contents_family: None,
+            subsystems: ReaderSalvageSubsystemProbe {
+                contents: ReaderSalvageStreamState::Readable,
+                quill: ReaderSalvageStreamState::Absent,
+                escher: ReaderSalvageStreamState::Absent,
+                escher_delay: ReaderSalvageStreamState::Absent,
+            },
+            facts: Vec::new(),
+            gaps: vec![
+                ReaderPartialSourceGap::TextUnavailable,
+                ReaderPartialSourceGap::ImageFactsUnavailable,
+                ReaderPartialSourceGap::GeometryFactsUnavailable,
+            ],
+        };
+        let outcome = ViewerProductOpenOutcome::Salvage(graph.clone());
+        assert_eq!(outcome, ViewerProductOpenOutcome::Salvage(graph));
     }
 
     #[test]
