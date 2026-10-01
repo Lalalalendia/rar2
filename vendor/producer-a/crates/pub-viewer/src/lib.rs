@@ -5443,8 +5443,10 @@ mod mature_officeart_wmf_exact_product_tests {
     use super::*;
     use std::{fs, path::PathBuf};
 
-    fn exact_wmf_fixture(env_name: &str, expected_sha256: &str, expected_counts: [usize; 6]) {
+    fn exact_wmf_fixture(env_name: &str, expected_sha256: &str, expected_counts: [usize; 8]) {
         let [
+            expected_physical_wmf_records,
+            expected_live_bstore_wmf_slots,
             expected_source_wmf_resources,
             expected_source_wmf_uses,
             expected_image_resources,
@@ -5583,9 +5585,17 @@ mod mature_officeart_wmf_exact_product_tests {
             diagnostic_counts,
         );
         assert_eq!(
+            source_wmf.physical_wmf_record_count, expected_physical_wmf_records,
+            "exact fixture physical WMF record count drift"
+        );
+        assert_eq!(
+            source_wmf.live_bstore_wmf_slot_count, expected_live_bstore_wmf_slots,
+            "exact fixture live BStore WMF slot count drift"
+        );
+        assert_eq!(
             source_wmf.sources.len(),
             expected_source_wmf_resources,
-            "exact fixture source WMF resource count drift"
+            "exact fixture grounded source WMF resource count drift"
         );
         assert_eq!(
             source_wmf
@@ -5644,7 +5654,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_NEWSLETTER",
             "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
-            [8, 9, 9, 10, 8, 9],
+            [8, 8, 7, 8, 8, 9, 7, 8],
         );
     }
 
@@ -5654,7 +5664,7 @@ mod mature_officeart_wmf_exact_product_tests {
         exact_wmf_fixture(
             "CHAPTERA_SAMPLE_BROCHURE",
             "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
-            [5, 5, 6, 6, 5, 5],
+            [5, 5, 5, 5, 6, 6, 5, 5],
         );
     }
 }
