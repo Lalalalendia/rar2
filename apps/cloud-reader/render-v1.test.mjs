@@ -109,7 +109,8 @@ test("table cell fill plan uses source-neutral fill on authoritative bounds", ()
     tableCellFillPaintPlan({
       cell_id: "cell-fill",
       bounds: { x: 100, y: 200, width: 300, height: 400 },
-      fill_rgb: [10, 20, 30]
+      fill_rgb: [10, 20, 30],
+      fill_visible: true
     }),
     {
       geometry: { x: 100, y: 200, width: 300, height: 400 },
@@ -119,6 +120,14 @@ test("table cell fill plan uses source-neutral fill on authoritative bounds", ()
   assert.equal(
     tableCellFillPaintPlan({
       bounds: { x: 100, y: 200, width: 300, height: 400 }
+    }),
+    null
+  );
+  assert.equal(
+    tableCellFillPaintPlan({
+      bounds: { x: 100, y: 200, width: 300, height: 400 },
+      fill_rgb: [10, 20, 30],
+      fill_visible: false
     }),
     null
   );
