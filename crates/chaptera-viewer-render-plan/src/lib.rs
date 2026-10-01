@@ -1795,16 +1795,7 @@ mod tests {
 
         // Missing authority keeps the existing leading origin.
         assert_eq!(
-            resolved_line_x_offset_emu_v1(
-                &fragment,
-                node_id,
-                &bounds,
-                0,
-                0,
-                5,
-                100,
-                "layout:test",
-            ),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0, 5, 100, "layout:test",),
             0
         );
 
@@ -1815,37 +1806,21 @@ mod tests {
             source_value: 1,
         }];
         assert_eq!(
-            resolved_line_x_offset_emu_v1(
-                &fragment,
-                node_id,
-                &bounds,
-                0,
-                0,
-                5,
-                100,
-                "layout:test",
-            ),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0, 5, 100, "layout:test",),
             10
         );
 
         // Two complete authorities are ambiguous and therefore fail closed.
-        fragment.paragraph_alignments.push(RenderParagraphAlignmentRunV1 {
-            scalar_start: 0,
-            scalar_end: 5,
-            alignment: RenderParagraphAlignmentV1::Right,
-            source_value: 2,
-        });
+        fragment
+            .paragraph_alignments
+            .push(RenderParagraphAlignmentRunV1 {
+                scalar_start: 0,
+                scalar_end: 5,
+                alignment: RenderParagraphAlignmentV1::Right,
+                source_value: 2,
+            });
         assert_eq!(
-            resolved_line_x_offset_emu_v1(
-                &fragment,
-                node_id,
-                &bounds,
-                0,
-                0,
-                5,
-                100,
-                "layout:test",
-            ),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 0, 5, 100, "layout:test",),
             0
         );
 
@@ -1865,16 +1840,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            resolved_line_x_offset_emu_v1(
-                &fragment,
-                node_id,
-                &bounds,
-                0,
-                1,
-                4,
-                60,
-                "layout:test",
-            ),
+            resolved_line_x_offset_emu_v1(&fragment, node_id, &bounds, 0, 1, 4, 60, "layout:test",),
             0
         );
 
