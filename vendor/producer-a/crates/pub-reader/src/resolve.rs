@@ -1,7 +1,7 @@
 use crate::{
     PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
     PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource,
-    PubTableStoryOwnershipSource, PubTextFrameInsetSource,
+    PubTableStoryOwnershipSource, PubTextFrameInsetSource, PubTextFrameVerticalAlignment,
 };
 use anyhow::{Result, bail};
 use pub_model::{Node, NodeId, ResolvedGraph, StoryId, validate_source_graph_registries};
