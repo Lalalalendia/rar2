@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
+    RenderTextLayoutDispositionV1, admitted_single_family_source_font_v1,
+    build_page_render_plan_with_text_layout_resolver_v1, build_page_render_plan_with_text_layout_v1,
+    normalize_source_font_family_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
@@ -188,12 +190,39 @@ pub struct ReaderImageResourceV1 {
     pub inline_data_url: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReaderConfiguredFontResourceV1 {
+    pub source_family: String,
+    pub resource_id: String,
+    pub expected_sha256: String,
+    pub face_index: u32,
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+impl ReaderConfiguredFontResourceV1 {
+    fn normalized_source_family(&self) -> String {
+        normalize_source_font_family_v1(&self.source_family)
+    }
+
+    fn explicit_resource(&self) -> ExplicitRenderTextFontResourceV1<'_> {
+        ExplicitRenderTextFontResourceV1 {
+            resource_id: &self.resource_id,
+            expected_sha256: &self.expected_sha256,
+            face_index: self.face_index,
+            default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
+            default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
+            bytes: &self.bytes,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ReaderFontResourceV1 {
-    pub resource_id: &'static str,
-    pub family_name: &'static str,
-    pub mime: &'static str,
-    pub expected_sha256: &'static str,
+    pub resource_id: String,
+    pub family_name: String,
+    pub mime: String,
+    pub expected_sha256: String,
     pub availability: &'static str,
     pub inline_data_url: String,
 }
@@ -332,6 +361,24 @@ pub fn from_viewer_geometry(
     revision_id: String,
     geometry: &ViewerGeometryDocument,
     source_page_paint_orders: &[ViewerPagePaintOrderV1],
+) -> Result<ReaderSceneV1, String> {
+    from_viewer_geometry_with_fonts(
+        document_id,
+        source_hash,
+        revision_id,
+        geometry,
+        source_page_paint_orders,
+        &[],
+    )
+}
+
+pub fn from_viewer_geometry_with_fonts(
+    document_id: String,
+    source_hash: String,
+    revision_id: String,
+    geometry: &ViewerGeometryDocument,
+    source_page_paint_orders: &[ViewerPagePaintOrderV1],
+    configured_fonts: &[ReaderConfiguredFontResourceV1],
 ) -> Result<ReaderSceneV1, String> {
     let viewer_source_hash =
         serialized_string(&geometry.document.source.source_hash, "Viewer source hash")?;
@@ -542,6 +589,11 @@ pub fn from_viewer_geometry(
     chaptera_desktop_fallback_font_resource::validate()
         .map_err(|error| format!("shared fallback font validation failed: {error}"))?;
     let fallback_font = shared_text_font_resource();
+    let configured_fonts_by_family = configured_fonts
+        .iter()
+        .map(|font| (font.normalized_source_family(), font))
+        .collect::<HashMap<_, _>>();
+    let mut used_configured_font_ids = HashSet::<String>::new();
     let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
@@ -550,10 +602,17 @@ pub fn from_viewer_geometry(
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
     for page_index in 0..geometry.document.pages.len() {
-        let plan = match build_page_render_plan_with_text_layout_v1(
+        let plan = match build_page_render_plan_with_text_layout_resolver_v1(
             geometry,
             page_index,
             &fallback_font,
+            |fragment| {
+                let source_family = admitted_single_family_source_font_v1(fragment)?;
+                let normalized = normalize_source_font_family_v1(source_family);
+                configured_fonts_by_family
+                    .get(&normalized)
+                    .map(|font| font.explicit_resource())
+            },
         ) {
             Ok(plan) => plan,
             Err(_) => {
@@ -562,6 +621,15 @@ pub fn from_viewer_geometry(
             }
         };
         let plan_page_id = serialized_string(&plan.page_id, "render-plan page id")?;
+        for node in &plan.nodes {
+            if let Some(resource_id) = node
+                .text
+                .as_ref()
+                .and_then(|text| text.backend_font_resource_id.as_ref())
+            {
+                used_configured_font_ids.insert(resource_id.clone());
+            }
+        }
 
         for node in plan.nodes {
             let (mapped_layout, layout_partial) = match node.text.as_ref() {
@@ -778,21 +846,37 @@ pub fn from_viewer_geometry(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let fonts = if text_layout_count > 0 {
-        vec![ReaderFontResourceV1 {
-            resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
-            family_name: chaptera_desktop_fallback_font_resource::FAMILY_NAME,
-            mime: SHARED_FALLBACK_FONT_MIME,
-            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+    let mut fonts = Vec::new();
+    if text_layout_count > 0 {
+        fonts.push(ReaderFontResourceV1 {
+            resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID.to_owned(),
+            family_name: chaptera_desktop_fallback_font_resource::FAMILY_NAME.to_owned(),
+            mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
+            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
             availability: "inline_data_url",
             inline_data_url: format!(
                 "data:{SHARED_FALLBACK_FONT_MIME};base64,{}",
                 base64_encode(chaptera_desktop_fallback_font_resource::bytes())
             ),
-        }]
-    } else {
-        Vec::new()
-    };
+        });
+        for configured in configured_fonts {
+            if !used_configured_font_ids.contains(&configured.resource_id) {
+                continue;
+            }
+            fonts.push(ReaderFontResourceV1 {
+                resource_id: configured.resource_id.clone(),
+                family_name: configured.source_family.clone(),
+                mime: configured.mime.clone(),
+                expected_sha256: configured.expected_sha256.clone(),
+                availability: "inline_data_url",
+                inline_data_url: format!(
+                    "data:{};base64,{}",
+                    configured.mime,
+                    base64_encode(&configured.bytes)
+                ),
+            });
+        }
+    }
 
     let mut diagnostics = Vec::new();
     for diagnostic in &geometry.document.diagnostics {
