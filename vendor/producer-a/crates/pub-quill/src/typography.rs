@@ -898,9 +898,8 @@ fn apply_bounded_implicit_style_zero(
 
     for range in paragraph_ranges {
         range.selected_style_index = Some(0);
-        range.selector_source = Some(
-            QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
-        );
+        range.selector_source =
+            Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence);
     }
     true
 }
@@ -1900,7 +1899,11 @@ mod tests {
         }];
 
         assert!(apply_bounded_implicit_style_zero(&mut ranges, &defaults));
-        assert!(ranges.iter().all(|range| range.selected_style_index == Some(0)));
+        assert!(
+            ranges
+                .iter()
+                .all(|range| range.selected_style_index == Some(0))
+        );
         assert!(ranges.iter().all(|range| {
             range.selector_source
                 == Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
@@ -2002,7 +2005,10 @@ mod tests {
         assert_eq!(run.font_name, "Times New Roman");
         assert_eq!(run.font_source, QuillTypographyValueSource::InheritedStsh1);
         assert_eq!(run.text_size_emu, 18 * QUILL_TEXT_SIZE_EMU_PER_POINT);
-        assert_eq!(run.text_size_source, QuillTypographyValueSource::ExplicitFdpc);
+        assert_eq!(
+            run.text_size_source,
+            QuillTypographyValueSource::ExplicitFdpc
+        );
         assert_eq!(
             run.inherited_selector_source,
             Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
