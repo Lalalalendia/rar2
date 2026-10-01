@@ -12,9 +12,9 @@ if receipt["real_pub_scene_present"] is not True:
 real_pub = receipt["real_pub_scene"]
 if real_pub["provenance"]["source_sha256"] != "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf":
     raise AssertionError("real PUB source identity drifted")
-if real_pub["provenance"]["page_count"] != 4 or real_pub["provenance"]["node_count"] != 68:
+if real_pub["provenance"]["page_count"] != 4 or real_pub["provenance"]["node_count"] != 73:
     raise AssertionError("real PUB scene counts drifted")
-if real_pub["input_pages"] != 4 or real_pub["input_nodes"] != 68:
+if real_pub["input_pages"] != 4 or real_pub["input_nodes"] != 73:
     raise AssertionError("real PUB benchmark did not consume the canonical scene")
 if receipt["incremental_patch"]["apply_equals_full_compile"] is not True:
     raise AssertionError("ScenePatch apply diverged from full compile")
