@@ -21,6 +21,7 @@ const FBOLD_ID: u16 = 0x0202;
 const FBOLD_CS_ID: u16 = 0x0237;
 const FONT_INDEX_CONTAINER_ID: u16 = 0x0224;
 const TEXT_SIZE_ID: u16 = 0x020C;
+const PARAGRAPH_ALIGNMENT_ID: u16 = 0x0204;
 const PARAGRAPH_DEFAULT_CHAR_STYLE_ID: u16 = 0x0219;
 
 pub const QUILL_TEXT_SIZE_EMU_PER_POINT: u32 = 12_700;
@@ -31,6 +32,8 @@ pub struct QuillTypographyCatalog {
     pub ranges: Vec<QuillTypographyRange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<QuillScriptFontMapObservation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_alignment_runs: Vec<QuillParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub explicit_runs: Vec<QuillExplicitTypographyRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -137,6 +140,28 @@ pub enum QuillParagraphSelectorSource {
     ImplicitStyleZeroFromBoundedEvidence,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuillParagraphAlignment {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillParagraphAlignmentRun {
+    pub story_index: u32,
+    pub story_syid: QuillSyid,
+    pub story_start_utf16: u32,
+    pub story_end_utf16: u32,
+    pub alignment: QuillParagraphAlignment,
+    pub fdpp_descriptor_ordinal: u32,
+    pub fdpp_style_ordinal: u32,
+    pub fdpp_style_source: RawSpan,
+    pub alignment_source: RawSpan,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuillEffectiveTypographyRun {
     pub story_index: u32,
@@ -216,6 +241,8 @@ struct ParagraphStyleObservation {
     text_offset_source: RawSpan,
     style_source: RawSpan,
     default_style_indices: Vec<u32>,
+    paragraph_alignment: Option<(QuillParagraphAlignment, RawSpan)>,
+    paragraph_alignment_ambiguous: bool,
 }
 
 #[allow(dead_code)]
@@ -228,6 +255,8 @@ struct ParagraphTypographyRange {
     style_source: RawSpan,
     selected_style_index: Option<u32>,
     selector_source: Option<QuillParagraphSelectorSource>,
+    paragraph_alignment: Option<QuillParagraphAlignment>,
+    paragraph_alignment_source: Option<RawSpan>,
 }
 
 #[allow(dead_code)]
@@ -469,6 +498,7 @@ pub fn parse_bounded_typography(
     }
 
     let mut effective_runs = Vec::new();
+    let mut paragraph_alignment_runs = Vec::new();
     let mut inheritance_unknown_block_types = BTreeSet::new();
     let mut effective_inheritance_unavailable_reason = None;
 
@@ -482,6 +512,8 @@ pub fn parse_bounded_typography(
         validate_monotone_fdpp_text_offsets(&paragraph_styles)?;
         let mut paragraph_ranges =
             materialize_paragraph_ranges(&paragraph_styles, text_start, text_end, total_utf16)?;
+        paragraph_alignment_runs =
+            build_paragraph_alignment_runs(&paragraph_ranges, &story_extents);
         let character_defaults = parse_stsh1_character_defaults(
             bytes,
             story_catalog,
@@ -517,6 +549,7 @@ pub fn parse_bounded_typography(
         font_names,
         ranges,
         script_font_maps,
+        paragraph_alignment_runs,
         explicit_runs,
         effective_runs,
         unknown_block_types_assumed_zero_length: unknown_block_types.into_iter().collect(),
@@ -621,12 +654,29 @@ fn parse_fdpp_styles(
             let style_end = checked_end(style_start, style_len, end, "FDPP style")?;
             let mut cursor = style_start + 4;
             let mut selectors = Vec::new();
+            let mut paragraph_alignment = None;
+            let mut paragraph_alignment_ambiguous = false;
 
             while cursor < style_end {
                 let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
                 if block.id == PARAGRAPH_DEFAULT_CHAR_STYLE_ID {
                     if let Some(value) = block.value {
                         selectors.push(value);
+                    }
+                }
+                if block.id == PARAGRAPH_ALIGNMENT_ID && block.block_type == 0x10 {
+                    if let Some(value) = block.value.and_then(paragraph_alignment_from_value) {
+                        let source = RawSpan {
+                            stream: stream.clone(),
+                            offset: cursor as u64,
+                            len: (next - cursor) as u64,
+                        };
+                        if paragraph_alignment.is_some() {
+                            paragraph_alignment_ambiguous = true;
+                            paragraph_alignment = None;
+                        } else if !paragraph_alignment_ambiguous {
+                            paragraph_alignment = Some((value, source));
+                        }
                     }
                 }
                 cursor = next;
@@ -656,6 +706,8 @@ fn parse_fdpp_styles(
                     len: style_len as u64,
                 },
                 default_style_indices: selectors,
+                paragraph_alignment,
+                paragraph_alignment_ambiguous,
             });
         }
     }
@@ -716,6 +768,12 @@ fn materialize_paragraph_ranges(
             style_source: style.style_source.clone(),
             selected_style_index,
             selector_source,
+            paragraph_alignment: (!style.paragraph_alignment_ambiguous)
+                .then(|| style.paragraph_alignment.as_ref().map(|(value, _)| *value))
+                .flatten(),
+            paragraph_alignment_source: (!style.paragraph_alignment_ambiguous)
+                .then(|| style.paragraph_alignment.as_ref().map(|(_, source)| source.clone()))
+                .flatten(),
         });
         previous_end_utf16 = global_end_utf16;
     }
@@ -726,6 +784,50 @@ fn materialize_paragraph_ranges(
         )));
     }
     Ok(ranges)
+}
+
+fn paragraph_alignment_from_value(value: u32) -> Option<QuillParagraphAlignment> {
+    match value {
+        1 => Some(QuillParagraphAlignment::Left),
+        2 => Some(QuillParagraphAlignment::Center),
+        3 => Some(QuillParagraphAlignment::Right),
+        4 => Some(QuillParagraphAlignment::Justify),
+        _ => None,
+    }
+}
+
+fn build_paragraph_alignment_runs(
+    ranges: &[ParagraphTypographyRange],
+    story_extents: &[StoryExtent],
+) -> Vec<QuillParagraphAlignmentRun> {
+    let mut runs = Vec::new();
+    for range in ranges {
+        let (Some(alignment), Some(alignment_source)) = (
+            range.paragraph_alignment,
+            range.paragraph_alignment_source.as_ref(),
+        ) else {
+            continue;
+        };
+        for extent in story_extents {
+            let start = range.global_start_utf16.max(extent.global_start_utf16);
+            let end = range.global_end_utf16.min(extent.global_end_utf16);
+            if start >= end {
+                continue;
+            }
+            runs.push(QuillParagraphAlignmentRun {
+                story_index: extent.story_index,
+                story_syid: extent.story_syid,
+                story_start_utf16: start - extent.global_start_utf16,
+                story_end_utf16: end - extent.global_start_utf16,
+                alignment,
+                fdpp_descriptor_ordinal: range.fdpp_descriptor_ordinal,
+                fdpp_style_ordinal: range.fdpp_style_ordinal,
+                fdpp_style_source: range.style_source.clone(),
+                alignment_source: alignment_source.clone(),
+            });
+        }
+    }
+    runs
 }
 
 fn parse_stsh1_character_defaults(
@@ -2141,6 +2243,23 @@ mod tests {
         assert_eq!(size_cs.id, 0x0239);
         assert_eq!(size_cs.block_type, 0x20);
         assert_eq!(size_cs.value, Some(165_100));
+        assert_eq!(end, bytes.len());
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn packed_fdpp_paragraph_alignment_decodes_explicit_center() {
+        let bytes = [0x04, 0x12, 0x02, 0x00];
+        let mut unknown = BTreeSet::new();
+        let (block, end) =
+            parse_block(&bytes, 0, bytes.len(), &mut unknown).expect("paragraph alignment");
+        assert_eq!(block.id, PARAGRAPH_ALIGNMENT_ID);
+        assert_eq!(block.block_type, 0x10);
+        assert_eq!(block.value, Some(2));
+        assert_eq!(
+            block.value.and_then(paragraph_alignment_from_value),
+            Some(QuillParagraphAlignment::Center)
+        );
         assert_eq!(end, bytes.len());
         assert!(unknown.is_empty());
     }
