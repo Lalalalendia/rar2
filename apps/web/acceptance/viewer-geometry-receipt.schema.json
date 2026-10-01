@@ -49,6 +49,12 @@
         "$ref": "#/$defs/typographyRun"
       }
     },
+    "paragraph_alignments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/paragraphAlignmentRun"
+      }
+    },
     "script_font_maps": {
       "type": "array",
       "items": {
@@ -540,6 +546,16 @@
         "ordinal": {
           "type": "integer",
           "minimum": 0
+        },
+        "text_content_bounds": {
+          "$ref": "#/$defs/rect"
+        },
+        "vertical_alignment": {
+          "enum": [
+            "top",
+            "center",
+            "bottom"
+          ]
         }
       }
     },
@@ -628,8 +644,7 @@
           "minimum": 0
         },
         "source_font_name": {
-          "type": "string",
-          "minLength": 1
+          "type": "string"
         },
         "text_size_emu": {
           "type": "integer",
@@ -640,6 +655,47 @@
         },
         "size_inherited": {
           "type": "boolean"
+        },
+        "source_story_text_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "paragraphAlignmentRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "story_id",
+        "scalar_start",
+        "scalar_end",
+        "alignment",
+        "source_value",
+        "source_story_text_sha256"
+      ],
+      "properties": {
+        "story_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "scalar_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scalar_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "alignment": {
+          "enum": [
+            "center",
+            "right",
+            "inter_word",
+            "distribute"
+          ]
+        },
+        "source_value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
         },
         "source_story_text_sha256": {
           "$ref": "#/$defs/sha256"

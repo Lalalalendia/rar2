@@ -67,7 +67,7 @@ jobs:
           from pathlib import Path
           p = Path(".web-v0/resolved-graph.json")
           digest = hashlib.sha256(p.read_bytes()).hexdigest()
-          expected = "cae2b1576e32b7bf204bbaa8436a8ee2a12b118895736e92f20da1cd9b8048cf"
+          expected = "818049a1d8599ab9ef68e3da2174bbfe876afbfa6711fad9f6a9efabc7d81c40"
           print({"resolved_graph_sha256": digest, "bytes": p.stat().st_size})
           assert digest == expected, (digest, expected)
           PY
@@ -132,7 +132,7 @@ jobs:
                 --resolved-graph .web-v0/resolved-graph.json \
                 --viewer-receipt .web-v0/viewer-geometry.json \
                 --source-page-paint-orders .web-v0/source-page-paint-orders.json \
-                --expected-resolved-graph-sha256 cae2b1576e32b7bf204bbaa8436a8ee2a12b118895736e92f20da1cd9b8048cf \
+                --expected-resolved-graph-sha256 818049a1d8599ab9ef68e3da2174bbfe876afbfa6711fad9f6a9efabc7d81c40 \
                 --target-node-id 007d9898-568b-5125-b519-8d88243aabfb \
                 --target-page-id 58ffa2e0-896e-5a40-806c-bd0184ea9c85 \
                 --after-x-emu 653710 \

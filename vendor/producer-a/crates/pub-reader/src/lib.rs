@@ -106,8 +106,9 @@ use pub_model::{
     derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillGroundedStoryIdentity, QuillMcldReadError, QuillParagraphAlignment,
-    QuillScriptFontEntryDisposition, QuillStoryReadError, QuillTypographyValueSource,
+    QuillGroundedStoryIdentity, QuillMcldReadError, QuillMcldVerticalAlignment,
+    QuillParagraphAlignment, QuillScriptFontEntryDisposition, QuillStoryReadError,
+    QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
     bounded_mcld_uniform_text_inset, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
     parse_bounded_typography, parse_confirmed_story_catalog,
 };
@@ -387,6 +388,21 @@ pub struct PubTextFrameInsetSource {
     pub source_refs: Vec<SourceRef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubTextFrameVerticalAlignment {
+    Top,
+    Center,
+    Bottom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTextFrameVerticalAlignmentSource {
+    pub layout_record_id: u32,
+    pub alignment: PubTextFrameVerticalAlignment,
+    pub source_refs: Vec<SourceRef>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubNodePayload {
     pub contents_seq_num: u32,
@@ -519,6 +535,8 @@ pub struct PubStoryFrameSource {
     pub previous_frame: Option<NodeId>,
     pub next_seq_num: Option<u32>,
     pub next_frame: Option<NodeId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_alignment: Option<PubTextFrameVerticalAlignmentSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2805,7 +2823,7 @@ pub fn build_mature_0x2c_from_streams(
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
             .flatten();
-        let story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
+        let mut story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
             build_story_frame(
                 source_hash,
                 seq_num,
@@ -2847,6 +2865,46 @@ pub fn build_mature_0x2c_from_streams(
                 source_refs,
             })
         });
+        let text_frame_vertical_alignment = story_frame.as_ref().and_then(|frame| {
+            let (layout_record_id, layout_key_source) = story_layout_keys.get(&frame.text_id)?;
+            let mcld = mcld.as_ref()?;
+            let vertical =
+                bounded_mcld_text_frame_vertical_alignment(mcld, *layout_record_id).ok()?;
+            let object_key = quill_story_object_key(frame.text_id);
+            Some(PubTextFrameVerticalAlignmentSource {
+                layout_record_id: *layout_record_id,
+                alignment: match vertical.alignment {
+                    QuillMcldVerticalAlignment::Top => PubTextFrameVerticalAlignment::Top,
+                    QuillMcldVerticalAlignment::Center => PubTextFrameVerticalAlignment::Center,
+                    QuillMcldVerticalAlignment::Bottom => PubTextFrameVerticalAlignment::Bottom,
+                },
+                source_refs: vec![
+                    source_ref(
+                        &graph.source,
+                        layout_key_source,
+                        Some(object_key.clone()),
+                        Some("Contents/0x65/layoutKey".into()),
+                        SourceRole::Relation,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ),
+                    source_ref(
+                        &graph.source,
+                        &vertical.source,
+                        Some(object_key),
+                        Some("MCLD/18/text-vertical-align".into()),
+                        SourceRole::Semantic,
+                        AuthorityClass::Authoritative,
+                        ReadConfidence::Exact,
+                    ),
+                ],
+            })
+        });
+        if let (Some(frame), Some(vertical_alignment)) =
+            (story_frame.as_mut(), text_frame_vertical_alignment)
+        {
+            frame.vertical_alignment = Some(vertical_alignment);
+        }
         let (table_story, table) = if raw_type == Some(RAW_TYPE_TABLE) {
             if let Some(quill_catalog) = quill_catalog.as_ref() {
                 let context = table_bridge::TableBridgeContext {
@@ -2950,6 +3008,12 @@ pub fn build_mature_0x2c_from_streams(
         }
         if let Some(text_frame_inset) = &text_frame_inset {
             source_refs.extend(text_frame_inset.source_refs.clone());
+        }
+        if let Some(vertical_alignment) = story_frame
+            .as_ref()
+            .and_then(|frame| frame.vertical_alignment.as_ref())
+        {
+            source_refs.extend(vertical_alignment.source_refs.clone());
         }
         if let Some(table) = &table {
             source_refs.extend(table.source_refs.clone());
@@ -4457,6 +4521,7 @@ fn build_story_frame(
         previous_frame,
         next_seq_num: next_seq,
         next_frame,
+        vertical_alignment: None,
     }))
 }
 

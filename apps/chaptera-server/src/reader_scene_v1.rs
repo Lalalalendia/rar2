@@ -143,6 +143,8 @@ pub struct ReaderTextLayoutV1 {
     pub font_fingerprint_sha256: String,
     pub font_size_emu: i64,
     pub line_height_emu: i64,
+    #[serde(skip_serializing_if = "is_zero_i64")]
+    pub vertical_offset_emu: i64,
     pub lines: Vec<ReaderTextLineV1>,
 }
 
@@ -268,6 +270,10 @@ fn take_direct_render_text(
         .or_else(|| source_text_by_node.get(node_id).cloned())
 }
 
+fn is_zero_i64(value: &i64) -> bool {
+    *value == 0
+}
+
 fn reader_text_layout_from_render_text(
     text: &RenderTextFragmentV1,
 ) -> (Option<ReaderTextLayoutV1>, bool) {
@@ -291,6 +297,7 @@ fn reader_text_layout_from_render_text(
         font_fingerprint_sha256: font_fingerprint_sha256.clone(),
         font_size_emu: *font_size_emu,
         line_height_emu: *line_height_emu,
+        vertical_offset_emu: layout.vertical_offset_emu,
         lines: layout
             .lines
             .iter()
@@ -600,6 +607,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut used_configured_font_ids = HashSet::<String>::new();
     let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
+    let mut text_bounds_by_node = HashMap::<String, ReaderRectV1>::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
     let mut projected_instance_ids = HashSet::<String>::new();
     let mut projected_text_layout_count = 0_usize;
@@ -801,6 +809,20 @@ pub fn from_viewer_geometry_with_fonts(
                     "duplicate direct render-plan text binding for node {node_id}"
                 ));
             }
+            if let Some(text_bounds) = node.text_bounds.as_ref() {
+                let mapped_bounds = rect_from_serialized(text_bounds)?;
+                if mapped_bounds.width <= 0 || mapped_bounds.height <= 0 {
+                    return Err(format!(
+                        "direct render-plan node {node_id} has non-positive text bounds"
+                    ));
+                }
+                if text_bounds_by_node
+                    .insert(node_id.clone(), mapped_bounds)
+                    .is_some()
+                {
+                    return Err(format!("duplicate text bounds binding for node {node_id}"));
+                }
+            }
             if let Some(mapped_layout) = mapped_layout
                 && text_layout_by_node
                     .insert(node_id.clone(), mapped_layout)
@@ -822,6 +844,7 @@ pub fn from_viewer_geometry_with_fonts(
             .cloned()
             .ok_or_else(|| format!("node {node_id} has no resolved page"))?;
         let parent_node_id = node_ids.contains(&parent_id).then_some(parent_id);
+        let text_bounds = text_bounds_by_node.remove(&node_id);
         nodes.push(ReaderNodeV1 {
             origin_node_id: None,
             kind: kind_by_node
@@ -834,11 +857,11 @@ pub fn from_viewer_geometry_with_fonts(
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
             text_layout: text_layout_by_node.remove(&node_id),
-            node_id,
+            node_id: node_id.clone(),
             page_id,
             parent_node_id,
             bounds,
-            text_bounds: None,
+            text_bounds,
             transform,
         });
     }

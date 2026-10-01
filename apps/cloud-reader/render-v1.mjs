@@ -173,8 +173,11 @@ export function resolvedTextLinePaintPlan(node) {
   const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
   if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
 
+  const verticalOffset = safeInteger(layout.vertical_offset_emu ?? 0, "text.vertical_offset_emu");
+  if (verticalOffset < 0 || verticalOffset > height) return null;
+
   const lines = [];
-  let cursorY = y;
+  let cursorY = y + verticalOffset;
   for (const line of [...(layout.lines ?? [])].sort((left, right) => left.line_index - right.line_index)) {
     const lineIndex = safeInteger(line.line_index, "text.line_index");
     const currentLineHeight = safeInteger(line.line_height_emu, "text.line_height_emu");
