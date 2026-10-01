@@ -37,6 +37,25 @@ fn emit_resolved_graph(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn emit_source_page_paint_orders(path: &str) -> Result<()> {
+    let bytes = fs::read(path).context("read pinned PUB fixture")?;
+    let source_hash = pinned_hash();
+    let source = pub_reader::build_mature_0x2c_source_graph(
+        Cursor::new(bytes.as_slice()),
+        source_hash,
+    )
+    .context("build mature-0x2c SourceGraph")?;
+    print!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+            "schema_version": "chaptera.pub-source-page-paint-orders-sidecar.v1",
+            "source_hash": source_hash,
+            "orders": source.source_page_paint_orders,
+        }))?
+    );
+    Ok(())
+}
+
 fn editable_target(value: &str) -> Result<EditorEditableTarget> {
     match value {
         "idml" => Ok(EditorEditableTarget::Idml),
@@ -106,6 +125,13 @@ fn main() -> Result<()> {
             anyhow::bail!("unexpected extra arguments");
         }
         return emit_resolved_graph(&path);
+    }
+    if first == "source-page-paint-orders" {
+        let path = args.next().context("fixture path argument missing")?;
+        if args.next().is_some() {
+            anyhow::bail!("unexpected extra arguments");
+        }
+        return emit_source_page_paint_orders(&path);
     }
     if first == "editable-export" {
         let fixture = args.next().context("fixture path missing")?;
