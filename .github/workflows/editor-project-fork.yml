@@ -32,5 +32,8 @@ jobs:
       - name: Test project fork contract
         run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test project_fork_v1
 
+      - name: Test operation-reachable project assets
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test asset_reachability_v1
+
       - name: Check formatting
         run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
