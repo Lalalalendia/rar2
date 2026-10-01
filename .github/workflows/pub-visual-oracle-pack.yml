@@ -1,0 +1,106 @@
+name: PUB visual oracle pack
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-visual-oracle-pack.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download diverse public Publisher fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-visual-oracle-10
+          base="https://raw.githubusercontent.com/apache/poi/trunk/test-data/publisher"
+          files=(
+            "Sample98.pub"
+            "Sample2000.pub"
+            "Sample_2010.pub"
+            "Sample2_2010.pub"
+            "Sample3_2010.pub"
+            "Sample4_2010.pub"
+            "SampleBrochure.pub"
+            "SampleNewsletter.pub"
+            "51318.pub"
+            "60685.pub"
+          )
+          for f in "${files[@]}"; do
+            curl -fL --retry 4 --retry-all-errors --retry-delay 2               "${base}/${f}" -o "target/pub-visual-oracle-10/${f}"
+          done
+
+      - name: Validate PUB bytes and build manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import csv, hashlib
+
+          root = Path("target/pub-visual-oracle-10")
+          names = [
+              "Sample98.pub",
+              "Sample2000.pub",
+              "Sample_2010.pub",
+              "Sample2_2010.pub",
+              "Sample3_2010.pub",
+              "Sample4_2010.pub",
+              "SampleBrochure.pub",
+              "SampleNewsletter.pub",
+              "51318.pub",
+              "60685.pub",
+          ]
+          magic = bytes.fromhex("d0cf11e0a1b11ae1")
+          rows = []
+          for i, name in enumerate(names, 1):
+              p = root / name
+              data = p.read_bytes()
+              assert data.startswith(magic), (name, data[:8].hex())
+              assert len(data) > 4096, (name, len(data))
+              rows.append({
+                  "oracle_id": f"POI-{i:02d}",
+                  "pub_filename": name,
+                  "expected_pdf_filename": name[:-4] + ".pdf",
+                  "bytes": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "source": f"https://github.com/apache/poi/blob/trunk/test-data/publisher/{name}",
+              })
+          with (root / "MANIFEST.csv").open("w", newline="", encoding="utf-8") as f:
+              w = csv.DictWriter(f, fieldnames=rows[0].keys())
+              w.writeheader()
+              w.writerows(rows)
+          (root / "README.txt").write_text(
+              "PUB visual-oracle seed corpus (10 files)\n"
+              "Source: Apache POI public Publisher fixtures.\n\n"
+              "Please open each .pub in Microsoft Publisher and export/save a PDF "
+              "with the same basename shown in MANIFEST.csv. Do not resave the .pub. "
+              "Return the PDFs together with the original ZIP or the unchanged PUB files.\n"
+              "If Publisher warns about missing fonts or substitutions, note the filename and warning.\n",
+              encoding="utf-8",
+          )
+          print("\n".join(f"{r['oracle_id']} {r['pub_filename']} {r['bytes']} {r['sha256']}" for r in rows))
+          PY
+
+      - name: Pack visual oracle seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd target
+          zip -9 -r pub-visual-oracle-10.zip pub-visual-oracle-10
+          sha256sum pub-visual-oracle-10.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-visual-oracle-10
+          path: target/pub-visual-oracle-10.zip
+          if-no-files-found: error
+          retention-days: 7
