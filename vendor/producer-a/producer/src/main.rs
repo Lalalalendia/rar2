@@ -98,6 +98,44 @@ fn emit_editable_export(
 }
 
 
+fn emit_editor_capabilities(
+    fixture: &str,
+    project_path: &str,
+) -> Result<()> {
+    let bytes = fs::read(fixture).context("read source PUB fixture")?;
+    let project: EditorProject =
+        serde_json::from_slice(&fs::read(project_path).context("read canonical EditorProject")?)
+            .context("parse canonical EditorProject")?;
+    if source_sha256(&bytes) != project.source_hash {
+        anyhow::bail!("source PUB SHA-256 does not match EditorProject");
+    }
+
+    let mut session =
+        pub_editor::open_mature_0x2c_editor(&bytes, project.source_hash).context("open editor")?;
+    session
+        .apply_project(&project)
+        .context("replay canonical EditorProject")?;
+
+    let mut editable_story_ids = session
+        .graph()
+        .stories
+        .keys()
+        .copied()
+        .filter(|story_id| session.can_replace_story_text(*story_id).is_ok())
+        .collect::<Vec<_>>();
+    editable_story_ids.sort();
+
+    print!(
+        "{}",
+        serde_json::to_string(&serde_json::json!({
+            "protocol_version": "chaptera.editor-capabilities.v1",
+            "source_hash": project.source_hash,
+            "editable_story_ids": editable_story_ids,
+        }))?
+    );
+    Ok(())
+}
+
 fn emit_editor_move_node(
     fixture: &str,
     project_path: &str,
@@ -336,6 +374,14 @@ fn main() -> Result<()> {
             anyhow::bail!("unexpected extra arguments");
         }
         return emit_editable_export(&fixture, &project, &target, &output, &report);
+    }
+    if first == "editor-capabilities" {
+        let fixture = args.next().context("fixture path missing")?;
+        let project = args.next().context("project path missing")?;
+        if args.next().is_some() {
+            anyhow::bail!("unexpected extra arguments");
+        }
+        return emit_editor_capabilities(&fixture, &project);
     }
     if first == "editor-move-node" {
         let fixture = args.next().context("fixture path missing")?;
