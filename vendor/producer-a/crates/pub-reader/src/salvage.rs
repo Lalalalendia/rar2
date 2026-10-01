@@ -4,6 +4,7 @@ use crate::failure_intake::{
 use crate::family_classifier::classify_pub_family;
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
+use pub_escher::inspect_delayed_blips;
 use pub_quill::{QuillStoryReadError, parse_confirmed_story_catalog};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -246,10 +247,47 @@ pub fn build_reader_partial_source_graph(
         gaps.push(ReaderPartialSourceGap::TextUnavailable);
     }
 
-    // The current shared salvage probe can prove Escher stream survival, but it
-    // does not yet prove a source-neutral image or geometry join. Preserve that
-    // absence explicitly instead of inventing identities or bounds.
-    gaps.push(ReaderPartialSourceGap::ImageFactsUnavailable);
+    let mut verified_image_count = 0_usize;
+    if probe.subsystems.escher_delay == ReaderSalvageStreamState::Readable
+        && let Ok(delay) = pub_cfb::read_stream_reader(Cursor::new(bytes), ESCHER_DELAY_STREAM)
+        && u64::try_from(delay.len())
+            .ok()
+            .is_some_and(|len| len <= READER_SALVAGE_MAX_STREAM_BYTES)
+        && let Ok(inventory) =
+            inspect_delayed_blips(StreamPath(ESCHER_DELAY_STREAM.into()), &delay)
+    {
+        for record in inventory.records {
+            let Some(source) = record.image_payload_source else {
+                continue;
+            };
+            let Some(start) = usize::try_from(source.offset).ok() else {
+                continue;
+            };
+            let Some(len) = usize::try_from(source.len).ok() else {
+                continue;
+            };
+            let Some(end) = start.checked_add(len) else {
+                continue;
+            };
+            let Some(payload) = delay.get(start..end) else {
+                continue;
+            };
+            let sha256 = source_sha256(payload);
+            facts.push(ReaderPartialSourceFact::VerifiedImage {
+                resource_key: format!("escher-delay:{}:{sha256}", record.ordinal),
+                sha256,
+                byte_len: payload.len() as u64,
+            });
+            verified_image_count += 1;
+        }
+    }
+    if verified_image_count == 0 {
+        gaps.push(ReaderPartialSourceGap::ImageFactsUnavailable);
+    }
+
+    // Stream survival alone is not enough to assign source-neutral page/object
+    // identity or bounds. Keep geometry absent until that join is independently
+    // grounded rather than promoting raw OfficeArt coordinates.
     gaps.push(ReaderPartialSourceGap::GeometryFactsUnavailable);
     gaps.sort_by_key(|gap| match gap {
         ReaderPartialSourceGap::TextUnavailable => 0,
