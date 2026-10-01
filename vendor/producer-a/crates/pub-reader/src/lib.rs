@@ -29,8 +29,10 @@ mod wmf_preview;
 pub use asset_export::{
     PUB_ASSET_EXPORT_SCHEMA_V0_1, PUB_ASSET_MANIFEST_FILENAME, PubAssetExportBundle,
     PubAssetExportDiagnostic, PubAssetExportFile, PubAssetExportManifest,
-    PubAssetExportManifestEntry, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_pub_asset_export_bundle, pub_asset_manifest_json, write_pub_asset_export_bundle,
+    PubAssetExportManifestEntry, PubMaterializedWmfAsset,
+    build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_pub_asset_export_bundle, materialize_mature_0x2c_wmf_assets_from_bytes,
+    pub_asset_manifest_json, write_pub_asset_export_bundle,
 };
 pub use assets::{
     PubAssetManifest, PubAssetManifestDiagnostic, PubAssetManifestEntry, PubAssetUse,
