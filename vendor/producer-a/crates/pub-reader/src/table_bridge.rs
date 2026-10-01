@@ -1318,6 +1318,7 @@ mod tests {
             utf16_start: 0,
             utf16_end: 1,
             bounds: Some(bounds),
+            paint: None,
             source_refs: Vec::new(),
         };
         let simple_table = SimpleRectangularTable::new(
