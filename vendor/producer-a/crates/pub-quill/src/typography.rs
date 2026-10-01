@@ -480,7 +480,7 @@ pub fn parse_bounded_typography(
             &mut inheritance_unknown_block_types,
         )?;
         validate_monotone_fdpp_text_offsets(&paragraph_styles)?;
-        let paragraph_ranges =
+        let mut paragraph_ranges =
             materialize_paragraph_ranges(&paragraph_styles, text_start, text_end, total_utf16)?;
         let character_defaults = parse_stsh1_character_defaults(
             bytes,
@@ -489,6 +489,7 @@ pub fn parse_bounded_typography(
             &font_names,
             &mut inheritance_unknown_block_types,
         )?;
+        apply_bounded_implicit_style_zero(&mut paragraph_ranges, &character_defaults);
 
         if explicit_run_projection_allowed(&unknown_block_types)
             && explicit_run_projection_allowed(&inheritance_unknown_block_types)
@@ -874,6 +875,33 @@ fn parse_stsh1_character_defaults(
         ));
     }
     Ok(rows)
+}
+
+fn apply_bounded_implicit_style_zero(
+    paragraph_ranges: &mut [ParagraphTypographyRange],
+    defaults: &[CharacterDefaultObservation],
+) -> bool {
+    if paragraph_ranges.is_empty()
+        || paragraph_ranges
+            .iter()
+            .any(|range| range.selected_style_index.is_some())
+    {
+        return false;
+    }
+
+    let [only_default] = defaults else {
+        return false;
+    };
+    if only_default.logical_style_index != 0 {
+        return false;
+    }
+
+    for range in paragraph_ranges {
+        range.selected_style_index = Some(0);
+        range.selector_source =
+            Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence);
+    }
+    true
 }
 
 fn build_effective_runs(
@@ -1824,6 +1852,160 @@ mod tests {
         let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story])
             .expect("bounded segmentation");
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn bounded_implicit_style_zero_requires_one_style_zero_and_no_explicit_selectors() {
+        let stream = pub_core::StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let mut ranges = vec![
+            ParagraphTypographyRange {
+                global_start_utf16: 0,
+                global_end_utf16: 5,
+                fdpp_descriptor_ordinal: 4,
+                fdpp_style_ordinal: 0,
+                style_source: RawSpan {
+                    stream: stream.clone(),
+                    offset: 100,
+                    len: 4,
+                },
+                selected_style_index: None,
+                selector_source: None,
+            },
+            ParagraphTypographyRange {
+                global_start_utf16: 5,
+                global_end_utf16: 10,
+                fdpp_descriptor_ordinal: 4,
+                fdpp_style_ordinal: 1,
+                style_source: RawSpan {
+                    stream: stream.clone(),
+                    offset: 104,
+                    len: 4,
+                },
+                selected_style_index: None,
+                selector_source: None,
+            },
+        ];
+        let defaults = vec![CharacterDefaultObservation {
+            logical_style_index: 0,
+            stsh_descriptor_ordinal: 2,
+            stsh_record_ordinal: 0,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 200,
+                len: 12,
+            },
+            font_pairs: vec![(0, "Times New Roman".to_owned())],
+            text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+        }];
+
+        assert!(apply_bounded_implicit_style_zero(&mut ranges, &defaults));
+        assert!(ranges.iter().all(|range| range.selected_style_index == Some(0)));
+        assert!(ranges.iter().all(|range| {
+            range.selector_source
+                == Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
+        }));
+
+        let mut explicit = ranges.clone();
+        explicit[0].selected_style_index = Some(3);
+        explicit[0].selector_source = Some(QuillParagraphSelectorSource::ExplicitFdpp0x19);
+        assert!(!apply_bounded_implicit_style_zero(&mut explicit, &defaults));
+        assert_eq!(explicit[0].selected_style_index, Some(3));
+
+        let mut multi_default = ranges.clone();
+        for range in &mut multi_default {
+            range.selected_style_index = None;
+            range.selector_source = None;
+        }
+        let mut two_defaults = defaults.clone();
+        two_defaults.push(CharacterDefaultObservation {
+            logical_style_index: 1,
+            stsh_descriptor_ordinal: 2,
+            stsh_record_ordinal: 2,
+            style_source: RawSpan {
+                stream,
+                offset: 220,
+                len: 12,
+            },
+            font_pairs: vec![(1, "Other".to_owned())],
+            text_sizes_emu: vec![11 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+        });
+        assert!(!apply_bounded_implicit_style_zero(
+            &mut multi_default,
+            &two_defaults
+        ));
+    }
+
+    #[test]
+    fn implicit_style_zero_inherits_missing_font_without_overriding_explicit_size() {
+        let stream = pub_core::StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let story = StoryExtent {
+            story_index: 0,
+            story_syid: QuillSyid(7),
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+        };
+        let fdpc = QuillTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpc_descriptor_ordinal: 5,
+            fdpc_style_ordinal: 3,
+            fdpc_style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 300,
+                len: 12,
+            },
+            text_offset_source: RawSpan {
+                stream: stream.clone(),
+                offset: 80,
+                len: 4,
+            },
+            font_indices: Vec::new(),
+            font_names: Vec::new(),
+            script_fonts: Vec::new(),
+            text_sizes_emu: vec![18 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+            story_intersections: Vec::new(),
+        };
+        let paragraph = ParagraphTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpp_descriptor_ordinal: 4,
+            fdpp_style_ordinal: 7,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 200,
+                len: 8,
+            },
+            selected_style_index: Some(0),
+            selector_source: Some(
+                QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
+            ),
+        };
+        let default = CharacterDefaultObservation {
+            logical_style_index: 0,
+            stsh_descriptor_ordinal: 2,
+            stsh_record_ordinal: 0,
+            style_source: RawSpan {
+                stream,
+                offset: 400,
+                len: 16,
+            },
+            font_pairs: vec![(0, "Times New Roman".to_owned())],
+            text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+        };
+
+        let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story])
+            .expect("bounded implicit style-0 effective run");
+        let [run] = runs.as_slice() else {
+            panic!("expected one effective run");
+        };
+        assert_eq!(run.font_name, "Times New Roman");
+        assert_eq!(run.font_source, QuillTypographyValueSource::InheritedStsh1);
+        assert_eq!(run.text_size_emu, 18 * QUILL_TEXT_SIZE_EMU_PER_POINT);
+        assert_eq!(run.text_size_source, QuillTypographyValueSource::ExplicitFdpc);
+        assert_eq!(
+            run.inherited_selector_source,
+            Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
+        );
     }
 
     #[test]
