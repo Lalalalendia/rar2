@@ -2365,29 +2365,6 @@ impl ViewerApp {
 
         self.ensure_image_textures(ui.ctx());
 
-        if let Some(graph) = &self.salvage {
-            reader_product_ui::section_label(ui, "Reader mode");
-            ui.label(
-                egui::RichText::new("●  Salvage")
-                    .strong()
-                    .color(reader_product_ui::WARNING),
-            );
-            reader_product_ui::muted(
-                ui,
-                "Read-only source-backed recovery facts. No repaired document or page layout is claimed.",
-            );
-            ui.add_space(8.0);
-            reader_product_ui::muted(
-                ui,
-                format!(
-                    "{} proven fact(s), {} explicit gap(s)",
-                    graph.facts.len(),
-                    graph.gaps.len()
-                ),
-            );
-            return;
-        }
-
         let Some(visual) = &self.visual else {
             ui.weak("No document loaded.");
             return;
@@ -2624,6 +2601,29 @@ impl ViewerApp {
             ui.label("Project");
             ui.small(status);
             ui.add_space(8.0);
+        }
+
+        if let Some(graph) = &self.salvage {
+            reader_product_ui::section_label(ui, "Reader mode");
+            ui.label(
+                egui::RichText::new("●  Salvage")
+                    .strong()
+                    .color(reader_product_ui::WARNING),
+            );
+            reader_product_ui::muted(
+                ui,
+                "Read-only source-backed recovery facts. No repaired document or page layout is claimed.",
+            );
+            ui.add_space(8.0);
+            reader_product_ui::muted(
+                ui,
+                format!(
+                    "{} proven fact(s), {} explicit gap(s)",
+                    graph.facts.len(),
+                    graph.gaps.len()
+                ),
+            );
+            return;
         }
 
         let Some(visual) = &self.visual else {
