@@ -65,7 +65,8 @@ use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, PubAssetExportDiagnostic, PubBridgeDiagnostic,
-    PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
+    PubEffectivePaintAuthority, PubEffectiveTextMarginsSource, PubExplicitImageCropSource,
+    PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
@@ -211,6 +212,10 @@ pub struct ViewerProjectedSceneInstanceV1 {
     /// canonical source text but are overset and must not paint in the target frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_frame_paint_scalar_end: Option<u32>,
+    /// Source-backed text content box inside the projected carrier geometry.
+    /// Shape paint/image bounds remain in `bounds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_content_bounds: Option<RectEmu>,
     pub bounds: RectEmu,
     pub transform: Affine2D,
 }
@@ -3052,6 +3057,33 @@ fn page_for_resolved_node(graph: &PubResolvedGraph, node_id: NodeId) -> Result<P
 }
 
 #[cfg(feature = "cmo-slot-compose")]
+fn text_content_bounds_from_margins(
+    bounds: RectEmu,
+    margins: &PubEffectiveTextMarginsSource,
+) -> Option<RectEmu> {
+    let x = bounds.x.get().checked_add(margins.left_emu.value)?;
+    let y = bounds.y.get().checked_add(margins.top_emu.value)?;
+    let horizontal = margins
+        .left_emu
+        .value
+        .checked_add(margins.right_emu.value)?;
+    let vertical = margins
+        .top_emu
+        .value
+        .checked_add(margins.bottom_emu.value)?;
+    let width = bounds.width.get().checked_sub(horizontal)?;
+    let height = bounds.height.get().checked_sub(vertical)?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(RectEmu::new(
+        LengthEmu::new(x),
+        LengthEmu::new(y),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
 fn project_carlton_march_cmo_instances(
     bytes: &[u8],
     pipeline: &Mature0x2cPipeline,
@@ -3352,10 +3384,17 @@ fn project_carlton_march_cmo_instances(
                 ));
             }
 
+            let text_content_bounds = carrier
+                .payload
+                .effective_text_margins
+                .as_ref()
+                .and_then(|margins| text_content_bounds_from_margins(bounds, margins));
+
             projected.push(ViewerProjectedSceneInstanceV1 {
                 scene_instance,
                 target_frame_node_id,
                 target_frame_paint_scalar_end,
+                text_content_bounds,
                 bounds,
                 transform: carrier.header.transform.clone(),
             });
@@ -3612,6 +3651,7 @@ mod tests {
                         explicit_image_crop: None,
                         explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                         effective_paint: None,
+                        effective_text_margins: None,
                         story_frame: Some(PubResolvedStoryFrame {
                             story_id: Some(story_id),
                             ordinal: 0,
@@ -4177,6 +4217,7 @@ mod tests {
                 explicit_image_crop: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                 effective_paint: None,
+                effective_text_margins: None,
                 story_frame: Some(PubResolvedStoryFrame {
                     story_id: Some(story_id),
                     ordinal: 0,
