@@ -967,7 +967,13 @@ mod tests {
         let root = temp_root("roundtrip");
         let (source, project) = source_and_project(&root);
 
+        let source_before = fs::read(&source).expect("read source before save");
         let receipt = commit(&source, &project, &BTreeMap::new()).expect("commit");
+        assert_eq!(
+            fs::read(&source).expect("read source after save"),
+            source_before,
+            "EditorProject durability must not mutate source PUB bytes"
+        );
         assert_eq!(receipt.generation, 1);
         assert!(receipt.visible_path.is_file());
         assert!(receipt.generation_manifest_path.is_file());
@@ -1113,6 +1119,148 @@ mod tests {
         ));
         drop(first);
         acquire_lock(&source).expect("stale lock filename must not block a new live handle");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_unpublished_generation_is_never_recovered_as_committed() {
+        let root = temp_root("staged-unpublished");
+        let (source, project) = source_and_project(&root);
+        let first = commit(&source, &project, &BTreeMap::new()).expect("first commit");
+
+        let staged_generation = 2;
+        let staged_assets =
+            generation_asset_dir_path(&source, staged_generation).expect("staged asset dir");
+        fs::create_dir(&staged_assets).expect("create staged asset dir");
+        let staged_envelope =
+            build_envelope(&source, staged_generation, &project).expect("staged envelope");
+        let mut staged_bytes =
+            serde_json::to_vec_pretty(&staged_envelope).expect("serialize staged envelope");
+        staged_bytes.push(b'\n');
+        let staged_manifest =
+            generation_manifest_path(&source, staged_generation).expect("staged manifest");
+        let source_identity = identify_existing_path(&source).expect("source identity");
+        AdmittedDestination::admit(&staged_manifest, &[source_identity])
+            .expect("admit staged manifest")
+            .commit_bytes(&staged_bytes)
+            .expect("publish staged manifest");
+
+        let opened = inspect(&source, project.source_hash)
+            .expect("inspect with valid visible")
+            .expect("current generation");
+        assert_eq!(opened.disposition, StoreDisposition::Current);
+        assert_eq!(opened.generation, Some(first.generation));
+
+        fs::write(&first.visible_path, b"corrupt visible").expect("corrupt visible");
+        let recovered = inspect(&source, project.source_hash)
+            .expect("recover committed generation")
+            .expect("recovery generation");
+        assert_eq!(recovered.disposition, StoreDisposition::Recovery);
+        assert_eq!(
+            recovered.generation,
+            Some(first.generation),
+            "complete but never-visible generation must not be resurrected"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn orphan_pre_manifest_generation_is_cleaned_only_after_next_success() {
+        let root = temp_root("orphan-cleanup");
+        let (source, project) = source_and_project(&root);
+        let first = commit(&source, &project, &BTreeMap::new()).expect("first commit");
+
+        let orphan_generation = 2;
+        let orphan_dir =
+            generation_asset_dir_path(&source, orphan_generation).expect("orphan dir");
+        fs::create_dir(&orphan_dir).expect("simulate crash after asset-dir creation");
+        assert!(orphan_dir.exists());
+
+        let next = commit(&source, &project, &BTreeMap::new()).expect("next complete commit");
+        assert_eq!(
+            next.generation, 3,
+            "orphan generation identity must never be reused"
+        );
+        assert!(
+            !orphan_dir.exists(),
+            "stale generated orphan may be cleaned only after a newer complete save"
+        );
+        assert!(first.generation_manifest_path.exists());
+        assert!(next.generation_manifest_path.exists());
+
+        let third = commit(&source, &project, &BTreeMap::new()).expect("third complete commit");
+        assert_eq!(third.generation, 4);
+        assert!(
+            !first.generation_manifest_path.exists(),
+            "normal cleanup retains only current plus previous complete generation"
+        );
+        assert!(next.generation_manifest_path.exists());
+        assert!(third.generation_manifest_path.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_open_upgrades_on_next_successful_save_without_losing_recovery() {
+        let root = temp_root("legacy-upgrade");
+        let (source, project) = source_and_project(&root);
+        let visible = sidecar_path(&source).expect("visible path");
+        let legacy_bytes = serde_json::to_vec_pretty(&project).expect("serialize legacy");
+        fs::write(&visible, &legacy_bytes).expect("write legacy sidecar");
+
+        let legacy = inspect(&source, project.source_hash)
+            .expect("inspect legacy")
+            .expect("legacy state");
+        assert_eq!(legacy.disposition, StoreDisposition::Legacy);
+
+        let receipt = commit(&source, &project, &BTreeMap::new()).expect("upgrade save");
+        let current = inspect(&source, project.source_hash)
+            .expect("inspect upgraded")
+            .expect("upgraded state");
+        assert_eq!(current.disposition, StoreDisposition::Current);
+        assert_eq!(current.generation, Some(receipt.generation));
+
+        fs::write(&receipt.visible_path, b"corrupt upgraded visible")
+            .expect("corrupt upgraded visible");
+        let recovered = inspect(&source, project.source_hash)
+            .expect("recover legacy last-known-good")
+            .expect("legacy recovery");
+        assert_eq!(recovered.disposition, StoreDisposition::Legacy);
+        assert_eq!(recovered.project, project);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_asset_closure_is_typed_and_never_empty() {
+        let root = temp_root("asset-corruption");
+        let (source, mut project) = source_and_project(&root);
+        let bytes = [b"\x89PNG\r\n\x1a\n".as_slice(), b"required"].concat();
+        let sha = digest_value(&bytes);
+        project.assets.push(EditorProjectAsset {
+            sha256: sha,
+            mime: "image/png".to_owned(),
+            byte_len: u64::try_from(bytes.len()).expect("bounded test asset"),
+        });
+        project.operations.push(EditOperation::ReplaceImage {
+            node_id: serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId"),
+            before_asset: None,
+            after_asset: sha,
+        });
+        let receipt = commit(&source, &project, &BTreeMap::from([(sha, bytes)]))
+            .expect("asset project commit");
+
+        let asset_name = project.assets[0].file_name().expect("asset file name");
+        fs::write(receipt.generation_asset_dir.join(asset_name), b"corrupt")
+            .expect("corrupt asset");
+
+        assert!(
+            inspect(&source, project.source_hash).is_err(),
+            "corrupt current and same-generation recovery closure must fail typed, never become empty"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
