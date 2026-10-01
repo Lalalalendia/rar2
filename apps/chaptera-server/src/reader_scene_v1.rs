@@ -2,11 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
+    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+    build_page_render_plan_with_text_layout_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
@@ -190,12 +192,73 @@ pub struct ReaderImageResourceV1 {
 
 #[derive(Debug, Serialize)]
 pub struct ReaderFontResourceV1 {
-    pub resource_id: &'static str,
-    pub family_name: &'static str,
+    pub resource_id: String,
+    pub family_name: String,
     pub mime: &'static str,
-    pub expected_sha256: &'static str,
+    pub expected_sha256: String,
     pub availability: &'static str,
     pub inline_data_url: String,
+}
+
+#[derive(Debug)]
+pub struct ReaderTextFontProbeResource<'a> {
+    pub resource_id: &'a str,
+    pub family_name: &'a str,
+    pub expected_sha256: &'a str,
+    pub source_family_sha256: &'a str,
+    pub face_index: u32,
+    pub bytes: &'a [u8],
+}
+
+impl ReaderTextFontProbeResource<'_> {
+    fn resource_for_fragment<'a>(
+        &'a self,
+        fragment: &RenderTextFragmentV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
+        let family_sha256 = complete_single_family_sha256(fragment)?;
+        if family_sha256 != self.source_family_sha256 {
+            return None;
+        }
+        Some(ExplicitRenderTextFontResourceV1 {
+            resource_id: self.resource_id,
+            expected_sha256: self.expected_sha256,
+            face_index: self.face_index,
+            default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
+            default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
+            bytes: self.bytes,
+        })
+    }
+}
+
+fn complete_single_family_sha256(fragment: &RenderTextFragmentV1) -> Option<String> {
+    if fragment.typography.is_empty() {
+        return None;
+    }
+    let mut cursor = fragment.scalar_start;
+    let mut normalized_family: Option<String> = None;
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+        {
+            return None;
+        }
+        let family = run.source_font_name.trim().to_lowercase();
+        if family.is_empty() {
+            return None;
+        }
+        match normalized_family.as_deref() {
+            None => normalized_family = Some(family),
+            Some(existing) if existing == family => {}
+            Some(_) => return None,
+        }
+        cursor = run.scalar_end;
+    }
+    if cursor != fragment.scalar_end {
+        return None;
+    }
+    let family = normalized_family?;
+    Some(format!("{:x}", Sha256::digest(family.as_bytes())))
 }
 
 #[derive(Debug, Serialize)]
@@ -332,6 +395,24 @@ pub fn from_viewer_geometry(
     revision_id: String,
     geometry: &ViewerGeometryDocument,
     source_page_paint_orders: &[ViewerPagePaintOrderV1],
+) -> Result<ReaderSceneV1, String> {
+    from_viewer_geometry_with_font_probe(
+        document_id,
+        source_hash,
+        revision_id,
+        geometry,
+        source_page_paint_orders,
+        None,
+    )
+}
+
+pub fn from_viewer_geometry_with_font_probe(
+    document_id: String,
+    source_hash: String,
+    revision_id: String,
+    geometry: &ViewerGeometryDocument,
+    source_page_paint_orders: &[ViewerPagePaintOrderV1],
+    font_probe: Option<&ReaderTextFontProbeResource<'_>>,
 ) -> Result<ReaderSceneV1, String> {
     let viewer_source_hash =
         serialized_string(&geometry.document.source.source_hash, "Viewer source hash")?;
@@ -549,12 +630,22 @@ pub fn from_viewer_geometry(
     let mut projected_text_layout_count = 0_usize;
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
+    let mut probe_font_used = false;
     for page_index in 0..geometry.document.pages.len() {
-        let plan = match build_page_render_plan_with_text_layout_v1(
-            geometry,
-            page_index,
-            &fallback_font,
-        ) {
+        let plan = match font_probe {
+            Some(probe) => build_page_render_plan_with_text_layout_resolver_v1(
+                geometry,
+                page_index,
+                &fallback_font,
+                |fragment| probe.resource_for_fragment(fragment),
+            ),
+            None => build_page_render_plan_with_text_layout_v1(
+                geometry,
+                page_index,
+                &fallback_font,
+            ),
+        };
+        let plan = match plan {
             Ok(plan) => plan,
             Err(_) => {
                 text_layout_partial = true;
@@ -564,6 +655,10 @@ pub fn from_viewer_geometry(
         let plan_page_id = serialized_string(&plan.page_id, "render-plan page id")?;
 
         for node in plan.nodes {
+            if let (Some(probe), Some(text)) = (font_probe, node.text.as_ref()) {
+                probe_font_used |= text.backend_font_resource_id.as_deref()
+                    == Some(probe.resource_id);
+            }
             let (mapped_layout, layout_partial) = match node.text.as_ref() {
                 Some(text) => reader_text_layout_from_render_text(text),
                 None => (None, false),
@@ -778,12 +873,12 @@ pub fn from_viewer_geometry(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let fonts = if text_layout_count > 0 {
+    let mut fonts = if text_layout_count > 0 {
         vec![ReaderFontResourceV1 {
-            resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
-            family_name: chaptera_desktop_fallback_font_resource::FAMILY_NAME,
+            resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID.to_owned(),
+            family_name: chaptera_desktop_fallback_font_resource::FAMILY_NAME.to_owned(),
             mime: SHARED_FALLBACK_FONT_MIME,
-            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
             availability: "inline_data_url",
             inline_data_url: format!(
                 "data:{SHARED_FALLBACK_FONT_MIME};base64,{}",
@@ -793,6 +888,20 @@ pub fn from_viewer_geometry(
     } else {
         Vec::new()
     };
+    if probe_font_used {
+        let probe = font_probe.expect("probe use implies configured probe");
+        fonts.push(ReaderFontResourceV1 {
+            resource_id: probe.resource_id.to_owned(),
+            family_name: probe.family_name.to_owned(),
+            mime: SHARED_FALLBACK_FONT_MIME,
+            expected_sha256: probe.expected_sha256.to_owned(),
+            availability: "inline_data_url",
+            inline_data_url: format!(
+                "data:{SHARED_FALLBACK_FONT_MIME};base64,{}",
+                base64_encode(probe.bytes)
+            ),
+        });
+    }
 
     let mut diagnostics = Vec::new();
     for diagnostic in &geometry.document.diagnostics {
