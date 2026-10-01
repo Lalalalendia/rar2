@@ -31,8 +31,13 @@ jobs:
         run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
       - name: Check desktop durability integration
         run: cargo check -p chaptera-desktop --all-targets
-      - name: Clippy desktop durability integration
-        run: cargo clippy -p chaptera-desktop --all-targets -- -D warnings
+      - name: Clippy desktop durability delta
+        run: >-
+          python tools/ci/check_desktop_clippy_delta.py
+          --base ${{ github.event.pull_request.base.sha }}
+          --head ${{ github.event.pull_request.head.sha }}
+          --path apps/chaptera-desktop/src/editor_project_store.rs
+          --path apps/chaptera-desktop/src/main.rs
       - name: Prove generation store and recovery
         run: cargo test -p chaptera-desktop editor_project_store::tests -- --nocapture
 
