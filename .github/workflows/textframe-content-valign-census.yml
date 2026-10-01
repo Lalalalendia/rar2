@@ -1,0 +1,50 @@
+name: TextFrame content and vertical alignment census
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+      - ".github/workflows/textframe-content-valign-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire exact SampleNewsletter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/textframe-valign"
+          python - <<'PY'
+          import hashlib, os, urllib.request
+          from pathlib import Path
+          url = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          expected = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          data = urllib.request.urlopen(url, timeout=30).read()
+          assert hashlib.sha256(data).hexdigest() == expected
+          (Path(os.environ["RUNNER_TEMP"]) / "textframe-valign" / "SampleNewsletter.pub").write_bytes(data)
+          PY
+
+      - name: Measure exact TextFrame content and alignment
+        env:
+          CHAPTERA_TEXTFRAME_VALIGN_PUB: ${{ runner.temp }}/textframe-valign/SampleNewsletter.pub
+          CHAPTERA_TEXTFRAME_VALIGN_SHA256: 6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer             exact_textframe_content_and_vertical_alignment_census             -- --ignored --nocapture
