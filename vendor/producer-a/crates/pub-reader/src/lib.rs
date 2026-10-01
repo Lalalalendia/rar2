@@ -102,8 +102,9 @@ use pub_model::{
 };
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillScriptFontEntryDisposition,
-    QuillStoryReadError, QuillTypographyValueSource, parse_bounded_fdpp_exact_story_catalog,
-    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
+    QuillStoryReadError, QuillTypographyValueSource, bounded_mcld_uniform_text_inset,
+    parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld, parse_bounded_typography,
+    parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -2699,9 +2700,22 @@ pub fn build_mature_0x2c_from_streams(
         } else {
             None
         };
-        let effective_text_margins = (story_frame.is_some() && dgg_defaults_unambiguous)
-            .then(|| resolve_bounded_effective_officeart_text_margins(shape, dgg_defaults))
-            .flatten();
+        let effective_text_margins = story_frame
+            .as_ref()
+            .and_then(|story_frame| {
+                resolve_bounded_story_mcld_text_margins(
+                    story_frame,
+                    &story_layout_keys,
+                    mcld.as_ref(),
+                )
+            })
+            .or_else(|| {
+                (story_frame.is_some()
+                    && dgg_defaults_unambiguous
+                    && has_explicit_officeart_text_inset_scalar_observation(shape))
+                .then(|| resolve_bounded_effective_officeart_text_margins(shape, dgg_defaults))
+                .flatten()
+            });
         let (table_story, table) = if raw_type == Some(RAW_TYPE_TABLE) {
             if let Some(quill_catalog) = quill_catalog.as_ref() {
                 let context = table_bridge::TableBridgeContext {
@@ -3470,6 +3484,24 @@ enum PaintLineVisibilityLayer {
     Unresolved,
 }
 
+fn has_explicit_officeart_text_inset_scalar_observation(
+    shape: &pub_escher::SpContainerObservation,
+) -> bool {
+    shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| {
+            matches!(
+                property.property_id(),
+                OFFICE_ART_TEXT_LEFT_MARGIN
+                    | OFFICE_ART_TEXT_TOP_MARGIN
+                    | OFFICE_ART_TEXT_RIGHT_MARGIN
+                    | OFFICE_ART_TEXT_BOTTOM_MARGIN
+            )
+        })
+}
+
 fn has_explicit_officeart_text_margin_observation(
     shape: &pub_escher::SpContainerObservation,
 ) -> bool {
@@ -3627,6 +3659,30 @@ pub fn resolve_bounded_effective_officeart_paint(
     })
 }
 
+fn resolve_bounded_story_mcld_text_margins(
+    story_frame: &PubStoryFrameSource,
+    story_layout_keys: &BTreeMap<u32, (u32, RawSpan)>,
+    mcld: Option<&pub_quill::QuillMcldChunk>,
+) -> Option<PubEffectiveTextMarginsSource> {
+    let (layout_key, _) = story_layout_keys.get(&story_frame.text_id)?;
+    let inset = bounded_mcld_uniform_text_inset(mcld?, *layout_key).ok()?;
+    let value = i64::from(inset.inset_emu);
+    let margin_value = || PubEffectivePaintValue {
+        value,
+        authority: PubEffectivePaintAuthority::QuillMcld,
+        source: None,
+    };
+
+    Some(PubEffectiveTextMarginsSource {
+        auto_text_margin: None,
+        left_emu: margin_value(),
+        top_emu: margin_value(),
+        right_emu: margin_value(),
+        bottom_emu: margin_value(),
+        mcld_sources: inset.sources,
+    })
+}
+
 pub fn resolve_bounded_effective_officeart_text_margins(
     shape: &pub_escher::SpContainerObservation,
     dgg_defaults: Option<&pub_escher::DggDefaultOptionsObservation>,
@@ -3644,7 +3700,7 @@ pub fn resolve_bounded_effective_officeart_text_margins(
     };
 
     Some(PubEffectiveTextMarginsSource {
-        auto_text_margin,
+        auto_text_margin: Some(auto_text_margin),
         left_emu: resolve_margin(
             OFFICE_ART_TEXT_LEFT_MARGIN,
             NORMATIVE_TEXT_LEFT_MARGIN_EMU,
@@ -3661,6 +3717,7 @@ pub fn resolve_bounded_effective_officeart_text_margins(
             OFFICE_ART_TEXT_BOTTOM_MARGIN,
             NORMATIVE_TEXT_BOTTOM_MARGIN_EMU,
         )?,
+        mcld_sources: Vec::new(),
     })
 }
 
@@ -3948,13 +4005,17 @@ fn admits_normative_2d_paint_defaults(shape: &pub_escher::SpContainerObservation
 
 fn effective_text_margins_have_dgg_authority(margins: &PubEffectiveTextMarginsSource) -> bool {
     [
-        margins.auto_text_margin.authority,
-        margins.left_emu.authority,
-        margins.top_emu.authority,
-        margins.right_emu.authority,
-        margins.bottom_emu.authority,
+        margins
+            .auto_text_margin
+            .as_ref()
+            .map(|value| value.authority),
+        Some(margins.left_emu.authority),
+        Some(margins.top_emu.authority),
+        Some(margins.right_emu.authority),
+        Some(margins.bottom_emu.authority),
     ]
     .into_iter()
+    .flatten()
     .any(|authority| {
         matches!(
             authority,
@@ -4945,7 +5006,13 @@ mod tests {
         let margins = resolve_bounded_effective_officeart_text_margins(&shape, None)
             .expect("normative text margins");
 
-        assert!(!margins.auto_text_margin.value);
+        assert!(
+            !margins
+                .auto_text_margin
+                .as_ref()
+                .expect("OfficeArt auto-margin state")
+                .value
+        );
         assert_eq!(margins.left_emu.value, 91_440);
         assert_eq!(margins.top_emu.value, 45_720);
         assert_eq!(margins.right_emu.value, 91_440);
