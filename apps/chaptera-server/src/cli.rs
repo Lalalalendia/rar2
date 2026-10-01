@@ -65,6 +65,8 @@ pub enum Command {
         expected_sha256: String,
         #[arg(long)]
         expected_byte_len: u64,
+        #[arg(long, hide = true, default_value_t = false)]
+        probe_publisher_default_text_inset: bool,
     },
 }
 
