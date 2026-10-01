@@ -87,12 +87,14 @@ fn main() -> ExitCode {
         session_id,
         expected_sha256,
         expected_byte_len,
+        probe_publisher_default_text_inset,
     } = &cli.command
     {
         return match guest_reader_worker::run_guest_scene_worker(
             session_id,
             expected_sha256,
             *expected_byte_len,
+            *probe_publisher_default_text_inset,
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
