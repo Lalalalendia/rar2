@@ -69,7 +69,8 @@ pub struct PubMaterializedTableCell {
     pub column_span: u32,
     pub text: String,
     pub bounds: Option<RectEmu>,
-    pub solid_fill_rgb: Option<[u8; 3]>,
+    pub fill_rgb: Option<[u8; 3]>,
+    pub fill_visible: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,11 +250,8 @@ pub fn materialize_bounded_table_cells(
                 column_span: coordinates.end_column - coordinates.start_column + 1,
                 text,
                 bounds: source.bounds,
-                solid_fill_rgb: source
-                    .paint
-                    .as_ref()
-                    .filter(|paint| paint.fill_visible)
-                    .map(|paint| paint.solid_fill_rgb),
+                fill_rgb: source.paint.as_ref().map(|paint| paint.solid_fill_rgb),
+                fill_visible: source.paint.as_ref().map(|paint| paint.fill_visible),
             })
         })
         .collect()
@@ -316,7 +314,6 @@ pub(crate) struct TableBridgeContext<'a> {
     pub table_bounds: &'a RectEmu,
     pub officeart_owner_shape: &'a pub_escher::SpContainerObservation,
     pub officeart_inventory: &'a SpContainerInventory,
-    pub color_scheme: Option<&'a MatureColorScheme>,
 }
 
 fn rect_edges(rect: RectEmu) -> Option<[i128; 4]> {
@@ -376,7 +373,7 @@ fn populate_bounded_table_cell_fill(
             continue;
         }
         let Some(color) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
-            .and_then(|value| bounded_officeart_rgb(value, context.color_scheme))
+            .and_then(direct_officeart_rgb)
         else {
             continue;
         };
