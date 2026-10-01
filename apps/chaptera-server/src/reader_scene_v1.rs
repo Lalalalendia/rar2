@@ -812,7 +812,9 @@ pub fn from_viewer_geometry_with_fonts(
             if let Some(text_bounds) = node.text_bounds.as_ref() {
                 let mapped_bounds = rect_from_serialized(text_bounds)?;
                 if mapped_bounds.width <= 0 || mapped_bounds.height <= 0 {
-                    return Err(format!("direct render-plan node {node_id} has non-positive text bounds"));
+                    return Err(format!(
+                        "direct render-plan node {node_id} has non-positive text bounds"
+                    ));
                 }
                 if text_bounds_by_node
                     .insert(node_id.clone(), mapped_bounds)
