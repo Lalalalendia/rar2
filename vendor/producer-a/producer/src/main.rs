@@ -3,6 +3,7 @@ mod overset;
 use anyhow::{Context, Result};
 use pub_editor::{EditorEditableTarget, EditorProject, LengthEmu, NodeId, StoryId};
 use pub_model::{Sha256Digest, to_cdm_debug_json_v0_1};
+use sha2::{Digest, Sha256};
 use std::{env, fs, io::Cursor, path::Path};
 
 const SAMPLE_HASH: &str = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf";
@@ -11,6 +12,13 @@ fn pinned_hash() -> Sha256Digest {
     SAMPLE_HASH
         .parse()
         .expect("pinned SampleNewsletter SHA-256")
+}
+
+fn source_sha256(bytes: &[u8]) -> Sha256Digest {
+    let digest = Sha256::digest(bytes);
+    let mut value = [0_u8; 32];
+    value.copy_from_slice(&digest);
+    Sha256Digest::from_bytes(value)
 }
 
 fn emit_viewer(path: &str) -> Result<()> {
@@ -99,6 +107,9 @@ fn emit_editor_move_node(
     let project: EditorProject =
         serde_json::from_slice(&fs::read(project_path).context("read canonical EditorProject")?)
             .context("parse canonical EditorProject")?;
+    if source_sha256(&bytes) != project.source_hash {
+        anyhow::bail!("source PUB SHA-256 does not match EditorProject");
+    }
     let command: serde_json::Value =
         serde_json::from_slice(&fs::read(command_path).context("read MoveNode command")?)
             .context("parse MoveNode command")?;
@@ -152,6 +163,9 @@ fn emit_editor_story_range(
     let project: EditorProject =
         serde_json::from_slice(&fs::read(project_path).context("read canonical EditorProject")?)
             .context("parse canonical EditorProject")?;
+    if source_sha256(&bytes) != project.source_hash {
+        anyhow::bail!("source PUB SHA-256 does not match EditorProject");
+    }
     let command: serde_json::Value =
         serde_json::from_slice(&fs::read(command_path).context("read Story range command")?)
             .context("parse Story range command")?;
