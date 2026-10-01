@@ -9,6 +9,8 @@ on:
 permissions:
   contents: read
 
+# Measurement-only successor trigger for authored TextFrame probe.
+
 jobs:
   build:
     runs-on: ubuntu-latest
