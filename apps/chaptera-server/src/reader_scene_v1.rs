@@ -581,26 +581,29 @@ pub fn from_viewer_geometry(
                     ));
                 }
 
-                let origin_node_id =
-                    serialized_string(&node.node_id, "projected origin node id")?;
+                let origin_node_id = serialized_string(&node.node_id, "projected origin node id")?;
                 if origin_node_id != instance.origin_node_id {
                     return Err(format!(
                         "projected Scene instance {} origin {} differs from render-plan origin {}",
                         instance.instance_id, instance.origin_node_id, origin_node_id
                     ));
                 }
-                let projected = geometry
+                let mut projected_matches = geometry
                     .projected_instances
                     .iter()
-                    .find(|projected| {
-                        projected.scene_instance.instance_id == instance.instance_id
-                    })
-                    .ok_or_else(|| {
-                        format!(
-                            "render-plan projected instance {} has no Viewer projection record",
-                            instance.instance_id
-                        )
-                    })?;
+                    .filter(|projected| projected.scene_instance.instance_id == instance.instance_id);
+                let projected = projected_matches.next().ok_or_else(|| {
+                    format!(
+                        "render-plan projected instance {} has no Viewer projection record",
+                        instance.instance_id
+                    )
+                })?;
+                if projected_matches.next().is_some() {
+                    return Err(format!(
+                        "duplicate Viewer projected instance {}",
+                        instance.instance_id
+                    ));
+                }
                 if projected.scene_instance != *instance {
                     return Err(format!(
                         "render-plan projected instance {} differs from Viewer projection identity",
@@ -635,14 +638,16 @@ pub fn from_viewer_geometry(
                             instance.instance_id, resource_id
                         ));
                     }
-                    let source_window = image.source_window.as_ref().map(|window| {
-                        ReaderImageSourceWindowV1 {
-                            left_q16: window.left_q16,
-                            top_q16: window.top_q16,
-                            right_q16: window.right_q16,
-                            bottom_q16: window.bottom_q16,
-                        }
-                    });
+                    let source_window =
+                        image
+                            .source_window
+                            .as_ref()
+                            .map(|window| ReaderImageSourceWindowV1 {
+                                left_q16: window.left_q16,
+                                top_q16: window.top_q16,
+                                right_q16: window.right_q16,
+                                bottom_q16: window.bottom_q16,
+                            });
                     (Some(resource_id), source_window)
                 } else {
                     (None, None)
@@ -1087,10 +1092,9 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
-        ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
-        inline_image_data_url, insert_projected_nodes_after_targets, reader_image_resource,
-        shared_text_font_resource,
+        MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1, ReaderRectV1, ReaderTransformV1,
+        base64_encode, bind_visible_paint, from_viewer_geometry, inline_image_data_url,
+        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
     };
 
     #[test]
