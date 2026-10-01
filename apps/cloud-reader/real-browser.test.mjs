@@ -34,6 +34,35 @@ for (const fixture of fixtures) {
   if (fixture.require_render != null) assert.equal(typeof fixture.require_render, "boolean", "require_render must be boolean");
   if (fixture.require_shared_text != null) assert.equal(typeof fixture.require_shared_text, "boolean", "require_shared_text must be boolean");
 }
+function compatibilityReport(classification, sha, scene) {
+  const supported = classification === "supported";
+  assert.ok(supported || classification === "partial", "renderable fixture must be supported or partial");
+  return {
+    protocol_version: "chaptera.reader-compatibility-report.v1",
+    source_sha256: sha,
+    state: supported ? "opens_normally" : "needs_review",
+    engine_classification: classification,
+    content_summary: {
+      page_count: scene.pages.length,
+      text_frame_count: scene.nodes.filter((node) => node.kind === "text_frame").length,
+      picture_frame_count: scene.nodes.filter((node) => node.kind === "picture_frame").length
+    },
+    limitations: supported ? [] : [{
+      code: "preview_fidelity_warning",
+      message: "The preview contains known display limitations."
+    }],
+    output_routes: {
+      read_only_preview: supported ? "available" : "available_with_limitations",
+      salvage_recovery: "not_applicable",
+      editable_idml: "not_verified",
+      editable_odg: "not_verified"
+    },
+    recommended_next_step: supported
+      ? "migration_pilot_preview"
+      : "review_preview_before_migration"
+  };
+}
+
 const referenceRasterDpi = Number(process.env.READER_REFERENCE_RASTER_DPI ?? "0");
 assert.ok(
   referenceRasterDpi === 0 || (Number.isInteger(referenceRasterDpi) && referenceRasterDpi >= 72 && referenceRasterDpi <= 300),
@@ -65,7 +94,16 @@ const server = createServer(async (req, res) => {
         assert.equal(sha256(bytes), active.fixture.sha256);
         Object.assign(payload, { state: "uploaded" });
       } else if (req.url === `/v1/reader/guest-sessions/${session}/open`) {
-        Object.assign(payload, { classification: active.receipt.classification, scene: active.receipt.scene });
+        Object.assign(payload, {
+          classification: active.receipt.classification,
+          source_sha256: active.fixture.sha256,
+          compatibility_report: compatibilityReport(
+            active.receipt.classification,
+            active.fixture.sha256,
+            active.receipt.scene
+          ),
+          scene: active.receipt.scene
+        });
       } else throw new Error("unexpected_transport_path");
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify(payload));

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { orderedPages, searchStories, guestRequestPath, contributionEligible, extractableImages, assertSalvageObservation, classificationMessage, errorMessage } from "./reader-model.mjs";
+import { orderedPages, searchStories, guestRequestPath, contributionEligible, extractableImages, assertSalvageObservation, assertCompatibilityReport, classificationMessage, errorMessage } from "./reader-model.mjs";
 
 const scene = (extra = {}) => ({
   protocol_version: "chaptera.reader-scene.v1",
@@ -121,6 +121,64 @@ test("salvage observation is source-neutral and distinct from Reader scene", () 
   assert.throws(
     () => assertSalvageObservation({ ...salvage, schema_version: "chaptera.reader-scene.v1" }),
     /salvage_protocol_mismatch/
+  );
+});
+
+test("compatibility report is versioned, source-bound and fail-closed", () => {
+  const sha = "b".repeat(64);
+  const report = {
+    protocol_version: "chaptera.reader-compatibility-report.v1",
+    source_sha256: sha,
+    state: "needs_review",
+    engine_classification: "partial",
+    content_summary: { page_count: 2, text_frame_count: 3, picture_frame_count: 1 },
+    limitations: [{ code: "text_layout_may_differ", message: "Some text layout may differ from Microsoft Publisher." }],
+    output_routes: {
+      read_only_preview: "available_with_limitations",
+      salvage_recovery: "not_applicable",
+      editable_idml: "not_verified",
+      editable_odg: "not_verified"
+    },
+    recommended_next_step: "review_preview_before_migration"
+  };
+  assert.equal(assertCompatibilityReport(report, sha, "partial"), report);
+  assert.throws(
+    () => assertCompatibilityReport({ ...report, source_sha256: "c".repeat(64) }, sha, "partial"),
+    /compatibility_report_protocol_mismatch/
+  );
+  assert.throws(
+    () => assertCompatibilityReport({ ...report, state: "opens_normally" }, sha, "partial"),
+    /compatibility_report_protocol_mismatch/
+  );
+  assert.throws(
+    () => assertCompatibilityReport({
+      ...report,
+      output_routes: { ...report.output_routes, editable_idml: "available" }
+    }, sha, "partial"),
+    /compatibility_report_protocol_mismatch/
+  );
+});
+
+test("unsupported compatibility report carries no invented content inventory", () => {
+  const sha = "d".repeat(64);
+  const report = {
+    protocol_version: "chaptera.reader-compatibility-report.v1",
+    source_sha256: sha,
+    state: "unsupported",
+    engine_classification: "unsupported",
+    limitations: [{ code: "automatic_open_unavailable", message: "No trustworthy preview." }],
+    output_routes: {
+      read_only_preview: "unavailable",
+      salvage_recovery: "unavailable",
+      editable_idml: "not_verified",
+      editable_odg: "not_verified"
+    },
+    recommended_next_step: "unsupported_or_manual_review"
+  };
+  assert.equal(assertCompatibilityReport(report, sha, "unsupported"), report);
+  assert.throws(
+    () => assertCompatibilityReport({ ...report, content_summary: { page_count: -1 } }, sha, "unsupported"),
+    /compatibility_report_protocol_mismatch/
   );
 });
 

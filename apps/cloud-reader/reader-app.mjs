@@ -1,7 +1,8 @@
 import { renderReaderScene } from "./render-v1.mjs";
 import {
   EMU_PER_CSS_PX, orderedPages, searchStories, guestRequestPath, contributionEligible,
-  extractableImages, assertSalvageObservation, classificationMessage, errorMessage
+  extractableImages, assertSalvageObservation, assertCompatibilityReport,
+  classificationMessage, errorMessage
 } from "./reader-model.mjs";
 
 const $ = (selector) => document.querySelector(selector);
@@ -89,8 +90,18 @@ function busy(value) {
   $("#cancel-open").hidden = !value;
 }
 
+function clearCompatibilityReport() {
+  $("#compatibility-report").hidden = true;
+  $("#compatibility-state").textContent = "";
+  $("#compatibility-summary").textContent = "";
+  $("#compatibility-limitations").replaceChildren();
+  $("#compatibility-routes").textContent = "";
+  $("#compatibility-next").textContent = "";
+}
+
 function clearReader() {
   clearContribution();
+  clearCompatibilityReport();
   scene = null;
   pages = [];
   pagesHost.replaceChildren();
@@ -159,6 +170,72 @@ function showStory(index) {
   storySelect.value = String(index);
   $("#copy-text").disabled = !storyText.value;
   $("#copy-status").textContent = "";
+}
+
+const compatibilityStateLabels = {
+  opens_normally: "Opens normally",
+  needs_review: "Needs review",
+  opens_with_salvage: "Opens with recovery",
+  unsupported: "Unsupported"
+};
+
+const previewRouteLabels = {
+  available: "Read-only preview available",
+  available_with_limitations: "Read-only preview available with limitations",
+  unavailable: "Read-only preview unavailable"
+};
+
+const nextStepLabels = {
+  migration_pilot_preview: "Next step: review this preview as a representative Migration Pilot sample.",
+  review_preview_before_migration: "Next step: compare the preview before accepting it for migration.",
+  rescue_review: "Next step: use recovery/manual review before deciding on migration.",
+  unsupported_or_manual_review: "Next step: manual review is required; automatic migration is not claimed."
+};
+
+function showCompatibilityReport(report) {
+  $("#compatibility-state").textContent = compatibilityStateLabels[report.state] ?? report.state;
+
+  const labels = [
+    ["page_count", "page", "pages"],
+    ["text_frame_count", "text frame", "text frames"],
+    ["picture_frame_count", "picture frame", "picture frames"],
+    ["table_count", "table", "tables"],
+    ["other_node_count", "other object", "other objects"],
+    ["story_count", "text section", "text sections"],
+    ["image_resource_count", "image resource", "image resources"],
+    ["recovered_text_range_count", "recovered text range", "recovered text ranges"],
+    ["recovered_image_count", "recovered image", "recovered images"],
+    ["recovered_geometry_count", "recovered geometry item", "recovered geometry items"]
+  ];
+  const parts = [];
+  for (const [key, singular, plural] of labels) {
+    const value = report.content_summary?.[key];
+    if (!Number.isSafeInteger(value)) continue;
+    parts.push(value + " " + (value === 1 ? singular : plural));
+  }
+  $("#compatibility-summary").textContent =
+    "Source SHA-256: " + report.source_sha256 + ". "
+    + (parts.length ? parts.join(" · ") : "No trustworthy content inventory is available.");
+
+  const list = $("#compatibility-limitations");
+  list.replaceChildren();
+  for (const limitation of report.limitations) {
+    const item = document.createElement("li");
+    item.textContent = limitation.message;
+    list.appendChild(item);
+  }
+  if (!report.limitations.length) {
+    const item = document.createElement("li");
+    item.textContent = "No limitations were reported for the evaluated scope.";
+    list.appendChild(item);
+  }
+
+  $("#compatibility-routes").textContent =
+    (previewRouteLabels[report.output_routes.read_only_preview] ?? "Read-only preview status unavailable")
+    + ". Editable IDML/ODG migration is not advertised until separately verified on the current product path.";
+  $("#compatibility-next").textContent =
+    nextStepLabels[report.recommended_next_step] ?? "Next step: review this file manually.";
+  $("#compatibility-report").hidden = false;
 }
 
 const reasonLabels = {
@@ -304,6 +381,18 @@ async function openFile(file) {
     if (opened.protocol_version !== issued.protocol_version || opened.session_id !== issued.session_id) {
       throw new Error("guest_protocol_mismatch");
     }
+    let compatibilityReport = null;
+    if (opened.classification === "rejected") {
+      if (opened.compatibility_report !== undefined) {
+        throw new Error("compatibility_report_protocol_mismatch");
+      }
+    } else {
+      compatibilityReport = assertCompatibilityReport(
+        opened.compatibility_report,
+        opened.source_sha256,
+        opened.classification
+      );
+    }
     if (["supported", "partial"].includes(opened.classification)) {
       if (!opened.scene || opened.salvage !== undefined) throw new Error("scene_protocol_mismatch");
       if (!await render(opened.scene, operation)) return;
@@ -313,6 +402,7 @@ async function openFile(file) {
       if (salvage.source_sha256 !== opened.source_sha256) throw new Error("salvage_protocol_mismatch");
     }
     if (isCurrent(operation)) {
+      if (compatibilityReport) showCompatibilityReport(compatibilityReport);
       message(
         classificationMessage(opened.classification, opened.failure_classification?.class ?? null),
         !["supported", "partial", "salvage"].includes(opened.classification)

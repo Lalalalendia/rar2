@@ -38,6 +38,7 @@ use crate::{
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
+    reader_compatibility_report::{ReaderCompatibilityReportV1, build_reader_compatibility_report},
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
     upload_admission::{
@@ -435,6 +436,8 @@ struct GuestOpenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     source_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    compatibility_report: Option<ReaderCompatibilityReportV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     terminal_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_classification: Option<FailureClassificationV1>,
@@ -452,6 +455,8 @@ struct GuestSceneResponse {
     expires_at_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compatibility_report: Option<ReaderCompatibilityReportV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -755,6 +760,7 @@ async fn open_session(
                 classification: "rejected".to_owned(),
                 expires_at_ms: rejected.expires_at_ms,
                 source_sha256: None,
+                compatibility_report: None,
                 terminal_code: rejected.terminal_code,
                 failure_classification: None,
                 scene: None,
@@ -829,6 +835,12 @@ async fn open_session(
         )
         .await?;
     state.release_admission(&opened, now_ms).await?;
+    let compatibility_report = compatibility_report_for_payload(
+        &classification,
+        Some(receipt.source_sha256.as_str()),
+        scene.as_ref(),
+        salvage.as_ref(),
+    )?;
 
     Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
@@ -836,6 +848,7 @@ async fn open_session(
         classification,
         expires_at_ms: opened.expires_at_ms,
         source_sha256: Some(receipt.source_sha256),
+        compatibility_report,
         terminal_code,
         failure_classification,
         scene,
@@ -869,6 +882,12 @@ async fn get_scene(
         .classification
         .clone()
         .unwrap_or_else(|| "rejected".to_owned());
+    let compatibility_report = compatibility_report_for_payload(
+        &classification,
+        session.source_sha256.as_deref(),
+        scene.as_ref(),
+        salvage.as_ref(),
+    )?;
 
     Ok(GuestJson(GuestSceneResponse {
         protocol_version: GUEST_PROTOCOL_V1,
@@ -876,6 +895,7 @@ async fn get_scene(
         classification,
         expires_at_ms: session.expires_at_ms,
         source_sha256: session.source_sha256,
+        compatibility_report,
         terminal_code: session.terminal_code,
         failure_classification: decode_failure_classification(
             session.failure_classification_json.as_deref(),
@@ -1667,6 +1687,22 @@ fn stored_public_payload(
     }
 }
 
+fn compatibility_report_for_payload(
+    classification: &str,
+    source_sha256: Option<&str>,
+    scene: Option<&Value>,
+    salvage: Option<&Value>,
+) -> Result<Option<ReaderCompatibilityReportV1>, GuestReaderError> {
+    if classification == "rejected" {
+        return Ok(None);
+    }
+    let source_sha256 =
+        source_sha256.ok_or_else(|| GuestReaderError::internal("guest_source_identity_missing"))?;
+    build_reader_compatibility_report(source_sha256, classification, scene, salvage)
+        .map(Some)
+        .map_err(|_| GuestReaderError::internal("guest_compatibility_report_invalid"))
+}
+
 fn open_response_from_stored(
     session: &GuestReaderSession,
 ) -> Result<GuestJson<GuestOpenResponse>, GuestReaderError> {
@@ -1679,12 +1715,19 @@ fn open_response_from_stored(
         Some("rejected") | None => "rejected",
         Some(_) => return Err(GuestReaderError::internal("guest_classification_invalid")),
     };
+    let compatibility_report = compatibility_report_for_payload(
+        classification,
+        session.source_sha256.as_deref(),
+        scene.as_ref(),
+        salvage.as_ref(),
+    )?;
     Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: session.session_id.clone(),
         classification: classification.to_owned(),
         expires_at_ms: session.expires_at_ms,
         source_sha256: session.source_sha256.clone(),
+        compatibility_report,
         terminal_code: session.terminal_code.clone(),
         failure_classification: decode_failure_classification(
             session.failure_classification_json.as_deref(),
