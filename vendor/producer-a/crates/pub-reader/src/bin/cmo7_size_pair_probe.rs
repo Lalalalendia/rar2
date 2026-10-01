@@ -13,7 +13,10 @@ const MAX_DIFF_RUNS: usize = 64;
 const MAX_HEX_BYTES_PER_SIDE: usize = 32;
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn read_stream(pub_bytes: &[u8], path: &str) -> Result<Vec<u8>> {
