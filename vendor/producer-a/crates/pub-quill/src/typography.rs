@@ -659,8 +659,7 @@ pub fn diagnose_bounded_text_size_authority(
         diagnostic.fdpp_intersecting_ranges = paragraph_ranges
             .iter()
             .filter(|range| {
-                range.global_end_utf16 > target_start
-                    && range.global_start_utf16 < target_end
+                range.global_end_utf16 > target_start && range.global_start_utf16 < target_end
             })
             .count();
         diagnostic.fdpp_explicit_selector_ranges = paragraph_ranges
@@ -668,8 +667,7 @@ pub fn diagnose_bounded_text_size_authority(
             .filter(|range| {
                 range.global_end_utf16 > target_start
                     && range.global_start_utf16 < target_end
-                    && range.selector_source
-                        == Some(QuillParagraphSelectorSource::ExplicitFdpp0x19)
+                    && range.selector_source == Some(QuillParagraphSelectorSource::ExplicitFdpp0x19)
             })
             .count();
 
@@ -684,8 +682,7 @@ pub fn diagnose_bounded_text_size_authority(
         for paragraph in paragraph_ranges.iter().filter(|range| {
             range.global_end_utf16 > target_start
                 && range.global_start_utf16 < target_end
-                && range.selector_source
-                    == Some(QuillParagraphSelectorSource::ExplicitFdpp0x19)
+                && range.selector_source == Some(QuillParagraphSelectorSource::ExplicitFdpp0x19)
         }) {
             if let Some(style_index) = paragraph.selected_style_index
                 && let Some(default) = defaults
