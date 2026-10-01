@@ -14,6 +14,17 @@ export type Compatibility =
   | 'invalid'
   | 'failed';
 
+export type CanonicalCompatibilityState =
+  | 'opens_normally'
+  | 'needs_review'
+  | 'opens_with_salvage'
+  | 'unsupported';
+
+export type EditableRouteState =
+  | 'available_with_declared_losses'
+  | 'unavailable'
+  | 'not_verified';
+
 export type CheckResult = {
   compatibility: Compatibility;
   summary: string;
@@ -22,6 +33,10 @@ export type CheckResult = {
   diagnosticsCode?: string;
   limitations?: string[];
   checkerVersion?: string;
+  canonicalState?: CanonicalCompatibilityState;
+  editableIdml?: EditableRouteState;
+  editableOdg?: EditableRouteState;
+  recommendedNextStep?: string;
 };
 
 export type CheckRecord = {
