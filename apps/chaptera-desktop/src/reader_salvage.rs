@@ -84,6 +84,20 @@ pub fn search_text(graph: &ReaderPartialSourceGraph, query: &str) -> Vec<Salvage
     matches
 }
 
+pub fn fact_counts(graph: &ReaderPartialSourceGraph) -> (usize, usize, usize) {
+    let mut text_ranges = 0_usize;
+    let mut verified_images = 0_usize;
+    let mut grounded_geometry = 0_usize;
+    for fact in &graph.facts {
+        match fact {
+            ReaderPartialSourceFact::TextRange { .. } => text_ranges += 1,
+            ReaderPartialSourceFact::VerifiedImage { .. } => verified_images += 1,
+            ReaderPartialSourceFact::GroundedGeometry { .. } => grounded_geometry += 1,
+        }
+    }
+    (text_ranges, verified_images, grounded_geometry)
+}
+
 pub fn subsystem_rows(graph: &ReaderPartialSourceGraph) -> [(&'static str, &'static str); 4] {
     [
         ("Contents", stream_state_label(graph.subsystems.contents)),
@@ -164,6 +178,17 @@ mod tests {
         assert_eq!(matches[0].story_key, "quill-syid:00000001");
         assert_eq!(matches[0].utf16_start, 19);
         assert_eq!(matches[0].utf16_end, 22);
+    }
+
+    #[test]
+    fn fact_counts_keep_non_text_evidence_visible_without_inventing_layout() {
+        let mut graph = graph();
+        graph.facts.push(ReaderPartialSourceFact::VerifiedImage {
+            resource_key: "escher-delay:0:test".to_owned(),
+            sha256: "b".repeat(64),
+            byte_len: 128,
+        });
+        assert_eq!(fact_counts(&graph), (1, 1, 0));
     }
 
     #[test]
