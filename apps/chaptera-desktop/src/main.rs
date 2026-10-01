@@ -277,7 +277,7 @@ struct PreparedSalvageOpen {
 
 enum PreparedOpen {
     Normal(Box<PreparedDocumentOpen>),
-    Salvage(PreparedSalvageOpen),
+    Salvage(Box<PreparedSalvageOpen>),
 }
 
 fn dropped_file_candidate(paths: &[Option<PathBuf>]) -> Result<Option<PathBuf>, &'static str> {
@@ -1365,14 +1365,14 @@ impl ViewerApp {
                             diagnostic_json: None,
                         });
                     }
-                    return Ok(PreparedOpen::Salvage(PreparedSalvageOpen {
+                    return Ok(PreparedOpen::Salvage(Box::new(PreparedSalvageOpen {
                         source_path: path,
                         source_file_stamp,
                         source_hash: source_sha256(bytes),
                         source_byte_len: u64::try_from(bytes.len())
                             .expect("desktop source length must fit u64"),
                         salvage,
-                    }));
+                    })));
                 }
                 Err(error) => {
                     return Err(ViewerLoadFailure {
@@ -1595,7 +1595,7 @@ impl ViewerApp {
             }
             Ok(PreparedOpen::Salvage(prepared)) => {
                 if self.open_state.commit_if_current(generation) {
-                    self.commit_prepared_salvage_open(generation, prepared);
+                    self.commit_prepared_salvage_open(generation, *prepared);
                 }
             }
             Err(error) => {
