@@ -844,6 +844,7 @@ pub fn from_viewer_geometry_with_fonts(
             .cloned()
             .ok_or_else(|| format!("node {node_id} has no resolved page"))?;
         let parent_node_id = node_ids.contains(&parent_id).then_some(parent_id);
+        let text_bounds = text_bounds_by_node.remove(&node_id);
         nodes.push(ReaderNodeV1 {
             origin_node_id: None,
             kind: kind_by_node
@@ -860,7 +861,7 @@ pub fn from_viewer_geometry_with_fonts(
             page_id,
             parent_node_id,
             bounds,
-            text_bounds: text_bounds_by_node.remove(&node_id),
+            text_bounds,
             transform,
         });
     }
