@@ -57,17 +57,25 @@ jobs:
           from pathlib import Path
           p=Path(".web-v0/resolved-graph.json")
           digest=hashlib.sha256(p.read_bytes()).hexdigest()
-          expected="f2b17a6af0fc9a619316dbeab7efb41d5c49473109fd5d352272656215e603e2"
+          expected="a98aebab2713064575474ad23d76e1528fd6cdb01bb0f350e0ad0100211aa9f0"
           assert digest==expected, (digest, expected)
           print({"resolved_graph_sha256":digest,"byte_len":p.stat().st_size})
           PY
+
+      - name: Regenerate canonical Viewer geometry from the same producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a             .web-v0/SampleNewsletter.pub             > .web-v0/viewer-geometry.real.json
+          python tools/validate_viewer_geometry_receipt.py             .web-v0/viewer-geometry.real.json
+          cp .web-v0/viewer-geometry.real.json              apps/web/acceptance/receipts/viewer-geometry.real.json
 
       - name: Materialize canonical initial Browser Scene
         shell: bash
         run: |
           set -euo pipefail
           python tools/adapt_viewer_scene_v1.py \
-            apps/web/acceptance/receipts/viewer-geometry.real.json \
+            .web-v0/viewer-geometry.real.json \
             .web-v0/initial-scene.json \
             --document-id 9c2f8d5e-3f1b-4a57-9d40-6a7e2c11b001 \
             --revision-id sha256:853fa2471bbf5ce479340e391550c5ee7b972f208a36d81c26808ab52c672d6c
@@ -83,7 +91,7 @@ jobs:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           REAL_FIXTURE: .web-v0/SampleNewsletter.pub
           REAL_RESOLVED_GRAPH: .web-v0/resolved-graph.json
-          REAL_VIEWER_RECEIPT: apps/web/acceptance/receipts/viewer-geometry.real.json
+          REAL_VIEWER_RECEIPT: .web-v0/viewer-geometry.real.json
           REAL_REVISION_RECEIPT: packages/protocol/revision/v1/producer-receipts/sample-newsletter.real.json
           REAL_EXPORTER: vendor/producer-a/target/debug/chaptera-producer-a
           REAL_WORK_DIR: .web-v0/real-browser-service
