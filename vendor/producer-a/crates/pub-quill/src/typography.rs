@@ -37,6 +37,8 @@ pub struct QuillTypographyCatalog {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effective_runs: Vec<QuillEffectiveTypographyRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub size_only_runs: Vec<QuillTextSizeRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<QuillParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_block_types_assumed_zero_length: Vec<u8>,
@@ -175,6 +177,34 @@ pub enum QuillParagraphSelectorSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillTextSizeRun {
+    pub story_index: u32,
+    pub story_syid: QuillSyid,
+    pub story_start_utf16: u32,
+    pub story_end_utf16: u32,
+    pub text_size_emu: u32,
+    pub text_size_source: QuillTypographyValueSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_style_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_selector_source: Option<QuillParagraphSelectorSource>,
+    pub fdpc_descriptor_ordinal: u32,
+    pub fdpc_style_ordinal: u32,
+    pub fdpc_style_source: RawSpan,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdpp_style_source: Option<RawSpan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stsh_character_default_source: Option<RawSpan>,
+}
+
+impl QuillTextSizeRun {
+    pub fn text_size_points_exact(&self) -> Option<u32> {
+        (self.text_size_emu % QUILL_TEXT_SIZE_EMU_PER_POINT == 0)
+            .then_some(self.text_size_emu / QUILL_TEXT_SIZE_EMU_PER_POINT)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuillEffectiveTypographyRun {
     pub story_index: u32,
     pub story_syid: QuillSyid,
@@ -266,6 +296,7 @@ struct ParagraphTypographyRange {
     style_source: RawSpan,
     selected_style_index: Option<u32>,
     selector_source: Option<QuillParagraphSelectorSource>,
+    default_style_selector_present: bool,
     alignment: Option<QuillParagraphAlignment>,
     alignment_source_value: Option<u16>,
 }
@@ -509,6 +540,7 @@ pub fn parse_bounded_typography(
     }
 
     let mut effective_runs = Vec::new();
+    let mut size_only_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
     let mut inheritance_unknown_block_types = BTreeSet::new();
     let mut effective_inheritance_unavailable_reason = None;
@@ -539,6 +571,12 @@ pub fn parse_bounded_typography(
         if explicit_run_projection_allowed(&unknown_block_types)
             && explicit_run_projection_allowed(&inheritance_unknown_block_types)
         {
+            size_only_runs = build_size_only_runs(
+                &ranges,
+                &paragraph_ranges,
+                &character_defaults,
+                &story_extents,
+            )?;
             effective_runs = build_effective_runs(
                 &ranges,
                 &paragraph_ranges,
@@ -564,6 +602,7 @@ pub fn parse_bounded_typography(
         script_font_maps,
         explicit_runs,
         effective_runs,
+        size_only_runs,
         paragraph_alignments,
         unknown_block_types_assumed_zero_length: unknown_block_types.into_iter().collect(),
         inheritance_unknown_block_types_assumed_zero_length: inheritance_unknown_block_types
@@ -780,6 +819,7 @@ fn materialize_paragraph_ranges(
             style_source: style.style_source.clone(),
             selected_style_index,
             selector_source,
+            default_style_selector_present: !style.default_style_indices.is_empty(),
             alignment,
             alignment_source_value,
         });
@@ -980,9 +1020,9 @@ fn apply_bounded_implicit_style_zero(
     defaults: &[CharacterDefaultObservation],
 ) -> bool {
     if paragraph_ranges.is_empty()
-        || paragraph_ranges
-            .iter()
-            .any(|range| range.selected_style_index.is_some())
+        || paragraph_ranges.iter().any(|range| {
+            range.selected_style_index.is_some() || range.default_style_selector_present
+        })
     {
         return false;
     }
@@ -1000,6 +1040,130 @@ fn apply_bounded_implicit_style_zero(
             Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence);
     }
     true
+}
+
+fn build_size_only_runs(
+    fdpc_ranges: &[QuillTypographyRange],
+    paragraph_ranges: &[ParagraphTypographyRange],
+    defaults: &[CharacterDefaultObservation],
+    story_extents: &[StoryExtent],
+) -> Result<Vec<QuillTextSizeRun>, QuillTypographyReadError> {
+    let mut boundaries = BTreeSet::new();
+    boundaries.insert(0_u32);
+    if let Some(last) = story_extents.last() {
+        boundaries.insert(last.global_end_utf16);
+    }
+    for story in story_extents {
+        boundaries.insert(story.global_start_utf16);
+        boundaries.insert(story.global_end_utf16);
+    }
+    for range in fdpc_ranges {
+        boundaries.insert(range.global_start_utf16);
+        boundaries.insert(range.global_end_utf16);
+    }
+    for range in paragraph_ranges {
+        boundaries.insert(range.global_start_utf16);
+        boundaries.insert(range.global_end_utf16);
+    }
+    let ordered = boundaries.into_iter().collect::<Vec<_>>();
+
+    let mut style_zero = defaults
+        .iter()
+        .filter(|candidate| candidate.logical_style_index == 0);
+    let style_zero = match (style_zero.next(), style_zero.next()) {
+        (Some(default), None) => Some(default),
+        _ => None,
+    };
+
+    let mut runs = Vec::new();
+    for pair in ordered.windows(2) {
+        let [start, end] = pair else {
+            continue;
+        };
+        if start == end {
+            continue;
+        }
+
+        let story = exactly_one_covering_story(story_extents, *start, *end)?;
+        let fdpc = exactly_one_covering_fdpc(fdpc_ranges, *start, *end)?;
+        let paragraph = exactly_one_covering_paragraph(paragraph_ranges, *start, *end)?;
+
+        // This path exists only when family authority is absent from scalar
+        // typography. A present or ambiguous FDPC family must not be hidden by
+        // a size-only projection and later ScriptFonts fallback.
+        if !fdpc.font_indices.is_empty() || !fdpc.font_names.is_empty() {
+            continue;
+        }
+
+        // Explicit/default paragraph style selection is already owned by the
+        // full effective-typography path. This slice is only the independently
+        // reproduced "selector absent -> style 0 size" law.
+        if paragraph.selected_style_index.is_some() || paragraph.default_style_selector_present {
+            continue;
+        }
+
+        let mut explicit_sizes = fdpc.text_sizes_emu.clone();
+        let explicit_size_present = !explicit_sizes.is_empty();
+        explicit_sizes.sort_unstable();
+        explicit_sizes.dedup();
+
+        let (
+            text_size_emu,
+            text_size_source,
+            inherited_style_index,
+            inherited_selector_source,
+            fdpp_style_source,
+            stsh_character_default_source,
+        ) = if let [text_size_emu] = explicit_sizes.as_slice() {
+            (
+                *text_size_emu,
+                QuillTypographyValueSource::ExplicitFdpc,
+                None,
+                None,
+                None,
+                None,
+            )
+        } else if !explicit_size_present {
+            let Some(default) = style_zero else {
+                continue;
+            };
+            let [text_size_emu] = default.text_sizes_emu.as_slice() else {
+                continue;
+            };
+            (
+                *text_size_emu,
+                QuillTypographyValueSource::InheritedStsh1,
+                Some(0),
+                Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence),
+                Some(paragraph.style_source.clone()),
+                Some(default.style_source.clone()),
+            )
+        } else {
+            continue;
+        };
+
+        if text_size_emu == 0 {
+            continue;
+        }
+
+        runs.push(QuillTextSizeRun {
+            story_index: story.story_index,
+            story_syid: story.story_syid,
+            story_start_utf16: *start - story.global_start_utf16,
+            story_end_utf16: *end - story.global_start_utf16,
+            text_size_emu,
+            text_size_source,
+            inherited_style_index,
+            inherited_selector_source,
+            fdpc_descriptor_ordinal: fdpc.fdpc_descriptor_ordinal,
+            fdpc_style_ordinal: fdpc.fdpc_style_ordinal,
+            fdpc_style_source: fdpc.fdpc_style_source.clone(),
+            fdpp_style_source,
+            stsh_character_default_source,
+        });
+    }
+
+    Ok(runs)
 }
 
 fn build_effective_runs(
@@ -1857,6 +2021,7 @@ mod tests {
             },
             selected_style_index: Some(2),
             selector_source: Some(QuillParagraphSelectorSource::ExplicitFdpp0x19),
+            default_style_selector_present: true,
             alignment: None,
             alignment_source_value: None,
         };
@@ -1935,6 +2100,7 @@ mod tests {
             selector_source: Some(
                 QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
             ),
+            default_style_selector_present: false,
             alignment: None,
             alignment_source_value: None,
         };
@@ -1972,6 +2138,7 @@ mod tests {
                 },
                 selected_style_index: None,
                 selector_source: None,
+                default_style_selector_present: false,
                 alignment: None,
                 alignment_source_value: None,
             },
@@ -1987,6 +2154,7 @@ mod tests {
                 },
                 selected_style_index: None,
                 selector_source: None,
+                default_style_selector_present: false,
                 alignment: None,
                 alignment_source_value: None,
             },
@@ -2089,6 +2257,7 @@ mod tests {
             selector_source: Some(
                 QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
             ),
+            default_style_selector_present: false,
             alignment: None,
             alignment_source_value: None,
         };
@@ -2120,6 +2289,141 @@ mod tests {
         assert_eq!(
             run.inherited_selector_source,
             Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
+        );
+    }
+
+    #[test]
+    fn size_only_style_zero_inherits_only_missing_size_with_multiple_defaults() {
+        let stream = pub_core::StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let story = StoryExtent {
+            story_index: 0,
+            story_syid: QuillSyid(7),
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+        };
+        let fdpc = QuillTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpc_descriptor_ordinal: 5,
+            fdpc_style_ordinal: 3,
+            fdpc_style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 300,
+                len: 12,
+            },
+            text_offset_source: RawSpan {
+                stream: stream.clone(),
+                offset: 80,
+                len: 4,
+            },
+            font_indices: Vec::new(),
+            font_names: Vec::new(),
+            script_fonts: Vec::new(),
+            text_sizes_emu: Vec::new(),
+            story_intersections: Vec::new(),
+        };
+        let paragraph = ParagraphTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpp_descriptor_ordinal: 4,
+            fdpp_style_ordinal: 7,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 200,
+                len: 8,
+            },
+            selected_style_index: None,
+            selector_source: None,
+            default_style_selector_present: false,
+            alignment: None,
+            alignment_source_value: None,
+        };
+        let defaults = vec![
+            CharacterDefaultObservation {
+                logical_style_index: 0,
+                stsh_descriptor_ordinal: 2,
+                stsh_record_ordinal: 0,
+                style_source: RawSpan {
+                    stream: stream.clone(),
+                    offset: 400,
+                    len: 16,
+                },
+                font_pairs: vec![(0, "Calibri".to_owned())],
+                text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+            },
+            CharacterDefaultObservation {
+                logical_style_index: 1,
+                stsh_descriptor_ordinal: 2,
+                stsh_record_ordinal: 2,
+                style_source: RawSpan {
+                    stream: stream.clone(),
+                    offset: 420,
+                    len: 16,
+                },
+                font_pairs: vec![(1, "Other".to_owned())],
+                text_sizes_emu: vec![9 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+            },
+        ];
+
+        let inherited = build_size_only_runs(
+            std::slice::from_ref(&fdpc),
+            std::slice::from_ref(&paragraph),
+            &defaults,
+            &[story],
+        )
+        .expect("size-only inherited run");
+        let [run] = inherited.as_slice() else {
+            panic!("expected one size-only inherited run");
+        };
+        assert_eq!(run.text_size_emu, 10 * QUILL_TEXT_SIZE_EMU_PER_POINT);
+        assert_eq!(
+            run.text_size_source,
+            QuillTypographyValueSource::InheritedStsh1
+        );
+        assert_eq!(run.inherited_style_index, Some(0));
+        assert_eq!(
+            run.inherited_selector_source,
+            Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
+        );
+        assert!(
+            build_effective_runs(
+                std::slice::from_ref(&fdpc),
+                std::slice::from_ref(&paragraph),
+                &defaults,
+                &[story],
+            )
+            .expect("full effective run evaluation")
+            .is_empty(),
+            "multiple defaults must not authorize full family inheritance"
+        );
+
+        let mut direct_fdpc = fdpc.clone();
+        direct_fdpc.text_sizes_emu = vec![12 * QUILL_TEXT_SIZE_EMU_PER_POINT];
+        let direct = build_size_only_runs(
+            &[direct_fdpc],
+            std::slice::from_ref(&paragraph),
+            &defaults,
+            &[story],
+        )
+        .expect("direct size-only run");
+        let [run] = direct.as_slice() else {
+            panic!("expected one direct size-only run");
+        };
+        assert_eq!(run.text_size_emu, 12 * QUILL_TEXT_SIZE_EMU_PER_POINT);
+        assert_eq!(
+            run.text_size_source,
+            QuillTypographyValueSource::ExplicitFdpc
+        );
+        assert_eq!(run.inherited_style_index, None);
+        assert_eq!(run.inherited_selector_source, None);
+
+        let mut selector_present = paragraph;
+        selector_present.default_style_selector_present = true;
+        assert!(
+            build_size_only_runs(&[fdpc], &[selector_present], &defaults, &[story])
+                .expect("selector-present evaluation")
+                .is_empty(),
+            "present or ambiguous paragraph selector must fail closed"
         );
     }
 
