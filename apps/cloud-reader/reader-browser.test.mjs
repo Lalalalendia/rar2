@@ -36,7 +36,7 @@ const requests = [];
 const sessions = new Map();
 let nextScenario = {};
 let nextSession = 0;
-const staticFiles = new Set(["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs"]);
+const staticFiles = new Set(["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs", "observability-v1.mjs"]);
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://127.0.0.1");
