@@ -102,8 +102,9 @@ use pub_model::{
 };
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillScriptFontEntryDisposition,
-    QuillStoryReadError, QuillTypographyValueSource, parse_bounded_fdpp_exact_story_catalog,
-    parse_bounded_mcld, parse_bounded_typography, parse_confirmed_story_catalog,
+    QuillStoryReadError, QuillTypographyValueSource, bounded_mcld_uniform_text_inset,
+    parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld, parse_bounded_typography,
+    parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -339,6 +340,13 @@ pub struct PubLegacyOleSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTextFrameInsetSource {
+    pub layout_record_id: u32,
+    pub uniform_emu: u32,
+    pub source_refs: Vec<SourceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubNodePayload {
     pub contents_seq_num: u32,
     pub officeart_shape_type: Option<u16>,
@@ -361,6 +369,8 @@ pub struct PubNodePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_paint: Option<PubEffectiveShapePaintSource>,
     pub story_frame: Option<PubStoryFrameSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_inset: Option<PubTextFrameInsetSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table_story: Option<PubTableStoryOwnershipSource>,
     pub table: Option<PubTableSource>,
@@ -2675,6 +2685,37 @@ pub fn build_mature_0x2c_from_streams(
         } else {
             None
         };
+        let text_frame_inset = story_frame.as_ref().and_then(|frame| {
+            let (layout_record_id, layout_key_source) = story_layout_keys.get(&frame.text_id)?;
+            let mcld = mcld.as_ref()?;
+            let inset = bounded_mcld_uniform_text_inset(mcld, *layout_record_id).ok()?;
+            let object_key = quill_story_object_key(frame.text_id);
+            let mut source_refs = vec![source_ref(
+                &graph.source,
+                layout_key_source,
+                Some(object_key.clone()),
+                Some("Contents/0x65/layoutKey".into()),
+                SourceRole::Relation,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            )];
+            source_refs.extend(inset.sources.iter().map(|source| {
+                source_ref(
+                    &graph.source,
+                    source,
+                    Some(object_key.clone()),
+                    Some("MCLD/06..09/text-inset".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                )
+            }));
+            Some(PubTextFrameInsetSource {
+                layout_record_id: *layout_record_id,
+                uniform_emu: inset.inset_emu,
+                source_refs,
+            })
+        });
         let (table_story, table) = if raw_type == Some(RAW_TYPE_TABLE) {
             if let Some(quill_catalog) = quill_catalog.as_ref() {
                 let context = table_bridge::TableBridgeContext {
@@ -2776,6 +2817,9 @@ pub fn build_mature_0x2c_from_streams(
                 ReadConfidence::Exact,
             ));
         }
+        if let Some(text_frame_inset) = &text_frame_inset {
+            source_refs.extend(text_frame_inset.source_refs.clone());
+        }
         if let Some(table) = &table {
             source_refs.extend(table.source_refs.clone());
         } else if let Some(table_story) = &table_story {
@@ -2811,6 +2855,7 @@ pub fn build_mature_0x2c_from_streams(
                     explicit_paint,
                     effective_paint,
                     story_frame,
+                    text_frame_inset,
                     table_story,
                     table,
                 },
