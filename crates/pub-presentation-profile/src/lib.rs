@@ -110,6 +110,8 @@ pub const STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1: &str =
     "chaptera.standard-print-service-tail-profile-input.v1";
 pub const STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1: &str =
     "publisher-mature-0x2c/standard-print-service-tail/v1";
+pub const STANDARD_PRINT_SERVICE_TAIL_SPECIAL_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/standard-print-service-tail-interleaved/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StandardPrintServiceTailPageEvidenceV1 {
@@ -150,12 +152,14 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     mut input: StandardPrintServiceTailProfileInputV1,
 ) -> Option<StandardPrintServiceTailSelectionV1> {
     if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
-        || input.special_entry_count != 0
         || input.scenario_evidence_list_count != 0
         || input.observed_scenario_page_count != 0
-        || input.document_page_list_entry_count != input.confirmed_page_count
         || input.confirmed_page_count != input.pages.len()
-        || input.pages.len() < 6
+        || input.document_page_list_entry_count
+            != input
+                .confirmed_page_count
+                .checked_add(input.special_entry_count)?
+        || input.special_entry_count > 1
     {
         return None;
     }
@@ -163,8 +167,8 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     input.pages.sort_by_key(|page| page.document_ordinal);
     let mut ordinals = BTreeSet::new();
     let mut seq_nums = BTreeSet::new();
-    for (expected_ordinal, page) in input.pages.iter().enumerate() {
-        if page.document_ordinal != expected_ordinal
+    for page in &input.pages {
+        if page.document_ordinal >= input.document_page_list_entry_count
             || !ordinals.insert(page.document_ordinal)
             || !seq_nums.insert(page.contents_seq_num)
         {
@@ -178,18 +182,75 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     let oid_is_nonzero = |page: &StandardPrintServiceTailPageEvidenceV1| matches!((page.oid_dword0, page.oid_dword1), (Some(d0), Some(d1)) if d0 != 0 || d1 != 0);
 
     let master = input.pages.first()?;
-    if !oid_is_zero(master) || master.applied_master_seq_num.is_some() {
+    if master.document_ordinal != 0
+        || !oid_is_zero(master)
+        || master.applied_master_seq_num.is_some()
+    {
         return None;
     }
     let master_seq = master.contents_seq_num;
 
-    let split = input.pages.len().checked_sub(4)?;
-    let customer_pages = input.pages.get(1..split)?;
-    let service_pages = input.pages.get(split..)?;
-    if customer_pages.is_empty()
-        || !customer_pages
+    if input.special_entry_count == 0 {
+        if input.pages.len() < 6
+            || input
+                .pages
+                .iter()
+                .enumerate()
+                .any(|(expected_ordinal, page)| page.document_ordinal != expected_ordinal)
+        {
+            return None;
+        }
+
+        let split = input.pages.len().checked_sub(4)?;
+        let customer_pages = input.pages.get(1..split)?;
+        let service_pages = input.pages.get(split..)?;
+        if customer_pages.is_empty()
+            || !customer_pages
+                .iter()
+                .all(|page| oid_is_nonzero(page) && page.applied_master_seq_num == Some(master_seq))
+            || !service_pages
+                .iter()
+                .all(|page| oid_is_zero(page) && page.applied_master_seq_num == Some(master_seq))
+        {
+            return None;
+        }
+
+        return Some(StandardPrintServiceTailSelectionV1 {
+            profile_id: STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1.to_owned(),
+            raw_page_count: input.pages.len(),
+            customer_page_seq_nums: customer_pages
+                .iter()
+                .map(|page| page.contents_seq_num)
+                .collect(),
+            master_page_seq_num: master_seq,
+            service_page_seq_nums: service_pages
+                .iter()
+                .map(|page| page.contents_seq_num)
+                .collect(),
+        });
+    }
+
+    // Exact source-semantic shape proven by a one-page native Publisher
+    // control: PAGE master, PAGE customer, PAGE service, one raw0x59
+    // special entry, then two PAGE service records. The special record remains
+    // preserved in SourceGraph; only product PAGE presentation is narrowed.
+    if input.document_page_list_entry_count != 6
+        || input.confirmed_page_count != 5
+        || input
+            .pages
             .iter()
-            .all(|page| oid_is_nonzero(page) && page.applied_master_seq_num == Some(master_seq))
+            .map(|page| page.document_ordinal)
+            .collect::<Vec<_>>()
+            != vec![0, 1, 2, 4, 5]
+    {
+        return None;
+    }
+
+    let customer_pages = input.pages.get(1..2)?;
+    let service_pages = input.pages.get(2..)?;
+    if !customer_pages
+        .iter()
+        .all(|page| oid_is_nonzero(page) && page.applied_master_seq_num == Some(master_seq))
         || !service_pages
             .iter()
             .all(|page| oid_is_zero(page) && page.applied_master_seq_num == Some(master_seq))
@@ -198,7 +259,7 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     }
 
     Some(StandardPrintServiceTailSelectionV1 {
-        profile_id: STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1.to_owned(),
+        profile_id: STANDARD_PRINT_SERVICE_TAIL_SPECIAL_PROFILE_ID_V1.to_owned(),
         raw_page_count: input.pages.len(),
         customer_page_seq_nums: customer_pages
             .iter()
@@ -855,6 +916,124 @@ mod tests {
             observed_scenario_page_count: 0,
             pages,
         };
+        assert!(select_standard_print_service_tail_customer_page_seq_nums_v1(input).is_none());
+    }
+
+    #[test]
+    fn standard_print_profile_accepts_one_page_special_interleaved_service_tail() {
+        let input = StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: 6,
+            confirmed_page_count: 5,
+            special_entry_count: 1,
+            scenario_evidence_list_count: 0,
+            observed_scenario_page_count: 0,
+            pages: vec![
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 0,
+                    contents_seq_num: 263,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: None,
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 1,
+                    contents_seq_num: 301,
+                    oid_dword0: Some(2),
+                    oid_dword1: Some(2),
+                    applied_master_seq_num: Some(263),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 2,
+                    contents_seq_num: 269,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: Some(263),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 4,
+                    contents_seq_num: 273,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: Some(263),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 5,
+                    contents_seq_num: 277,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: Some(263),
+                },
+            ],
+        };
+
+        let selection =
+            select_standard_print_service_tail_customer_page_seq_nums_v1(input).unwrap();
+        assert_eq!(
+            selection.profile_id,
+            STANDARD_PRINT_SERVICE_TAIL_SPECIAL_PROFILE_ID_V1
+        );
+        assert_eq!(selection.raw_page_count, 5);
+        assert_eq!(selection.customer_page_seq_nums, vec![301]);
+        assert_eq!(selection.master_page_seq_num, 263);
+        assert_eq!(selection.service_page_seq_nums, vec![269, 273, 277]);
+    }
+
+    #[test]
+    fn standard_print_special_profile_rejects_special_before_customer_page() {
+        let mut input = StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: 6,
+            confirmed_page_count: 5,
+            special_entry_count: 1,
+            scenario_evidence_list_count: 0,
+            observed_scenario_page_count: 0,
+            pages: vec![
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 0,
+                    contents_seq_num: 263,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: None,
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 2,
+                    contents_seq_num: 301,
+                    oid_dword0: Some(2),
+                    oid_dword1: Some(2),
+                    applied_master_seq_num: Some(263),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 3,
+                    contents_seq_num: 269,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: Some(263),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 4,
+                    contents_seq_num: 273,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: Some(263),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 5,
+                    contents_seq_num: 277,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: Some(263),
+                },
+            ],
+        };
+        assert!(
+            select_standard_print_service_tail_customer_page_seq_nums_v1(input.clone()).is_none()
+        );
+
+        input.pages[1].document_ordinal = 1;
+        input.pages[2].document_ordinal = 2;
+        input.pages[3].document_ordinal = 3;
+        input.pages[4].document_ordinal = 5;
         assert!(select_standard_print_service_tail_customer_page_seq_nums_v1(input).is_none());
     }
 
