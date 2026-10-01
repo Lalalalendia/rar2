@@ -381,26 +381,25 @@ pub fn run_guest_scene_worker(
                     None,
                 ),
             },
-            Err(_) => match open_pub_or_salvage(
-                &source_bytes,
-                viewer_geometry_environment_v0_1(),
-            ) {
-                Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
-                    let observation = serde_json::to_value(partial_graph).map_err(|_| {
-                        GuestSceneWorkerError::new(
-                            "guest_scene_worker_output_failed",
-                            "Reader salvage observation serialization failed",
-                        )
-                    })?;
-                    ("salvage".to_owned(), None, None, Some(observation))
+            Err(_) => {
+                match open_pub_or_salvage(&source_bytes, viewer_geometry_environment_v0_1()) {
+                    Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
+                        let observation = serde_json::to_value(partial_graph).map_err(|_| {
+                            GuestSceneWorkerError::new(
+                                "guest_scene_worker_output_failed",
+                                "Reader salvage observation serialization failed",
+                            )
+                        })?;
+                        ("salvage".to_owned(), None, None, Some(observation))
+                    }
+                    Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
+                        "unsupported".to_owned(),
+                        Some("reader_scene_open_failed".to_owned()),
+                        None,
+                        None,
+                    ),
                 }
-                Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
-                    "unsupported".to_owned(),
-                    Some("reader_scene_open_failed".to_owned()),
-                    None,
-                    None,
-                ),
-            },
+            }
         };
 
     let failure_classification =
@@ -486,8 +485,7 @@ fn validate_receipt(
                     "salvage receipt uses an unsupported observation protocol",
                 ));
             }
-            if observation.get("source_sha256").and_then(Value::as_str)
-                != Some(expected_sha256)
+            if observation.get("source_sha256").and_then(Value::as_str) != Some(expected_sha256)
                 || receipt.terminal_code.is_some()
                 || receipt.failure_classification.is_some()
             {
@@ -692,13 +690,8 @@ mod tests {
             failure_classification: None,
             filesystem_confinement: true,
         };
-        validate_receipt(
-            &receipt,
-            "guest:0123456789abcdef",
-            &"a".repeat(64),
-            1,
-        )
-        .expect("source-neutral salvage observation should cross worker boundary");
+        validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1)
+            .expect("source-neutral salvage observation should cross worker boundary");
     }
 
     #[test]
