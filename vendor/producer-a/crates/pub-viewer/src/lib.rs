@@ -548,6 +548,8 @@ pub struct ViewerTableCell {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid_fill_rgb: Option<[u8; 3]>,
 }
 
 fn default_table_span() -> u32 {
@@ -3081,6 +3083,7 @@ fn viewer_tables_from_resolved(
                             .map(|candidate| candidate.bounds)
                     })
                 }),
+                solid_fill_rgb: cell.solid_fill_rgb,
             })
             .collect();
 
