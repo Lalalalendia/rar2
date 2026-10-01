@@ -64,15 +64,17 @@ pub use pub_reader::{
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
-    LegacyOleCachedPresentationSelection, PubAssetExportDiagnostic, PubBridgeDiagnostic,
-    PubEffectivePaintAuthority, PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
+    LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
+    PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
+    PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
+    PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
+    PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, derive_pub_page_id, materialize_bounded_table_cells,
-    rasterize_wmf_preview, read_legacy_0x22_image_wmfs, resolve_pub_source_graph,
-    scan_legacy_ole_cached_presentations, select_unambiguous_legacy_ole_cached_presentation,
+    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
+    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1234,6 +1236,208 @@ fn viewer_legacy_image_preview_images(
     images
 }
 
+fn mature_officeart_wmf_preview_resource_id(
+    source_hash: &Sha256Digest,
+    slot: u32,
+    wmf_bytes: &[u8],
+) -> Result<ResourceId> {
+    let digest = Sha256::digest(wmf_bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut wmf_sha256 = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        wmf_sha256.push(char::from(HEX[usize::from(byte >> 4)]));
+        wmf_sha256.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    let source_object_key = format!(
+        "mature-officeart-wmf-preview/slot-{slot}/wmf-sha256-{wmf_sha256}/{}/{}",
+        MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1,
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &source_object_key,
+        semantic_role: "viewer.mature-officeart-wmf-preview-v1",
+    })
+    .map_err(|error| anyhow!("derive mature OfficeArt WMF preview identity: {error:?}"))?;
+    Ok(ResourceId::from_canonical(canonical))
+}
+
+#[cfg(test)]
+mod mature_officeart_wmf_preview_identity_tests {
+    use super::*;
+
+    #[test]
+    fn preview_resource_identity_is_source_slot_and_wmf_bound() {
+        let source_hash = Sha256Digest::from_bytes([0x11; 32]);
+        let first = mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
+            .expect("preview resource id");
+        let repeated =
+            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-a")
+                .expect("repeat preview resource id");
+        let other_slot =
+            mature_officeart_wmf_preview_resource_id(&source_hash, 4, b"normalized-wmf-a")
+                .expect("other slot preview resource id");
+        let other_wmf =
+            mature_officeart_wmf_preview_resource_id(&source_hash, 3, b"normalized-wmf-b")
+                .expect("other WMF preview resource id");
+
+        assert_eq!(first, repeated);
+        assert_ne!(first, other_slot);
+        assert_ne!(first, other_wmf);
+    }
+}
+
+fn viewer_mature_officeart_wmf_preview_images(
+    bytes: &[u8],
+    source_hash: &Sha256Digest,
+    source: &PubSourceGraphBuild,
+    resolved: &PubResolvedGraph,
+    scene: &BoundedResolvedScene,
+    diagnostics: &mut Vec<ViewerDiagnostic>,
+) -> Vec<ViewerEmbeddedImage> {
+    let bundle = match build_mature_0x2c_wmf_preview_bundle_from_bytes(bytes, &source.graph) {
+        Ok(bundle) => bundle,
+        Err(_) => {
+            diagnostics.push(ViewerDiagnostic {
+                code: "viewer.mature_officeart_wmf.preview_source_unavailable".to_owned(),
+                severity: ViewerDiagnosticSeverity::FidelityWarning,
+                message:
+                    "Source-backed mature OfficeArt WMF images could not be materialized through the bounded preview bridge."
+                        .to_owned(),
+            });
+            return Vec::new();
+        }
+    };
+
+    if bundle.rejected_source_count > 0 {
+        diagnostics.push(ViewerDiagnostic {
+            code: "viewer.mature_officeart_wmf.preview_source_rejected".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{} mature OfficeArt WMF source(s) remain outside the bounded preview profile.",
+                bundle.rejected_source_count
+            ),
+        });
+    }
+
+    let renderable_node_ids = scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let mut images = Vec::new();
+
+    for preview_source in bundle.sources {
+        let mut node_ids = preview_source
+            .uses
+            .iter()
+            .map(|usage| usage.node_id)
+            .filter(|node_id| renderable_node_ids.contains(node_id))
+            .collect::<Vec<_>>();
+        node_ids.sort();
+        node_ids.dedup();
+        if node_ids.is_empty() {
+            continue;
+        }
+
+        let preview = match rasterize_wmf_preview(
+            &preview_source.wmf_bytes,
+            preview_source.width_hint,
+            preview_source.height_hint,
+        ) {
+            Ok(preview) => preview,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.mature_officeart_wmf.preview_raster_unsupported".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A structurally valid mature OfficeArt WMF is outside the existing bounded Viewer raster profile."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let png = match encode_wmf_preview_png(&preview) {
+            Ok(png) => png,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.mature_officeart_wmf.preview_encode_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded mature OfficeArt WMF preview could not be encoded as a Viewer image resource."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+        let resource_id = match mature_officeart_wmf_preview_resource_id(
+            source_hash,
+            preview_source.slot,
+            &preview_source.wmf_bytes,
+        ) {
+            Ok(resource_id) => resource_id,
+            Err(_) => {
+                diagnostics.push(ViewerDiagnostic {
+                    code: "viewer.mature_officeart_wmf.preview_identity_unavailable".to_owned(),
+                    severity: ViewerDiagnosticSeverity::FidelityWarning,
+                    message:
+                        "A bounded mature OfficeArt WMF preview could not receive a deterministic Viewer resource identity."
+                            .to_owned(),
+                });
+                continue;
+            }
+        };
+
+        let mut placements = Vec::new();
+        for node_id in &node_ids {
+            let source_window = match resolved.nodes.get(node_id).map(|node| {
+                viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
+            }) {
+                Some(Ok(source_window)) => source_window,
+                Some(Err(reason)) => {
+                    diagnostics.push(ViewerDiagnostic {
+                        code: "viewer.image.crop_partial".to_owned(),
+                        severity: ViewerDiagnosticSeverity::FidelityWarning,
+                        message: format!(
+                            "Image crop for node {} is present but cannot be projected exactly ({reason}); the bounded WMF preview remains available as the full-image fallback.",
+                            node_id.as_canonical()
+                        ),
+                    });
+                    None
+                }
+                None => None,
+            };
+            if let Some(source_window) = source_window {
+                placements.push(ViewerImagePlacementV1 {
+                    node_id: *node_id,
+                    source_window: Some(source_window),
+                });
+            }
+        }
+
+        images.push(ViewerEmbeddedImage {
+            resource_id,
+            mime: "image/png".to_owned(),
+            node_ids,
+            placements,
+            bytes: png,
+        });
+    }
+
+    if !images.is_empty() {
+        diagnostics.push(ViewerDiagnostic {
+            code: "viewer.mature_officeart_wmf.preview_applied".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "{} bounded source-backed mature OfficeArt WMF preview resource(s) admitted through the shared Viewer image path.",
+                images.len()
+            ),
+        });
+    }
+
+    images
+}
+
 fn viewer_legacy_ole_cached_preview_images(
     bytes: &[u8],
     source_hash: &Sha256Digest,
@@ -1894,7 +2098,7 @@ fn open_mature_0x2c_bundle(
         viewer_tables_from_resolved(&pipeline.resolved.graph, &projection);
     document.diagnostics.extend(table_diagnostics);
 
-    let images = match build_mature_0x2c_asset_export_bundle_from_bytes(
+    let mut images = match build_mature_0x2c_asset_export_bundle_from_bytes(
         bytes,
         &pipeline.source.graph,
     ) {
@@ -1989,6 +2193,15 @@ fn open_mature_0x2c_bundle(
             .map(map_scene_diagnostic),
     );
 
+    images.extend(viewer_mature_officeart_wmf_preview_images(
+        bytes,
+        &pipeline.source_hash,
+        &pipeline.source,
+        &pipeline.resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    ));
+
     #[cfg(feature = "cmo-slot-compose")]
     let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
         Ok(instances) => {
@@ -2044,7 +2257,7 @@ fn open_mature_0x2c_bundle(
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, admitted source typography sizing, exact embedded PNG/JPEG bytes, persisted bounded image source-window crop, and admitted solid fill/line state. Publisher-exact typography/reflow, unsupported or ambiguous image crop, gradients/patterns, effects, and broader transforms are not faithfully painted yet."
+            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, admitted source typography sizing, exact embedded PNG/JPEG bytes, bounded source-backed mature OfficeArt WMF previews, persisted bounded image source-window crop, and admitted solid fill/line state. Publisher-exact typography/reflow, unsupported or ambiguous image crop, gradients/patterns, effects, and broader transforms are not faithfully painted yet."
                 .to_owned(),
         });
     }
@@ -5221,6 +5434,237 @@ mod standard_print_service_tail_exact_product_tests {
             "CHAPTERA_VIRGINIA_REMPLACANTE_PUB",
             "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506",
             25,
+        );
+    }
+}
+
+#[cfg(test)]
+mod mature_officeart_wmf_exact_product_tests {
+    use super::*;
+    use std::{fs, path::PathBuf};
+
+    fn exact_wmf_fixture(env_name: &str, expected_sha256: &str, expected_counts: [usize; 8]) {
+        let [
+            expected_physical_wmf_records,
+            expected_live_bstore_wmf_slots,
+            expected_source_wmf_resources,
+            expected_source_wmf_uses,
+            expected_image_resources,
+            expected_image_uses,
+            expected_wmf_preview_resources,
+            expected_wmf_preview_uses,
+        ] = expected_counts;
+        let path = std::env::var_os(env_name)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| panic!("{env_name} is required"));
+        let before = fs::read(&path).expect("read exact mature OfficeArt WMF fixture");
+        assert_eq!(sha256_digest(&before).unwrap().to_string(), expected_sha256);
+
+        let source_hash = sha256_digest(&before).expect("hash exact WMF fixture");
+        let source = build_mature_0x2c_source_graph(Cursor::new(before.as_slice()), source_hash)
+            .expect("build exact mature OfficeArt source graph");
+        let source_wmf = build_mature_0x2c_wmf_preview_bundle_from_bytes(&before, &source.graph)
+            .expect("materialize exact mature OfficeArt WMF source bundle");
+        let graph_image_slot_nodes = source
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.payload.image_slot.is_some())
+            .count();
+        let graph_image_slots = source
+            .graph
+            .nodes
+            .values()
+            .filter_map(|node| node.payload.image_slot)
+            .collect::<BTreeSet<_>>();
+        let graph_page_ids = source
+            .graph
+            .pages
+            .keys()
+            .map(|page_id| page_id.into_canonical())
+            .collect::<BTreeSet<_>>();
+        let graph_page_bound_image_slot_nodes = source
+            .graph
+            .nodes
+            .values()
+            .filter(|node| {
+                node.payload.image_slot.is_some() && graph_page_ids.contains(&node.header.parent_id)
+            })
+            .count();
+        let raw_assets = build_mature_0x2c_asset_export_bundle_from_bytes(&before, &source.graph)
+            .expect("build exact mature image export bundle");
+        let raw_asset_mime_counts = raw_assets.manifest.assets.iter().fold(
+            BTreeMap::<&str, usize>::new(),
+            |mut counts, asset| {
+                *counts.entry(asset.mime.as_str()).or_default() += 1;
+                counts
+            },
+        );
+        let graph_image_slot_bindings = source
+            .graph
+            .nodes
+            .values()
+            .filter_map(|node| {
+                node.payload
+                    .image_slot
+                    .map(|slot| (node.payload.contents_seq_num, slot))
+            })
+            .collect::<Vec<_>>();
+        eprintln!(
+            "EXACT_MATURE_WMF_SOURCE_BINDINGS bindings={:?} bridge_diagnostics={:?}",
+            graph_image_slot_bindings, source.diagnostics,
+        );
+
+        let geometry = open_mature_0x2c_geometry(&before, viewer_geometry_environment_v0_1())
+            .expect("exact mature OfficeArt WMF fixture must open through Viewer product boundary");
+        let scene_node_ids = geometry
+            .scene
+            .nodes
+            .iter()
+            .map(|node| node.origin)
+            .collect::<BTreeSet<_>>();
+        let scene_bound_wmf_resources = source_wmf
+            .sources
+            .iter()
+            .filter(|source| {
+                source
+                    .uses
+                    .iter()
+                    .any(|usage| scene_node_ids.contains(&usage.node_id))
+            })
+            .count();
+        let scene_bound_wmf_uses = source_wmf
+            .sources
+            .iter()
+            .flat_map(|source| &source.uses)
+            .filter(|usage| scene_node_ids.contains(&usage.node_id))
+            .count();
+
+        let wmf_previews = geometry
+            .images
+            .iter()
+            .filter(|image| image.mime == "image/png")
+            .collect::<Vec<_>>();
+        let wmf_preview_uses = wmf_previews
+            .iter()
+            .map(|image| image.node_ids.len())
+            .sum::<usize>();
+        let diagnostic_counts = geometry.document.diagnostics.iter().fold(
+            BTreeMap::<&str, usize>::new(),
+            |mut counts, diagnostic| {
+                *counts.entry(diagnostic.code.as_str()).or_default() += 1;
+                counts
+            },
+        );
+        eprintln!(
+            "EXACT_MATURE_WMF_ACCEPTANCE graph_image_slot_nodes={} graph_image_slots={} graph_page_bound_image_slot_nodes={} raw_asset_mime_counts={:?} raw_asset_diagnostics={} physical_wmf_records={} live_bstore_wmf_slots={} source_resources={} source_uses={} source_rejected={} scene_bound_resources={} scene_bound_uses={} viewer_wmf_resources={} viewer_wmf_uses={} viewer_images={} viewer_image_uses={} diagnostics={:?}",
+            graph_image_slot_nodes,
+            graph_image_slots.len(),
+            graph_page_bound_image_slot_nodes,
+            raw_asset_mime_counts,
+            raw_assets.manifest.diagnostics.len(),
+            source_wmf.physical_wmf_record_count,
+            source_wmf.live_bstore_wmf_slot_count,
+            source_wmf.sources.len(),
+            source_wmf
+                .sources
+                .iter()
+                .map(|source| source.uses.len())
+                .sum::<usize>(),
+            source_wmf.rejected_source_count,
+            scene_bound_wmf_resources,
+            scene_bound_wmf_uses,
+            wmf_previews.len(),
+            wmf_preview_uses,
+            geometry.images.len(),
+            geometry
+                .images
+                .iter()
+                .map(|image| image.node_ids.len())
+                .sum::<usize>(),
+            diagnostic_counts,
+        );
+        assert_eq!(
+            source_wmf.physical_wmf_record_count, expected_physical_wmf_records,
+            "exact fixture physical WMF record count drift"
+        );
+        assert_eq!(
+            source_wmf.live_bstore_wmf_slot_count, expected_live_bstore_wmf_slots,
+            "exact fixture live BStore WMF slot count drift"
+        );
+        assert_eq!(
+            source_wmf.sources.len(),
+            expected_source_wmf_resources,
+            "exact fixture grounded source WMF resource count drift"
+        );
+        assert_eq!(
+            source_wmf
+                .sources
+                .iter()
+                .map(|source| source.uses.len())
+                .sum::<usize>(),
+            expected_source_wmf_uses,
+            "exact fixture source WMF grounded-use count drift"
+        );
+        assert_eq!(
+            source_wmf.rejected_source_count, 0,
+            "exact fixture contains a WMF source outside the bounded decode profile"
+        );
+        assert_eq!(
+            wmf_previews.len(),
+            expected_wmf_preview_resources,
+            "bounded mature OfficeArt WMF preview-resource count drift"
+        );
+        assert_eq!(
+            wmf_preview_uses, expected_wmf_preview_uses,
+            "bounded mature OfficeArt WMF preview-use count drift"
+        );
+        assert_eq!(
+            geometry.images.len(),
+            expected_image_resources,
+            "exact fixture image-resource count drift"
+        );
+        assert_eq!(
+            geometry
+                .images
+                .iter()
+                .map(|image| image.node_ids.len())
+                .sum::<usize>(),
+            expected_image_uses,
+            "exact fixture grounded image-use count drift"
+        );
+        assert!(
+            wmf_previews.iter().all(|image| !image.bytes.is_empty()),
+            "bounded WMF previews must carry deterministic PNG bytes"
+        );
+        assert!(
+            geometry.document.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "viewer.mature_officeart_wmf.preview_applied"
+            }),
+            "exact fixture must record bounded mature OfficeArt WMF preview admission"
+        );
+
+        let after = fs::read(&path).expect("re-read exact mature OfficeArt WMF fixture");
+        assert_eq!(after, before, "Viewer WMF preview path mutated source PUB");
+    }
+
+    #[test]
+    #[ignore = "requires CHAPTERA_SAMPLE_NEWSLETTER exact Apache POI fixture"]
+    fn exact_sample_newsletter_mature_officeart_wmf_previews_reach_viewer() {
+        exact_wmf_fixture(
+            "CHAPTERA_SAMPLE_NEWSLETTER",
+            "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf",
+            [8, 8, 7, 8, 8, 9, 7, 8],
+        );
+    }
+
+    #[test]
+    #[ignore = "requires CHAPTERA_SAMPLE_BROCHURE exact Apache POI fixture"]
+    fn exact_sample_brochure_mature_officeart_wmf_previews_reach_viewer() {
+        exact_wmf_fixture(
+            "CHAPTERA_SAMPLE_BROCHURE",
+            "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87",
+            [5, 5, 5, 5, 6, 6, 5, 5],
         );
     }
 }
