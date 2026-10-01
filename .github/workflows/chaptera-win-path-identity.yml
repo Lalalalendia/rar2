@@ -1,8 +1,16 @@
 name: CHAPTERA-WIN-PATH-IDENTITY-01
 
 on:
+  pull_request:
+    paths:
+      - "crates/chaptera-suite-handoff/**"
+      - ".github/workflows/chaptera-win-path-identity.yml"
   workflow_call:
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,8 +22,16 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # 1.94.1
+        with:
+          components: rustfmt, clippy
 
-      - name: Test exact-open handoff authority
+      - name: Format shared file authority
+        run: cargo fmt --manifest-path crates/chaptera-suite-handoff/Cargo.toml -- --check
+
+      - name: Clippy shared file authority
+        run: cargo clippy --manifest-path crates/chaptera-suite-handoff/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test exact-open and destination-write authority
         run: cargo test --manifest-path crates/chaptera-suite-handoff/Cargo.toml
 
       - name: Build Reader and Editor
