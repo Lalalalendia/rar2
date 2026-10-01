@@ -410,8 +410,9 @@ fn paint_shared_resolved_text(
         let galley = painter.layout_job(job);
         max_width_px = max_width_px.max(galley.size().x);
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
+        let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
         painter.galley(
-            egui::pos2(clip_rect.left(), y),
+            egui::pos2(x, y),
             galley,
             egui::Color32::BLACK,
         );
