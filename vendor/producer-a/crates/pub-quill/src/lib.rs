@@ -38,8 +38,7 @@ pub use tokn::{
 pub use typography::{
     QUILL_TEXT_SIZE_EMU_PER_POINT, QuillEffectiveTypographyRun, QuillExplicitTypographyRun,
     QuillParagraphAlignment, QuillParagraphAlignmentRun, QuillParagraphSelectorSource,
-    QuillScriptFontEntry, QuillScriptFontEntryDisposition,
-    QuillScriptFontMapObservation, QuillTypographyCatalog, QuillTypographyRange,
-    QuillTypographyReadError, QuillTypographyStoryIntersection, QuillTypographyValueSource,
-    parse_bounded_typography,
+    QuillScriptFontEntry, QuillScriptFontEntryDisposition, QuillScriptFontMapObservation,
+    QuillTypographyCatalog, QuillTypographyRange, QuillTypographyReadError,
+    QuillTypographyStoryIntersection, QuillTypographyValueSource, parse_bounded_typography,
 };
