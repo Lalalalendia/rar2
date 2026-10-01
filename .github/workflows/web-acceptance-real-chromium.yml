@@ -57,9 +57,30 @@ jobs:
           from pathlib import Path
           p=Path(".web-v0/resolved-graph.json")
           digest=hashlib.sha256(p.read_bytes()).hexdigest()
-          expected="f2b17a6af0fc9a619316dbeab7efb41d5c49473109fd5d352272656215e603e2"
+          expected="8e20a4ad7e05350605471a731b7140568744ec94e630ac00d02774895198fc23"
           assert digest==expected, (digest, expected)
           print({"resolved_graph_sha256":digest,"byte_len":p.stat().st_size})
+          PY
+
+      - name: Regenerate exact current Viewer receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            .web-v0/SampleNewsletter.pub \
+            > apps/web/acceptance/receipts/viewer-geometry.real.json
+          python tools/validate_viewer_geometry_receipt.py \
+            apps/web/acceptance/receipts/viewer-geometry.real.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("apps/web/acceptance/receipts/viewer-geometry.real.json")
+          viewer=json.loads(p.read_text(encoding="utf-8"))
+          source=viewer["document"]["source"]
+          assert source["source_hash"]=="6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          assert source["byte_len"]==291840
+          assert isinstance(viewer.get("scene", {}).get("nodes"), list)
+          print({"viewer_nodes":len(viewer["scene"]["nodes"])})
           PY
 
       - name: Materialize canonical initial Browser Scene
