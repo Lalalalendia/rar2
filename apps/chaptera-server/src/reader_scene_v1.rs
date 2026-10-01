@@ -11,7 +11,9 @@ use serde_json::Value;
 pub const READER_SCENE_V1: &str = "chaptera.reader-scene.v1";
 
 const MAX_INLINE_IMAGE_RESOURCE_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(test)]
 const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
 const SHARED_FALLBACK_FONT_MIME: &str = "font/ttf";
 
 #[derive(Debug, Serialize)]
@@ -416,18 +418,17 @@ pub fn from_viewer_geometry(
     let mut source_window_by_node = HashMap::new();
     let mut resources = Vec::with_capacity(geometry.images.len());
     let mut resource_ids = HashSet::new();
-    let mut inline_image_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
         if !resource_ids.insert(resource_id.clone()) {
             return Err(format!("duplicate Viewer image resource {resource_id}"));
         }
-        resources.push(reader_image_resource(
-            resource_id.clone(),
-            image.mime.clone(),
-            &image.bytes,
-            &mut inline_image_budget,
-        ));
+        resources.push(ReaderImageResourceV1 {
+            resource_id: resource_id.clone(),
+            mime: image.mime.clone(),
+            availability: "descriptor_only",
+            inline_data_url: None,
+        });
 
         for placement in &image.placements {
             let node_id = serialized_string(&placement.node_id, "image placement node id")?;
@@ -853,7 +854,7 @@ pub fn from_viewer_geometry(
         reasons.push("viewer_fidelity_warnings");
     }
 
-    Ok(ReaderSceneV1 {
+    let mut scene = ReaderSceneV1 {
         protocol_version: READER_SCENE_V1,
         document_id,
         source_hash,
@@ -878,7 +879,35 @@ pub fn from_viewer_geometry(
         resources,
         fonts,
         diagnostics,
-    })
+    };
+
+    promote_inline_images_within_scene_cap(&mut scene, geometry)?;
+    if scene
+        .resources
+        .iter()
+        .all(|resource| resource.inline_data_url.is_some())
+    {
+        scene
+            .fidelity
+            .reasons
+            .retain(|reason| *reason != "image_resource_not_inline");
+    }
+    scene.fidelity.state = if scene.fidelity.reasons.is_empty() {
+        "supported"
+    } else {
+        "partial"
+    };
+
+    let serialized_scene_bytes = serde_json::to_vec(&scene)
+        .map_err(|error| format!("Reader Scene serialization failed: {error}"))?
+        .len();
+    if serialized_scene_bytes > MAX_SCENE_BYTES {
+        return Err(format!(
+            "Reader Scene exceeds serialized byte cap: {serialized_scene_bytes} > {MAX_SCENE_BYTES}"
+        ));
+    }
+
+    Ok(scene)
 }
 
 fn apply_source_page_paint_order(
@@ -1058,6 +1087,77 @@ fn shared_text_font_resource() -> ExplicitRenderTextFontResourceV1<'static> {
         default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
         bytes: chaptera_desktop_fallback_font_resource::bytes(),
     }
+}
+
+fn promote_inline_images_within_scene_cap(
+    scene: &mut ReaderSceneV1,
+    geometry: &ViewerGeometryDocument,
+) -> Result<(), String> {
+    let mut image_by_resource = HashMap::<String, (&str, &[u8])>::new();
+    for image in &geometry.images {
+        let resource_id = serialized_string(&image.resource_id, "image resource id")?;
+        if image_by_resource
+            .insert(resource_id.clone(), (image.mime.as_str(), image.bytes.as_slice()))
+            .is_some()
+        {
+            return Err(format!("duplicate Viewer image resource {resource_id}"));
+        }
+    }
+
+    let mut scene_bytes = serde_json::to_vec(&*scene)
+        .map_err(|error| format!("Reader Scene serialization failed: {error}"))?
+        .len();
+    if scene_bytes > MAX_SCENE_BYTES {
+        return Err(format!(
+            "Reader Scene exceeds serialized byte cap before image promotion: {scene_bytes} > {MAX_SCENE_BYTES}"
+        ));
+    }
+
+    for resource in &mut scene.resources {
+        let Some(&(mime, bytes)) = image_by_resource.get(resource.resource_id.as_str()) else {
+            return Err(format!(
+                "Reader Scene image resource {} has no Viewer payload",
+                resource.resource_id
+            ));
+        };
+        if resource.mime != mime {
+            return Err(format!(
+                "Reader Scene image resource {} MIME differs from Viewer payload",
+                resource.resource_id
+            ));
+        }
+
+        let mut unbounded_aggregate = usize::MAX;
+        let candidate = reader_image_resource(
+            resource.resource_id.clone(),
+            resource.mime.clone(),
+            bytes,
+            &mut unbounded_aggregate,
+        );
+        if candidate.inline_data_url.is_none() {
+            continue;
+        }
+
+        let current_resource_bytes = serde_json::to_vec(&*resource)
+            .map_err(|error| format!("Reader image resource serialization failed: {error}"))?
+            .len();
+        let candidate_resource_bytes = serde_json::to_vec(&candidate)
+            .map_err(|error| format!("Reader image resource serialization failed: {error}"))?
+            .len();
+        let Some(candidate_scene_bytes) = scene_bytes
+            .checked_sub(current_resource_bytes)
+            .and_then(|bytes| bytes.checked_add(candidate_resource_bytes))
+        else {
+            return Err("Reader Scene image byte accounting overflow".to_owned());
+        };
+
+        if candidate_scene_bytes <= MAX_SCENE_BYTES {
+            *resource = candidate;
+            scene_bytes = candidate_scene_bytes;
+        }
+    }
+
+    Ok(())
 }
 
 fn reader_image_resource(
@@ -1371,7 +1471,7 @@ mod tests {
 
                 const GUEST_SCENE_BYTE_CAP: usize = 16 * 1024 * 1024;
 
-                let mut descriptor_probe_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+                let mut descriptor_probe_budget = usize::MAX;
                 let mut inline_resource_count = 0_usize;
                 let mut inline_raw_bytes = 0_usize;
                 let mut descriptor_only_resource_count = 0_usize;
