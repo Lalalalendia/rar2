@@ -225,6 +225,16 @@ fn bind_visible_paint(
     Ok(())
 }
 
+fn take_direct_render_text(
+    render_text_by_node: &mut HashMap<String, String>,
+    source_text_by_node: &HashMap<String, String>,
+    node_id: &str,
+) -> Option<String> {
+    render_text_by_node
+        .remove(node_id)
+        .or_else(|| source_text_by_node.get(node_id).cloned())
+}
+
 fn reader_text_layout_from_render_text(
     text: &RenderTextFragmentV1,
 ) -> (Option<ReaderTextLayoutV1>, bool) {
@@ -532,6 +542,7 @@ pub fn from_viewer_geometry(
     chaptera_desktop_fallback_font_resource::validate()
         .map_err(|error| format!("shared fallback font validation failed: {error}"))?;
     let fallback_font = shared_text_font_resource();
+    let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
     let mut projected_instance_ids = HashSet::<String>::new();
@@ -688,20 +699,29 @@ pub fn from_viewer_geometry(
                 continue;
             }
 
-            let Some(mapped_layout) = mapped_layout else {
-                continue;
-            };
-            let node_id = serialized_string(&node.node_id, "text layout node id")?;
+            let node_id = serialized_string(&node.node_id, "direct render-plan node id")?;
             if !node_ids.contains(&node_id) {
                 return Err(format!(
-                    "direct render-plan text layout references unknown node {node_id}"
+                    "direct render-plan node references unknown Viewer node {node_id}"
                 ));
             }
-            if text_layout_by_node
-                .insert(node_id.clone(), mapped_layout)
-                .is_some()
-            {
-                return Err(format!("duplicate text layout binding for node {node_id}"));
+            if let Some(text) = node.text.as_ref() {
+                if render_text_by_node
+                    .insert(node_id.clone(), text.text.clone())
+                    .is_some()
+                {
+                    return Err(format!(
+                        "duplicate direct render-plan text binding for node {node_id}"
+                    ));
+                }
+            }
+            if let Some(mapped_layout) = mapped_layout {
+                if text_layout_by_node
+                    .insert(node_id.clone(), mapped_layout)
+                    .is_some()
+                {
+                    return Err(format!("duplicate text layout binding for node {node_id}"));
+                }
             }
         }
     }
@@ -727,7 +747,7 @@ pub fn from_viewer_geometry(
             resource_id: resource_by_node.remove(&node_id),
             image_source_window: source_window_by_node.remove(&node_id),
             table: table_by_node.remove(&node_id),
-            text: text_by_node.get(&node_id).cloned(),
+            text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
             text_layout: text_layout_by_node.remove(&node_id),
             node_id,
             page_id,
@@ -1101,6 +1121,7 @@ mod tests {
         MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1, ReaderRectV1, ReaderTransformV1,
         base64_encode, bind_visible_paint, from_viewer_geometry, inline_image_data_url,
         insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
+        take_direct_render_text,
     };
 
     #[test]
@@ -1431,6 +1452,24 @@ mod tests {
             text: None,
             text_layout: None,
         }
+    }
+
+    #[test]
+    fn direct_scene_text_prefers_render_plan_paint_text() {
+        let raw = HashMap::from([("node".to_owned(), "raw target-frame tail".to_owned())]);
+        let mut rendered = HashMap::from([("node".to_owned(), "\u{200b}\rX".to_owned())]);
+
+        assert_eq!(
+            take_direct_render_text(&mut rendered, &raw, "node").as_deref(),
+            Some("\u{200b}\rX"),
+            "Cloud Scene must consume render-plan marker suppression and paint cutoff"
+        );
+        assert!(rendered.is_empty());
+        assert_eq!(
+            take_direct_render_text(&mut rendered, &raw, "node").as_deref(),
+            Some("raw target-frame tail"),
+            "raw Viewer fragment is only a fallback when no render-plan text exists"
+        );
     }
 
     #[test]
