@@ -12,6 +12,10 @@ button,select{border:1px solid #394352;background:#252b34;color:#eef1f5;border-r
 button{cursor:pointer}button:hover{background:#303845}
 #state{font-size:12px;color:#9aa4b2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:200px}
 #disclosure{font-size:12px;color:#aeb8c6;display:flex;gap:12px;flex-wrap:wrap;width:100%}
+#text-tools{display:grid;grid-template-columns:minmax(320px,1fr) auto auto;gap:8px;align-items:start;width:100%}
+#text-tools[hidden]{display:none}
+#text-value{min-height:84px;max-height:220px;resize:vertical;border:1px solid #394352;background:#101318;color:#eef1f5;border-radius:7px;padding:8px;font:13px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}
+button:disabled{cursor:not-allowed;opacity:.45}
 #host-wrap{overflow:auto;background:#d9d9d9;position:relative}
 #host{width:1200px;height:3600px;position:relative;touch-action:none;background:#e9e9e9}
 .bad{color:#ff8d8d}.ok{color:#70e5a3}.warn{color:#ffd166}
@@ -21,6 +25,8 @@ button{cursor:pointer}button:hover{background:#303845}
   <button id="undo">Undo</button>
   <button id="redo">Redo</button>
   <button id="reopen">Reopen</button>
+  <button id="edit-text" disabled>Edit text</button>
+  <button id="save-pub" disabled>Download PUB</button>
   <select id="target"><option value="idml">IDML</option><option value="odg">ODG</option></select>
   <button id="preview">Export preview</button>
   <span id="state">connecting…</span>
@@ -28,6 +34,12 @@ button{cursor:pointer}button:hover{background:#303845}
     <span id="fidelity"></span>
     <span id="capabilities"></span>
     <span id="loss"></span>
+    <span id="pubsave"></span>
+  </div>
+  <div id="text-tools" hidden>
+    <textarea id="text-value" spellcheck="false" aria-label="Story text"></textarea>
+    <button id="apply-text">Apply text</button>
+    <button id="cancel-text">Cancel</button>
   </div>
 </header>
 <div id="host-wrap"><div id="host" aria-label="Chaptera editor canvas"></div></div>
@@ -42,6 +54,11 @@ const emuPerCssPx=Number(params.get("emu_per_css_px") ?? "12700");
 const panYCssPx=Number(params.get("pan_y_css_px") ?? "-2600");
 const stateEl=document.querySelector("#state");
 const host=document.querySelector("#host");
+const editTextButton=document.querySelector("#edit-text");
+const savePubButton=document.querySelector("#save-pub");
+const textTools=document.querySelector("#text-tools");
+const textValue=document.querySelector("#text-value");
+let editingStory=null;
 let seq=0;
 const observability=new BrowserObservabilityV1({
   sessionIncarnation:"session:local-editor",
@@ -53,14 +70,33 @@ let shell=null;
 
 function opId(kind){return "local-"+kind+"-"+crypto.randomUUID();}
 function showError(error){stateEl.className="bad";stateEl.textContent=String(error?.message??error);}
+function selectedStory(){
+  if(!shell?.snapshot || !shell.selection.nodeId) return null;
+  const frame=shell.snapshot.story_frames.find(x=>x.node_id===shell.selection.nodeId);
+  if(!frame) return null;
+  const story=shell.snapshot.stories.find(x=>x.story_id===frame.story_id);
+  return story?{node_id:shell.selection.nodeId,frame,story}:null;
+}
+function syncTextControls(){
+  const selected=selectedStory();
+  editTextButton.disabled=!selected;
+  if(editingStory && (!selected || selected.story.story_id!==editingStory.story_id)){
+    editingStory=null;
+    textTools.hidden=true;
+  }
+}
 function showState(state){
   stateEl.className="";
   stateEl.textContent="revision "+state.revision_id+(state.selected_node_id?" · selected "+state.selected_node_id:"");
+  syncTextControls();
 }
 
 async function disclosure(){
   const scene=shell.snapshot;
-  const preview=await service.exportPreview(document.querySelector("#target").value);
+  const [preview,pubPreview]=await Promise.all([
+    service.exportPreview(document.querySelector("#target").value),
+    service.nativePubPreview(),
+  ]);
   const caps=scene.capabilities ?? [];
   document.querySelector("#fidelity").textContent="Fidelity: "+scene.fidelity.state+
     (scene.fidelity.reasons?.length?" — "+scene.fidelity.reasons.join(", "):"");
@@ -72,6 +108,84 @@ async function disclosure(){
   loss.textContent="Export "+preview.target.format.toUpperCase()+": "+
     (preview.can_serialize?"ready":"blocked")+" · blocking="+preview.counts.blocking+
     " · losses="+losses.length;
+  const pub=document.querySelector("#pubsave");
+  pub.className=pubPreview.can_serialize?"ok":"warn";
+  pub.textContent="PUB: "+(pubPreview.can_serialize
+    ?"round-trip ready"
+    :"Project-only · "+(pubPreview.blocker_code??"writer blocked"));
+  savePubButton.disabled=!pubPreview.can_serialize;
+}
+
+function openTextEditor(){
+  const selected=selectedStory();
+  if(!selected) return;
+  const original=selected.story.text;
+  const terminalCr=original.endsWith("\r");
+  editingStory={
+    story_id:selected.story.story_id,
+    node_id:selected.node_id,
+    original_text:original,
+    terminal_cr:terminalCr,
+  };
+  textValue.value=terminalCr?original.slice(0,-1):original;
+  textTools.hidden=false;
+  textValue.focus();
+}
+function closeTextEditor(){
+  editingStory=null;
+  textTools.hidden=true;
+}
+async function applyTextEdit(){
+  if(!editingStory) return;
+  const snapshot=shell.snapshot;
+  const current=snapshot.stories.find(x=>x.story_id===editingStory.story_id);
+  if(!current || current.text!==editingStory.original_text){
+    throw new Error("Story changed since text editor opened");
+  }
+  const replacement=textValue.value+(editingStory.terminal_cr?"\r":"");
+  if(replacement===editingStory.original_text){
+    closeTextEditor();
+    return;
+  }
+  const request={
+    protocol_version:"chaptera.story-range-intent.v1",
+    document_id:snapshot.document_id,
+    source_hash:snapshot.source_hash,
+    base_revision_id:snapshot.revision_id,
+    client_operation_id:opId("story"),
+    command:{
+      kind:"replace_story_range",
+      story_id:editingStory.story_id,
+      start_scalar:0,
+      end_scalar:Array.from(editingStory.original_text).length,
+      expected_before:editingStory.original_text,
+      replacement_text:replacement,
+    },
+  };
+  const accepted=await service.commit(request);
+  if(accepted.protocol_version!=="chaptera.commit-accepted.v1"){
+    throw new Error("Story edit rejected: "+JSON.stringify(accepted));
+  }
+  const scene=await service.sceneForRevision(accepted.revision_id);
+  closeTextEditor();
+  shell.loadSnapshot(scene,{preserveSelection:true});
+  await disclosure();
+}
+async function downloadNativePub(){
+  const preview=await service.nativePubPreview();
+  if(!preview.can_serialize) throw new Error("Native PUB save is blocked");
+  const result=await service.nativePubDownload();
+  const url=URL.createObjectURL(result.blob);
+  try{
+    const anchor=document.createElement("a");
+    anchor.href=url;
+    anchor.download="chaptera-edited.pub";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }finally{
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function history(kind){
@@ -116,6 +230,10 @@ async function start(){
   };
   document.querySelector("#preview").onclick=()=>disclosure().catch(showError);
   document.querySelector("#target").onchange=()=>disclosure().catch(showError);
+  editTextButton.onclick=()=>openTextEditor();
+  document.querySelector("#apply-text").onclick=()=>applyTextEdit().catch(showError);
+  document.querySelector("#cancel-text").onclick=()=>closeTextEditor();
+  savePubButton.onclick=()=>downloadNativePub().catch(showError);
   document.querySelector("#host-wrap").scrollTop=2480;
 }
 start().catch(showError);
