@@ -265,6 +265,9 @@ try {
       screenshots.push({ page: i + 1, filename, sha256: sha256(png) });
     }
     const nonempty = painted.filter((line) => line.text.trim());
+    const fontProbeLayoutNodes = fontProbeResourceId
+      ? scene.nodes.filter((node) => node.text_layout?.font_resource_id === fontProbeResourceId).length
+      : 0;
     const fidelityReasons = [...(scene.fidelity?.reasons ?? [])].sort();
     if (scene.stacking_fidelity === "source_back_to_front") {
       assert.equal(
@@ -296,6 +299,7 @@ try {
       classification: receipt.classification, rendered: true, fidelity: scene.fidelity, stacking_fidelity: scene.stacking_fidelity,
       font_probe_resource_id: fontProbeResourceId,
       font_probe_sha256: fontProbeSha256,
+      font_probe_layout_nodes: fontProbeLayoutNodes,
       fidelity_reasons: fidelityReasons, diagnostic_codes: diagnosticCodes, pages: fixturePages, nodes: scene.nodes.length,
       node_kind_counts: nodeKindCounts, text_layout_disposition_counts: textLayoutDispositionCounts,
       descriptor_only_resource_count: descriptorOnlyResourceCount, browser_preserved_scene_node_order: true,
