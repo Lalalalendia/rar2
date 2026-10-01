@@ -111,7 +111,7 @@ pub const STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1: &str =
 pub const STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1: &str =
     "publisher-mature-0x2c/standard-print-service-tail/v1";
 pub const STANDARD_PRINT_SERVICE_TAIL_SPECIAL_PROFILE_ID_V1: &str =
-    "publisher-mature-0x2c/standard-print-service-tail-special/v1";
+    "publisher-mature-0x2c/standard-print-service-tail-interleaved/v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StandardPrintServiceTailPageEvidenceV1 {
@@ -230,8 +230,8 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
         });
     }
 
-    // Exact source-semantic shape proven by the one-page Messaging flyer
-    // Publisher control: PAGE master, PAGE customer, PAGE service, one raw0x59
+    // Exact source-semantic shape proven by a one-page native Publisher
+    // control: PAGE master, PAGE customer, PAGE service, one raw0x59
     // special entry, then two PAGE service records. The special record remains
     // preserved in SourceGraph; only product PAGE presentation is narrowed.
     if input.document_page_list_entry_count != 6
@@ -1026,7 +1026,9 @@ mod tests {
                 },
             ],
         };
-        assert!(select_standard_print_service_tail_customer_page_seq_nums_v1(input.clone()).is_none());
+        assert!(
+            select_standard_print_service_tail_customer_page_seq_nums_v1(input.clone()).is_none()
+        );
 
         input.pages[1].document_ordinal = 1;
         input.pages[2].document_ordinal = 2;
