@@ -1263,6 +1263,44 @@ fn mature_officeart_wmf_preview_resource_id(
     Ok(ResourceId::from_canonical(canonical))
 }
 
+#[cfg(test)]
+mod mature_officeart_wmf_preview_identity_tests {
+    use super::*;
+
+    #[test]
+    fn preview_resource_identity_is_source_slot_and_wmf_bound() {
+        let source_hash = Sha256Digest::from_bytes([0x11; 32]);
+        let first = mature_officeart_wmf_preview_resource_id(
+            &source_hash,
+            3,
+            b"normalized-wmf-a",
+        )
+        .expect("preview resource id");
+        let repeated = mature_officeart_wmf_preview_resource_id(
+            &source_hash,
+            3,
+            b"normalized-wmf-a",
+        )
+        .expect("repeat preview resource id");
+        let other_slot = mature_officeart_wmf_preview_resource_id(
+            &source_hash,
+            4,
+            b"normalized-wmf-a",
+        )
+        .expect("other slot preview resource id");
+        let other_wmf = mature_officeart_wmf_preview_resource_id(
+            &source_hash,
+            3,
+            b"normalized-wmf-b",
+        )
+        .expect("other WMF preview resource id");
+
+        assert_eq!(first, repeated);
+        assert_ne!(first, other_slot);
+        assert_ne!(first, other_wmf);
+    }
+}
+
 fn viewer_mature_officeart_wmf_preview_images(
     bytes: &[u8],
     source_hash: &Sha256Digest,
