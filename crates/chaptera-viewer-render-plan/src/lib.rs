@@ -137,6 +137,42 @@ pub struct RenderTypographyRunV1 {
     pub size_inherited: bool,
 }
 
+pub fn normalize_source_font_family_v1(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+pub fn admitted_single_family_source_font_v1(fragment: &RenderTextFragmentV1) -> Option<&str> {
+    if fragment.typography.is_empty() {
+        return None;
+    }
+
+    let mut cursor = fragment.scalar_start;
+    let mut family: Option<&str> = None;
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+        {
+            return None;
+        }
+        let name = run.source_font_name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        match family {
+            None => family = Some(name),
+            Some(existing)
+                if normalize_source_font_family_v1(existing)
+                    == normalize_source_font_family_v1(name) => {}
+            Some(_) => return None,
+        }
+        cursor = run.scalar_end;
+    }
+
+    let family = family?;
+    (cursor == fragment.scalar_end).then_some(family)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ExplicitRenderTextFontResourceV1<'a> {
     pub resource_id: &'a str,
