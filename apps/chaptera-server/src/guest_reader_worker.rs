@@ -8,7 +8,10 @@ use std::{
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
-use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+use pub_viewer::{
+    ViewerProductOpenOutcome, open_pub_bundle, open_pub_or_salvage,
+    viewer_geometry_environment_v0_1,
+};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -376,11 +379,30 @@ pub fn run_guest_scene_worker(
                     None,
                 ),
             },
-            Err(_) => (
-                "unsupported".to_owned(),
-                Some("reader_scene_open_failed".to_owned()),
-                None,
-            ),
+            Err(_) => match open_pub_or_salvage(
+                &source_bytes,
+                viewer_geometry_environment_v0_1(),
+            ) {
+                Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
+                    let observation = serde_json::to_value(partial_graph).map_err(|_| {
+                        GuestSceneWorkerError::new(
+                            "guest_scene_worker_output_failed",
+                            "Reader salvage observation serialization failed",
+                        )
+                    })?;
+                    ("salvage".to_owned(), None, Some(observation))
+                }
+                Ok(ViewerProductOpenOutcome::Normal(_)) => (
+                    "unsupported".to_owned(),
+                    Some("reader_scene_open_inconsistent".to_owned()),
+                    None,
+                ),
+                Err(_) => (
+                    "unsupported".to_owned(),
+                    Some("reader_scene_open_failed".to_owned()),
+                    None,
+                ),
+            },
         };
 
     let failure_classification =
@@ -441,11 +463,41 @@ fn validate_receipt(
                 ));
             }
         }
+        "salvage" => {
+            let observation = receipt.scene.as_ref().ok_or_else(|| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt is missing Reader partial source graph",
+                )
+            })?;
+            if observation.get("schema_version").and_then(Value::as_str)
+                != Some("chaptera.reader-partial-source-graph.v1")
+            {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt uses an unsupported observation protocol",
+                ));
+            }
+            if observation.get("source_sha256").and_then(Value::as_str)
+                != Some(expected_sha256)
+                || receipt.terminal_code.is_some()
+                || receipt.failure_classification.is_some()
+            {
+                return Err(GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "salvage receipt identity/evidence shape is invalid",
+                ));
+            }
+        }
         "unsupported" => {
             if receipt.scene.is_some()
                 || !matches!(
                     receipt.terminal_code.as_deref(),
-                    Some("reader_scene_open_failed" | "reader_scene_projection_failed")
+                    Some(
+                        "reader_scene_open_failed"
+                            | "reader_scene_projection_failed"
+                            | "reader_scene_open_inconsistent"
+                    )
                 )
             {
                 return Err(GuestSceneWorkerError::new(
@@ -608,6 +660,40 @@ impl Drop for GuestSceneTempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_receipt_accepts_source_neutral_salvage_observation() {
+        let receipt = GuestSceneWorkerReceiptV1 {
+            protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
+            session_id: "guest:0123456789abcdef".to_owned(),
+            source_sha256: "a".repeat(64),
+            source_byte_len: 1,
+            classification: "salvage".to_owned(),
+            terminal_code: None,
+            scene: Some(serde_json::json!({
+                "schema_version":"chaptera.reader-partial-source-graph.v1",
+                "source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "contents_family":null,
+                "subsystems":{
+                    "contents":"readable",
+                    "quill":"absent",
+                    "escher":"absent",
+                    "escher_delay":"absent"
+                },
+                "facts":[],
+                "gaps":["text_unavailable","image_facts_unavailable","geometry_facts_unavailable"]
+            })),
+            failure_classification: None,
+            filesystem_confinement: true,
+        };
+        validate_receipt(
+            &receipt,
+            "guest:0123456789abcdef",
+            &"a".repeat(64),
+            1,
+        )
+        .expect("source-neutral salvage observation should cross worker boundary");
+    }
 
     #[test]
     fn worker_receipt_rejects_scene_for_unsupported_classification() {
