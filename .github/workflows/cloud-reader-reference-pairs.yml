@@ -147,11 +147,13 @@ jobs:
       - name: Build canonical guest Scene producer
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
 
-      - name: Diagnose exact Carlton Scene adapter boundary
+      - name: Diagnose exact Carlton Scene and projected text-layout boundary
         env:
           CHAPTERA_READER_SCENE_PROBE_PUB: ${{ runner.temp }}/carlton-pair/March-2026.pub
           CHAPTERA_READER_SCENE_PROBE_SHA256: bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3
-        run: cargo test -p chaptera-server real_reference_scene_projection_probe -- --ignored --nocapture
+        run: |
+          cargo test -p chaptera-server real_reference_scene_projection_probe -- --ignored --nocapture
+          cargo test -p chaptera-server real_reference_text_layout_fallback_census_probe -- --ignored --nocapture
 
       - name: Diagnose exact Devinettes text-layout fallback reasons
         env:
