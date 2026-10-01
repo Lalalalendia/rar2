@@ -9,6 +9,7 @@ on:
       - "tools/run_local_layout_resolved_scene_engine.py"
       - "tools/run_sample_newsletter_resolved_scene_bridge.py"
       - "tools/resolved_graph_scene_bridge_v1.py"
+      - "tools/validate_viewer_geometry_receipt.py"
       - "tools/projection_context_sidecar_v1.py"
   workflow_dispatch:
 
@@ -72,6 +73,13 @@ jobs:
           assert digest == expected, (digest, expected)
           PY
 
+      - name: Regenerate canonical Viewer geometry from the same producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a             .web-v0/SampleNewsletter.pub             > .web-v0/viewer-geometry.real.json
+          python tools/validate_viewer_geometry_receipt.py             .web-v0/viewer-geometry.real.json
+
       - name: Build real current-state to Scene lifecycle receipt
         shell: bash
         run: |
@@ -89,7 +97,7 @@ jobs:
               --state-dir .web-v0/layout-resolved-scene-state \
               -- python tools/run_sample_newsletter_resolved_scene_bridge.py \
                 --resolved-graph .web-v0/resolved-graph.json \
-                --viewer-receipt apps/web/acceptance/receipts/viewer-geometry.real.json \
+                --viewer-receipt .web-v0/viewer-geometry.real.json \
                 --expected-resolved-graph-sha256 a98aebab2713064575474ad23d76e1528fd6cdb01bb0f350e0ad0100211aa9f0 \
                 --target-node-id 007d9898-568b-5125-b519-8d88243aabfb \
                 --target-page-id 58ffa2e0-896e-5a40-806c-bd0184ea9c85 \
