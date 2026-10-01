@@ -313,3 +313,34 @@ jobs:
     needs: [classify, tier-a]
     if: ${{ !cancelled() && always() && needs.classify.outputs.update_accept == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-win-update-accept.yml
+
+
+  caladea-authored-font-probe:
+    name: Caladea authored font probe binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build measurement chaptera binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+          sha256sum target/debug/chaptera > target/chaptera-caladea-authored-probe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chaptera-caladea-authored-probe-linux
+          path: |
+            target/debug/chaptera
+            target/chaptera-caladea-authored-probe.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
