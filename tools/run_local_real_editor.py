@@ -30,6 +30,7 @@ else:
 VENV = STATE / "venv"
 FIXTURE = STATE / "SampleNewsletter.pub"
 GRAPH = STATE / "resolved-graph.json"
+VIEWER = STATE / "viewer-geometry.json"
 WORK = STATE / "work"
 API_PORT = 18765
 WEB_PORT = 18083
@@ -157,6 +158,33 @@ def build_inputs() -> pathlib.Path:
             f"actual_sha={actual_graph_sha} expected_sha={GRAPH_SHA} "
             f"actual_bytes={actual_graph_bytes} expected_bytes={GRAPH_BYTES}"
         )
+
+    viewer_tmp = VIEWER.with_name(VIEWER.name + ".tmp")
+    viewer_tmp.unlink(missing_ok=True)
+    with viewer_tmp.open("wb") as output:
+        proc = subprocess.run(
+            [str(producer), str(FIXTURE)],
+            cwd=ROOT,
+            stdout=output,
+        )
+    if proc.returncode != 0:
+        raise RuntimeError("Viewer geometry producer failed")
+    try:
+        viewer = json.loads(viewer_tmp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Viewer geometry output is invalid JSON: {error}") from error
+    source = viewer.get("document", {}).get("source")
+    scene = viewer.get("scene")
+    if (
+        viewer.get("schema_version") != "0.1"
+        or not isinstance(source, dict)
+        or source.get("source_hash") != FIXTURE_SHA
+        or source.get("byte_len") != 291840
+        or not isinstance(scene, dict)
+        or not isinstance(scene.get("nodes"), list)
+    ):
+        raise RuntimeError("Viewer geometry source/schema identity mismatch")
+    os.replace(viewer_tmp, VIEWER)
     return producer
 
 
@@ -258,7 +286,7 @@ def main() -> int:
             "--resolved-graph",
             str(GRAPH),
             "--viewer-receipt",
-            "apps/web/acceptance/receipts/viewer-geometry.real.json",
+            str(VIEWER),
             "--revision-receipt",
             "packages/protocol/revision/v1/producer-receipts/sample-newsletter.real.json",
             "--exporter",
