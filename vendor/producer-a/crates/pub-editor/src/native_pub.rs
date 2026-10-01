@@ -59,7 +59,10 @@ impl fmt::Display for EditorNativePubMaterializationBlocked {
                 "native PUB save is blocked because the final Editor state requires {} persistence capabilities outside the single-Story text slice",
                 requirements.len()
             ),
-            Self::Writer(error) => write!(formatter, "native PUB writer blocked the final mutation: {error}"),
+            Self::Writer(error) => write!(
+                formatter,
+                "native PUB writer blocked the final mutation: {error}"
+            ),
         }
     }
 }
@@ -105,9 +108,7 @@ impl EditorSession {
         let expected = vec![story_text_requirement(mutations[0].story_id)];
         if requirements != expected {
             return Err(
-                EditorNativePubMaterializationBlocked::UnsupportedEffectiveState {
-                    requirements,
-                },
+                EditorNativePubMaterializationBlocked::UnsupportedEffectiveState { requirements },
             );
         }
 
@@ -218,8 +219,8 @@ mod tests {
             candidate.output_hash,
         )
         .expect("candidate SourceGraph");
-        let resolved = pub_reader::resolve_pub_source_graph(&reopened.graph)
-            .expect("candidate resolve");
+        let resolved =
+            pub_reader::resolve_pub_source_graph(&reopened.graph).expect("candidate resolve");
         assert_eq!(
             resolved.graph.stories[&candidate.output_story_id].text,
             after
@@ -277,8 +278,16 @@ mod tests {
         for quartet in cleaned.chunks_exact(4) {
             let a = base64_value(quartet[0]);
             let b = base64_value(quartet[1]);
-            let c = if quartet[2] == b'=' { 0 } else { base64_value(quartet[2]) };
-            let d = if quartet[3] == b'=' { 0 } else { base64_value(quartet[3]) };
+            let c = if quartet[2] == b'=' {
+                0
+            } else {
+                base64_value(quartet[2])
+            };
+            let d = if quartet[3] == b'=' {
+                0
+            } else {
+                base64_value(quartet[3])
+            };
             output.push((a << 2) | (b >> 4));
             if quartet[2] != b'=' {
                 output.push((b << 4) | (c >> 2));
