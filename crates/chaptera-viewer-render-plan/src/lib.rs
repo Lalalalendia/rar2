@@ -284,6 +284,18 @@ fn ascii_latin_script_font_family_v1(
     selected.map(|(_, display, _)| display)
 }
 
+/// Returns a complete scalar-typography family only when the fragment has
+/// contiguous, unambiguous non-blank family authority.
+pub fn complete_scalar_source_font_family_v1(
+    fragment: &RenderTextFragmentV1,
+) -> Option<String> {
+    match scalar_source_font_family_authority_v1(fragment) {
+        ScalarSourceFontFamilyAuthorityV1::Authoritative(family) => Some(family),
+        ScalarSourceFontFamilyAuthorityV1::Absent
+        | ScalarSourceFontFamilyAuthorityV1::Invalid => None,
+    }
+}
+
 /// Returns bounded source family authority for a render fragment without
 /// inventing font size, style, substitution, or general script fallback.
 ///
