@@ -1134,11 +1134,50 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1, ReaderRectV1, ReaderTransformV1,
-        base64_encode, bind_visible_paint, from_viewer_geometry, inline_image_data_url,
-        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
-        take_direct_render_text,
+        MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES, ReaderNodeV1, ReaderPaintV1,
+        ReaderRectV1, ReaderTransformV1, base64_encode, bind_visible_paint, from_viewer_geometry,
+        inline_image_data_url, insert_projected_nodes_after_targets, reader_image_resource,
+        shared_text_font_resource, take_direct_render_text,
     };
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ProbeImageInlineAdmission {
+        Inline,
+        UnsupportedMime,
+        EmptyPayload,
+        PerResourceLimit,
+        AggregateBudgetExhausted,
+    }
+
+    impl ProbeImageInlineAdmission {
+        fn reason(self) -> Option<&'static str> {
+            match self {
+                Self::Inline => None,
+                Self::UnsupportedMime => Some("unsupported_mime"),
+                Self::EmptyPayload => Some("empty_payload"),
+                Self::PerResourceLimit => Some("per_resource_limit"),
+                Self::AggregateBudgetExhausted => Some("aggregate_budget_exhausted"),
+            }
+        }
+    }
+
+    fn classify_probe_image_inline_admission(
+        mime: &str,
+        byte_len: usize,
+        remaining_budget: usize,
+    ) -> ProbeImageInlineAdmission {
+        if !matches!(mime, "image/png" | "image/jpeg" | "image/jpg" | "image/gif") {
+            ProbeImageInlineAdmission::UnsupportedMime
+        } else if byte_len == 0 {
+            ProbeImageInlineAdmission::EmptyPayload
+        } else if byte_len > MAX_INLINE_IMAGE_RESOURCE_BYTES {
+            ProbeImageInlineAdmission::PerResourceLimit
+        } else if byte_len > remaining_budget {
+            ProbeImageInlineAdmission::AggregateBudgetExhausted
+        } else {
+            ProbeImageInlineAdmission::Inline
+        }
+    }
 
     #[test]
     #[ignore = "requires an explicitly pinned external PUB path"]
@@ -1329,8 +1368,60 @@ mod tests {
                     .flat_map(|layout| &layout.lines)
                     .filter(|line| !line.text.trim().is_empty())
                     .count();
+
+                let mut descriptor_probe_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+                let mut descriptor_only_resource_count = 0_usize;
+                let mut descriptor_only_mime_counts = BTreeMap::<String, usize>::new();
+                let mut descriptor_only_reason_counts = BTreeMap::<&'static str, usize>::new();
+                let mut descriptor_only_total_bytes = 0_usize;
+                for image in &bundle.geometry.images {
+                    let admission = classify_probe_image_inline_admission(
+                        &image.mime,
+                        image.bytes.len(),
+                        descriptor_probe_budget,
+                    );
+                    if admission == ProbeImageInlineAdmission::Inline {
+                        descriptor_probe_budget -= image.bytes.len();
+                        continue;
+                    }
+
+                    descriptor_only_resource_count += 1;
+                    *descriptor_only_mime_counts
+                        .entry(image.mime.clone())
+                        .or_default() += 1;
+                    *descriptor_only_reason_counts
+                        .entry(
+                            admission
+                                .reason()
+                                .expect("non-inline probe admission must have a reason"),
+                        )
+                        .or_default() += 1;
+                    descriptor_only_total_bytes += image.bytes.len();
+                }
+
+                let descriptor_scene_resource_ids = scene
+                    .resources
+                    .iter()
+                    .filter(|resource| resource.availability == "descriptor_only")
+                    .map(|resource| resource.resource_id.as_str())
+                    .collect::<HashSet<_>>();
+                assert_eq!(
+                    descriptor_only_resource_count,
+                    descriptor_scene_resource_ids.len(),
+                    "probe admission classifier drifted from Reader Scene resource availability"
+                );
+                let descriptor_only_visible_node_refs = scene
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        node.resource_id.as_deref().is_some_and(|resource_id| {
+                            descriptor_scene_resource_ids.contains(resource_id)
+                        })
+                    })
+                    .count();
+
                 println!(
-                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} descriptor_only_resource_count={} descriptor_only_mime_counts={:?} descriptor_only_reason_counts={:?} descriptor_only_total_bytes={} descriptor_only_visible_node_refs={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
                     scene.fidelity.state,
                     scene.stacking_fidelity,
                     scene.pages.len(),
@@ -1342,6 +1433,11 @@ mod tests {
                     table_cells,
                     spanning_cells,
                     bounded_table_cells,
+                    descriptor_only_resource_count,
+                    descriptor_only_mime_counts,
+                    descriptor_only_reason_counts,
+                    descriptor_only_total_bytes,
+                    descriptor_only_visible_node_refs,
                     source_explicit_line_any,
                     source_explicit_line_color,
                     source_explicit_line_width,
@@ -1779,6 +1875,46 @@ mod tests {
         assert_eq!(budget, MAX_INLINE_IMAGE_TOTAL_BYTES - 3);
 
         assert!(inline_image_data_url("image/svg+xml", b"<svg/>", &mut budget).is_none());
+
+        let mut exhausted = 2;
+        assert!(inline_image_data_url("image/png", b"png", &mut exhausted).is_none());
+        assert_eq!(exhausted, 2);
+    }
+
+    #[test]
+    fn descriptor_probe_classifier_matches_inline_admission_law() {
+        assert_eq!(
+            classify_probe_image_inline_admission("image/png", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            ProbeImageInlineAdmission::Inline
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission("image/svg+xml", 3, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            ProbeImageInlineAdmission::UnsupportedMime
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission("image/png", 0, MAX_INLINE_IMAGE_TOTAL_BYTES),
+            ProbeImageInlineAdmission::EmptyPayload
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission(
+                "image/png",
+                MAX_INLINE_IMAGE_RESOURCE_BYTES + 1,
+                MAX_INLINE_IMAGE_TOTAL_BYTES
+            ),
+            ProbeImageInlineAdmission::PerResourceLimit
+        );
+        assert_eq!(
+            classify_probe_image_inline_admission("image/png", 3, 2),
+            ProbeImageInlineAdmission::AggregateBudgetExhausted
+        );
+
+        let mut product_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+        assert!(inline_image_data_url("image/png", b"png", &mut product_budget).is_some());
+        assert_eq!(product_budget, MAX_INLINE_IMAGE_TOTAL_BYTES - b"png".len());
+
+        let unchanged = product_budget;
+        assert!(inline_image_data_url("image/svg+xml", b"svg", &mut product_budget).is_none());
+        assert_eq!(product_budget, unchanged);
 
         let mut exhausted = 2;
         assert!(inline_image_data_url("image/png", b"png", &mut exhausted).is_none());

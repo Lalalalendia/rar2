@@ -1,4 +1,7 @@
-use chaptera_viewer_render_plan::{ExplicitRenderTextFontResourceV1, RenderTextFragmentV1};
+use chaptera_viewer_render_plan::{
+    ExplicitRenderTextFontResourceV1, RenderTextFragmentV1, build_page_render_plan_v1,
+    complete_scalar_source_font_family_v1, effective_source_font_family_v1,
+};
 use pub_viewer::ViewerGeometryDocument;
 #[cfg(target_os = "windows")]
 use sha2::{Digest, Sha256};
@@ -19,6 +22,7 @@ pub struct DesktopSourceFontRegistry {
     database: fontdb::Database,
     resolved: BTreeMap<String, ResolvedDesktopFont>,
     unavailable: BTreeSet<String>,
+    effective_fragment_families: BTreeMap<(String, u32, u32, String), String>,
 }
 
 impl Default for DesktopSourceFontRegistry {
@@ -41,17 +45,34 @@ impl DesktopSourceFontRegistry {
             database,
             resolved: BTreeMap::new(),
             unavailable: BTreeSet::new(),
+            effective_fragment_families: BTreeMap::new(),
         }
     }
 
     pub fn ensure_visual_fonts(&mut self, visual: &ViewerGeometryDocument) -> bool {
-        let families = visual
+        let mut families = visual
             .typography_runs
             .iter()
             .map(|run| run.source_font_name.trim())
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
+
+        self.effective_fragment_families.clear();
+        for page_index in 0..visual.document.pages.len() {
+            let Ok(plan) = build_page_render_plan_v1(visual, page_index) else {
+                continue;
+            };
+            for fragment in plan.nodes.iter().filter_map(|node| node.text.as_ref()) {
+                if let Some(family) = effective_source_font_family_v1(visual, fragment) {
+                    families.insert(family.clone());
+                    if complete_scalar_source_font_family_v1(fragment).is_none() {
+                        self.effective_fragment_families
+                            .insert(fragment_family_key(fragment), family);
+                    }
+                }
+            }
+        }
 
         let mut changed = false;
         for family in families {
@@ -75,7 +96,18 @@ impl DesktopSourceFontRegistry {
         &'a self,
         fragment: &RenderTextFragmentV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
-        let family = admitted_single_family(fragment)?;
+        let family = complete_scalar_source_font_family_v1(fragment).or_else(|| {
+            self.effective_fragment_families
+                .get(&fragment_family_key(fragment))
+                .cloned()
+        })?;
+        self.resource_for_family(&family)
+    }
+
+    fn resource_for_family<'a>(
+        &'a self,
+        family: &str,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
         let key = normalize_family(family);
         let font = self.resolved.get(&key)?;
         Some(ExplicitRenderTextFontResourceV1 {
@@ -180,75 +212,18 @@ fn normalize_family(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
-fn admitted_single_family(fragment: &RenderTextFragmentV1) -> Option<&str> {
-    if fragment.typography.is_empty() {
-        return None;
-    }
-
-    let mut cursor = fragment.scalar_start;
-    let mut family: Option<&str> = None;
-    for run in &fragment.typography {
-        if run.scalar_start != cursor
-            || run.scalar_end <= run.scalar_start
-            || run.scalar_end > fragment.scalar_end
-        {
-            return None;
-        }
-        let name = run.source_font_name.trim();
-        if name.is_empty() {
-            return None;
-        }
-        match family {
-            None => family = Some(name),
-            Some(existing) if normalize_family(existing) == normalize_family(name) => {}
-            Some(_) => return None,
-        }
-        cursor = run.scalar_end;
-    }
-
-    let family = family?;
-    (cursor == fragment.scalar_end).then_some(family)
+fn fragment_family_key(fragment: &RenderTextFragmentV1) -> (String, u32, u32, String) {
+    (
+        format!("{:?}", fragment.story_id),
+        fragment.scalar_start,
+        fragment.scalar_end,
+        fragment.text.clone(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fragment(runs: serde_json::Value) -> RenderTextFragmentV1 {
-        serde_json::from_value(serde_json::json!({
-            "story_id": "00000000-0000-0000-0000-000000000001",
-            "scalar_start": 0,
-            "scalar_end": 4,
-            "text": "ABCD",
-            "line_count": 1,
-            "typography": runs
-        }))
-        .expect("render fragment")
-    }
-
-    #[test]
-    fn single_family_requires_complete_contiguous_coverage() {
-        let value = fragment(serde_json::json!([
-            {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false},
-            {"scalar_start":2,"scalar_end":4,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
-        ]));
-        assert_eq!(admitted_single_family(&value), Some("Arial"));
-
-        let gap = fragment(serde_json::json!([
-            {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false},
-            {"scalar_start":3,"scalar_end":4,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
-        ]));
-        assert_eq!(admitted_single_family(&gap), None);
-    }
-
-    #[test]
-    fn mixed_family_fails_closed() {
-        let value = fragment(serde_json::json!([
-            {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false},
-            {"scalar_start":2,"scalar_end":4,"source_font_name":"Times New Roman","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
-        ]));
-        assert_eq!(admitted_single_family(&value), None);
-    }
 
     #[cfg(target_os = "windows")]
     #[test]
@@ -259,12 +234,9 @@ mod tests {
             .find(|family| registry.ensure_family(family))
             .expect("windows-latest should expose at least one unique normal system face");
 
-        let value = fragment(serde_json::json!([
-            {"scalar_start":0,"scalar_end":4,"source_font_name":source_family,"text_size_emu":152400,"font_inherited":false,"size_inherited":false}
-        ]));
         let layout_font = registry
-            .resource_for_fragment(&value)
-            .expect("admitted layout font resource");
+            .resource_for_family(source_family)
+            .expect("resolved layout font resource");
         let paint_fonts = registry.egui_fonts();
         let paint_font = paint_fonts
             .iter()
