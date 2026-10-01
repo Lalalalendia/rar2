@@ -5600,6 +5600,61 @@ mod standard_print_service_tail_exact_product_tests {
 }
 
 #[cfg(test)]
+mod textframe_content_valign_exact_measurement_tests {
+    use super::*;
+    use std::{fs, path::PathBuf};
+
+    #[test]
+    #[ignore = "requires CHAPTERA_TEXTFRAME_VALIGN_PUB exact public fixture"]
+    fn exact_textframe_content_and_vertical_alignment_census() {
+        let path = std::env::var_os("CHAPTERA_TEXTFRAME_VALIGN_PUB")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_TEXTFRAME_VALIGN_PUB");
+        let expected_sha = std::env::var("CHAPTERA_TEXTFRAME_VALIGN_SHA256")
+            .expect("CHAPTERA_TEXTFRAME_VALIGN_SHA256");
+        let bytes = fs::read(path).expect("read exact PUB");
+        assert_eq!(sha256_digest(&bytes).unwrap().to_string(), expected_sha);
+
+        let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
+            .expect("exact PUB must open through Viewer bundle");
+        let frames = &bundle.geometry.story_frames;
+        let mut top = 0_usize;
+        let mut center = 0_usize;
+        let mut bottom = 0_usize;
+        let mut absent = 0_usize;
+        let mut content_bounds = 0_usize;
+        let mut both = 0_usize;
+
+        for frame in frames {
+            content_bounds += usize::from(frame.text_content_bounds.is_some());
+            match frame.vertical_alignment {
+                Some(ViewerTextVerticalAlignment::Top) => top += 1,
+                Some(ViewerTextVerticalAlignment::Center) => center += 1,
+                Some(ViewerTextVerticalAlignment::Bottom) => bottom += 1,
+                None => absent += 1,
+            }
+            both += usize::from(
+                frame.text_content_bounds.is_some() && frame.vertical_alignment.is_some(),
+            );
+        }
+
+        let receipt = serde_json::json!({
+            "schema": "chaptera.textframe-content-valign-census.v1",
+            "story_frame_count": frames.len(),
+            "text_content_bounds_count": content_bounds,
+            "vertical_alignment": {
+                "top": top,
+                "center": center,
+                "bottom": bottom,
+                "absent": absent,
+            },
+            "content_bounds_and_alignment_count": both,
+        });
+        println!("{}", serde_json::to_string(&receipt).expect("serialize census"));
+    }
+}
+
+#[cfg(test)]
 mod mature_officeart_wmf_exact_product_tests {
     use super::*;
     use std::{fs, path::PathBuf};
