@@ -4915,9 +4915,11 @@ impl ViewerApp {
                     );
                 }
 
-                for selected_instance_id in self.canvas_selection.iter().filter(|instance_id| {
-                    Some(*instance_id) != selected_canvas_instance.as_deref()
-                }) {
+                for selected_instance_id in self
+                    .canvas_selection
+                    .iter()
+                    .filter(|instance_id| Some(*instance_id) != selected_canvas_instance.as_deref())
+                {
                     if let Some(hit) = hit_index.entry_for_instance(selected_instance_id)
                         && let Some(selected_rect) = render_backend::physical_rect_to_egui(
                             page_rect,
@@ -5073,9 +5075,7 @@ impl ViewerApp {
             || resize_commit.is_some()
             || next_canvas_resize.is_some()
         {
-            if let Some(instance_id) = resize_instance
-                .or(resize_commit_instance)
-                .or(drag_instance)
+            if let Some(instance_id) = resize_instance.or(resize_commit_instance).or(drag_instance)
             {
                 self.canvas_selection.select_only(instance_id);
             }
