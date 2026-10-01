@@ -35,12 +35,10 @@ use crate::{
     blob_store::{BlobStoreError, BlobStoreService, CreateBindingRequest, ResourceKind},
     edge::ClientIp,
     guest_reader_worker::{GuestSceneWorkerError, IsolatedGuestSceneProducer},
-    reader_compatibility_report::{
-        ReaderCompatibilityReportV1, build_reader_compatibility_report,
-    },
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
+    reader_compatibility_report::{ReaderCompatibilityReportV1, build_reader_compatibility_report},
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
     upload_admission::{
@@ -1698,8 +1696,8 @@ fn compatibility_report_for_payload(
     if classification == "rejected" {
         return Ok(None);
     }
-    let source_sha256 = source_sha256
-        .ok_or_else(|| GuestReaderError::internal("guest_source_identity_missing"))?;
+    let source_sha256 =
+        source_sha256.ok_or_else(|| GuestReaderError::internal("guest_source_identity_missing"))?;
     build_reader_compatibility_report(source_sha256, classification, scene, salvage)
         .map(Some)
         .map_err(|_| GuestReaderError::internal("guest_compatibility_report_invalid"))

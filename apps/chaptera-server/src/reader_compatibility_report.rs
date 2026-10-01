@@ -3,8 +3,7 @@ use std::collections::HashSet;
 use serde::Serialize;
 use serde_json::Value;
 
-pub const READER_COMPATIBILITY_REPORT_V1: &str =
-    "chaptera.reader-compatibility-report.v1";
+pub const READER_COMPATIBILITY_REPORT_V1: &str = "chaptera.reader-compatibility-report.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReaderCompatibilityReportV1 {
@@ -112,9 +111,7 @@ pub fn build_reader_compatibility_report(
             }
             "salvage" => {
                 if scene.is_some() {
-                    return Err(
-                        "salvage compatibility report cannot carry Reader Scene".to_owned(),
-                    );
+                    return Err("salvage compatibility report cannot carry Reader Scene".to_owned());
                 }
                 let salvage = salvage.ok_or_else(|| {
                     "salvage compatibility report is missing recovery observation".to_owned()
@@ -155,7 +152,9 @@ pub fn build_reader_compatibility_report(
                     "unsupported_or_manual_review",
                 )
             }
-            _ => return Err("unsupported Reader classification for compatibility report".to_owned()),
+            _ => {
+                return Err("unsupported Reader classification for compatibility report".to_owned());
+            }
         };
 
     Ok(ReaderCompatibilityReportV1 {
@@ -183,8 +182,7 @@ fn validate_source_sha256(value: &str) -> Result<(), String> {
 }
 
 fn validate_scene_identity(scene: &Value, source_sha256: &str) -> Result<(), String> {
-    if scene.get("protocol_version").and_then(Value::as_str)
-        != Some("chaptera.reader-scene.v1")
+    if scene.get("protocol_version").and_then(Value::as_str) != Some("chaptera.reader-scene.v1")
         || scene.get("source_hash").and_then(Value::as_str) != Some(source_sha256)
     {
         return Err("Reader Scene identity differs from compatibility source".to_owned());
@@ -216,7 +214,10 @@ fn summarize_scene(scene: &Value) -> Result<ReaderCompatibilityContentSummaryV1,
         let object = node
             .as_object()
             .ok_or_else(|| "Reader Scene node is not an object".to_owned())?;
-        let kind = object.get("kind").and_then(Value::as_str).unwrap_or("unknown");
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         if object.get("table").is_some_and(|value| !value.is_null()) || kind == "table" {
             tables += 1;
         } else if kind == "text_frame" {
@@ -242,9 +243,7 @@ fn summarize_scene(scene: &Value) -> Result<ReaderCompatibilityContentSummaryV1,
     })
 }
 
-fn summarize_salvage(
-    salvage: &Value,
-) -> Result<ReaderCompatibilityContentSummaryV1, String> {
+fn summarize_salvage(salvage: &Value) -> Result<ReaderCompatibilityContentSummaryV1, String> {
     let facts = required_array(salvage, "facts")?;
     let mut text_ranges = 0_u64;
     let mut images = 0_u64;
@@ -255,7 +254,7 @@ fn summarize_salvage(
             Some("verified_image") => images += 1,
             Some("grounded_geometry") => geometry += 1,
             Some(_) | None => {
-                return Err("salvage fact uses an unsupported compatibility kind".to_owned())
+                return Err("salvage fact uses an unsupported compatibility kind".to_owned());
             }
         }
     }
@@ -449,8 +448,7 @@ mod tests {
             "nodes": [],
             "stories": []
         });
-        let report =
-            build_reader_compatibility_report(SHA, "partial", Some(&scene), None).unwrap();
+        let report = build_reader_compatibility_report(SHA, "partial", Some(&scene), None).unwrap();
 
         assert_eq!(report.state, "needs_review");
         let codes = report
@@ -497,8 +495,7 @@ mod tests {
 
     #[test]
     fn unsupported_report_advertises_no_unverified_conversion() {
-        let report =
-            build_reader_compatibility_report(SHA, "unsupported", None, None).unwrap();
+        let report = build_reader_compatibility_report(SHA, "unsupported", None, None).unwrap();
 
         assert_eq!(report.state, "unsupported");
         assert_eq!(report.output_routes.read_only_preview, "unavailable");
@@ -517,8 +514,6 @@ mod tests {
             "nodes": [],
             "stories": []
         });
-        assert!(
-            build_reader_compatibility_report(SHA, "supported", Some(&scene), None).is_err()
-        );
+        assert!(build_reader_compatibility_report(SHA, "supported", Some(&scene), None).is_err());
     }
 }
