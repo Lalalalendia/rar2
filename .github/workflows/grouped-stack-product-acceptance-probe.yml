@@ -1,0 +1,88 @@
+name: Grouped stack product acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/grouped-stack-product-acceptance-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire exact public Brochure and Newsletter controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/paint-fixtures" target/grouped-stack-acceptance
+          python - <<'PY'
+          import hashlib
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          expected = {
+              "SampleBrochure": ("ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", 161792),
+              "SampleNewsletter": ("6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", 291840),
+          }
+          base = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher"
+          root = Path(os.environ["RUNNER_TEMP"]) / "paint-fixtures"
+          for name, (digest, size) in expected.items():
+              data = urllib.request.urlopen(f"{base}/{name}.pub", timeout=30).read()
+              actual = hashlib.sha256(data).hexdigest()
+              assert actual == digest, (name, actual, digest)
+              assert len(data) == size, (name, len(data), size)
+              (root / f"{name}.pub").write_bytes(data)
+              print(name, len(data), actual)
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned browser runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Build canonical guest Scene producer
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Capture exact Brochure and Newsletter candidate page rasters
+        shell: bash
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/debug/chaptera
+          READER_REAL_OUTPUT: ${{ github.workspace }}/target/grouped-stack-acceptance/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+        run: |
+          set -euo pipefail
+          node apps/cloud-reader/real-browser.test.mjs \
+            | tee target/grouped-stack-acceptance/browser.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grouped-stack-product-acceptance
+          path: target/grouped-stack-acceptance/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
