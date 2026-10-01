@@ -23,7 +23,7 @@ use chaptera_server::{
         EXPORT_JOB_PAYLOAD_SCHEMA_V1, ExactRevisionEditableExporter, ExactRevisionStateProvider,
         ExportExecutorError, ExportJobPayloadV1, ExportPublicationCommitFuture,
         ExportPublicationCommitter, ExportPublishAuthFuture, ExportPublishAuthorizer,
-        IDML_BOUNDED_EDITABLE_PROFILE, PublishedExportJobExecutor,
+        IDML_BOUNDED_EDITABLE_PROFILE, ODG_BOUNDED_EDITABLE_PROFILE, PublishedExportJobExecutor,
     },
     export_publication::{
         ExportPublicationInputV1, ExportPublicationPrepareOutcomeV1, SqliteExportPublicationStore,
@@ -424,39 +424,67 @@ fn cleanup_db(path: &Path) {
 
 #[tokio::test]
 #[ignore = "requires pinned real PUB fixture from CLOUD-EXPORT-EXECUTOR-01 acceptance"]
-async fn exact_edited_real_pub_produces_deterministic_idml_and_loss_report() {
-    let (state, payload) = exact_edited_fixture_state();
+async fn exact_edited_real_pub_produces_deterministic_idml_and_odg_with_loss_reports() {
+    let (state, base_payload) = exact_edited_fixture_state();
     let exporter = ExactRevisionEditableExporter::new(Arc::new(FixtureStateProvider { state }));
+    let evidence_dir = std::env::var_os("CHAPTERA_EXPORT_EVIDENCE_DIR").map(PathBuf::from);
 
-    let first = exporter
-        .produce(&payload)
-        .await
-        .expect("produce exact edited IDML");
-    let second = exporter
-        .produce(&payload)
-        .await
-        .expect("exact retry produces the same edited IDML");
+    for (profile, extension) in [
+        (IDML_BOUNDED_EDITABLE_PROFILE, "idml"),
+        (ODG_BOUNDED_EDITABLE_PROFILE, "odg"),
+    ] {
+        let mut payload = base_payload.clone();
+        payload.target_profile = profile.to_owned();
 
-    assert!(!first.artifact_bytes.is_empty());
-    assert!(
-        first.artifact_bytes.starts_with(b"PK"),
-        "IDML must be a ZIP package"
-    );
-    assert!(!first.loss_report_json.is_empty());
-    let loss_json: serde_json::Value =
-        serde_json::from_slice(&first.loss_report_json).expect("canonical LossReport JSON");
-    assert!(loss_json.is_object());
+        let first = exporter
+            .produce(&payload)
+            .await
+            .unwrap_or_else(|error| panic!("produce exact edited {extension}: {error}"));
+        let second = exporter
+            .produce(&payload)
+            .await
+            .unwrap_or_else(|error| panic!("retry exact edited {extension}: {error}"));
 
-    assert_eq!(first.artifact_bytes, second.artifact_bytes);
-    assert_eq!(first.artifact_sha256, second.artifact_sha256);
-    assert_eq!(first.loss_report_json, second.loss_report_json);
-    assert_eq!(first.loss_report_sha256, second.loss_report_sha256);
-    assert_eq!(first.exact_revision_id, payload.exact_revision_id);
-    assert_eq!(
-        first.canonical_authoring_revision_id,
-        payload.canonical_authoring_revision_id
-    );
-    assert_eq!(first.layout_environment_id, payload.layout_environment_id);
+        assert!(!first.artifact_bytes.is_empty());
+        assert!(
+            first.artifact_bytes.starts_with(b"PK"),
+            "{extension} must be a ZIP package"
+        );
+        assert!(!first.loss_report_json.is_empty());
+        let loss_json: serde_json::Value =
+            serde_json::from_slice(&first.loss_report_json).expect("canonical LossReport JSON");
+        assert!(loss_json.is_object());
+
+        assert_eq!(first.artifact_bytes, second.artifact_bytes);
+        assert_eq!(first.artifact_sha256, second.artifact_sha256);
+        assert_eq!(first.loss_report_json, second.loss_report_json);
+        assert_eq!(first.loss_report_sha256, second.loss_report_sha256);
+        assert_eq!(first.exact_revision_id, payload.exact_revision_id);
+        assert_eq!(
+            first.canonical_authoring_revision_id,
+            payload.canonical_authoring_revision_id
+        );
+        assert_eq!(first.layout_environment_id, payload.layout_environment_id);
+
+        if let Some(dir) = evidence_dir.as_ref() {
+            fs::create_dir_all(dir).expect("create export consumer evidence directory");
+            fs::write(
+                dir.join(format!("edited.{extension}")),
+                &first.artifact_bytes,
+            )
+            .expect("write edited export artifact");
+            fs::write(
+                dir.join(format!("edited.{extension}.loss.json")),
+                &first.loss_report_json,
+            )
+            .expect("write canonical machine loss report");
+            fs::write(
+                dir.join(format!("edited.{extension}.loss.txt")),
+                first.loss_report_text.as_bytes(),
+            )
+            .expect("write canonical human loss report");
+        }
+    }
 }
 
 #[tokio::test]
