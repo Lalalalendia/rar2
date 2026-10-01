@@ -2,7 +2,7 @@ use std::{
     fmt,
     path::{Path as FsPath, PathBuf},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -39,6 +39,7 @@ use crate::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
     reader_compatibility_report::{ReaderCompatibilityReportV1, build_reader_compatibility_report},
+    reader_observability::ReaderObservabilityV1,
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
     upload_admission::{
@@ -89,6 +90,7 @@ pub struct GuestReaderHttpState {
     blob_store: BlobStoreService,
     scanner: Arc<ProductionSourceSecurityScanner>,
     scene_worker: IsolatedGuestSceneProducer,
+    observability: ReaderObservabilityV1,
     config: GuestReaderHttpConfig,
 }
 
@@ -370,6 +372,7 @@ impl GuestReaderHttpState {
             blob_store,
             scanner: Arc::new(scanner),
             scene_worker,
+            observability: ReaderObservabilityV1::default(),
             config,
         })
     }
@@ -493,8 +496,11 @@ impl<T: Serialize> IntoResponse for GuestJson<T> {
 async fn issue_session(
     State(state): State<GuestReaderHttpState>,
     Extension(client_ip): Extension<ClientIp>,
+    headers: HeaderMap,
     Json(body): Json<IssueGuestSessionBody>,
 ) -> Result<GuestJson<IssueGuestSessionResponse>, GuestReaderError> {
+    let started = Instant::now();
+    let trace = ReaderObservabilityV1::context_from_headers(&headers);
     let now_ms = now_ms()?;
     state.cleanup_expired(now_ms).await?;
     state
@@ -565,6 +571,16 @@ async fn issue_session(
         return Err(error);
     }
 
+    state
+        .observability
+        .remember_session(&session_id, trace.as_ref());
+    state.observability.record(
+        "reader.session_create",
+        trace.as_ref(),
+        "success",
+        started.elapsed(),
+    );
+
     Ok(GuestJson(IssueGuestSessionResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: session_id.clone(),
@@ -584,6 +600,9 @@ async fn put_content(
     headers: HeaderMap,
     body: Body,
 ) -> Result<GuestJson<GuestUploadResponse>, GuestReaderError> {
+    let started = Instant::now();
+    let trace = ReaderObservabilityV1::context_from_headers(&headers)
+        .or_else(|| state.observability.session_context(&session_id));
     let now_ms = now_ms()?;
     state.cleanup_expired(now_ms).await?;
     state
@@ -658,6 +677,12 @@ async fn put_content(
         }
     };
 
+    state.observability.record(
+        "reader.upload",
+        trace.as_ref(),
+        "success",
+        started.elapsed(),
+    );
     Ok(GuestJson(GuestUploadResponse {
         protocol_version: GUEST_PROTOCOL_V1,
         session_id: stored.session_id,
@@ -672,6 +697,9 @@ async fn open_session(
     Path(session_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<GuestJson<GuestOpenResponse>, GuestReaderError> {
+    let started = Instant::now();
+    let trace = ReaderObservabilityV1::context_from_headers(&headers)
+        .or_else(|| state.observability.session_context(&session_id));
     let now_ms = now_ms()?;
     state.cleanup_expired(now_ms).await?;
     state
@@ -736,13 +764,31 @@ async fn open_session(
         }
     };
     let mut scan_input = first;
+    let scan_started = Instant::now();
     let scan_outcome = match state.scanner.scan(&mut *scan_input).await {
-        Ok(outcome) => outcome,
+        Ok(outcome) => {
+            state.observability.record(
+                "reader.scan",
+                trace.as_ref(),
+                "success",
+                scan_started.elapsed(),
+            );
+            outcome
+        }
         Err(error) => {
+            state.observability.record(
+                "reader.scan",
+                trace.as_ref(),
+                "error",
+                scan_started.elapsed(),
+            );
             state
                 .sessions
                 .reset_open(&opening.session_id, now_ms)
                 .await?;
+            state
+                .observability
+                .record("reader.open", trace.as_ref(), "error", started.elapsed());
             return Err(map_scan_error(error));
         }
     };
@@ -754,6 +800,12 @@ async fn open_session(
                 .finish_rejected(&opening.session_id, code, now_ms)
                 .await?;
             state.finalize_rejected_cleanup(&rejected, now_ms).await?;
+            state.observability.record(
+                "reader.open",
+                trace.as_ref(),
+                "rejected",
+                started.elapsed(),
+            );
             return Ok(GuestJson(GuestOpenResponse {
                 protocol_version: GUEST_PROTOCOL_V1,
                 session_id: rejected.session_id,
@@ -788,9 +840,38 @@ async fn open_session(
                 .sessions
                 .reset_open(&opening.session_id, now_ms)
                 .await?;
+            state
+                .observability
+                .record("reader.open", trace.as_ref(), "error", started.elapsed());
             return Err(map_scene_worker_error(error));
         }
     };
+
+    let structural_outcome = if receipt.terminal_code.as_deref() == Some("reader_scene_open_failed") {
+        "error"
+    } else {
+        "success"
+    };
+    state.observability.record(
+        "reader.structural_scan",
+        trace.as_ref(),
+        structural_outcome,
+        Duration::from_micros(receipt.structural_scan_duration_us),
+    );
+    if let Some(scene_duration_us) = receipt.scene_duration_us {
+        let scene_outcome =
+            if receipt.terminal_code.as_deref() == Some("reader_scene_projection_failed") {
+                "error"
+            } else {
+                "success"
+            };
+        state.observability.record(
+            "reader.scene",
+            trace.as_ref(),
+            scene_outcome,
+            Duration::from_micros(scene_duration_us),
+        );
+    }
 
     let mut classification = receipt.classification;
     let mut terminal_code = receipt.terminal_code;
@@ -835,6 +916,16 @@ async fn open_session(
         )
         .await?;
     state.release_admission(&opened, now_ms).await?;
+    state.observability.record(
+        "reader.open",
+        trace.as_ref(),
+        if matches!(classification.as_str(), "supported" | "partial" | "salvage") {
+            "success"
+        } else {
+            "error"
+        },
+        started.elapsed(),
+    );
     let compatibility_report = compatibility_report_for_payload(
         &classification,
         Some(receipt.source_sha256.as_str()),
@@ -1018,12 +1109,21 @@ impl GuestReaderHttpState {
         session: GuestReaderSession,
         now_ms: i64,
     ) -> Result<(), GuestReaderError> {
+        let started = Instant::now();
+        let trace = self.observability.session_context(&session.session_id);
         let _ = self.release_admission(&session, now_ms).await;
         self.delete_quarantine(&session, now_ms).await?;
         self.sessions
             .mark_expired(&session.session_id, now_ms)
             .await?;
         self.sessions.delete_expired(&session.session_id).await?;
+        self.observability.record(
+            "reader.cleanup",
+            trace.as_ref(),
+            "success",
+            started.elapsed(),
+        );
+        self.observability.forget_session(&session.session_id);
         Ok(())
     }
 
