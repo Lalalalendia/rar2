@@ -164,7 +164,7 @@ function nodeTransform(node) {
 export function resolvedTextLinePaintPlan(node) {
   const layout = node?.text_layout;
   if (!layout || layout.disposition !== "shared_resolved") return null;
-  const bounds = node.bounds;
+  const bounds = node.text_bounds ?? node.bounds;
   const x = safeInteger(bounds.x, "text.bounds.x");
   const y = safeInteger(bounds.y, "text.bounds.y");
   const width = safeInteger(bounds.width, "text.bounds.width");
@@ -223,7 +223,7 @@ export function resolvedTextLinePaintPlan(node) {
 
 function appendPreviewText(group, node, plan = null) {
   if (!node.text) return;
-  const bounds = node.bounds;
+  const bounds = node.text_bounds ?? node.bounds;
   const foreign = previewForeignObject(bounds, {
     "data-text-authority": "browser-preview-only"
   });
