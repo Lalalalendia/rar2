@@ -30,6 +30,7 @@ else:
 VENV = STATE / "venv"
 FIXTURE = STATE / "SampleNewsletter.pub"
 GRAPH = STATE / "resolved-graph.json"
+VIEWER_RECEIPT = STATE / "viewer-geometry.json"
 WORK = STATE / "work"
 API_PORT = 18765
 WEB_PORT = 18083
@@ -44,8 +45,9 @@ FIXTURE_URL = (
     "test-data/publisher/SampleNewsletter.pub"
 )
 FIXTURE_SHA = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
-GRAPH_SHA = "c38959cd843af978d743a929c7bb813c3a383400c4ad57ebf30b89d032ec9216"
-GRAPH_BYTES = 217194
+FIXTURE_BYTES = 291840
+GRAPH_SHA = "a98aebab2713064575474ad23d76e1528fd6cdb01bb0f350e0ad0100211aa9f0"
+GRAPH_BYTES = 230955
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -108,12 +110,12 @@ def ensure_python() -> pathlib.Path:
 
 
 def ensure_fixture() -> None:
-    if FIXTURE.exists() and FIXTURE.stat().st_size == 291840 and sha256(FIXTURE) == FIXTURE_SHA:
+    if FIXTURE.exists() and FIXTURE.stat().st_size == FIXTURE_BYTES and sha256(FIXTURE) == FIXTURE_SHA:
         return
     FIXTURE.unlink(missing_ok=True)
     with urllib.request.urlopen(FIXTURE_URL, timeout=60) as response:
         data = response.read(292000)
-    if len(data) != 291840 or hashlib.sha256(data).hexdigest() != FIXTURE_SHA:
+    if len(data) != FIXTURE_BYTES or hashlib.sha256(data).hexdigest() != FIXTURE_SHA:
         raise RuntimeError("downloaded SampleNewsletter.pub identity mismatch")
     FIXTURE.write_bytes(data)
 
@@ -157,6 +159,32 @@ def build_inputs() -> pathlib.Path:
             f"actual_sha={actual_graph_sha} expected_sha={GRAPH_SHA} "
             f"actual_bytes={actual_graph_bytes} expected_bytes={GRAPH_BYTES}"
         )
+
+    # Viewer and resolved-graph inputs must come from the same current producer.
+    # A committed Viewer golden is useful as CI evidence, but using it at runtime
+    # makes the local Editor stale whenever the admitted Viewer Scene evolves.
+    with VIEWER_RECEIPT.open("wb") as output:
+        proc = subprocess.run(
+            [str(producer), str(FIXTURE)],
+            cwd=ROOT,
+            stdout=output,
+        )
+    if proc.returncode != 0:
+        raise RuntimeError("Viewer geometry producer failed")
+    try:
+        viewer = json.loads(VIEWER_RECEIPT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("Viewer geometry producer did not emit valid JSON") from error
+    source = viewer.get("document", {}).get("source")
+    if (
+        not isinstance(source, dict)
+        or source.get("source_hash") != FIXTURE_SHA
+        or source.get("byte_len") != FIXTURE_BYTES
+    ):
+        raise RuntimeError("Viewer geometry receipt identity mismatch")
+    scene = viewer.get("scene")
+    if not isinstance(scene, dict) or not isinstance(scene.get("nodes"), list):
+        raise RuntimeError("Viewer geometry receipt is missing Scene nodes")
     return producer
 
 
@@ -258,7 +286,7 @@ def main() -> int:
             "--resolved-graph",
             str(GRAPH),
             "--viewer-receipt",
-            "apps/web/acceptance/receipts/viewer-geometry.real.json",
+            str(VIEWER_RECEIPT),
             "--revision-receipt",
             "packages/protocol/revision/v1/producer-receipts/sample-newsletter.real.json",
             "--exporter",
