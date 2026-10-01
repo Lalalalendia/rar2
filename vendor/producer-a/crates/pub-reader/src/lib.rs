@@ -4484,6 +4484,238 @@ fn add_missing_link_target_diagnostics(
 mod tests {
     use super::*;
 
+
+    #[test]
+    #[ignore = "requires CHAPTERA_STACK_ADMISSION_FIXTURE, CHAPTERA_STACK_ADMISSION_SHA256 and CHAPTERA_STACK_ADMISSION_OUT"]
+    fn exact_stack_admission_census_is_source_safe() {
+        let fixture = std::env::var_os("CHAPTERA_STACK_ADMISSION_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_STACK_ADMISSION_FIXTURE");
+        let output = std::env::var_os("CHAPTERA_STACK_ADMISSION_OUT")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_STACK_ADMISSION_OUT");
+        let source_hash: Sha256Digest = std::env::var("CHAPTERA_STACK_ADMISSION_SHA256")
+            .expect("CHAPTERA_STACK_ADMISSION_SHA256")
+            .parse()
+            .expect("valid source SHA-256");
+
+        let bytes = std::fs::read(&fixture).expect("read exact PUB fixture");
+        let build = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
+            .expect("build exact source graph");
+
+        let contents =
+            pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), CONTENTS_STREAM_PATH)
+                .expect("read Contents");
+        let escher =
+            pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), ESCHER_STREAM_PATH)
+                .expect("read Escher");
+        let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let header = parse_0x2c_header(contents_stream.clone(), &contents)
+            .expect("parse mature header");
+        let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
+            .expect("parse mature trailer");
+        let references =
+            build_reference_index(&contents, &trailer.directory).expect("build reference index");
+        let inventory =
+            inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher)
+                .expect("inspect OfficeArt shapes");
+
+        let page_ordinals = build
+            .graph
+            .document
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(ordinal, page_id)| (*page_id, ordinal))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut expected = BTreeMap::<PageId, BTreeSet<NodeId>>::new();
+        for node in build.graph.nodes.values() {
+            let seq_num = node.payload.contents_seq_num;
+            let Some(reference) = references.get(&seq_num) else {
+                continue;
+            };
+            let Some(parent_seq) = single_parent_seq(reference) else {
+                continue;
+            };
+            let Ok(page_id) = derive_pub_page_id(&source_hash, parent_seq) else {
+                continue;
+            };
+            if !build.graph.pages.contains_key(&page_id)
+                || node.header.parent_id != page_id.into_canonical()
+            {
+                continue;
+            }
+            expected.entry(page_id).or_default().insert(node.header.id);
+        }
+
+        let mut joined = BTreeMap::<PageId, BTreeMap<NodeId, usize>>::new();
+        let mut page_shape_id_records = BTreeMap::<PageId, usize>::new();
+        let mut page_exact_shape_id_records = BTreeMap::<PageId, usize>::new();
+        let mut page_exact_graph_joins = BTreeMap::<PageId, usize>::new();
+        let mut client_data_shape_count = 0_usize;
+        let mut exact_shape_id_shape_count = 0_usize;
+
+        for shape in &inventory.shapes {
+            let Some(client_data) = shape.client_data.as_ref() else {
+                continue;
+            };
+            client_data_shape_count += 1;
+            let fields = client_data
+                .fields
+                .iter()
+                .filter(|field| field.id == PUBLISHER_FIELD_SHAPE_ID)
+                .collect::<Vec<_>>();
+            if fields.len() != 1 {
+                continue;
+            }
+            exact_shape_id_shape_count += 1;
+            let seq_num = fields[0].value;
+            let Some(reference) = references.get(&seq_num) else {
+                continue;
+            };
+            let Some(parent_seq) = single_parent_seq(reference) else {
+                continue;
+            };
+            let Ok(page_id) = derive_pub_page_id(&source_hash, parent_seq) else {
+                continue;
+            };
+            if !build.graph.pages.contains_key(&page_id) {
+                continue;
+            }
+            *page_shape_id_records.entry(page_id).or_default() += 1;
+            *page_exact_shape_id_records.entry(page_id).or_default() += 1;
+
+            let Ok(node_id) = derive_pub_node_id(&source_hash, seq_num) else {
+                continue;
+            };
+            if !build.graph.nodes.contains_key(&node_id) {
+                continue;
+            }
+            *page_exact_graph_joins.entry(page_id).or_default() += 1;
+            *joined.entry(page_id).or_default().entry(node_id).or_default() += 1;
+        }
+
+        let emitted = build
+            .source_page_paint_orders
+            .iter()
+            .map(|order| (order.page_id, order.node_ids.len()))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut page_receipts = Vec::new();
+        let mut global_missing = 0_usize;
+        let mut global_duplicate = 0_usize;
+        let mut global_zero_join = 0_usize;
+        let mut global_one_join = 0_usize;
+        let mut global_multi_join = 0_usize;
+
+        for page_id in &build.graph.document.pages {
+            let expected_nodes = expected.get(page_id).cloned().unwrap_or_default();
+            if expected_nodes.is_empty() {
+                continue;
+            }
+            let joins = joined.get(page_id).cloned().unwrap_or_default();
+            let actual_nodes = joins.keys().copied().collect::<BTreeSet<_>>();
+
+            let mut zero_join = 0_usize;
+            let mut one_join = 0_usize;
+            let mut multi_join = 0_usize;
+            let mut missing_kind_counts = BTreeMap::<String, usize>::new();
+            let mut missing_shape_type_counts = BTreeMap::<String, usize>::new();
+            let mut duplicate_kind_counts = BTreeMap::<String, usize>::new();
+            let mut duplicate_shape_type_counts = BTreeMap::<String, usize>::new();
+            let mut missing_picture_nodes = 0_usize;
+            let mut duplicate_picture_nodes = 0_usize;
+
+            for node_id in &expected_nodes {
+                let count = joins.get(node_id).copied().unwrap_or(0);
+                let node = build.graph.nodes.get(node_id).expect("expected graph node");
+                match count {
+                    0 => {
+                        zero_join += 1;
+                        *missing_kind_counts
+                            .entry(format!("{:?}", node.kind))
+                            .or_default() += 1;
+                        *missing_shape_type_counts
+                            .entry(format!("{:?}", node.payload.officeart_shape_type))
+                            .or_default() += 1;
+                        missing_picture_nodes += usize::from(node.kind == NodeKind::ImageFrame);
+                    }
+                    1 => one_join += 1,
+                    _ => {
+                        multi_join += 1;
+                        *duplicate_kind_counts
+                            .entry(format!("{:?}", node.kind))
+                            .or_default() += 1;
+                        *duplicate_shape_type_counts
+                            .entry(format!("{:?}", node.payload.officeart_shape_type))
+                            .or_default() += 1;
+                        duplicate_picture_nodes += usize::from(node.kind == NodeKind::ImageFrame);
+                    }
+                }
+            }
+
+            let intersection_count = actual_nodes.intersection(&expected_nodes).count();
+            let missing_count = expected_nodes.difference(&actual_nodes).count();
+            let extra_count = actual_nodes.difference(&expected_nodes).count();
+            let duplicate_joined_nodes = joins.values().filter(|count| **count > 1).count();
+
+            global_missing += missing_count;
+            global_duplicate += duplicate_joined_nodes;
+            global_zero_join += zero_join;
+            global_one_join += one_join;
+            global_multi_join += multi_join;
+
+            page_receipts.push(serde_json::json!({
+                "page_ordinal": page_ordinals.get(page_id).copied(),
+                "direct_page_owned_graph_node_count": expected_nodes.len(),
+                "current_emitted_source_paint_order_count": emitted.get(page_id).copied().unwrap_or(0),
+                "exact_shape_id_record_count": page_exact_shape_id_records.get(page_id).copied().unwrap_or(0),
+                "exact_graph_join_record_count": page_exact_graph_joins.get(page_id).copied().unwrap_or(0),
+                "graph_nodes_zero_join": zero_join,
+                "graph_nodes_one_join": one_join,
+                "graph_nodes_multiple_joins": multi_join,
+                "duplicate_joined_node_count": duplicate_joined_nodes,
+                "ordered_expected_intersection_count": intersection_count,
+                "ordered_expected_missing_count": missing_count,
+                "ordered_expected_extra_count": extra_count,
+                "missing_node_kind_counts": missing_kind_counts,
+                "missing_officeart_shape_type_counts": missing_shape_type_counts,
+                "duplicate_node_kind_counts": duplicate_kind_counts,
+                "duplicate_officeart_shape_type_counts": duplicate_shape_type_counts,
+                "missing_picture_frame_count": missing_picture_nodes,
+                "duplicate_picture_frame_count": duplicate_picture_nodes,
+                "page_shape_id_record_count": page_shape_id_records.get(page_id).copied().unwrap_or(0),
+            }));
+        }
+
+        let receipt = serde_json::json!({
+            "schema": "chaptera.newsletter-stack-admission-census.v1",
+            "source_sha256": source_hash,
+            "page_count": build.graph.document.pages.len(),
+            "source_paint_order_page_count": build.source_page_paint_orders.len(),
+            "officeart_spcontainer_count": inventory.shapes.len(),
+            "officeart_shapes_with_client_data": client_data_shape_count,
+            "officeart_shapes_with_exactly_one_shape_id": exact_shape_id_shape_count,
+            "global_expected_nodes_zero_join": global_zero_join,
+            "global_expected_nodes_one_join": global_one_join,
+            "global_expected_nodes_multiple_joins": global_multi_join,
+            "global_expected_missing_count": global_missing,
+            "global_duplicate_joined_node_count": global_duplicate,
+            "pages": page_receipts,
+        });
+
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent).expect("create stack census output directory");
+        }
+        std::fs::write(
+            &output,
+            serde_json::to_vec_pretty(&receipt).expect("serialize stack census"),
+        )
+        .expect("write stack census");
+        println!("{}", serde_json::to_string(&receipt).expect("print stack census"));
+    }
+
     fn source_hash() -> Sha256Digest {
         "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
             .parse()
