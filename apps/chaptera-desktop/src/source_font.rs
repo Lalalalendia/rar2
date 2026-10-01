@@ -202,13 +202,13 @@ mod tests {
             {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false},
             {"scalar_start":2,"scalar_end":4,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
         ]));
-        assert_eq!(admitted_single_family(&value), Some("Arial"));
+        assert_eq!(admitted_single_family_source_font_v1(&value), Some("Arial"));
 
         let gap = fragment(serde_json::json!([
             {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false},
             {"scalar_start":3,"scalar_end":4,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
         ]));
-        assert_eq!(admitted_single_family(&gap), None);
+        assert_eq!(admitted_single_family_source_font_v1(&gap), None);
     }
 
     #[test]
@@ -217,7 +217,7 @@ mod tests {
             {"scalar_start":0,"scalar_end":2,"source_font_name":"Arial","text_size_emu":152400,"font_inherited":false,"size_inherited":false},
             {"scalar_start":2,"scalar_end":4,"source_font_name":"Times New Roman","text_size_emu":152400,"font_inherited":false,"size_inherited":false}
         ]));
-        assert_eq!(admitted_single_family(&value), None);
+        assert_eq!(admitted_single_family_source_font_v1(&value), None);
     }
 
     #[cfg(target_os = "windows")]
