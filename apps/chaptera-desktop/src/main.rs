@@ -1694,10 +1694,20 @@ impl ViewerApp {
             match pub_editor::open_mature_0x2c_editor(bytes, source_hash) {
                 Ok(mut editor) => {
                     let project_status = match load_editor_project_sidecar(&path, &mut editor) {
-                        Ok(Some((sidecar, operation_count))) => Some(format!(
-                            "Loaded editor project {} with {operation_count} operations.",
-                            sidecar.display()
-                        )),
+                        Ok(Some((sidecar, operation_count, disposition))) => match disposition {
+                            editor_project_store::StoreDisposition::Current => Some(format!(
+                                "Loaded editor project {} with {operation_count} operations.",
+                                sidecar.display()
+                            )),
+                            editor_project_store::StoreDisposition::Recovery => Some(format!(
+                                "Recovered editor project from the last complete generation {} with {operation_count} operations. Save Project will republish a healthy current generation.",
+                                sidecar.display()
+                            )),
+                            editor_project_store::StoreDisposition::Legacy => Some(format!(
+                                "Loaded legacy editor project {} with {operation_count} operations. The next Save Project upgrades it to crash-safe generation storage.",
+                                sidecar.display()
+                            )),
+                        },
                         Ok(None) => None,
                         Err(error) => Some(format!("Editor project was not applied: {error}")),
                     };
@@ -5521,7 +5531,7 @@ fn apply_editor_project_json(
 fn load_editor_project_sidecar(
     source_path: &Path,
     editor: &mut pub_editor::EditorSession,
-) -> Result<Option<(PathBuf, usize)>, String> {
+) -> Result<Option<(PathBuf, usize, editor_project_store::StoreDisposition)>, String> {
     let Some(stored) = editor_project_store::inspect(source_path, editor.source_hash())
         .map_err(|error| format!("inspect EditorProject store: {error}"))?
     else {
@@ -5529,10 +5539,15 @@ fn load_editor_project_sidecar(
     };
 
     let operation_count = stored.project.operations.len();
+    let disposition = stored.disposition;
     editor
         .apply_project_with_assets(&stored.project, &stored.asset_bytes)
         .map_err(|error| format!("replay editor project: {error}"))?;
-    Ok(Some((stored.manifest_path, operation_count)))
+    Ok(Some((
+        stored.manifest_path,
+        operation_count,
+        disposition,
+    )))
 }
 
 fn editor_project_sidecar_path(source_path: &Path) -> Option<PathBuf> {
