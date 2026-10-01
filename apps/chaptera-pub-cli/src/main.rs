@@ -34,14 +34,12 @@ fn source_sha256(bytes: &[u8]) -> Sha256Digest {
 }
 
 fn extract_assets(file: PathBuf, output: PathBuf, json: bool) -> Result<()> {
-    let bytes = fs::read(&file)
-        .with_context(|| format!("read Publisher source {}", file.display()))?;
+    let bytes =
+        fs::read(&file).with_context(|| format!("read Publisher source {}", file.display()))?;
     let source_hash = source_sha256(&bytes);
-    let source = pub_reader::build_mature_0x2c_source_graph(
-        Cursor::new(bytes.as_slice()),
-        source_hash,
-    )
-    .context("build mature-0x2C source graph")?;
+    let source =
+        pub_reader::build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
+            .context("build mature-0x2C source graph")?;
     let bundle =
         pub_reader::build_mature_0x2c_asset_export_bundle_from_bytes(&bytes, &source.graph)
             .context("build exact asset export bundle")?;
@@ -59,7 +57,9 @@ fn extract_assets(file: PathBuf, output: PathBuf, json: bool) -> Result<()> {
             bundle.files.len(),
             output.display(),
             bundle.manifest.diagnostics.len(),
-            output.join(pub_reader::PUB_ASSET_MANIFEST_FILENAME).display()
+            output
+                .join(pub_reader::PUB_ASSET_MANIFEST_FILENAME)
+                .display()
         );
     }
 
