@@ -7,6 +7,7 @@
 mod acceptance;
 mod agent;
 mod diagnostic_sweep;
+mod editor_project_store;
 mod fallback_font;
 mod image_decode_adapter;
 #[allow(dead_code)]
@@ -3725,16 +3726,13 @@ impl ViewerApp {
         let Some(source_path) = self.source_path.as_ref() else {
             return Ok(None);
         };
-        let sidecar = editor_project_sidecar_path(source_path)
-            .ok_or_else(|| "source path has no file name".to_owned())?;
-        if !sidecar.exists() {
-            return Ok(None);
-        }
-        let bytes =
-            fs::read(&sidecar).map_err(|error| format!("read {}: {error}", sidecar.display()))?;
-        let project: pub_editor::EditorProject = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("parse editor project JSON: {error}"))?;
-        Ok(Some(project.operations.len()))
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "editor session is unavailable".to_owned())?;
+        editor_project_store::inspect(source_path, editor.source_hash())
+            .map(|opened| opened.map(|stored| stored.project.operations.len()))
+            .map_err(|error| format!("inspect saved EditorProject: {error}"))
     }
 
     fn reopen_saved_project(&mut self) -> Result<(), String> {
@@ -3853,41 +3851,16 @@ impl ViewerApp {
             return Err("there are no edit operations to save".to_owned());
         }
 
-        let sidecar = editor_project_sidecar_path(source_path)
-            .ok_or_else(|| "source path has no file name".to_owned())?;
         let project = editor
             .try_project()
             .map_err(|error| format!("materialize editor project: {error}"))?;
-
-        if !project.assets.is_empty() {
-            let asset_dir = editor_project_asset_dir_path(source_path)
-                .ok_or_else(|| "source path has no file name".to_owned())?;
-            fs::create_dir_all(&asset_dir)
-                .map_err(|error| format!("create {}: {error}", asset_dir.display()))?;
-
-            for metadata in &project.assets {
-                let asset = editor
-                    .replacement_assets()
-                    .find(|asset| asset.sha256 == metadata.sha256)
-                    .ok_or_else(|| {
-                        format!(
-                            "project-required replacement asset {} is unavailable",
-                            metadata.sha256
-                        )
-                    })?;
-                let file_name = pub_editor::editor_asset_file_name(asset.sha256, &asset.mime)
-                    .map_err(|error| format!("name replacement asset: {error}"))?;
-                let asset_path = asset_dir.join(file_name);
-                fs::write(&asset_path, &asset.bytes)
-                    .map_err(|error| format!("write {}: {error}", asset_path.display()))?;
-            }
-        }
-
-        let json = serde_json::to_vec_pretty(&project)
-            .map_err(|error| format!("serialize project: {error}"))?;
-        fs::write(&sidecar, json)
-            .map_err(|error| format!("write {}: {error}", sidecar.display()))?;
-        Ok(sidecar)
+        let runtime_assets = editor
+            .replacement_assets()
+            .map(|asset| (asset.sha256, asset.bytes.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let receipt = editor_project_store::commit(source_path, &project, &runtime_assets)
+            .map_err(|error| format!("durably save EditorProject: {error}"))?;
+        Ok(receipt.visible_path)
     }
 
     fn sync_visual_stories_from_editor(&mut self) -> Result<(), String> {
@@ -5545,55 +5518,25 @@ fn apply_editor_project_json(
     Ok(operation_count)
 }
 
-fn load_editor_project_assets(
-    source_path: &Path,
-    project: &pub_editor::EditorProject,
-) -> Result<BTreeMap<pub_editor::Sha256Digest, Vec<u8>>, String> {
-    if project.assets.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let asset_dir = editor_project_asset_dir_path(source_path)
-        .ok_or_else(|| "source path has no file name".to_owned())?;
-    let mut assets = BTreeMap::new();
-    for metadata in &project.assets {
-        let file_name = metadata
-            .file_name()
-            .map_err(|error| format!("derive replacement asset name: {error}"))?;
-        let path = asset_dir.join(file_name);
-        let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
-        assets.insert(metadata.sha256, bytes);
-    }
-    Ok(assets)
-}
-
 fn load_editor_project_sidecar(
     source_path: &Path,
     editor: &mut pub_editor::EditorSession,
 ) -> Result<Option<(PathBuf, usize)>, String> {
-    let sidecar = editor_project_sidecar_path(source_path)
-        .ok_or_else(|| "source path has no file name".to_owned())?;
-    if !sidecar.exists() {
+    let Some(stored) = editor_project_store::inspect(source_path, editor.source_hash())
+        .map_err(|error| format!("inspect EditorProject store: {error}"))?
+    else {
         return Ok(None);
-    }
+    };
 
-    let bytes =
-        fs::read(&sidecar).map_err(|error| format!("read {}: {error}", sidecar.display()))?;
-    let project: pub_editor::EditorProject = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("parse editor project JSON: {error}"))?;
-    let operation_count = project.operations.len();
-    let assets = load_editor_project_assets(source_path, &project)?;
+    let operation_count = stored.project.operations.len();
     editor
-        .apply_project_with_assets(&project, &assets)
+        .apply_project_with_assets(&stored.project, &stored.asset_bytes)
         .map_err(|error| format!("replay editor project: {error}"))?;
-    Ok(Some((sidecar, operation_count)))
+    Ok(Some((stored.manifest_path, operation_count)))
 }
 
 fn editor_project_sidecar_path(source_path: &Path) -> Option<PathBuf> {
-    let file_name = source_path.file_name()?;
-    let mut sidecar_name = file_name.to_os_string();
-    sidecar_name.push(".pub-editor.json");
-    Some(source_path.with_file_name(sidecar_name))
+    editor_project_store::sidecar_path(source_path)
 }
 
 fn editor_project_asset_dir_path(source_path: &Path) -> Option<PathBuf> {
