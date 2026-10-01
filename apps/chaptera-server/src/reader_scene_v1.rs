@@ -588,10 +588,10 @@ pub fn from_viewer_geometry(
                         instance.instance_id, instance.origin_node_id, origin_node_id
                     ));
                 }
-                let mut projected_matches = geometry
-                    .projected_instances
-                    .iter()
-                    .filter(|projected| projected.scene_instance.instance_id == instance.instance_id);
+                let mut projected_matches =
+                    geometry.projected_instances.iter().filter(|projected| {
+                        projected.scene_instance.instance_id == instance.instance_id
+                    });
                 let projected = projected_matches.next().ok_or_else(|| {
                     format!(
                         "render-plan projected instance {} has no Viewer projection record",
