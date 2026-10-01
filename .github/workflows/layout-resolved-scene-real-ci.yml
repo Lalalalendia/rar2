@@ -72,6 +72,23 @@ jobs:
           assert digest == expected, (digest, expected)
           PY
 
+      - name: Materialize bounded source page paint order
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            source-page-paint-orders .web-v0/SampleNewsletter.pub \
+            > .web-v0/source-page-paint-orders.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          value = json.loads(Path(".web-v0/source-page-paint-orders.json").read_text())
+          assert value["schema_version"] == "chaptera.pub-source-page-paint-orders-sidecar.v1"
+          assert value["source_hash"] == "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          assert isinstance(value["orders"], list) and value["orders"], value
+          print({"source_page_paint_order_count": len(value["orders"])})
+          PY
+
       - name: Generate same-head Viewer geometry
         shell: bash
         run: |
@@ -114,6 +131,7 @@ jobs:
               -- python tools/run_sample_newsletter_resolved_scene_bridge.py \
                 --resolved-graph .web-v0/resolved-graph.json \
                 --viewer-receipt .web-v0/viewer-geometry.json \
+                --source-page-paint-orders .web-v0/source-page-paint-orders.json \
                 --expected-resolved-graph-sha256 cae2b1576e32b7bf204bbaa8436a8ee2a12b118895736e92f20da1cd9b8048cf \
                 --target-node-id 007d9898-568b-5125-b519-8d88243aabfb \
                 --target-page-id 58ffa2e0-896e-5a40-806c-bd0184ea9c85 \
@@ -128,5 +146,7 @@ jobs:
         with:
           name: layout-resolved-scene-real
           if-no-files-found: error
-          path: .web-v0/layout-resolved-scene.real.json
+          path: |
+            .web-v0/layout-resolved-scene.real.json
+            .web-v0/source-page-paint-orders.json
           retention-days: 30
