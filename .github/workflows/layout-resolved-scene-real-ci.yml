@@ -72,6 +72,30 @@ jobs:
           assert digest == expected, (digest, expected)
           PY
 
+      - name: Generate same-head Viewer geometry
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor/producer-a/target/debug/chaptera-producer-a \
+            .web-v0/SampleNewsletter.pub \
+            > .web-v0/viewer-geometry.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path(".web-v0/viewer-geometry.json")
+          viewer = json.loads(path.read_text())
+          source = viewer.get("document", {}).get("source")
+          scene = viewer.get("scene")
+          assert viewer.get("schema_version") == "0.1"
+          assert isinstance(source, dict)
+          assert source.get("source_hash") == "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          assert source.get("byte_len") == 291840
+          assert isinstance(scene, dict)
+          assert isinstance(scene.get("nodes"), list)
+          print({"viewer_scene_nodes": len(scene["nodes"]), "viewer_bytes": path.stat().st_size})
+          PY
+
       - name: Build real current-state to Scene lifecycle receipt
         shell: bash
         run: |
@@ -89,7 +113,7 @@ jobs:
               --state-dir .web-v0/layout-resolved-scene-state \
               -- python tools/run_sample_newsletter_resolved_scene_bridge.py \
                 --resolved-graph .web-v0/resolved-graph.json \
-                --viewer-receipt apps/web/acceptance/receipts/viewer-geometry.real.json \
+                --viewer-receipt .web-v0/viewer-geometry.json \
                 --expected-resolved-graph-sha256 cae2b1576e32b7bf204bbaa8436a8ee2a12b118895736e92f20da1cd9b8048cf \
                 --target-node-id 007d9898-568b-5125-b519-8d88243aabfb \
                 --target-page-id 58ffa2e0-896e-5a40-806c-bd0184ea9c85 \
