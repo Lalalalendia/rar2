@@ -1351,11 +1351,16 @@ mod tests {
                     .filter(|line| !line.text.trim().is_empty())
                     .count();
 
+                const GUEST_SCENE_BYTE_CAP: usize = 16 * 1024 * 1024;
+
                 let mut descriptor_probe_budget = MAX_INLINE_IMAGE_TOTAL_BYTES;
+                let mut inline_resource_count = 0_usize;
+                let mut inline_raw_bytes = 0_usize;
                 let mut descriptor_only_resource_count = 0_usize;
                 let mut descriptor_only_mime_counts = BTreeMap::<String, usize>::new();
                 let mut descriptor_only_reason_counts = BTreeMap::<&'static str, usize>::new();
                 let mut descriptor_only_total_bytes = 0_usize;
+                let mut budget_exhausted_images = Vec::new();
                 for image in &bundle.geometry.images {
                     let admission = classify_probe_image_inline_admission(
                         &image.mime,
@@ -1364,6 +1369,8 @@ mod tests {
                     );
                     if admission == ProbeImageInlineAdmission::Inline {
                         descriptor_probe_budget -= image.bytes.len();
+                        inline_resource_count += 1;
+                        inline_raw_bytes += image.bytes.len();
                         continue;
                     }
 
@@ -1379,6 +1386,9 @@ mod tests {
                         )
                         .or_default() += 1;
                     descriptor_only_total_bytes += image.bytes.len();
+                    if admission == ProbeImageInlineAdmission::AggregateBudgetExhausted {
+                        budget_exhausted_images.push(image);
+                    }
                 }
 
                 let descriptor_scene_resource_ids = scene
@@ -1402,8 +1412,63 @@ mod tests {
                     })
                     .count();
 
+                let scene_json_bytes = serde_json::to_vec(&scene)
+                    .expect("serialize exact Reader Scene for byte-envelope probe")
+                    .len();
+                let inline_data_url_bytes = scene
+                    .resources
+                    .iter()
+                    .filter_map(|resource| resource.inline_data_url.as_ref())
+                    .map(String::len)
+                    .sum::<usize>();
+
+                let mut hypothetical_scene_json_bytes = scene_json_bytes;
+                for image in budget_exhausted_images {
+                    let resource_id = super::serialized_string(
+                        &image.resource_id,
+                        "hypothetical image resource id",
+                    )
+                    .expect("exact probe image resource id");
+                    let current = scene
+                        .resources
+                        .iter()
+                        .find(|resource| resource.resource_id == resource_id)
+                        .expect("budget-exhausted image must exist in Reader Scene");
+                    assert_eq!(
+                        current.availability, "descriptor_only",
+                        "budget-exhausted image must currently be descriptor-only"
+                    );
+
+                    let mut unlimited_budget = usize::MAX;
+                    let hypothetical = reader_image_resource(
+                        resource_id,
+                        image.mime.clone(),
+                        &image.bytes,
+                        &mut unlimited_budget,
+                    );
+                    assert_eq!(
+                        hypothetical.availability, "inline_data_url",
+                        "budget-exhausted supported image must inline when aggregate budget is removed"
+                    );
+
+                    let current_bytes = serde_json::to_vec(current)
+                        .expect("serialize current descriptor resource")
+                        .len();
+                    let hypothetical_bytes = serde_json::to_vec(&hypothetical)
+                        .expect("serialize hypothetical inline resource")
+                        .len();
+                    hypothetical_scene_json_bytes = hypothetical_scene_json_bytes
+                        .checked_add(hypothetical_bytes)
+                        .and_then(|bytes| bytes.checked_sub(current_bytes))
+                        .expect("hypothetical Scene byte accounting overflow");
+                }
+                let current_scene_margin_bytes =
+                    GUEST_SCENE_BYTE_CAP.saturating_sub(scene_json_bytes);
+                let hypothetical_scene_margin_bytes =
+                    GUEST_SCENE_BYTE_CAP.saturating_sub(hypothetical_scene_json_bytes);
+
                 println!(
-                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} descriptor_only_resource_count={} descriptor_only_mime_counts={:?} descriptor_only_reason_counts={:?} descriptor_only_total_bytes={} descriptor_only_visible_node_refs={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
+                    "CLOUD_READER_SCENE_PROJECTION_PROBE ok state={} stacking={} pages={} nodes={} projected_scene_nodes={} projected_shared_layout_nodes={} projected_shared_nonempty_lines={} tables={} table_cells={} spanning_cells={} bounded_table_cells={} inline_resource_count={} inline_raw_bytes={} inline_data_url_bytes={} descriptor_only_resource_count={} descriptor_only_mime_counts={:?} descriptor_only_reason_counts={:?} descriptor_only_total_bytes={} descriptor_only_visible_node_refs={} scene_json_bytes={} guest_scene_cap_bytes={} current_scene_margin_bytes={} hypothetical_budget_exhausted_inline_scene_json_bytes={} hypothetical_scene_margin_bytes={} source_explicit_line_any={} source_explicit_line_color={} source_explicit_line_width={} source_explicit_line_visible={} source_explicit_line_any_effective_none={} source_explicit_color_effective_missing={} source_explicit_width_effective_missing={} source_explicit_visible_effective_missing={} source_effective_line_presence={:?} source_effective_line_any={} source_effective_line_complete_visible={} source_effective_line_complete_hidden={} source_effective_line_incomplete={} viewer_line_paints={} viewer_line_only_paints={} viewer_black_lines={} scene_line_nodes={} scene_line_only_nodes={} scene_black_lines={} page_line_nodes={:?} reasons={:?}",
                     scene.fidelity.state,
                     scene.stacking_fidelity,
                     scene.pages.len(),
@@ -1415,11 +1480,19 @@ mod tests {
                     table_cells,
                     spanning_cells,
                     bounded_table_cells,
+                    inline_resource_count,
+                    inline_raw_bytes,
+                    inline_data_url_bytes,
                     descriptor_only_resource_count,
                     descriptor_only_mime_counts,
                     descriptor_only_reason_counts,
                     descriptor_only_total_bytes,
                     descriptor_only_visible_node_refs,
+                    scene_json_bytes,
+                    GUEST_SCENE_BYTE_CAP,
+                    current_scene_margin_bytes,
+                    hypothetical_scene_json_bytes,
+                    hypothetical_scene_margin_bytes,
                     source_explicit_line_any,
                     source_explicit_line_color,
                     source_explicit_line_width,
