@@ -1610,6 +1610,7 @@ mod tests {
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             script_font_maps: Vec::new(),
+            paragraph_alignment_runs: Vec::new(),
             tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
                 resource_id,
