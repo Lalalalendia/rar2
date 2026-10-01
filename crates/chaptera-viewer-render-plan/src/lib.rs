@@ -17,9 +17,9 @@ use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D, StoryId, TableCellId,
 };
-use pub_viewer::{ViewerGeometryDocument, ViewerScriptFontEntryDisposition};
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
+use pub_viewer::{ViewerGeometryDocument, ViewerScriptFontEntryDisposition};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -189,9 +189,7 @@ fn scalar_source_font_family_authority_v1(
     }
 
     match (family, blank_family) {
-        (Some((display, _)), false) => {
-            ScalarSourceFontFamilyAuthorityV1::Authoritative(display)
-        }
+        (Some((display, _)), false) => ScalarSourceFontFamilyAuthorityV1::Authoritative(display),
         (None, true) => ScalarSourceFontFamilyAuthorityV1::Absent,
         _ => ScalarSourceFontFamilyAuthorityV1::Invalid,
     }
@@ -201,11 +199,16 @@ fn one_resolved_script_font_entry_v1<'a>(
     entries: &'a [pub_viewer::ViewerScriptFontEntry],
     script_slot: u16,
 ) -> Option<&'a pub_viewer::ViewerScriptFontEntry> {
-    let mut matches = entries.iter().filter(|entry| entry.script_slot == script_slot);
+    let mut matches = entries
+        .iter()
+        .filter(|entry| entry.script_slot == script_slot);
     let entry = matches.next()?;
     if matches.next().is_some()
         || entry.disposition != ViewerScriptFontEntryDisposition::Resolved
-        || entry.source_font_name.as_deref().is_none_or(|name| name.trim().is_empty())
+        || entry
+            .source_font_name
+            .as_deref()
+            .is_none_or(|name| name.trim().is_empty())
     {
         return None;
     }
@@ -262,16 +265,14 @@ fn ascii_latin_script_font_family_v1(
             let Some(name) = entry.source_font_name.as_deref() else {
                 return true;
             };
-            entry.source_font_index != first.0
-                || normalize_source_font_family_v1(name) != first.2
+            entry.source_font_index != first.0 || normalize_source_font_family_v1(name) != first.2
         }) {
             return None;
         }
 
         match selected.as_ref() {
             None => selected = Some(first),
-            Some((ordinal, _, normalized))
-                if *ordinal == first.0 && *normalized == first.2 => {}
+            Some((ordinal, _, normalized)) if *ordinal == first.0 && *normalized == first.2 => {}
             Some(_) => return None,
         }
         cursor = end;
@@ -286,13 +287,12 @@ fn ascii_latin_script_font_family_v1(
 
 /// Returns a complete scalar-typography family only when the fragment has
 /// contiguous, unambiguous non-blank family authority.
-pub fn complete_scalar_source_font_family_v1(
-    fragment: &RenderTextFragmentV1,
-) -> Option<String> {
+pub fn complete_scalar_source_font_family_v1(fragment: &RenderTextFragmentV1) -> Option<String> {
     match scalar_source_font_family_authority_v1(fragment) {
         ScalarSourceFontFamilyAuthorityV1::Authoritative(family) => Some(family),
-        ScalarSourceFontFamilyAuthorityV1::Absent
-        | ScalarSourceFontFamilyAuthorityV1::Invalid => None,
+        ScalarSourceFontFamilyAuthorityV1::Absent | ScalarSourceFontFamilyAuthorityV1::Invalid => {
+            None
+        }
     }
 }
 
@@ -1423,8 +1423,8 @@ mod tests {
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
         ViewerNodePaint, ViewerPage, ViewerScriptFontEntry, ViewerScriptFontMap, ViewerSolidLine,
-        ViewerSource, ViewerTable, ViewerTableCell,
-        ViewerTextFragment, ViewerTypographyRun, viewer_story_text_sha256,
+        ViewerSource, ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
+        viewer_story_text_sha256,
     };
 
     fn canonical(byte: u8) -> CanonicalId {
@@ -1579,9 +1579,24 @@ mod tests {
             scalar_start: start,
             scalar_end: end,
             entries: vec![
-                script_entry(0, ordinal, Some(family), ViewerScriptFontEntryDisposition::Resolved),
-                script_entry(1, ordinal, Some(family), ViewerScriptFontEntryDisposition::Resolved),
-                script_entry(2, ordinal, Some(family), ViewerScriptFontEntryDisposition::Resolved),
+                script_entry(
+                    0,
+                    ordinal,
+                    Some(family),
+                    ViewerScriptFontEntryDisposition::Resolved,
+                ),
+                script_entry(
+                    1,
+                    ordinal,
+                    Some(family),
+                    ViewerScriptFontEntryDisposition::Resolved,
+                ),
+                script_entry(
+                    2,
+                    ordinal,
+                    Some(family),
+                    ViewerScriptFontEntryDisposition::Resolved,
+                ),
             ],
             source_story_text_sha256: viewer_story_text_sha256(text),
         }
@@ -1649,7 +1664,10 @@ mod tests {
             .expect("ascii slot")
             .disposition = ViewerScriptFontEntryDisposition::UnresolvedSentinel;
         unresolved.script_font_maps = vec![map];
-        assert_eq!(effective_source_font_family_v1(&unresolved, &fragment), None);
+        assert_eq!(
+            effective_source_font_family_v1(&unresolved, &fragment),
+            None
+        );
 
         let mut mixed = fixture();
         let mut map = latin_map(story_id, text, 0, 5, "Caladea", 32);
@@ -1672,8 +1690,7 @@ mod tests {
 
         let mut non_ascii = fixture();
         non_ascii.document.stories[0].text = "héllo".to_owned();
-        non_ascii.script_font_maps =
-            vec![latin_map(story_id, "héllo", 0, 5, "Caladea", 32)];
+        non_ascii.script_font_maps = vec![latin_map(story_id, "héllo", 0, 5, "Caladea", 32)];
         let non_ascii_fragment = render_fragment(story_id, "héllo", Vec::new());
         assert_eq!(
             effective_source_font_family_v1(&non_ascii, &non_ascii_fragment),
