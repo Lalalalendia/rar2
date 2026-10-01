@@ -1413,13 +1413,9 @@ impl ViewerApp {
             }
         };
 
-        let (editor, editor_load_error, project_status) = if reader_only_mode() || visual.is_none()
-        {
+        let (editor, editor_load_error, project_status) = if reader_only_mode() {
             (None, None, None)
-        } else {
-            let visual = visual
-                .as_ref()
-                .expect("normal Editor open must carry Viewer geometry");
+        } else if let Some(visual) = visual.as_ref() {
             let source_hash = visual.document.source.source_hash;
             match pub_editor::open_mature_0x2c_editor(bytes, source_hash) {
                 Ok(mut editor) => {
@@ -1435,6 +1431,8 @@ impl ViewerApp {
                 }
                 Err(error) => (None, Some(error.to_string()), None),
             }
+        } else {
+            (None, None, None)
         };
 
         Ok(PreparedDocumentOpen {
