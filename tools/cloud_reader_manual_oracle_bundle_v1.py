@@ -35,6 +35,10 @@ REQUIRED_COLUMNS = {
     "pdf_sha256",
     "pdf_pages",
 }
+MAX_BUNDLE_MEMBERS = 128
+MAX_PAIR_COUNT = 64
+MAX_PAIR_FILE_BYTES = 128 * 1024 * 1024
+MAX_BUNDLE_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 
 
 def file_sha256(path: Path) -> str:
@@ -78,8 +82,19 @@ def materialize_bundle(bundle: Path, work_dir: Path) -> Path:
             infos = archive.infolist()
             if not infos:
                 raise ValueError("oracle bundle ZIP is empty")
+            if len(infos) > MAX_BUNDLE_MEMBERS:
+                raise ValueError("oracle bundle ZIP contains too many members")
             if any(not _safe_zip_member(info) for info in infos):
                 raise ValueError("oracle bundle ZIP contains an unsafe path or symlink")
+            declared_bytes = 0
+            for info in infos:
+                if info.is_dir():
+                    continue
+                if info.file_size > MAX_PAIR_FILE_BYTES:
+                    raise ValueError("oracle bundle ZIP member exceeds bounded size")
+                declared_bytes += info.file_size
+                if declared_bytes > MAX_BUNDLE_UNCOMPRESSED_BYTES:
+                    raise ValueError("oracle bundle ZIP exceeds bounded uncompressed size")
             archive.extractall(extracted)
         root = extracted
     else:
@@ -105,8 +120,11 @@ def load_pairs(root: Path) -> list[dict]:
         rows = list(reader)
     if not rows:
         raise ValueError("PAIRS.csv contains no pairs")
+    if len(rows) > MAX_PAIR_COUNT:
+        raise ValueError("PAIRS.csv contains too many pairs")
 
     seen_ids: set[str] = set()
+    declared_pair_bytes = 0
     seen_names: set[str] = set()
     normalized = []
     for number, raw in enumerate(rows, 2):
@@ -138,6 +156,11 @@ def load_pairs(root: Path) -> list[dict]:
         pub_bytes = _parse_positive_int(raw.get("pub_bytes", ""), "pub_bytes", number)
         pdf_bytes = _parse_positive_int(raw.get("pdf_bytes", ""), "pdf_bytes", number)
         pdf_pages = _parse_positive_int(raw.get("pdf_pages", ""), "pdf_pages", number)
+        if pub_bytes > MAX_PAIR_FILE_BYTES or pdf_bytes > MAX_PAIR_FILE_BYTES:
+            raise ValueError(f"row {number}: pair file exceeds bounded size")
+        declared_pair_bytes += pub_bytes + pdf_bytes
+        if declared_pair_bytes > MAX_BUNDLE_UNCOMPRESSED_BYTES:
+            raise ValueError("PAIRS.csv declares too many input bytes")
         pub_path = (root / pub_filename).resolve()
         pdf_path = (root / pdf_filename).resolve()
         if pub_path.parent != root.resolve() or pdf_path.parent != root.resolve():
