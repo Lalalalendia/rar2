@@ -898,8 +898,9 @@ fn apply_bounded_implicit_style_zero(
 
     for range in paragraph_ranges {
         range.selected_style_index = Some(0);
-        range.selector_source =
-            Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence);
+        range.selector_source = Some(
+            QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
+        );
     }
     true
 }
