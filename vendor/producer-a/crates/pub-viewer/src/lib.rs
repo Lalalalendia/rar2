@@ -18,8 +18,8 @@ use pub_layout::{
     BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput, BoundedTableInput,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
     ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
-    project_bounded,
-    resolve_bounded_geometry, resolve_bounded_text_flow, resolve_bounded_uniform_table_cells,
+    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow,
+    resolve_bounded_uniform_table_cells,
 };
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 #[cfg(feature = "cmo-slot-compose")]
@@ -68,10 +68,9 @@ use pub_reader::{
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
-    PubTextFrameVerticalAlignment,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
-    build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
+    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
     derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
@@ -767,8 +766,15 @@ fn viewer_story_frame_from_projection(
 ) -> ViewerStoryFrame {
     let node = graph.nodes.get(&frame.frame_origin);
     let text_content_bounds = node
-        .and_then(|node| node.payload.text_frame_inset.as_ref().map(|inset| (node, inset)))
-        .and_then(|(node, inset)| uniform_text_content_bounds(node.header.bounds, inset.uniform_emu));
+        .and_then(|node| {
+            node.payload
+                .text_frame_inset
+                .as_ref()
+                .map(|inset| (node, inset))
+        })
+        .and_then(|(node, inset)| {
+            uniform_text_content_bounds(node.header.bounds, inset.uniform_emu)
+        });
     let vertical_alignment = node
         .and_then(|node| node.payload.story_frame.as_ref())
         .and_then(|frame| frame.vertical_alignment)
