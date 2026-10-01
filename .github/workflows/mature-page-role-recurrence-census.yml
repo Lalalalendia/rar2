@@ -1,0 +1,207 @@
+name: Mature public page-role recurrence census
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-page-role-recurrence-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire pinned mature public corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/page-role-mature" "$RUNNER_TEMP/page-role-receipts" target/page-role-mature
+          python - <<'PY'
+          import hashlib, json, os, urllib.request
+          from pathlib import Path
+
+          commit = "942d95d85b15d0dfdb3bc9ba1b4f273f277757c8"
+          names = [
+              "51318", "60685",
+              "LinkAt0And10", "LinkAt10", "LinkAt10And20And30",
+              "LinkAt10And20And30And40", "LinkAt10Longer", "LinkAt20",
+              "Sample", "Sample2", "Sample2_2010", "Sample3", "Sample3_2010",
+              "Sample4", "Sample4_2010", "SampleBrochure", "SampleNewsletter",
+              "Sample_2010", "Simple",
+          ]
+          base = f"https://raw.githubusercontent.com/apache/poi/{commit}/test-data/publisher"
+          root = Path(os.environ["RUNNER_TEMP"]) / "page-role-mature"
+          receipt = {"source_commit": commit, "fixture_count": len(names), "fixtures": []}
+          for name in names:
+              data = urllib.request.urlopen(f"{base}/{name}.pub", timeout=30).read()
+              (root / f"{name}.pub").write_bytes(data)
+              receipt["fixtures"].append({
+                  "fixture": name,
+                  "bytes": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              })
+          Path("target/page-role-mature/acquisition.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - name: Build page-role analyzer
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt
+
+      - name: Analyze all mature public fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pub in "$RUNNER_TEMP"/page-role-mature/*.pub; do
+            name="$(basename "$pub" .pub)"
+            cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt -- \
+              "$pub" "$RUNNER_TEMP/page-role-receipts/$name.json"
+          done
+
+      - name: Build source-safe recurrence summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          receipt_root = Path(os.environ["RUNNER_TEMP"]) / "page-role-receipts"
+          acquisition = json.loads(Path("target/page-role-mature/acquisition.json").read_text())
+          sha_by_name = {row["fixture"]: row["sha256"] for row in acquisition["fixtures"]}
+
+          def oid_class(page):
+              a = page.get("oid_dword0")
+              b = page.get("oid_dword1")
+              if a is None or b is None:
+                  return "absent"
+              return "zero" if a == 0 and b == 0 else "nonzero"
+
+          def payload_count(page):
+              counts = page.get("child_raw_type_counts", {})
+              # SHAPE=0x01, TABLE=0x10, GROUP=0x30. Keys are JSON strings.
+              return (
+                  int(counts.get("1", 0))
+                  + int(counts.get("16", 0))
+                  + int(counts.get("48", 0))
+              )
+
+          fixtures = []
+          candidates = []
+          for path in sorted(receipt_root.glob("*.json")):
+              name = path.stem
+              r = json.loads(path.read_text())
+              pages = sorted(r["pages"], key=lambda p: p["document_ordinal"])
+              leader_seq = pages[0]["contents_seq_num"] if pages else None
+              page_rows = []
+              for p in pages:
+                  applied = p.get("applied_master_seq_num")
+                  page_rows.append({
+                      "document_ordinal": p["document_ordinal"],
+                      "oid_class": oid_class(p),
+                      "master_relation": (
+                          "none" if applied is None
+                          else "leader" if applied == leader_seq
+                          else "other"
+                      ),
+                      "payload_child_count": payload_count(p),
+                      "shape_child_count": p["shape_child_count"],
+                      "group_child_count": p["group_child_count"],
+                      "table_child_count": int(p.get("child_raw_type_counts", {}).get("16", 0)),
+                      "child_raw_types": sorted(int(k) for k, v in p.get("child_raw_type_counts", {}).items() if int(v) > 0),
+                  })
+
+              pgid_count = sum(
+                  len(field.get("pgids", []))
+                  for item in r.get("controlling", [])
+                  for field in item.get("fields", [])
+              )
+              scaffold = False
+              if len(page_rows) >= 5 and pgid_count == 0:
+                  p0, p1, p2 = page_rows[0], page_rows[1], page_rows[2]
+                  tail = page_rows[3:]
+                  ordinals = [p["document_ordinal"] for p in page_rows]
+                  ordinal_shape_ok = (
+                      p0["document_ordinal"] == 0
+                      and p1["document_ordinal"] == 1
+                      and p2["document_ordinal"] == 2
+                      and all(b > a for a, b in zip(ordinals, ordinals[1:]))
+                  )
+                  scaffold = (
+                      ordinal_shape_ok
+                      and p0["oid_class"] == "nonzero"
+                      and p0["master_relation"] == "none"
+                      and p0["payload_child_count"] == 0
+                      and p1["oid_class"] == "nonzero"
+                      and p1["master_relation"] == "leader"
+                      and p1["payload_child_count"] > 0
+                      and p2["oid_class"] == "nonzero"
+                      and p2["master_relation"] == "leader"
+                      and p2["payload_child_count"] == 0
+                      and all(
+                          p["oid_class"] == "zero"
+                          and p["master_relation"] == "leader"
+                          and p["payload_child_count"] == 0
+                          for p in tail
+                      )
+                      and r["special_entry_count"] in (0, 1)
+                      and r["document_page_list_entry_count"]
+                          == r["confirmed_page_count"] + r["special_entry_count"]
+                  )
+              if scaffold:
+                  candidates.append(name)
+
+              fixtures.append({
+                  "fixture": name,
+                  "source_sha256": sha_by_name[name],
+                  "document_page_list_entry_count": r["document_page_list_entry_count"],
+                  "confirmed_page_count": r["confirmed_page_count"],
+                  "special_entry_count": r["special_entry_count"],
+                  "pgid_count": pgid_count,
+                  "candidate_51318_60685_scaffold": scaffold,
+                  "pages": page_rows,
+              })
+
+          out = {
+              "schema": "chaptera.mature-public-page-role-recurrence.v1",
+              "source_commit": acquisition["source_commit"],
+              "fixture_count": len(fixtures),
+              "candidate_count": len(candidates),
+              "candidate_fixtures": candidates,
+              "fixtures": fixtures,
+              "claims": {
+                  "publisher_page_count_used_as_authority": False,
+                  "blankness_used_as_generic_authority": False,
+                  "source_seq_nums_emitted": False,
+                  "document_text_emitted": False,
+              },
+          }
+          Path("target/page-role-mature/summary.json").write_text(
+              json.dumps(out, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(out, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-public-page-role-recurrence
+          path: target/page-role-mature/
+          if-no-files-found: error
+          retention-days: 7
