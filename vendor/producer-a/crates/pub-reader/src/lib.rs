@@ -4484,6 +4484,152 @@ fn add_missing_link_target_diagnostics(
 mod tests {
     use super::*;
 
+
+    #[test]
+    #[ignore = "requires CHAPTERA_GROUP_STACK_FIXTURE, CHAPTERA_GROUP_STACK_SHA256 and CHAPTERA_GROUP_STACK_OUT"]
+    fn exact_group_stack_carrier_census_is_source_safe() {
+        let fixture = std::env::var_os("CHAPTERA_GROUP_STACK_FIXTURE")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_GROUP_STACK_FIXTURE");
+        let output = std::env::var_os("CHAPTERA_GROUP_STACK_OUT")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_GROUP_STACK_OUT");
+        let source_hash: Sha256Digest = std::env::var("CHAPTERA_GROUP_STACK_SHA256")
+            .expect("CHAPTERA_GROUP_STACK_SHA256")
+            .parse()
+            .expect("valid source SHA-256");
+
+        let bytes = std::fs::read(&fixture).expect("read exact PUB fixture");
+        let build = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
+            .expect("build exact source graph");
+        let contents =
+            pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), CONTENTS_STREAM_PATH)
+                .expect("read Contents");
+        let escher =
+            pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), ESCHER_STREAM_PATH)
+                .expect("read Escher");
+        let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let header =
+            parse_0x2c_header(contents_stream.clone(), &contents).expect("parse mature header");
+        let trailer =
+            parse_confirmed_0x2c_trailer_root(&contents, &header).expect("parse mature trailer");
+        let references =
+            build_reference_index(&contents, &trailer.directory).expect("build reference index");
+        let inventory = inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher)
+            .expect("inspect OfficeArt shapes");
+        let escher_by_contents_seq = index_escher_by_contents_seq(&inventory);
+
+        let page_ordinals = build
+            .graph
+            .document
+            .pages
+            .iter()
+            .enumerate()
+            .map(|(ordinal, page_id)| (*page_id, ordinal))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut page_rows = BTreeMap::<usize, BTreeMap<String, usize>>::new();
+        let mut total_grouped_nodes = 0_usize;
+        let mut total_grouped_images = 0_usize;
+        let mut total_grouped_story_nodes = 0_usize;
+        let mut exact_top_group_escher = 0_usize;
+        let mut ambiguous_top_group_escher = 0_usize;
+        let mut max_depth = 0_usize;
+
+        for node in build.graph.nodes.values() {
+            let seq_num = node.payload.contents_seq_num;
+            let Some(reference) = references.get(&seq_num) else {
+                continue;
+            };
+            let Some(mut parent_seq) = single_parent_seq(reference) else {
+                continue;
+            };
+            if references.get(&parent_seq).and_then(single_raw_type) != Some(RAW_TYPE_GROUP) {
+                continue;
+            }
+
+            let mut depth = 0_usize;
+            let top_group_seq;
+            let page_id;
+            loop {
+                depth += 1;
+                let group_ref = references.get(&parent_seq).expect("group ref");
+                assert_eq!(single_raw_type(group_ref), Some(RAW_TYPE_GROUP));
+                let next_parent = single_parent_seq(group_ref).expect("group parent");
+                if let Ok(candidate_page_id) = derive_pub_page_id(&source_hash, next_parent)
+                    && build.graph.pages.contains_key(&candidate_page_id)
+                {
+                    top_group_seq = parent_seq;
+                    page_id = candidate_page_id;
+                    break;
+                }
+                assert_eq!(
+                    references.get(&next_parent).and_then(single_raw_type),
+                    Some(RAW_TYPE_GROUP),
+                    "bounded grouped node must continue through GROUP ancestry"
+                );
+                parent_seq = next_parent;
+                assert!(depth <= 2, "current product grouped projection is bounded to depth 2");
+            }
+
+            let Some(page_ordinal) = page_ordinals.get(&page_id).copied() else {
+                continue;
+            };
+            max_depth = max_depth.max(depth);
+            total_grouped_nodes += 1;
+            let is_image = node.payload.image_slot.is_some();
+            let is_story = node.payload.story_frame.is_some();
+            total_grouped_images += usize::from(is_image);
+            total_grouped_story_nodes += usize::from(is_story);
+
+            let top_matches = escher_by_contents_seq
+                .get(&top_group_seq)
+                .map(Vec::len)
+                .unwrap_or(0);
+            exact_top_group_escher += usize::from(top_matches == 1);
+            ambiguous_top_group_escher += usize::from(top_matches > 1);
+
+            let row = page_rows.entry(page_ordinal).or_default();
+            *row.entry("grouped_visible_nodes".to_owned()).or_default() += 1;
+            *row.entry(format!("depth_{depth}")).or_default() += 1;
+            if is_image {
+                *row.entry("grouped_image_nodes".to_owned()).or_default() += 1;
+            }
+            if is_story {
+                *row.entry("grouped_story_nodes".to_owned()).or_default() += 1;
+            }
+            if top_matches == 1 {
+                *row.entry("nodes_with_exact_top_group_escher".to_owned()).or_default() += 1;
+            }
+        }
+
+        let receipt = serde_json::json!({
+            "schema": "chaptera.newsletter-group-stack-carrier-census.v1",
+            "source_sha256": source_hash,
+            "page_count": build.graph.document.pages.len(),
+            "grouped_visible_node_count": total_grouped_nodes,
+            "grouped_image_node_count": total_grouped_images,
+            "grouped_story_node_count": total_grouped_story_nodes,
+            "grouped_max_depth": max_depth,
+            "grouped_nodes_with_exact_top_group_escher_count": exact_top_group_escher,
+            "grouped_nodes_with_ambiguous_top_group_escher_count": ambiguous_top_group_escher,
+            "pages": page_rows,
+        });
+
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent).expect("create group stack output directory");
+        }
+        std::fs::write(
+            &output,
+            serde_json::to_vec_pretty(&receipt).expect("serialize group stack census"),
+        )
+        .expect("write group stack census");
+        println!(
+            "{}",
+            serde_json::to_string(&receipt).expect("print group stack census")
+        );
+    }
+
     fn source_hash() -> Sha256Digest {
         "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
             .parse()
