@@ -1503,10 +1503,8 @@ mod tests {
                                     latin_family_authority = false;
                                     continue;
                                 }
-                                let fingerprint = format!(
-                                    "{:x}",
-                                    Sha256::digest(normalized_family.as_bytes())
-                                );
+                                let fingerprint =
+                                    format!("{:x}", Sha256::digest(normalized_family.as_bytes()));
                                 let authority = (entry.source_font_index, fingerprint);
                                 match current_latin_authority.as_ref() {
                                     None => current_latin_authority = Some(authority),
