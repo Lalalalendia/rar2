@@ -108,9 +108,8 @@ use pub_model::{
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillParagraphAlignment,
     QuillScriptFontEntryDisposition, QuillStoryReadError, QuillTypographyValueSource,
-    bounded_mcld_uniform_text_inset,
-    parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld, parse_bounded_typography,
-    parse_confirmed_story_catalog,
+    bounded_mcld_uniform_text_inset, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
+    parse_bounded_typography, parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
