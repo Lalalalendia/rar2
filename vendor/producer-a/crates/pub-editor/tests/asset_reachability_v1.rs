@@ -55,7 +55,11 @@ fn unused_runtime_import_is_not_durable_project_truth() {
         .expect("bounded PNG import");
 
     assert_eq!(session.replacement_assets().count(), 1);
-    assert!(session.replacement_assets().any(|asset| asset.sha256 == sha));
+    assert!(
+        session
+            .replacement_assets()
+            .any(|asset| asset.sha256 == sha)
+    );
 
     let project = session.try_project().expect("project materialization");
     assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_11);
