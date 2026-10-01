@@ -411,11 +411,7 @@ fn paint_shared_resolved_text(
         max_width_px = max_width_px.max(galley.size().x);
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
         let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
-        painter.galley(
-            egui::pos2(x, y),
-            galley,
-            egui::Color32::BLACK,
-        );
+        painter.galley(egui::pos2(x, y), galley, egui::Color32::BLACK);
     }
 
     let resolved_height_px = lines.len() as f32 * line_height_px;
