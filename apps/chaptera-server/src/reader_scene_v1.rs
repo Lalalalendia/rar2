@@ -856,7 +856,7 @@ pub fn from_viewer_geometry_with_fonts(
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
             text_layout: text_layout_by_node.remove(&node_id),
-            node_id,
+            node_id: node_id.clone(),
             page_id,
             parent_node_id,
             bounds,
