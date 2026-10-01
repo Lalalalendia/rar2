@@ -197,6 +197,41 @@ class ResolvedGraphSceneBridgeTests(unittest.TestCase):
         )
 
 
+    def test_source_paint_order_reorders_nodes_but_keeps_origin_mapping_canonical(self):
+        value = graph()
+        second_node = "10000000-0000-4000-8000-000000000002"
+        value["pages"][PAGE_ID]["children"].append(second_node)
+        value["nodes"][second_node] = {
+            "header": {
+                "id": second_node,
+                "parent_id": PAGE_ID,
+                "bounds": {"x": 11, "y": 22, "width": 33, "height": 44},
+                "transform": {
+                    "a": "1", "b": "0", "c": "0", "d": "1",
+                    "tx": 0, "ty": 0,
+                },
+                "source_refs": [],
+            },
+            "payload": {"story_frame": None},
+        }
+
+        scene = project_resolved_graph_scene(
+            value,
+            source_page_paint_orders=[{
+                "page_id": PAGE_ID,
+                "node_ids": [second_node, NODE_ID],
+            }],
+        )
+
+        self.assertEqual(
+            [second_node, NODE_ID],
+            [item["origin"] for item in scene["nodes"]],
+        )
+        self.assertEqual(
+            [NODE_ID, second_node],
+            [item["resolved_node_origin"] for item in scene["origin_mapping"]],
+        )
+
     def test_typed_cmo_context_withholds_carrier_until_slot_flow(self):
         scene = project_resolved_graph_scene(
             graph(),
