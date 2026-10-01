@@ -3331,22 +3331,27 @@ fn project_carlton_march_cmo_instances(
                 LengthEmu::new(slot.resolved_width_emu),
                 LengthEmu::new(slot.resolved_height_emu),
             );
-            let text_content_bounds = carrier.payload.text_frame_inset.as_ref().and_then(|source| {
-                let inset = i64::from(source.uniform_emu);
-                let double = inset.checked_mul(2)?;
-                let content_x = bounds.x.get().checked_add(inset)?;
-                let content_y = bounds.y.get().checked_add(inset)?;
-                let content_width = bounds.width.get().checked_sub(double)?;
-                let content_height = bounds.height.get().checked_sub(double)?;
-                (content_width > 0 && content_height > 0).then(|| {
-                    RectEmu::new(
-                        LengthEmu::new(content_x),
-                        LengthEmu::new(content_y),
-                        LengthEmu::new(content_width),
-                        LengthEmu::new(content_height),
-                    )
-                })
-            });
+            let text_content_bounds =
+                carrier
+                    .payload
+                    .text_frame_inset
+                    .as_ref()
+                    .and_then(|source| {
+                        let inset = i64::from(source.uniform_emu);
+                        let double = inset.checked_mul(2)?;
+                        let content_x = bounds.x.get().checked_add(inset)?;
+                        let content_y = bounds.y.get().checked_add(inset)?;
+                        let content_width = bounds.width.get().checked_sub(double)?;
+                        let content_height = bounds.height.get().checked_sub(double)?;
+                        (content_width > 0 && content_height > 0).then(|| {
+                            RectEmu::new(
+                                LengthEmu::new(content_x),
+                                LengthEmu::new(content_y),
+                                LengthEmu::new(content_width),
+                                LengthEmu::new(content_height),
+                            )
+                        })
+                    });
 
             let relation = relations.get(slot.slot_index).copied().with_context(|| {
                 format!(
