@@ -16,6 +16,8 @@ FILES = {
     "web": ROOT / "deploy/systemd/chaptera-web.service",
     "worker": ROOT / "deploy/systemd/chaptera-worker.service",
     "tmpfiles": ROOT / "deploy/tmpfiles/chaptera.conf",
+    "sysusers": ROOT / "deploy/sysusers/chaptera.conf",
+    "target": ROOT / "deploy/systemd/chaptera.target",
     "caddy": ROOT / "deploy/caddy/Caddyfile.example",
     "config": ROOT / "deploy/config/chaptera.prod.example.toml",
     "doc": ROOT / "docs/cloud-single-host-v0.md",
@@ -48,6 +50,8 @@ def main() -> int:
     slice_text = texts["slice"]
     web = texts["web"]
     worker = texts["worker"]
+    target = texts["target"]
+    sysusers = texts["sysusers"]
     caddy = texts["caddy"]
     config = texts["config"]
 
@@ -87,6 +91,9 @@ def main() -> int:
         raise AssertionError("worker must not receive the web/OIDC client secret")
     require(worker, "MemoryHigh=384M", "worker")
     require(worker, "MemoryMax=640M", "worker")
+    require(target, "Requires=chaptera-web.service chaptera-worker.service", "target")
+    require(target, "WantedBy=multi-user.target", "target")
+    require(sysusers, "u chaptera", "sysusers")
 
     require(caddy, "reverse_proxy 127.0.0.1:8080", "caddy")
     require(caddy, "max_size 256MB", "caddy")
@@ -174,6 +181,8 @@ def main() -> int:
             "typed_production_config": True,
             "web_oidc_secret_via_systemd_credential": True,
             "worker_has_no_oidc_credential": True,
+            "one_target_starts_web_and_worker": True,
+            "service_account_declared": True,
         },
         "files": {
             name: {
