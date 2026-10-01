@@ -77,6 +77,7 @@ jobs:
           cmp target/debug/chaptera "$ROOT/opt/chaptera/current/chaptera"
           test -x "$ROOT/opt/chaptera/current/tools/migration_pdf_worker_isolation.py"
           test -f "$ROOT/etc/systemd/system/chaptera.target"
+          cmp deploy/config/chaptera.prod.example.toml "$ROOT/etc/chaptera/chaptera.toml"
           test -f "$ROOT/etc/systemd/system/chaptera-web.service"
           test -f "$ROOT/etc/systemd/system/chaptera-worker.service"
           test -f "$ROOT/etc/sysusers.d/chaptera.conf"
