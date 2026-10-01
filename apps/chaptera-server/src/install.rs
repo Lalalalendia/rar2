@@ -19,6 +19,8 @@ const CHAPTERA_WORKER_SERVICE: &str =
 const CHAPTERA_TARGET: &str = include_str!("../../../deploy/systemd/chaptera.target");
 const CHAPTERA_TMPFILES: &str = include_str!("../../../deploy/tmpfiles/chaptera.conf");
 const CHAPTERA_SYSUSERS: &str = include_str!("../../../deploy/sysusers/chaptera.conf");
+const ISOLATION_HARNESS: &[u8] =
+    include_bytes!("../../../tools/migration_pdf_worker_isolation.py");
 
 const CANONICAL_CONFIG: &str = "/etc/chaptera/chaptera.toml";
 
@@ -125,6 +127,11 @@ fn install_from(
 
     let installed_exe = release_dir.join("chaptera");
     install_exact_executable(source_exe, &installed_exe)?;
+    atomic_write(
+        &release_dir.join("tools/migration_pdf_worker_isolation.py"),
+        ISOLATION_HARNESS,
+        0o755,
+    )?;
 
     for (absolute_path, contents, mode) in HOST_FILES {
         let path = rooted(root, absolute_path)?;
@@ -484,6 +491,15 @@ mod tests {
         assert_eq!(
             fs::read(root.join("opt/chaptera/current/chaptera")).unwrap(),
             b"chaptera-build-b"
+        );
+        assert_eq!(
+            fs::read(
+                root.join(
+                    "opt/chaptera/current/tools/migration_pdf_worker_isolation.py"
+                )
+            )
+            .unwrap(),
+            ISOLATION_HARNESS
         );
         assert_eq!(
             fs::read(root.join("etc/systemd/system/chaptera.target")).unwrap(),
