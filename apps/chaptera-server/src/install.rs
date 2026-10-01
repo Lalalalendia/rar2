@@ -81,8 +81,6 @@ pub fn run(config_path: Option<&Path>, staging_root: Option<&Path>) -> Result<()
         ))
     })?;
 
-    install_from(&source_exe, root, BUILD_IDENTITY, staging)?;
-
     if staging {
         let staged_config = rooted(root, CANONICAL_CONFIG)?;
         let config_bytes = fs::read(config_path).map_err(|error| {
@@ -93,6 +91,8 @@ pub fn run(config_path: Option<&Path>, staging_root: Option<&Path>) -> Result<()
         })?;
         atomic_write(&staged_config, &config_bytes, 0o640)?;
     }
+
+    install_from(&source_exe, root, BUILD_IDENTITY, staging)?;
 
     if staging {
         println!(
