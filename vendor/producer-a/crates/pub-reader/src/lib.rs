@@ -3482,6 +3482,12 @@ fn source_page_paint_orders_v1(
         if node.header.parent_id != page_id.into_canonical() {
             continue;
         }
+        // #632 proves the first carrier-rank class only for visible grouped
+        // Story and image descendants. Grouped TABLE/other classes remain
+        // outside this slice even when they happen to have exact ancestry.
+        if node.payload.story_frame.is_none() && node.payload.image_slot.is_none() {
+            continue;
+        }
 
         let child_matches = escher_by_contents_seq
             .get(&seq_num)
