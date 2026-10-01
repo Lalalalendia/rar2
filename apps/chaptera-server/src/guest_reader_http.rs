@@ -847,7 +847,8 @@ async fn open_session(
         }
     };
 
-    let structural_outcome = if receipt.terminal_code.as_deref() == Some("reader_scene_open_failed") {
+    let structural_outcome = if receipt.terminal_code.as_deref() == Some("reader_scene_open_failed")
+    {
         "error"
     } else {
         "success"
