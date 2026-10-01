@@ -277,9 +277,9 @@ fn known_quill_corruption_evidence(
         QuillStoryReadError::DescriptorNodeTruncated { .. } => {
             Some(ReaderSalvageCorruptionEvidence::QuillDescriptorNodeTruncated)
         }
-        QuillStoryReadError::StrsServiceSpanOutOfBounds { .. } => Some(
-            ReaderSalvageCorruptionEvidence::QuillStrsServiceSpanOutOfBounds,
-        ),
+        QuillStoryReadError::StrsServiceSpanOutOfBounds { .. } => {
+            Some(ReaderSalvageCorruptionEvidence::QuillStrsServiceSpanOutOfBounds)
+        }
         _ => None,
     }
 }
