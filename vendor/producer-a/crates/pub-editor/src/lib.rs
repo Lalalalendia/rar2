@@ -255,6 +255,49 @@ pub enum EditOperation {
     },
 }
 
+impl EditOperation {
+    /// Exact editor-owned asset identities required to retain this canonical
+    /// operation in a durable EditorProject.
+    ///
+    /// Keep this match exhaustive: every future asset-bearing operation must
+    /// make an explicit reachability decision here.
+    pub fn durable_editor_asset_refs_v1(&self) -> Vec<Sha256Digest> {
+        match self {
+            Self::ReplaceImage {
+                before_asset,
+                after_asset,
+                ..
+            } => {
+                let mut refs = Vec::with_capacity(2);
+                if let Some(before_asset) = before_asset {
+                    refs.push(*before_asset);
+                }
+                refs.push(*after_asset);
+                refs.sort_unstable();
+                refs.dedup();
+                refs
+            }
+            Self::ReplaceStoryRange { .. }
+            | Self::ReplaceStoryText { .. }
+            | Self::BreakTextFrameForwardLink { .. }
+            | Self::ReplaceTableCellText { .. }
+            | Self::MoveNode { .. }
+            | Self::MoveNodes { .. }
+            | Self::ResizeNode { .. }
+            | Self::ResizeNodes { .. }
+            | Self::CreateTextBox { .. }
+            | Self::CreateShape { .. } => Vec::new(),
+        }
+    }
+}
+
+fn required_editor_asset_refs_v1(operations: &[EditOperation]) -> BTreeSet<Sha256Digest> {
+    operations
+        .iter()
+        .flat_map(EditOperation::durable_editor_asset_refs_v1)
+        .collect()
+}
+
 impl PersistenceRequirements for EditOperation {
     fn persistence_requirements(&self) -> Vec<PersistenceRequirement> {
         match self {
@@ -1181,6 +1224,13 @@ pub enum EditorProjectError {
     LegacyProjectCarriesIdentity,
     MissingProjectIdentity,
     TableGridMismatch,
+    RequiredAssetUnavailable {
+        sha256: Sha256Digest,
+    },
+    AssetReachabilityMismatch {
+        expected: Vec<Sha256Digest>,
+        found: Vec<Sha256Digest>,
+    },
     MissingAssetBytes {
         sha256: Sha256Digest,
     },
@@ -1273,6 +1323,14 @@ impl fmt::Display for EditorProjectError {
             ),
             Self::TableGridMismatch => formatter.write_str(
                 "editor project EffectiveTableGridV1 state does not match deterministic replay",
+            ),
+            Self::RequiredAssetUnavailable { sha256 } => write!(
+                formatter,
+                "editor operation history requires asset {sha256}, but exact runtime bytes are unavailable"
+            ),
+            Self::AssetReachabilityMismatch { expected, found } => write!(
+                formatter,
+                "editor project asset metadata does not match operation-reachable identities; expected {expected:?}, found {found:?}"
             ),
             Self::MissingAssetBytes { sha256 } => {
                 write!(
@@ -1674,6 +1732,12 @@ impl EditorSession {
     }
 
     pub fn project(&self) -> EditorProject {
+        self.try_project().expect(
+            "EditorSession public mutation APIs preserve every operation-reachable runtime asset",
+        )
+    }
+
+    pub fn try_project(&self) -> Result<EditorProject, EditorProjectError> {
         let table_grids = effective_table_grids(&self.graph);
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (EDITOR_PROJECT_VERSION_V0_11, Some(identity.clone()))
@@ -1726,14 +1790,14 @@ impl EditorSession {
             (legacy_schema, None)
         };
 
-        EditorProject {
+        Ok(EditorProject {
             schema_version: schema_version.into(),
             source_hash: self.source_hash,
             identity,
-            assets: self.project_asset_metadata(),
+            assets: self.project_asset_metadata()?,
             table_grids,
             operations: self.undo.clone(),
-        }
+        })
     }
 
     pub fn fork_project_next_issue(&self) -> Result<EditorProject, EditorProjectForkError> {
@@ -1751,14 +1815,15 @@ impl EditorSession {
         assess_mature_0x2c_pub_project_persistence(&self.project(), writer)
     }
 
-    fn project_asset_metadata(&self) -> Vec<EditorProjectAsset> {
-        self.replacement_assets
-            .values()
-            .map(|asset| EditorProjectAsset {
-                sha256: asset.sha256,
-                mime: asset.mime.clone(),
-                byte_len: u64::try_from(asset.bytes.len())
-                    .expect("validated editor asset length must fit u64"),
+    fn project_asset_metadata(&self) -> Result<Vec<EditorProjectAsset>, EditorProjectError> {
+        required_editor_asset_refs_v1(&self.undo)
+            .into_iter()
+            .map(|sha256| {
+                let asset = self
+                    .replacement_assets
+                    .get(&sha256)
+                    .ok_or(EditorProjectError::RequiredAssetUnavailable { sha256 })?;
+                Ok(editor_project_asset_metadata(asset))
             })
             .collect()
     }
@@ -1934,6 +1999,20 @@ impl EditorSession {
             return Err(EditorProjectError::SessionNotEmpty);
         }
 
+        if project.schema_version == EDITOR_PROJECT_VERSION_V0_11 {
+            let expected = required_editor_asset_refs_v1(&project.operations)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let found = project
+                .assets
+                .iter()
+                .map(|asset| asset.sha256)
+                .collect::<Vec<_>>();
+            if found != expected {
+                return Err(EditorProjectError::AssetReachabilityMismatch { expected, found });
+            }
+        }
+
         let mut candidate = self.clone();
         candidate.project_identity = project.identity.clone();
         for (index, metadata) in project.assets.iter().enumerate() {
@@ -1966,7 +2045,7 @@ impl EditorSession {
             candidate.replacement_assets.insert(metadata.sha256, asset);
         }
 
-        if candidate.project_asset_metadata() != project.assets {
+        if canonical_editor_asset_metadata(&candidate.replacement_assets) != project.assets {
             return Err(EditorProjectError::AssetMetadataNonCanonical);
         }
 
@@ -3111,6 +3190,21 @@ impl EditorSession {
         }
         Ok(())
     }
+}
+
+fn editor_project_asset_metadata(asset: &EditorReplacementAsset) -> EditorProjectAsset {
+    EditorProjectAsset {
+        sha256: asset.sha256,
+        mime: asset.mime.clone(),
+        byte_len: u64::try_from(asset.bytes.len())
+            .expect("validated editor asset length must fit u64"),
+    }
+}
+
+fn canonical_editor_asset_metadata(
+    assets: &BTreeMap<Sha256Digest, EditorReplacementAsset>,
+) -> Vec<EditorProjectAsset> {
+    assets.values().map(editor_project_asset_metadata).collect()
 }
 
 pub fn editor_asset_file_name(
@@ -4579,4 +4673,65 @@ fn apply_table_cell_state(
     story.text.clear();
     story.text.push_str(replacement_story);
     Ok(())
+}
+
+#[cfg(test)]
+mod asset_reachability_tests {
+    use super::*;
+
+    fn digest(byte: u8) -> Sha256Digest {
+        Sha256Digest::from_bytes([byte; 32])
+    }
+
+    fn replace(before_asset: Option<Sha256Digest>, after_asset: Sha256Digest) -> EditOperation {
+        EditOperation::ReplaceImage {
+            node_id: serde_json::from_str(
+                "\"22000000-0000-4000-8000-000000000001\"",
+            )
+            .expect("canonical NodeId"),
+            before_asset,
+            after_asset,
+        }
+    }
+
+    #[test]
+    fn operation_asset_refs_are_exact_and_deterministic() {
+        let a = digest(0x11);
+        let b = digest(0x22);
+
+        assert_eq!(replace(None, a).durable_editor_asset_refs_v1(), vec![a]);
+        assert_eq!(replace(Some(a), b).durable_editor_asset_refs_v1(), vec![a, b]);
+
+        let refs = required_editor_asset_refs_v1(&[
+            replace(None, a),
+            replace(Some(a), b),
+            replace(Some(b), a),
+        ])
+        .into_iter()
+        .collect::<Vec<_>>();
+        assert_eq!(refs, vec![a, b]);
+    }
+
+    #[test]
+    fn non_asset_operations_emit_no_durable_asset_refs() {
+        let operation = EditOperation::MoveNode {
+            node_id: serde_json::from_str(
+                "\"22000000-0000-4000-8000-000000000001\"",
+            )
+            .expect("canonical NodeId"),
+            before: RectEmu::new(
+                LengthEmu::ZERO,
+                LengthEmu::ZERO,
+                LengthEmu::new(10),
+                LengthEmu::new(10),
+            ),
+            after: RectEmu::new(
+                LengthEmu::new(1),
+                LengthEmu::new(2),
+                LengthEmu::new(10),
+                LengthEmu::new(10),
+            ),
+        };
+        assert!(operation.durable_editor_asset_refs_v1().is_empty());
+    }
 }
