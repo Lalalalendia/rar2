@@ -45,7 +45,7 @@ const errors = [];
 const foreign = [];
 let active;
 let browser;
-const assets = new Set(["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs"]);
+const assets = new Set(["index.html", "reader.css", "reader-app.mjs", "reader-model.mjs", "render-v1.mjs", "observability-v1.mjs"]);
 const server = createServer(async (req, res) => {
   try {
     if (req.url.startsWith("/v1/")) {
@@ -73,8 +73,10 @@ const server = createServer(async (req, res) => {
     }
     const name = req.url === "/" ? "index.html" : req.url.slice(1);
     if (!assets.has(name)) { res.writeHead(404); res.end(); return; }
+    const source = name === "observability-v1.mjs" ? join(root, "../web/observability-v1.mjs") : join(root, name);
+    const bytes = await readFile(source);
     res.writeHead(200, { "content-type": name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript" });
-    res.end(await readFile(join(root, name)));
+    res.end(bytes);
   } catch (error) { errors.push(String(error)); res.writeHead(500); res.end("controlled_transport_failure"); }
 });
 
