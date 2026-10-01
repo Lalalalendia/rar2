@@ -51,6 +51,16 @@ export class HttpEditorServiceV1 {
     }, context, "browser.history_http");
   }
 
+  async editorCapabilities() {
+    const context = this.#context("scene_read");
+    return this.#json(
+      "/v1/editor/capabilities",
+      {},
+      context,
+      "browser.editor_capabilities_http",
+    );
+  }
+
   async nativePubPreview() {
     const context = this.#context("export");
     return this.#json(
