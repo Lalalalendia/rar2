@@ -33,10 +33,6 @@ from resolved_graph_scene_bridge_v1 import (
     compare_viewer_and_adapter_scene,
     project_resolved_graph_scene,
 )
-from sample_newsletter_move_producer import (
-    SampleNewsletterMoveSession,
-    load_baseline,
-)
 from validate_export_preview import validate_schema as validate_export_preview_schema
 from validate_export_preview import validate_semantics as validate_export_preview_semantics
 from verify_editable_export_geometry import RectEmu, verify_export
