@@ -66,8 +66,9 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
-    PubResolvedNodePayload, PubScriptFontEntryDisposition, PubSourceGraphBuild,
+    PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
+    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
+    PubSourceGraphBuild,
     PubSourcePagePaintOrderV1, WmfPreviewRgba, analyze_mature_0x2c_page_roles,
     build_failure_envelope, build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
@@ -234,6 +235,8 @@ pub struct ViewerGeometryDocument {
     pub text_fragments: Vec<ViewerTextFragment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<ViewerTypographyRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<ViewerScriptFontMap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -770,6 +773,31 @@ pub struct ViewerScriptFontMap {
 }
 
 impl ViewerScriptFontMap {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerParagraphAlignment {
+    Center,
+    Right,
+    InterWord,
+    Distribute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerParagraphAlignmentRun {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub alignment: ViewerParagraphAlignment,
+    pub source_value: u16,
+    pub source_story_text_sha256: Sha256Digest,
+}
+
+impl ViewerParagraphAlignmentRun {
     pub fn applies_to_story_text(&self, text: &str) -> bool {
         self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
@@ -1801,6 +1829,7 @@ fn open_legacy_0x22_noquill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        paragraph_alignments: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -1933,6 +1962,7 @@ fn open_legacy_0x22_quill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        paragraph_alignments: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2039,6 +2069,50 @@ fn open_mature_0x2c_bundle(
                 "{} source typography range(s) are available for preview sizing; {} use bounded inherited font/size authority. The renderer still uses the pinned fallback font face and does not claim Publisher-exact reflow.",
                 typography_runs.len(),
                 inherited
+            ),
+        });
+    }
+
+    let paragraph_alignments = pipeline
+        .source
+        .paragraph_alignments
+        .iter()
+        .filter_map(|run| {
+            let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
+            Some(ViewerParagraphAlignmentRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                alignment: match run.alignment {
+                    PubParagraphAlignment::Center => ViewerParagraphAlignment::Center,
+                    PubParagraphAlignment::Right => ViewerParagraphAlignment::Right,
+                    PubParagraphAlignment::InterWord => ViewerParagraphAlignment::InterWord,
+                    PubParagraphAlignment::Distribute => ViewerParagraphAlignment::Distribute,
+                },
+                source_value: run.source_value,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
+    if !paragraph_alignments.is_empty() {
+        let unsupported = paragraph_alignments
+            .iter()
+            .filter(|run| matches!(
+                run.alignment,
+                ViewerParagraphAlignment::InterWord | ViewerParagraphAlignment::Distribute
+            ))
+            .count();
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.text.paragraph_alignment_partial".to_owned(),
+            severity: if unsupported == 0 {
+                ViewerDiagnosticSeverity::Info
+            } else {
+                ViewerDiagnosticSeverity::FidelityWarning
+            },
+            message: format!(
+                "{} explicit source paragraph-alignment range(s) are preserved; {} use InterWord/Distribute semantics that remain non-executable and stay Partial.",
+                paragraph_alignments.len(),
+                unsupported
             ),
         });
     }
@@ -2275,6 +2349,7 @@ fn open_mature_0x2c_bundle(
         story_frames,
         text_fragments,
         typography_runs,
+        paragraph_alignments,
         script_font_maps,
         tables,
         #[cfg(feature = "cmo-slot-compose")]
@@ -4373,6 +4448,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -4527,6 +4603,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -4980,6 +5057,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5086,6 +5164,7 @@ mod tests {
             story_frames: initial_frames.clone(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5153,6 +5232,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
