@@ -2632,6 +2632,24 @@ impl ViewerApp {
                 });
             }
 
+            let (text_ranges, verified_images, grounded_geometry) =
+                reader_salvage::fact_counts(salvage);
+            ui.add_space(10.0);
+            reader_product_ui::section_label(ui, "Proven facts");
+            ui.label(format!(
+                "{text_ranges} text range(s) · {verified_images} verified image fact(s) · {grounded_geometry} grounded geometry fact(s)"
+            ));
+            if verified_images > 0 {
+                ui.small(
+                    "Verified image identity/byte facts are preserved, but Salvage View does not invent missing placement or render unavailable payload bytes.",
+                );
+            }
+            if grounded_geometry > 0 {
+                ui.small(
+                    "Grounded geometry facts are preserved individually; Salvage View still does not synthesize a complete page layout.",
+                );
+            }
+
             let gaps = reader_salvage::gap_labels(salvage);
             if !gaps.is_empty() {
                 ui.add_space(10.0);
