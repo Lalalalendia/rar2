@@ -332,13 +332,10 @@ jobs:
               assert row["source_modified"] is False, row
 
           opnhous = rows["227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"]
-          assert opnhous["outcome"] != "normal_open", opnhous
-          assert opnhous["salvage_eligibility"] == "eligible_damaged_publisher", opnhous
+          assert opnhous["outcome"] == "unsupported", opnhous
+          assert opnhous["salvage_eligibility"] == "awaiting_typed_corruption_evidence", opnhous
+          assert opnhous["has_surviving_evidence"] is False, opnhous
           assert opnhous["source_modified"] is False, opnhous
-          if opnhous["has_surviving_evidence"]:
-              assert opnhous["outcome"] == "salvage_open", opnhous
-          else:
-              assert opnhous["outcome"] == "unsupported", opnhous
 
           assert payload["corruption_evidence_counts"] == {
               "quill_descriptor_node_truncated": 1,
@@ -466,11 +463,11 @@ jobs:
           assert materialized["rejections"] == 0, materialized
 
           reader = summary["reader"]
-          assert reader["opened_count"] == 1038, reader
-          assert reader["failed_count"] == 12, reader
-          assert reader["opened_by_family"] == {"0x22": 652, "0x2c": 386}, reader["opened_by_family"]
-          assert reader["failed_by_family"] == {"0x22": 1, "0x2c": 10, "unknown": 1}, reader["failed_by_family"]
-          assert reader["failure_signature_count"] == 12, reader["failure_signature_count"]
+          assert reader["opened_count"] == 1041, reader
+          assert reader["failed_count"] == 9, reader
+          assert reader["opened_by_family"] == {"0x22": 652, "0x2c": 389}, reader["opened_by_family"]
+          assert reader["failed_by_family"] == {"0x22": 1, "0x2c": 7, "unknown": 1}, reader["failed_by_family"]
+          assert reader["failure_signature_count"] == 9, reader["failure_signature_count"]
           assert summary["contents_family_physical_counts"] == {"0x22": 653, "0x2c": 396, "unknown": 1}, summary["contents_family_physical_counts"]
           assert summary["structural_cluster_count"] == 565, summary["structural_cluster_count"]
           assert summary["path_cluster_count"] == 273, summary["path_cluster_count"]
