@@ -1388,6 +1388,8 @@ mod tests {
         let mut projected_line_counts = BTreeMap::<usize, usize>::new();
         let mut projected_line_heights_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
+        let mut projected_text_content_boxes = 0_usize;
+        let mut projected_text_content_insets_emu = BTreeMap::<String, usize>::new();
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
@@ -1395,7 +1397,33 @@ mod tests {
                     .expect("exact reference render plan must build");
 
             for node in plan.nodes {
-                let projected = node.projected_scene_instance.is_some();
+                let projected_instance_id = node
+                    .projected_scene_instance
+                    .as_ref()
+                    .map(|instance| instance.instance_id.as_str());
+                let projected = projected_instance_id.is_some();
+                if let Some(instance_id) = projected_instance_id
+                    && let Some(projected_instance) = bundle
+                        .geometry
+                        .projected_scene_instances
+                        .iter()
+                        .find(|candidate| candidate.scene_instance.instance_id == instance_id)
+                    && let Some(content_bounds) = projected_instance.text_content_bounds
+                {
+                    let outer = projected_instance.bounds;
+                    let left = content_bounds.x.get() - outer.x.get();
+                    let top = content_bounds.y.get() - outer.y.get();
+                    let right = outer.x.get() + outer.width.get()
+                        - content_bounds.x.get()
+                        - content_bounds.width.get();
+                    let bottom = outer.y.get() + outer.height.get()
+                        - content_bounds.y.get()
+                        - content_bounds.height.get();
+                    projected_text_content_boxes += 1;
+                    *projected_text_content_insets_emu
+                        .entry(format!("{left},{top},{right},{bottom}"))
+                        .or_default() += 1;
+                }
                 let Some(text) = node.text else {
                     continue;
                 };
@@ -1501,8 +1529,11 @@ mod tests {
             serde_json::to_string(&projected_line_counts).expect("serialize projected line counts");
         let projected_line_heights_json = serde_json::to_string(&projected_line_heights_emu)
             .expect("serialize projected line heights");
+        let projected_text_content_insets_json =
+            serde_json::to_string(&projected_text_content_insets_emu)
+                .expect("serialize projected text-content insets");
         println!(
-            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={}",
+            "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_measured_width_total_emu={} projected_text_content_boxes={} projected_text_content_insets_emu={}",
             actual_sha256,
             bundle.geometry.document.pages.len(),
             text_nodes,
@@ -1524,6 +1555,8 @@ mod tests {
             projected_line_counts_json,
             projected_line_heights_json,
             projected_measured_width_total_emu,
+            projected_text_content_boxes,
+            projected_text_content_insets_json,
         );
     }
 
