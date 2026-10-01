@@ -1739,6 +1739,15 @@ fn open_legacy_0x22_noquill_bundle(
             .map(map_scene_diagnostic),
     );
 
+    images.extend(viewer_mature_officeart_wmf_preview_images(
+        bytes,
+        &pipeline.source_hash,
+        &pipeline.source,
+        &pipeline.resolved.graph,
+        &scene,
+        &mut document.diagnostics,
+    ));
+
     let preview_source_hash = document.source.source_hash;
     let mut images = viewer_legacy_ole_cached_preview_images(
         bytes,
@@ -2074,7 +2083,7 @@ fn open_mature_0x2c_bundle(
         viewer_tables_from_resolved(&pipeline.resolved.graph, &projection);
     document.diagnostics.extend(table_diagnostics);
 
-    let images = match build_mature_0x2c_asset_export_bundle_from_bytes(
+    let mut images = match build_mature_0x2c_asset_export_bundle_from_bytes(
         bytes,
         &pipeline.source.graph,
     ) {
@@ -2224,7 +2233,7 @@ fn open_mature_0x2c_bundle(
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
             severity: ViewerDiagnosticSeverity::FidelityWarning,
-            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, admitted source typography sizing, exact embedded PNG/JPEG bytes, persisted bounded image source-window crop, and admitted solid fill/line state. Publisher-exact typography/reflow, unsupported or ambiguous image crop, gradients/patterns, effects, and broader transforms are not faithfully painted yet."
+            message: "Object positions and sizes are resolved. The desktop Viewer may paint bounded semantic text, admitted source typography sizing, exact embedded PNG/JPEG bytes, bounded source-backed mature OfficeArt WMF previews, persisted bounded image source-window crop, and admitted solid fill/line state. Publisher-exact typography/reflow, unsupported or ambiguous image crop, gradients/patterns, effects, and broader transforms are not faithfully painted yet."
                 .to_owned(),
         });
     }
