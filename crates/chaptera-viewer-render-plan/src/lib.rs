@@ -387,6 +387,8 @@ pub struct RenderResolvedTextLineV1 {
     pub scalar_end: u32,
     pub consumed_scalar_end: u32,
     pub text: String,
+    #[serde(default)]
+    pub x_offset_emu: i64,
     pub measured_width_emu: i64,
     pub line_height_emu: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1081,6 +1083,7 @@ fn resolve_text_layout_v1(
             scalar_end: line.scalar_end,
             consumed_scalar_end: line.consumed_scalar_end,
             text: line.text,
+            x_offset_emu: 0,
             measured_width_emu: line.measured_width.get(),
             line_height_emu,
             spans: Vec::new(),
@@ -1356,6 +1359,7 @@ fn resolve_mixed_size_text_layout_v1(
             scalar_end: chosen.scalar_end,
             consumed_scalar_end: chosen.consumed_scalar_end,
             text: chosen.text,
+            x_offset_emu: 0,
             measured_width_emu: chosen.measured_width_emu,
             line_height_emu: chosen.line_height_emu,
             spans: chosen.spans,
