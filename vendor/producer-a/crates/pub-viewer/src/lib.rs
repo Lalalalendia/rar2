@@ -1485,7 +1485,7 @@ fn open_legacy_0x22_noquill_bundle(
             .push(viewer_fallback_flow_metrics_diagnostic());
     }
 
-    let mut scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
+    let scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
         let codes = blocked
             .projection_errors
             .iter()
@@ -1914,7 +1914,7 @@ fn open_mature_0x2c_bundle(
         }
     };
 
-    let scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
+    let mut scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
         let codes = blocked
             .projection_errors
             .iter()
@@ -4874,8 +4874,7 @@ mod tests {
             ],
         };
 
-        let stats =
-            apply_known_source_page_paint_orders_to_scene_nodes_v1(&mut nodes, &[order]);
+        let stats = apply_known_source_page_paint_orders_to_scene_nodes_v1(&mut nodes, &[order]);
 
         assert_eq!(stats.page_order_count, 1);
         assert_eq!(stats.known_node_count, 3);
