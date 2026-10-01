@@ -94,6 +94,7 @@ fn text_frame(
                 previous_frame: previous,
                 next_frame: next,
             }),
+            text_frame_inset: None,
             table_story: None,
             table: None,
         },
