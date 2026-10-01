@@ -93,6 +93,8 @@ pub struct RenderTableCellV1 {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid_fill_rgb: Option<[u8; 3]>,
 }
 
 fn default_render_table_span() -> u32 {
@@ -808,6 +810,7 @@ pub fn build_page_render_plan_v1(
                             column_span: cell.column_span,
                             text: cell.text.clone(),
                             bounds: cell.bounds,
+                            solid_fill_rgb: cell.solid_fill_rgb,
                         })
                         .collect(),
                 });
@@ -2148,6 +2151,7 @@ mod tests {
         assert_eq!(table.cells[0].column_span, 1);
         assert_eq!(table.cells[0].text, "cell");
         assert_eq!(table.cells[0].bounds, Some(cell_bounds));
+        assert_eq!(table.cells[0].solid_fill_rgb, Some([10, 20, 30]));
     }
 
     #[cfg(feature = "projected-scene-instances")]
