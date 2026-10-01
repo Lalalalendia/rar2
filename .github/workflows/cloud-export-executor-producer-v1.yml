@@ -15,6 +15,7 @@ on:
       - "apps/chaptera-server/migrations/0008_quota_reservations.sql"
       - "apps/chaptera-server/migrations/0010_export_publications.sql"
       - "tools/run_cloud_migration_receipt.py"
+      - "tools/ci/scribus_idml_consumer.py"
       - "vendor/producer-a/crates/pub-editor/**"
       - ".github/workflows/cloud-export-executor-producer-v1.yml"
   workflow_dispatch:
@@ -29,6 +30,7 @@ permissions:
 jobs:
   edited-export-producer:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +38,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
-
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
 
       - name: Fetch pinned real Publisher fixture
         shell: bash
@@ -48,8 +54,49 @@ jobs:
           test "$actual" = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
           echo "CHAPTERA_EXPORT_FIXTURE=$fixture" >> "$GITHUB_ENV"
 
-      - name: Prove exact edited real-PUB producer
+      - name: Prove exact edited real-PUB IDML + ODG producers
+        env:
+          CHAPTERA_EXPORT_EVIDENCE_DIR: ${{ runner.temp }}/chaptera-export-consumer
         run: cargo test -p chaptera-server --test export_executor_producer -- --ignored --nocapture
+
+      - name: Prove IDML survives independent Scribus consumer
+        env:
+          CHAPTERA_EXPORT_EVIDENCE_DIR: ${{ runner.temp }}/chaptera-export-consumer
+        run: |
+          set -euo pipefail
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.idml"
+          xvfb-run -a scribus --version
+          CHAPTERA_SCRIBUS_SLA_OUT="$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla" \
+            xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- \
+            "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.idml"
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla"
+          grep -aF "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.sla"
+
+      - name: Prove ODG survives independent LibreOffice Draw consumer
+        env:
+          CHAPTERA_EXPORT_EVIDENCE_DIR: ${{ runner.temp }}/chaptera-export-consumer
+        run: |
+          set -euo pipefail
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.odg"
+          libreoffice --version
+          mkdir -p "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice"
+          libreoffice --headless             --convert-to fodg             --outdir "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice"             "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.odg"
+          test -s "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/edited.fodg"
+          grep -aF "Chaptera export proof" "$CHAPTERA_EXPORT_EVIDENCE_DIR/libreoffice/edited.fodg"
+
+      - name: Record source-safe editable-target receipt
+        env:
+          CHAPTERA_EXPORT_EVIDENCE_DIR: ${{ runner.temp }}/chaptera-export-consumer
+        run: |
+          set -euo pipefail
+          {
+            echo "head_sha=$GITHUB_SHA"
+            echo "source_sha256=6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+            echo "idml_sha256=$(sha256sum "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.idml" | awk '{print $1}')"
+            echo "odg_sha256=$(sha256sum "$CHAPTERA_EXPORT_EVIDENCE_DIR/edited.odg" | awk '{print $1}')"
+            echo "scribus=$(xvfb-run -a scribus --version 2>&1 | tr '\n' ' ')"
+            echo "libreoffice=$(libreoffice --version 2>&1 | tr '\n' ' ')"
+          } > "$CHAPTERA_EXPORT_EVIDENCE_DIR/consumer-receipt.txt"
 
       - name: Prove durable export publication authority
         run: 'cargo test -p chaptera-server export_publication::'
@@ -74,4 +121,6 @@ jobs:
           name: cloud-export-publication-v1
           if-no-files-found: error
           retention-days: 90
-          path: target/cloud-export-publication/
+          path: |
+            target/cloud-export-publication/
+            ${{ runner.temp }}/chaptera-export-consumer/
