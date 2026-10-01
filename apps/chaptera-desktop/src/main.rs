@@ -3855,7 +3855,9 @@ impl ViewerApp {
 
         let sidecar = editor_project_sidecar_path(source_path)
             .ok_or_else(|| "source path has no file name".to_owned())?;
-        let project = editor.project();
+        let project = editor
+            .try_project()
+            .map_err(|error| format!("materialize editor project: {error}"))?;
 
         if !project.assets.is_empty() {
             let asset_dir = editor_project_asset_dir_path(source_path)
@@ -3863,7 +3865,16 @@ impl ViewerApp {
             fs::create_dir_all(&asset_dir)
                 .map_err(|error| format!("create {}: {error}", asset_dir.display()))?;
 
-            for asset in editor.replacement_assets() {
+            for metadata in &project.assets {
+                let asset = editor
+                    .replacement_assets()
+                    .find(|asset| asset.sha256 == metadata.sha256)
+                    .ok_or_else(|| {
+                        format!(
+                            "project-required replacement asset {} is unavailable",
+                            metadata.sha256
+                        )
+                    })?;
                 let file_name = pub_editor::editor_asset_file_name(asset.sha256, &asset.mime)
                     .map_err(|error| format!("name replacement asset: {error}"))?;
                 let asset_path = asset_dir.join(file_name);
