@@ -62,6 +62,17 @@ pub struct QuillMcldTableMetrics {
     pub row_pitch_emu: QuillMcldConsensusU32,
 }
 
+/// Bounded Publisher text inset promoted only when MCLD fields 0x06..0x09
+/// exist as u32 values on every child and all observed sides/children agree.
+/// This intentionally does not assign asymmetric side ordering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillMcldUniformTextInset {
+    pub record_id: u32,
+    pub child_count: u32,
+    pub inset_emu: u32,
+    pub sources: Vec<RawSpan>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuillMcldReadError {
     MissingMcldDescriptor,
@@ -231,6 +242,61 @@ pub fn parse_bounded_mcld(
         record_id_count,
         record_ids,
         records,
+    })
+}
+
+/// Promotes only the two grounded uniform table metrics from one keyed MCLD
+/// record. Every child must contain exactly one u32 field 0x04 and 0x05 and all
+/// children must agree; disagreement is an error, never a coercion.
+pub fn bounded_mcld_uniform_text_inset(
+    mcld: &QuillMcldChunk,
+    record_id: u32,
+) -> Result<QuillMcldUniformTextInset, QuillMcldReadError> {
+    let record = mcld
+        .records
+        .iter()
+        .find(|record| record.record_id == record_id)
+        .ok_or(QuillMcldReadError::RecordIdNotFound { record_id })?;
+
+    let mut values = Vec::with_capacity(record.children.len().saturating_mul(4));
+    for (child_index, child) in record.children.iter().enumerate() {
+        let child_index = u32::try_from(child_index).unwrap_or(u32::MAX);
+        for field_id in 0x06..=0x09 {
+            values.push(required_u32_field(
+                record_id,
+                child_index,
+                child,
+                field_id,
+            )?);
+        }
+    }
+
+    let Some((expected, _)) = values.first() else {
+        return Err(QuillMcldReadError::MissingRequiredField {
+            record_id,
+            child_index: 0,
+            field_id: 0x06,
+        });
+    };
+    for (index, (found, _)) in values.iter().enumerate().skip(1) {
+        if found != expected {
+            let child_index = u32::try_from(index / 4).unwrap_or(u32::MAX);
+            let field_id = 0x06_u8.saturating_add(u8::try_from(index % 4).unwrap_or(3));
+            return Err(QuillMcldReadError::NonUniformRequiredField {
+                record_id,
+                field_id,
+                expected: *expected,
+                found: *found,
+                child_index,
+            });
+        }
+    }
+
+    Ok(QuillMcldUniformTextInset {
+        record_id,
+        child_count: record.child_count.value,
+        inset_emu: *expected,
+        sources: values.into_iter().map(|(_, source)| source).collect(),
     })
 }
 
