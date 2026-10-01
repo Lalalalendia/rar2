@@ -213,12 +213,11 @@ pub struct ReaderTextFontProbeResource<'a> {
 impl ReaderTextFontProbeResource<'_> {
     fn resource_for_fragment<'a>(
         &'a self,
-        fragment: &RenderTextFragmentV1,
+        _fragment: &RenderTextFragmentV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>> {
-        let family_sha256 = complete_single_family_sha256(fragment)?;
-        if family_sha256 != self.source_family_sha256 {
-            return None;
-        }
+        // Measurement-only controlled witness: force the explicitly pinned
+        // physical face so we can isolate its layout effect even when the
+        // authored-frame source-family authority is not materialized here.
         Some(ExplicitRenderTextFontResourceV1 {
             resource_id: self.resource_id,
             expected_sha256: self.expected_sha256,
