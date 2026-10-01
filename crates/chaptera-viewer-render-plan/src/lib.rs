@@ -1516,8 +1516,9 @@ mod tests {
     };
     use pub_viewer::{
         ViewerDocument, ViewerEmbeddedImage, ViewerImagePlacementV1, ViewerImageSourceWindowV1,
-        ViewerNodePaint, ViewerPage, ViewerScriptFontEntry, ViewerScriptFontMap, ViewerSolidLine,
-        ViewerSource, ViewerTable, ViewerTableCell, ViewerTextFragment, ViewerTypographyRun,
+        ViewerNodePaint, ViewerPage, ViewerParagraphAlignmentRun, ViewerScriptFontEntry,
+        ViewerScriptFontMap, ViewerSolidLine, ViewerSource, ViewerTable, ViewerTableCell,
+        ViewerTextFragment, ViewerTypographyRun,
         viewer_story_text_sha256,
     };
 
@@ -1695,6 +1696,98 @@ mod tests {
             ],
             source_story_text_sha256: viewer_story_text_sha256(text),
         }
+    }
+
+    fn alignment_run(
+        story_id: StoryId,
+        text: &str,
+        start: u32,
+        end: u32,
+        alignment: ViewerParagraphAlignment,
+    ) -> ViewerParagraphAlignmentRun {
+        ViewerParagraphAlignmentRun {
+            story_id,
+            scalar_start: start,
+            scalar_end: end,
+            alignment,
+            source_story_text_sha256: viewer_story_text_sha256(text),
+        }
+    }
+
+    #[test]
+    fn resolved_line_alignment_offsets_are_post_shape_and_fail_closed() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let fragment = render_fragment(story_id, "hello", Vec::new());
+
+        visual.paragraph_alignment_runs = vec![alignment_run(
+            story_id,
+            "hello",
+            0,
+            5,
+            ViewerParagraphAlignment::Center,
+        )];
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 301, 1000),
+            349,
+            "Center must floor odd remaining EMU toward the leading edge"
+        );
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 300, 1000),
+            350
+        );
+
+        visual.paragraph_alignment_runs[0].alignment = ViewerParagraphAlignment::Right;
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 300, 1000),
+            700
+        );
+        visual.paragraph_alignment_runs[0].alignment = ViewerParagraphAlignment::Left;
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 300, 1000),
+            0
+        );
+        visual.paragraph_alignment_runs[0].alignment = ViewerParagraphAlignment::Justify;
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 300, 1000),
+            0,
+            "Justify is preserved upstream but not admitted into the bounded placement consumer"
+        );
+
+        visual.paragraph_alignment_runs[0].alignment = ViewerParagraphAlignment::Center;
+        visual.paragraph_alignment_runs[0].scalar_end = 4;
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 300, 1000),
+            0,
+            "partial paragraph coverage must not move a line"
+        );
+
+        visual.paragraph_alignment_runs[0].scalar_end = 5;
+        visual.paragraph_alignment_runs[0].source_story_text_sha256 =
+            viewer_story_text_sha256("stale");
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 300, 1000),
+            0,
+            "stale source authority must fail closed"
+        );
+
+        visual.paragraph_alignment_runs[0] = alignment_run(
+            story_id,
+            "hello",
+            0,
+            5,
+            ViewerParagraphAlignment::Right,
+        );
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 1000, 1000),
+            0,
+            "exact fit has no alignment displacement"
+        );
+        assert_eq!(
+            resolved_line_x_offset_emu_v1(&visual, &fragment, 0, 5, 1001, 1000),
+            0,
+            "over-wide resolved lines must never receive a negative offset"
+        );
     }
 
     #[test]
