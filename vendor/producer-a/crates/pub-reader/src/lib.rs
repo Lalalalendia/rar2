@@ -4933,6 +4933,66 @@ mod tests {
     }
 
     #[test]
+    fn effective_officeart_text_margins_use_normative_defaults_when_auto_margin_is_off() {
+        let shape = crop_test_shape(Vec::new());
+        let margins = resolve_bounded_effective_officeart_text_margins(&shape, None)
+            .expect("normative text margins");
+
+        assert!(!margins.auto_text_margin.value);
+        assert_eq!(margins.left_emu.value, 91_440);
+        assert_eq!(margins.top_emu.value, 45_720);
+        assert_eq!(margins.right_emu.value, 91_440);
+        assert_eq!(margins.bottom_emu.value, 45_720);
+        assert_eq!(
+            margins.left_emu.authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+    }
+
+    #[test]
+    fn effective_officeart_text_margins_prefer_shape_then_dgg() {
+        let shape = crop_test_shape(vec![crop_test_property(
+            OFFICE_ART_TEXT_LEFT_MARGIN,
+            120_000,
+        )]);
+        let dgg = dgg_test_defaults(
+            vec![
+                crop_test_property(OFFICE_ART_TEXT_LEFT_MARGIN, 130_000),
+                crop_test_property(OFFICE_ART_TEXT_TOP_MARGIN, 60_000),
+            ],
+            Vec::new(),
+        );
+        let margins = resolve_bounded_effective_officeart_text_margins(&shape, Some(&dgg))
+            .expect("effective text margins");
+
+        assert_eq!(margins.left_emu.value, 120_000);
+        assert_eq!(
+            margins.left_emu.authority,
+            PubEffectivePaintAuthority::ShapeLocal
+        );
+        assert_eq!(margins.top_emu.value, 60_000);
+        assert_eq!(
+            margins.top_emu.authority,
+            PubEffectivePaintAuthority::DrawingGroupPrimary
+        );
+        assert_eq!(margins.right_emu.value, 91_440);
+        assert_eq!(
+            margins.right_emu.authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+    }
+
+    #[test]
+    fn active_auto_text_margin_stays_fail_closed() {
+        let shape = crop_test_shape(vec![crop_test_property(
+            OFFICE_ART_TEXT_BOOLEANS,
+            TEXT_USE_AUTO_MARGIN_BIT | TEXT_AUTO_MARGIN_BIT,
+        )]);
+
+        assert!(resolve_bounded_effective_officeart_text_margins(&shape, None).is_none());
+    }
+
+    #[test]
     fn effective_officeart_paint_uses_normative_solid_2d_defaults() {
         let shape = crop_test_shape(Vec::new());
         let paint = resolve_bounded_effective_officeart_paint(&shape, None, None, true)
