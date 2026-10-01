@@ -462,31 +462,8 @@ pub fn from_viewer_geometry(
             let text = node.text.as_ref().map(|text| text.text.clone());
             let mut mapped_layout = None;
             if let Some(text_fragment) = node.text.as_ref() {
-                let Some(layout) = text_fragment.layout.as_ref() else {
-                    text_layout_partial = true;
-                    if node.projected_scene_instance.is_none() {
-                        continue;
-                    }
-                    mapped_layout = None;
-                    if let Some(instance) = node.projected_scene_instance.as_ref() {
-                        if instance.target_page_id != plan_page_id {
-                            return Err(format!(
-                                "projected instance {} targets page {} but render plan is page {}",
-                                instance.instance_id, instance.target_page_id, plan_page_id
-                            ));
-                        }
-                    }
-                    // Keep the projected visual node source-safe even when its text
-                    // layout is unavailable; fidelity remains Partial.
-                    if node.projected_scene_instance.is_none() {
-                        continue;
-                    }
-                    // Fall through to projected-node materialization below.
-                    // Ordinary direct nodes retain the existing no-layout behavior.
-                    
-                };
-                if let Some(layout) = text_fragment.layout.as_ref() {
-                    match &layout.disposition {
+                match text_fragment.layout.as_ref() {
+                    Some(layout) => match &layout.disposition {
                         RenderTextLayoutDispositionV1::SharedResolved {
                             font_resource_id,
                             font_fingerprint_sha256,
@@ -534,6 +511,9 @@ pub fn from_viewer_geometry(
                         RenderTextLayoutDispositionV1::BackendFallback { .. } => {
                             text_layout_partial = true;
                         }
+                    },
+                    None => {
+                        text_layout_partial = true;
                     }
                 }
             }
