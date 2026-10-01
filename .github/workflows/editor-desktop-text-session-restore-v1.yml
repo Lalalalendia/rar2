@@ -90,3 +90,6 @@ jobs:
 
       - name: Prove canvas Edit Text through real widgets
         run: cargo test -p chaptera-desktop gui_direct_text_session_edits_real_story_without_inspector_apply -- --ignored --nocapture
+
+      - name: Prove Shift-click multi-selection through real pointer events
+        run: cargo test -p chaptera-desktop real_gui_shift_pointer_toggles_two_scene_instances_without_editor_operations --features embedded-fixture-tests -- --ignored --nocapture
