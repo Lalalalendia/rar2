@@ -3406,6 +3406,13 @@ enum PaintScalarLayer {
     Unresolved,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PaintLineVisibilityLayer {
+    Absent,
+    Value(PubEffectivePaintValue<bool>),
+    Unresolved,
+}
+
 fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
     shape
         .fopts
@@ -3440,8 +3447,11 @@ fn explicit_officeart_paint(
         .and_then(|value| bounded_officeart_rgb(value, color_scheme));
     let line_width = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
         .and_then(|value| (value <= 0x0132_F540).then_some(i64::from(value)));
-    let line_visible = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_BOOLEANS)
-        .and_then(|value| (value & LINE_USE_LINE_BIT != 0).then_some(value & LINE_LINE_BIT != 0));
+    let line_visible =
+        match line_visibility_from_records(&shape.fopts, PubEffectivePaintAuthority::ShapeLocal) {
+            PaintLineVisibilityLayer::Value(value) => Some(value.value),
+            PaintLineVisibilityLayer::Absent | PaintLineVisibilityLayer::Unresolved => None,
+        };
 
     PubExplicitShapePaintSource {
         fill: PubExplicitFillSource {
@@ -3525,14 +3535,7 @@ pub fn resolve_bounded_effective_officeart_paint(
     )
     .and_then(|value| (value.value <= 0x0132_F540).then(|| value.map(i64::from)));
 
-    let line_visible = resolve_effective_officeart_boolean(
-        shape,
-        dgg_defaults,
-        OFFICE_ART_LINE_BOOLEANS,
-        LINE_USE_LINE_BIT,
-        LINE_LINE_BIT,
-        true,
-    );
+    let line_visible = resolve_effective_officeart_line_visibility(shape, dgg_defaults);
 
     Some(PubEffectiveShapePaintSource {
         fill: PubEffectiveFillSource {
@@ -3664,6 +3667,72 @@ fn resolve_effective_officeart_boolean(
         authority: PubEffectivePaintAuthority::NormativeDefault,
         source: None,
     })
+}
+
+fn resolve_effective_officeart_line_visibility(
+    shape: &pub_escher::SpContainerObservation,
+    dgg_defaults: Option<&pub_escher::DggDefaultOptionsObservation>,
+) -> Option<PubEffectivePaintValue<bool>> {
+    let mut layers = vec![line_visibility_from_records(
+        &shape.fopts,
+        PubEffectivePaintAuthority::ShapeLocal,
+    )];
+    if let Some(dgg) = dgg_defaults {
+        layers.push(line_visibility_from_records(
+            &dgg.primary_options,
+            PubEffectivePaintAuthority::DrawingGroupPrimary,
+        ));
+        layers.push(line_visibility_from_records(
+            &dgg.tertiary_options,
+            PubEffectivePaintAuthority::DrawingGroupTertiary,
+        ));
+    }
+
+    for layer in layers {
+        match layer {
+            PaintLineVisibilityLayer::Absent => {}
+            PaintLineVisibilityLayer::Unresolved => return None,
+            PaintLineVisibilityLayer::Value(value) => return Some(value),
+        }
+    }
+
+    Some(PubEffectivePaintValue {
+        value: true,
+        authority: PubEffectivePaintAuthority::NormativeDefault,
+        source: None,
+    })
+}
+
+fn line_visibility_from_records(
+    records: &[pub_escher::FoptObservation],
+    authority: PubEffectivePaintAuthority,
+) -> PaintLineVisibilityLayer {
+    let mut candidates = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICE_ART_LINE_BOOLEANS);
+
+    let mut resolved = None;
+    for property in candidates.by_ref() {
+        if property.f_bid() || property.f_complex() {
+            return PaintLineVisibilityLayer::Unresolved;
+        }
+        if property.op & LINE_USE_LINE_BIT == 0 {
+            continue;
+        }
+        if resolved.is_some() {
+            return PaintLineVisibilityLayer::Unresolved;
+        }
+        resolved = Some(PubEffectivePaintValue {
+            value: property.op & LINE_LINE_BIT != 0,
+            authority,
+            source: Some(property.source.clone()),
+        });
+    }
+
+    resolved
+        .map(PaintLineVisibilityLayer::Value)
+        .unwrap_or(PaintLineVisibilityLayer::Absent)
 }
 
 fn paint_scalar_from_records(
@@ -4742,6 +4811,83 @@ mod tests {
         assert_eq!(line_width.value, 30_000);
         assert_eq!(line_width.authority, PubEffectivePaintAuthority::ShapeLocal);
         assert!(paint.line.visible.unwrap().value);
+    }
+
+    #[test]
+    fn split_shape_line_boolean_records_resolve_only_the_fline_subfield() {
+        let mut visible = crop_test_shape(Vec::new());
+        visible.fopts = vec![
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_FOPT,
+                source: crop_test_span(10, 8),
+                properties: vec![crop_test_property(
+                    OFFICE_ART_LINE_BOOLEANS,
+                    LINE_USE_LINE_BIT | LINE_LINE_BIT,
+                )],
+            },
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+                source: crop_test_span(20, 8),
+                properties: vec![crop_test_property(OFFICE_ART_LINE_BOOLEANS, 0x0060_0020)],
+            },
+        ];
+
+        let explicit = explicit_officeart_paint(&visible, None);
+        assert_eq!(explicit.line.visible, Some(true));
+        let effective = resolve_bounded_effective_officeart_paint(&visible, None, None, true)
+            .expect("bounded 2-D paint");
+        let line = effective.line.visible.expect("shape-local line visibility");
+        assert!(line.value);
+        assert_eq!(line.authority, PubEffectivePaintAuthority::ShapeLocal);
+
+        let mut hidden = visible.clone();
+        hidden.fopts[0].properties[0] =
+            crop_test_property(OFFICE_ART_LINE_BOOLEANS, LINE_USE_LINE_BIT);
+        hidden.fopts[1].properties[0] = crop_test_property(OFFICE_ART_LINE_BOOLEANS, 0x0040_0000);
+        assert_eq!(
+            explicit_officeart_paint(&hidden, None).line.visible,
+            Some(false)
+        );
+        assert!(
+            !resolve_bounded_effective_officeart_paint(&hidden, None, None, true)
+                .expect("bounded 2-D paint")
+                .line
+                .visible
+                .expect("shape-local hidden line")
+                .value
+        );
+    }
+
+    #[test]
+    fn conflicting_fline_use_records_remain_fail_closed() {
+        let mut shape = crop_test_shape(Vec::new());
+        shape.fopts = vec![
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_FOPT,
+                source: crop_test_span(10, 8),
+                properties: vec![crop_test_property(
+                    OFFICE_ART_LINE_BOOLEANS,
+                    LINE_USE_LINE_BIT | LINE_LINE_BIT,
+                )],
+            },
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+                source: crop_test_span(20, 8),
+                properties: vec![crop_test_property(
+                    OFFICE_ART_LINE_BOOLEANS,
+                    LINE_USE_LINE_BIT,
+                )],
+            },
+        ];
+
+        assert_eq!(explicit_officeart_paint(&shape, None).line.visible, None);
+        assert_eq!(
+            resolve_bounded_effective_officeart_paint(&shape, None, None, true)
+                .expect("bounded 2-D paint")
+                .line
+                .visible,
+            None
+        );
     }
 
     #[test]
