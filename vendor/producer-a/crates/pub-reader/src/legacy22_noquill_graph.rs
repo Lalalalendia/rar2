@@ -804,6 +804,7 @@ fn build_legacy_table_projection(
             utf16_start,
             utf16_end,
             bounds: Some(cell_bounds),
+            paint: None,
             source_refs: vec![
                 source_ref(
                     &graph.source,
