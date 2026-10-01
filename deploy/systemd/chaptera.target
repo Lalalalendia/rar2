@@ -1,0 +1,8 @@
+[Unit]
+Description=Chaptera Cloud application target
+Requires=chaptera-web.service chaptera-worker.service
+After=network-online.target
+Wants=network-online.target
+
+[Install]
+WantedBy=multi-user.target
