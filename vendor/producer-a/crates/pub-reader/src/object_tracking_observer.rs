@@ -101,14 +101,19 @@ pub fn observe_object_tracking_wrap_state(
         let chunk = parse_confirmed_0x2c_chunk(stream.clone(), &contents, *offset)
             .with_context(|| format!("parse ObjectTracking chunk seq {seq_num}"))?;
 
-        let roots = parse_field_nodes(&contents, &chunk.fields)?;
-        collect_matching_entries(
+        if let Some(entry) = find_target_entry_by_oh_track_marker(
             &contents,
-            u32::try_from(seq_num).context("ObjectTracking seq does not fit u32")?,
+            &chunk.source,
             target_oh_track,
-            &roots,
-            &mut observations,
-        )?;
+        )? {
+            let observation = observe_target_entry(
+                &contents,
+                u32::try_from(seq_num).context("ObjectTracking seq does not fit u32")?,
+                target_oh_track,
+                &entry,
+            )?;
+            observations.push(observation);
+        }
     }
 
     Ok(PubObjectTrackingWrapObserver {
@@ -120,34 +125,7 @@ pub fn observe_object_tracking_wrap_state(
     })
 }
 
-fn parse_field_nodes(contents: &[u8], fields: &[RawContentsBlock]) -> Result<Vec<FieldNode>> {
-    fields
-        .iter()
-        .cloned()
-        .map(|field| {
-            let children = nested_children(contents, &field)?;
-            Ok(FieldNode { field, children })
-        })
-        .collect()
-}
-
-fn nested_children(contents: &[u8], field: &RawContentsBlock) -> Result<Vec<FieldNode>> {
-    if !is_recursive_observer_wire(field.block_type) {
-        return Ok(Vec::new());
-    }
-    match &field.body {
-        RawContentsBlockBody::Container { content_source, .. } => {
-            parse_container_children(contents, content_source)
-        }
-        _ => Ok(Vec::new()),
-    }
-}
-
-fn is_recursive_observer_wire(block_type: u8) -> bool {
-    matches!(block_type, 0x88 | 0x90 | 0xA0)
-}
-
-fn parse_container_children(contents: &[u8], source: &RawSpan) -> Result<Vec<FieldNode>> {
+fn parse_container_prefix(contents: &[u8], source: &RawSpan) -> Result<Vec<FieldNode>> {
     let start = usize::try_from(source.offset).context("container offset does not fit usize")?;
     let len = usize::try_from(source.len).context("container length does not fit usize")?;
     let mut cursor = ContentsCursor::bounded(source.stream.clone(), contents, start, len)
@@ -155,12 +133,153 @@ fn parse_container_children(contents: &[u8], source: &RawSpan) -> Result<Vec<Fie
     let mut fields = Vec::new();
     while cursor.remaining() > 0 {
         let offset = cursor.position();
-        let field = parse_observer_block(&mut cursor)
-            .with_context(|| format!("parse nested Contents field at {offset}"))?;
-        let children = nested_children(contents, &field)?;
-        fields.push(FieldNode { field, children });
+        match parse_observer_block(&mut cursor) {
+            Ok(field) => fields.push(FieldNode {
+                field,
+                children: Vec::new(),
+            }),
+            Err(_) => {
+                // Research-only prefix behavior: once the current payload stops
+                // looking like a field sequence, keep the already-framed prefix
+                // and leave the remainder opaque. Target admission below requires
+                // all named fields it needs to occur inside this framed prefix.
+                let _ = offset;
+                break;
+            }
+        }
     }
     Ok(fields)
+}
+
+fn find_target_entry_by_oh_track_marker(
+    contents: &[u8],
+    chunk_source: &RawSpan,
+    target_oh_track: u32,
+) -> Result<Option<FieldNode>> {
+    let chunk_start =
+        usize::try_from(chunk_source.offset).context("ObjectTracking chunk offset too large")?;
+    let chunk_len =
+        usize::try_from(chunk_source.len).context("ObjectTracking chunk length too large")?;
+    let chunk_end = chunk_start
+        .checked_add(chunk_len)
+        .filter(|end| *end <= contents.len())
+        .context("ObjectTracking chunk source is out of bounds")?;
+    let scan_start = chunk_start.saturating_add(4);
+    let target = target_oh_track.to_le_bytes();
+    let marker = [0x01_u8, 0x68_u8, target[0], target[1], target[2], target[3]];
+
+    let mut hits = Vec::new();
+    if scan_start + marker.len() <= chunk_end {
+        for offset in scan_start..=chunk_end - marker.len() {
+            if contents[offset..offset + marker.len()] == marker {
+                hits.push(offset);
+            }
+        }
+    }
+
+    let mut matches = Vec::new();
+    for hit in hits {
+        for start in scan_start..=hit {
+            if start + 6 > chunk_end {
+                break;
+            }
+            let raw_tag = [contents[start], contents[start + 1]];
+            let (_, block_type) = decode_packed_field_tag(raw_tag);
+            if block_type < 0x80 {
+                continue;
+            }
+            let declared_length = u32::from_le_bytes([
+                contents[start + 2],
+                contents[start + 3],
+                contents[start + 4],
+                contents[start + 5],
+            ]);
+            if declared_length < 4 {
+                continue;
+            }
+            let Ok(declared_usize) = usize::try_from(declared_length) else {
+                continue;
+            };
+            let Some(end) = start
+                .checked_add(2)
+                .and_then(|value| value.checked_add(declared_usize))
+            else {
+                continue;
+            };
+            if end > chunk_end || start + 6 > hit || hit + marker.len() > end {
+                continue;
+            }
+
+            let content_source = RawSpan {
+                stream: chunk_source.stream.clone(),
+                offset: (start + 6) as u64,
+                len: (end - (start + 6)) as u64,
+            };
+            let children = parse_container_prefix(contents, &content_source)?;
+            let direct_hit = children.iter().any(|node| {
+                node.field.tag_source.offset == hit as u64
+                    && node.field.id == 0x01
+                    && scalar(&node.field).is_some_and(|value| value.value == target_oh_track)
+            });
+            if !direct_hit {
+                continue;
+            }
+
+            let tag_source = RawSpan {
+                stream: chunk_source.stream.clone(),
+                offset: start as u64,
+                len: 2,
+            };
+            let length_source = RawSpan {
+                stream: chunk_source.stream.clone(),
+                offset: (start + 2) as u64,
+                len: 4,
+            };
+            let source = RawSpan {
+                stream: chunk_source.stream.clone(),
+                offset: start as u64,
+                len: (end - start) as u64,
+            };
+            matches.push(FieldNode {
+                field: RawContentsBlock {
+                    id: decode_packed_field_tag(raw_tag).0,
+                    block_type,
+                    raw_tag,
+                    tag_source,
+                    source,
+                    body: RawContentsBlockBody::Container {
+                        declared_length,
+                        length_source,
+                        content_source,
+                    },
+                },
+                children,
+            });
+        }
+    }
+
+    matches.sort_by_key(|node| node.field.source.len);
+    matches.dedup_by_key(|node| node.field.source.offset);
+
+    match matches.as_slice() {
+        [] => Ok(None),
+        [only] => Ok(Some(only.clone())),
+        many => {
+            let min_len = many[0].field.source.len;
+            let smallest = many
+                .iter()
+                .filter(|node| node.field.source.len == min_len)
+                .collect::<Vec<_>>();
+            if smallest.len() == 1 {
+                Ok(Some((*smallest[0]).clone()))
+            } else {
+                bail!(
+                    "OhTrack={target_oh_track} marker has {} equally-small direct parent candidates",
+                    smallest.len()
+                )
+            }
+        }
+    }
 }
 
 /// Research-only fallback for the exact Publisher11 tracking oracle.
@@ -168,10 +287,8 @@ fn parse_container_children(contents: &[u8], source: &RawSpan) -> Result<Vec<Fie
 /// The paired Publisher11 hidden-XML/binary oracle proved that observed
 /// variable wire classes >= 0x80 use the same bounded framing:
 /// two-byte packed tag + little-endian u32 declared length, where the length
-/// includes its own four-byte word. The production foundation intentionally
-/// supports a narrower semantic set. Here we need only preserve framing while
-/// walking a SHA-pinned rev19 fixture. Only known structural container wires
-/// are recursed into; opaque variable payloads such as 0xC0 are skipped.
+/// includes its own four-byte word. This fallback only establishes framing;
+/// semantic payload opening remains owner/member path specific.
 fn parse_observer_block(cursor: &mut ContentsCursor<'_>) -> Result<RawContentsBlock> {
     match parse_confirmed_block(cursor) {
         Ok(block) => Ok(block),
@@ -231,6 +348,23 @@ fn parse_bounded_variable_block(
     })
 }
 
+fn explicit_container_children(
+    contents: &[u8],
+    node: &FieldNode,
+    semantic_path: &str,
+) -> Result<Vec<FieldNode>> {
+    match &node.field.body {
+        RawContentsBlockBody::Container { content_source, .. } => {
+            let children = parse_container_prefix(contents, content_source)?;
+            if children.is_empty() && content_source.len != 0 {
+                bail!("{semantic_path} did not expose a decodable field prefix");
+            }
+            Ok(children)
+        }
+        _ => bail!("{semantic_path} is not a bounded variable payload"),
+    }
+}
+
 fn explicit_typed_98_children(
     contents: &[u8],
     node: &FieldNode,
@@ -242,74 +376,51 @@ fn explicit_typed_98_children(
             node.field.block_type
         );
     }
-    match &node.field.body {
-        RawContentsBlockBody::Container { content_source, .. } => {
-            parse_container_children(contents, content_source)
-        }
-        _ => bail!("{semantic_path} wire 0x98 lacks bounded container framing"),
-    }
+    explicit_container_children(contents, node, semantic_path)
 }
 
-fn collect_matching_entries(
+fn observe_target_entry(
     contents: &[u8],
     tracking_seq_num: u32,
     target_oh_track: u32,
-    nodes: &[FieldNode],
-    output: &mut Vec<PubTrackingWrapObservation>,
-) -> Result<()> {
-    for node in nodes {
-        if direct_scalar(&node.children, 0x01).is_some_and(|value| value.value == target_oh_track) {
-            let last_fmt = unique_child(&node.children, 0x12);
-            let formatting = last_fmt.and_then(|value| unique_child(&value.children, 0x02));
-
-            let formatting_children = match formatting {
-                Some(value) => explicit_typed_98_children(
-                    contents,
-                    value,
-                    "OplLastFmt.PoFormatting",
-                )
-                .context("parse target OplLastFmt.PoFormatting payload")?,
-                None => Vec::new(),
-            };
-            let group_shape = unique_child(&formatting_children, 0x0E);
-            let ecp_recolor = unique_child(&formatting_children, 0x22);
-
-            let group_shape_children = match group_shape {
-                Some(value) => {
-                    explicit_typed_98_children(contents, value, "OplOdpo.GroupShape")
-                        .context("parse target OplOdpo.GroupShape payload")?
-                }
-                None => Vec::new(),
-            };
-            let ecp_recolor_children = match ecp_recolor {
-                Some(value) => {
-                    explicit_typed_98_children(contents, value, "OplOdpo.EcpRecolor")
-                        .context("parse target OplOdpo.EcpRecolor payload")?
-                }
-                None => Vec::new(),
-            };
-
-            output.push(PubTrackingWrapObservation {
-                tracking_seq_num,
-                target_oh_track,
-                entry_source: node.field.source.clone(),
-                resolved_shape_type: direct_scalar(&formatting_children, 0x01),
-                dx_wrap_dist_left: direct_scalar(&group_shape_children, 0x05),
-                dy_wrap_dist_top: direct_scalar(&group_shape_children, 0x06),
-                dx_wrap_dist_right: direct_scalar(&group_shape_children, 0x07),
-                dy_wrap_dist_bottom: direct_scalar(&group_shape_children, 0x08),
-                ecp_recolor_scalars: direct_scalars(&ecp_recolor_children),
-            });
-        }
-        collect_matching_entries(
-            contents,
-            tracking_seq_num,
-            target_oh_track,
-            &node.children,
-            output,
-        )?;
+    entry: &FieldNode,
+) -> Result<PubTrackingWrapObservation> {
+    if !direct_scalar(&entry.children, 0x01)
+        .is_some_and(|value| value.value == target_oh_track)
+    {
+        bail!("selected ObjectTracking entry does not carry OhTrack={target_oh_track}");
     }
-    Ok(())
+
+    let last_fmt = unique_child(&entry.children, 0x12)
+        .context("target OplOt lacks unique OplLastFmt field0x12")?;
+    let last_fmt_children =
+        explicit_container_children(contents, last_fmt, "OplOt.OplLastFmt")?;
+    let formatting = unique_child(&last_fmt_children, 0x02)
+        .context("target OplLastFmt lacks unique PoFormatting field0x02")?;
+    let formatting_children =
+        explicit_typed_98_children(contents, formatting, "OplLastFmt.PoFormatting")?;
+
+    let group_shape = unique_child(&formatting_children, 0x0E)
+        .context("target PoFormatting lacks unique GroupShape field0x0E")?;
+    let ecp_recolor = unique_child(&formatting_children, 0x22)
+        .context("target PoFormatting lacks unique EcpRecolor field0x22")?;
+
+    let group_shape_children =
+        explicit_typed_98_children(contents, group_shape, "OplOdpo.GroupShape")?;
+    let ecp_recolor_children =
+        explicit_typed_98_children(contents, ecp_recolor, "OplOdpo.EcpRecolor")?;
+
+    Ok(PubTrackingWrapObservation {
+        tracking_seq_num,
+        target_oh_track,
+        entry_source: entry.field.source.clone(),
+        resolved_shape_type: direct_scalar(&formatting_children, 0x01),
+        dx_wrap_dist_left: direct_scalar(&group_shape_children, 0x05),
+        dy_wrap_dist_top: direct_scalar(&group_shape_children, 0x06),
+        dx_wrap_dist_right: direct_scalar(&group_shape_children, 0x07),
+        dy_wrap_dist_bottom: direct_scalar(&group_shape_children, 0x08),
+        ecp_recolor_scalars: direct_scalars(&ecp_recolor_children),
+    })
 }
 
 fn unique_child(nodes: &[FieldNode], id: u16) -> Option<&FieldNode> {
@@ -358,7 +469,7 @@ fn scalar(field: &RawContentsBlock) -> Option<PubTrackingScalar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pub_contents::{BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32};
+    use pub_contents::{BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32};
 
     #[test]
     fn observer_skips_opaque_c0_with_proven_variable_framing() {
@@ -436,15 +547,11 @@ mod tests {
     }
 
     #[test]
-    fn extracts_exact_named_wrap_and_recolor_path_from_matching_oh_track_entry() {
-        // OplOt entry (0x88)
-        //   OhTrack field0x01/0x68 = 294
-        //   OplLastFmt field0x12/0x88
-        //     PoFormatting field0x02/0x98
-        //       shape type field0x01/0x20 = 1
-        //       GroupShape field0x0E/0x98 -> wrap 0x05..0x08
-        //       EcpRecolor field0x22/0x98 -> Color field0x01/0x20
-        let bytes = [
+    fn marker_guided_observer_ignores_unrelated_bad_branch_and_extracts_target_path() {
+        // A fake unrelated 0x88 payload contains bytes that are not a valid field
+        // sequence. The target OplOt entry follows it in the same chunk.
+        let payload = [
+            0x09, 0x88, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x02, 0x88, 0x46, 0x00, 0x00, 0x00,
             0x01, BLOCK_TYPE_REFERENCE_U32, 0x26, 0x01, 0x00, 0x00,
             0x12, 0x88, 0x3A, 0x00, 0x00, 0x00,
@@ -458,52 +565,39 @@ mod tests {
             0x22, BLOCK_TYPE_TYPED_CONTAINER_98, 0x0A, 0x00, 0x00, 0x00,
             0x01, BLOCK_TYPE_U32, 0x03, 0x00, 0x00, 0x08,
         ];
-        let source = RawSpan {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&((payload.len() + 4) as u32).to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        let chunk_source = RawSpan {
             stream: StreamPath("/Contents".into()),
             offset: 0,
             len: bytes.len() as u64,
         };
-        let roots = parse_container_children(&bytes, &source).expect("tracking entry must frame");
 
-        let mut observations = Vec::new();
-        collect_matching_entries(&bytes, 290, 294, &roots, &mut observations)
+        let entry = find_target_entry_by_oh_track_marker(&bytes, &chunk_source, 294)
+            .expect("marker search must succeed")
+            .expect("target entry must exist");
+        let observation = observe_target_entry(&bytes, 290, 294, &entry)
             .expect("schema-guided target path must parse");
 
-        assert_eq!(observations.len(), 1);
-        let observation = &observations[0];
         assert_eq!(
-            observation
-                .dx_wrap_dist_left
-                .as_ref()
-                .map(|value| value.value),
+            observation.dx_wrap_dist_left.as_ref().map(|value| value.value),
             Some(111)
         );
         assert_eq!(
-            observation
-                .dy_wrap_dist_top
-                .as_ref()
-                .map(|value| value.value),
+            observation.dy_wrap_dist_top.as_ref().map(|value| value.value),
             Some(222)
         );
         assert_eq!(
-            observation
-                .dx_wrap_dist_right
-                .as_ref()
-                .map(|value| value.value),
+            observation.dx_wrap_dist_right.as_ref().map(|value| value.value),
             Some(333)
         );
         assert_eq!(
-            observation
-                .dy_wrap_dist_bottom
-                .as_ref()
-                .map(|value| value.value),
+            observation.dy_wrap_dist_bottom.as_ref().map(|value| value.value),
             Some(444)
         );
         assert_eq!(
-            observation
-                .resolved_shape_type
-                .as_ref()
-                .map(|value| value.value),
+            observation.resolved_shape_type.as_ref().map(|value| value.value),
             Some(1)
         );
         assert_eq!(
@@ -515,4 +609,5 @@ mod tests {
             vec![0x08000003]
         );
     }
+
 }
