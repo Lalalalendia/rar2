@@ -273,6 +273,45 @@ if (-not $beforeAfterEqual -or -not $beforeReopenEqual) {
     throw "No-semantic-edit one-save changed the bounded COM page/shape identity inventory."
 }
 
+$nativeCheckpoint = [ordered]@{
+    schema = "chaptera.modern-base-pin-native-checkpoint.v1"
+    experiment_id = $ExpectedExperiment
+    publisher = $publisherIdentity
+    seed = [ordered]@{
+        sha256 = [string]$seed.sha256
+        size = [long]$seed.size
+    }
+    working_copy = [ordered]@{
+        pre_save_sha256 = [string]$preSave.sha256
+        post_save_sha256 = [string]$postSave.sha256
+        post_save_size = [long]$postSave.size
+    }
+    lifecycle = [ordered]@{
+        save_count = 1
+        save_operation = "Document.Save"
+        fresh_read_only_reopen = $true
+        bounded_inventory_equal_after_save = [bool]$beforeAfterEqual
+        bounded_inventory_equal_after_reopen = [bool]$beforeReopenEqual
+    }
+    inventories = [ordered]@{
+        before_save = $beforeInventory
+        after_save = $afterSaveInventory
+        after_fresh_reopen = $reopenInventory
+    }
+}
+Write-PubJson -Value $nativeCheckpoint -Path (Join-Path $privateDir "native-stage.json")
+
+@(
+    "experiment=$ExpectedExperiment",
+    "publisher_version=$($publisherIdentity.version)",
+    "publisher_build=$($publisherIdentity.build)",
+    "pre_save_sha256=$($preSave.sha256)",
+    "post_save_sha256=$($postSave.sha256)",
+    "post_save_size=$($postSave.size)",
+    "inventory_equal_after_save=$beforeAfterEqual",
+    "inventory_equal_after_reopen=$beforeReopenEqual"
+) | Set-Content -LiteralPath (Join-Path $logDir "modern-base-pin-01-native-stage.txt") -Encoding ASCII
+
 $privateReceipt = Join-Path $privateDir "structural-base.json"
 $structural = Invoke-StructuralBase -Tool $toolInfo.path -Source $working -Output $privateReceipt
 
@@ -350,6 +389,7 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "modern-base-pin-01.j
     "candidate_count=$($result.structural_base.candidate_count)",
     "selected_contents_seq=$($result.structural_base.selected_target.contents_seq_num)",
     "selected_officeart_spid=$($result.structural_base.selected_target.officeart_spid)",
+    "selected_publisher_shape_id=$($result.structural_base.selected_target.publisher_shape_id)",
     "contents_width_emu=$($result.structural_base.selected_target.contents_width_emu)",
     "contents_height_emu=$($result.structural_base.selected_target.contents_height_emu)",
     "anchor_width_emu=$($result.structural_base.selected_target.anchor_width_emu)",
