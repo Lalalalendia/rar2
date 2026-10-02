@@ -147,6 +147,16 @@ jobs:
             cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
           fi
 
+      - name: Measure exact Virginia restored-fill stack participation
+        env:
+          CHAPTERA_VIRGINIA_RESTORED_FILL_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_RESTORED_FILL_SHA256: 88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506
+          CHAPTERA_VIRGINIA_RESTORED_FILL_OUT: ${{ github.workspace }}/target/cloud-reader-reference-pairs/virginia-remplacante-restored-fill-stack.json
+        run: |
+          set -euo pipefail
+          test -f "$CHAPTERA_VIRGINIA_RESTORED_FILL_FIXTURE"
+          cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test restored_fill_stack_probe -- --ignored --nocapture
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
