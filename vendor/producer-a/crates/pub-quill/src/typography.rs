@@ -74,7 +74,6 @@ pub struct QuillTypographyRange {
     pub script_fonts: Vec<QuillScriptFontEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_sizes_emu: Vec<u32>,
-    color_indices: Vec::new(),
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub color_indices: Vec<u32>,
     pub story_intersections: Vec<QuillTypographyStoryIntersection>,
