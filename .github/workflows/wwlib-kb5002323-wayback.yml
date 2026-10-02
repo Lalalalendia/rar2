@@ -1,0 +1,33 @@
+name: WWLIB KB5002323 Wayback Symbol Probe
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Query Wayback CDX for exact symbol identity
+        run: |
+          mkdir -p out
+          python research/wayback_exact_symbol_probe.py out/wayback.json
+      - name: Publish result
+        if: always()
+        run: |
+          cat out/wayback.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wwlib-kb5002323-wayback-${{ github.run_id }}
+          path: out/wayback.json
+          if-no-files-found: error
+          retention-days: 30
