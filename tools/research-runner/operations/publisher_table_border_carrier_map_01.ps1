@@ -612,11 +612,15 @@ foreach ($arm in $weightArms) {
     if (-not [bool]$arm.requested_weight_persisted -or -not [bool]$arm.color_unchanged) {
         $weightCausal = $false
     }
-    $rawDeltaCount =
-        [int]$arm.raw.changed_carrier_count +
-        [int]$arm.raw.removed_carrier_count +
-        [int]$arm.raw.added_carrier_count
-    if ($rawDeltaCount -ne 1 -or [int]$arm.raw.ambiguous_changed_group_count -ne 0) {
+    $changedCount = [int]$arm.raw.changed_carrier_count
+    $removedCount = [int]$arm.raw.removed_carrier_count
+    $addedCount = [int]$arm.raw.added_carrier_count
+    $oneStableCarrierChanged = $changedCount -eq 1 -and $removedCount -eq 0 -and $addedCount -eq 0
+    $oneCarrierRekeyed = $changedCount -eq 0 -and $removedCount -eq 1 -and $addedCount -eq 1
+    if (
+        (-not $oneStableCarrierChanged -and -not $oneCarrierRekeyed) -or
+        [int]$arm.raw.ambiguous_changed_group_count -ne 0
+    ) {
         $weightRawLocalized = $false
     }
 }
