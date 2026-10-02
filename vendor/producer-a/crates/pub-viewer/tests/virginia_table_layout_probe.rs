@@ -65,6 +65,18 @@ fn layout_reason_class(reason: &str) -> &'static str {
         "track_extent_exceeds_owner"
     } else if reason.contains("cell coordinates") {
         "cell_coordinates_unavailable"
+    } else if reason.contains("RecordIdNotFound") {
+        "mcld_record_id_not_found"
+    } else if reason.contains("UnexpectedChildCount") {
+        "mcld_unexpected_child_count"
+    } else if reason.contains("MissingRequiredField") {
+        "mcld_required_field_missing"
+    } else if reason.contains("DuplicateRequiredField") {
+        "mcld_required_field_duplicate"
+    } else if reason.contains("RequiredFieldWrongType") {
+        "mcld_required_field_wrong_type"
+    } else if reason.contains("NonUniformRequiredField") {
+        "mcld_required_field_nonuniform"
     } else if reason.contains("MCLD") || reason.contains("mcld") {
         "mcld_metrics_rejected"
     } else if reason.contains("row/column track geometry unavailable") {
