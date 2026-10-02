@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/table_style_probe.rs"
       - "vendor/producer-a/crates/pub-viewer/tests/virginia_table_layout_probe.rs"
       - "vendor/producer-a/crates/pub-viewer/tests/virginia_table_mcld_style_probe.rs"
       - "apps/chaptera-server/tests/virginia_table_layout_probe.rs"
