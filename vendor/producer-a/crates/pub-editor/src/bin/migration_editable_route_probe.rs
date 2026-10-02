@@ -1,6 +1,4 @@
-use pub_editor::{
-    EditorEditableTarget, EditorSession, Sha256Digest, open_mature_0x2c_editor,
-};
+use pub_editor::{EditorEditableTarget, EditorSession, Sha256Digest, open_mature_0x2c_editor};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -90,10 +88,9 @@ fn probe_target(
 
 fn parse_args() -> Result<(PathBuf, String, Option<PathBuf>), Box<dyn Error>> {
     let mut args = env::args().skip(1);
-    let input = PathBuf::from(
-        args.next()
-            .ok_or("usage: migration_editable_route_probe INPUT [--label LABEL] [--materialize-dir DIR]")?,
-    );
+    let input = PathBuf::from(args.next().ok_or(
+        "usage: migration_editable_route_probe INPUT [--label LABEL] [--materialize-dir DIR]",
+    )?);
     let mut label = input
         .file_name()
         .and_then(|name| name.to_str())
