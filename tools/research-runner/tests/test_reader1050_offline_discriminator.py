@@ -115,8 +115,8 @@ class Reader1050OfflineDiscriminatorTests(unittest.TestCase):
                         "source_main_sha": "deadbeef",
                         "selected": {
                             "source_sha256": selected_sha,
-                            "existing_owner": {
-                                "kind": "format_gap",
+                            "known_evidence": {
+                                "kind": "format_owner",
                                 "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
                                 "route": "existing_format_owner",
                             },
@@ -142,6 +142,62 @@ class Reader1050OfflineDiscriminatorTests(unittest.TestCase):
                 payload["next_discriminator"]["owner"],
                 "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
             )
+
+    def test_existing_typed_corruption_authority_binds_before_forced_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            selected_sha = "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"
+            control_sha = "0c74bed1b862f4603a77567f817ad22bf1f7c42eb5afbee0c907732953534b5c"
+            reader, frontier = self.make_inputs(root, selected_sha, control_sha)
+            frontier.write_text(
+                json.dumps(
+                    {
+                        "schema": "chaptera.reader1050-hosted-frontier.v1",
+                        "source_reader_run_id": "123",
+                        "source_main_sha": "deadbeef",
+                        "selected": {
+                            "source_sha256": selected_sha,
+                            "known_evidence": {
+                                "kind": "typed_corruption_evidence",
+                                "owner": "CORPUS-LINEAGE-OPNHOUS-GRAPH-01",
+                                "route": "existing_typed_corruption_evidence",
+                                "corruption_evidence": "publisher97_malformed_or_stale_media_variant",
+                                "authority": {
+                                    "control_sha256": control_sha,
+                                    "task_ids": ["PUB-T-649", "PUB-T-650"],
+                                    "evidence_boundary": "source-free",
+                                },
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            out = root / "out"
+            payload = discriminator.build_discriminator(
+                reader,
+                frontier,
+                out,
+                None,
+                discriminator_run_id="456",
+            )
+            self.assertEqual(payload["status"], "existing_evidence_binding")
+            self.assertEqual(payload["decision"], "bind_existing_typed_corruption_evidence")
+            self.assertEqual(payload["verdict"], "typed_corruption_authority_available")
+            self.assertEqual(
+                payload["next_discriminator"]["kind"],
+                "validate_existing_evidence_binding",
+            )
+            proposed = json.loads(
+                (out / "ledger-entry.proposed.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(proposed["discriminator_run_id"], "456")
+            self.assertEqual(
+                proposed["discriminator_kind"],
+                "existing_typed_corruption_evidence_binding",
+            )
+            self.assertEqual(proposed["status"], "executed")
 
     def test_forced_trigger_same_witness_wins_before_control_search(self) -> None:
         with tempfile.TemporaryDirectory() as td:
