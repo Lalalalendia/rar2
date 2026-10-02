@@ -34,6 +34,14 @@ const GROUP_USE_HIDDEN_BIT: u32 = 1 << 17;
 const GROUP_HIDDEN_BIT: u32 = 1 << 1;
 const GROUP_USE_PRINT_BIT: u32 = 1 << 16;
 const GROUP_PRINT_BIT: u32 = 1 << 0;
+const GEO_LEFT: u16 = 0x0140;
+const GEO_TOP: u16 = 0x0141;
+const GEO_RIGHT: u16 = 0x0142;
+const GEO_BOTTOM: u16 = 0x0143;
+const SHAPE_PATH: u16 = 0x0144;
+const P_VERTICES: u16 = 0x0145;
+const P_SEGMENT_INFO: u16 = 0x0146;
+const SHAPE_PATH_LINES_CLOSED: u32 = 0x0000_0001;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LegacyScalarLayer {
@@ -273,6 +281,93 @@ fn effective_fill_rect_geometry_profile(
     } else {
         "degenerate_or_nonpositive"
     }
+}
+
+fn complex_property_profile(records: &[FoptObservation], property_id: u16) -> &'static str {
+    let matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == property_id)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => "absent",
+        [property] if property.f_complex() => "single_complex",
+        [property] if !property.f_bid() && property.op == 0 => "empty_default",
+        [_] => "malformed_or_noncomplex",
+        _ => "duplicate",
+    }
+}
+
+fn geometry_layer_profile(records: &[FoptObservation]) -> &'static str {
+    let geo_profiles = [
+        scalar_property_profile(records, GEO_LEFT),
+        scalar_property_profile(records, GEO_TOP),
+        scalar_property_profile(records, GEO_RIGHT),
+        scalar_property_profile(records, GEO_BOTTOM),
+    ];
+    let shape_path = scalar_layer(records, SHAPE_PATH);
+    let vertices = complex_property_profile(records, P_VERTICES);
+    let segments = complex_property_profile(records, P_SEGMENT_INFO);
+
+    let unresolved = geo_profiles
+        .iter()
+        .any(|profile| matches!(*profile, "malformed_or_complex" | "duplicate_scalar"))
+        || matches!(shape_path, LegacyScalarLayer::Unresolved)
+        || matches!(
+            vertices,
+            "malformed_or_noncomplex" | "duplicate"
+        )
+        || matches!(
+            segments,
+            "malformed_or_noncomplex" | "duplicate"
+        );
+    if unresolved {
+        return "unresolved";
+    }
+
+    if vertices == "single_complex"
+        || segments == "single_complex"
+        || matches!(
+            shape_path,
+            LegacyScalarLayer::Value(value) if value != SHAPE_PATH_LINES_CLOSED
+        )
+    {
+        return "custom_path";
+    }
+
+    if geo_profiles.iter().any(|profile| *profile != "absent") {
+        return "explicit_rect_space";
+    }
+
+    if matches!(shape_path, LegacyScalarLayer::Value(_))
+        || vertices == "empty_default"
+        || segments == "empty_default"
+    {
+        return "default_rect";
+    }
+
+    "absent"
+}
+
+fn effective_geometry_profile(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+) -> String {
+    let local = geometry_layer_profile(&shape.fopts);
+    if local != "absent" {
+        return format!("shape_local:{local}");
+    }
+    if let Some(dgg) = dgg {
+        let primary = geometry_layer_profile(&dgg.primary_options);
+        if primary != "absent" {
+            return format!("drawing_group_primary:{primary}");
+        }
+        let tertiary = geometry_layer_profile(&dgg.tertiary_options);
+        if tertiary != "absent" {
+            return format!("drawing_group_tertiary:{tertiary}");
+        }
+    }
+    "normative_default:default_rect".to_owned()
 }
 
 fn legacy_fill_visibility(
@@ -558,6 +653,12 @@ struct PageReceipt {
     restored_effective_hidden_histogram: BTreeMap<String, usize>,
     restored_local_print_histogram: BTreeMap<String, usize>,
     restored_effective_print_histogram: BTreeMap<String, usize>,
+    restored_local_geometry_profile_histogram: BTreeMap<String, usize>,
+    restored_effective_geometry_profile_histogram: BTreeMap<String, usize>,
+    restored_local_geo_rect_profile_histogram: BTreeMap<String, usize>,
+    restored_local_shape_path_profile_histogram: BTreeMap<String, usize>,
+    restored_local_vertices_profile_histogram: BTreeMap<String, usize>,
+    restored_local_segment_info_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_rect_profile_histogram: BTreeMap<String, usize>,
     restored_effective_fill_rect_geometry_histogram: BTreeMap<String, usize>,
     restored_local_fill_opacity_profile_histogram: BTreeMap<String, usize>,
@@ -584,6 +685,11 @@ struct Receipt {
     dgg_primary_group_shape_profile: String,
     dgg_primary_hidden_profile: String,
     dgg_primary_print_profile: String,
+    dgg_primary_geometry_profile: String,
+    dgg_primary_geo_rect_profile: String,
+    dgg_primary_shape_path_profile: String,
+    dgg_primary_vertices_profile: String,
+    dgg_primary_segment_info_profile: String,
     dgg_primary_fill_opacity_profile: String,
     dgg_primary_fill_boolean_profile: String,
     dgg_tertiary_fill_type_profile: String,
@@ -594,6 +700,11 @@ struct Receipt {
     dgg_tertiary_group_shape_profile: String,
     dgg_tertiary_hidden_profile: String,
     dgg_tertiary_print_profile: String,
+    dgg_tertiary_geometry_profile: String,
+    dgg_tertiary_geo_rect_profile: String,
+    dgg_tertiary_shape_path_profile: String,
+    dgg_tertiary_vertices_profile: String,
+    dgg_tertiary_segment_info_profile: String,
     dgg_tertiary_fill_opacity_profile: String,
     dgg_tertiary_fill_boolean_profile: String,
     pages: Vec<PageReceipt>,
@@ -863,6 +974,53 @@ fn exact_virginia_restored_fill_stack_probe() {
                 ),
             );
             bump(
+                &mut page.restored_local_geometry_profile_histogram,
+                geometry_layer_profile(&shape.fopts),
+            );
+            bump(
+                &mut page.restored_effective_geometry_profile_histogram,
+                effective_geometry_profile(shape, dgg),
+            );
+            let local_geo_rect_profile = [
+                scalar_property_profile(&shape.fopts, GEO_LEFT),
+                scalar_property_profile(&shape.fopts, GEO_TOP),
+                scalar_property_profile(&shape.fopts, GEO_RIGHT),
+                scalar_property_profile(&shape.fopts, GEO_BOTTOM),
+            ];
+            let local_geo_rect_profile = if local_geo_rect_profile
+                .iter()
+                .all(|profile| *profile == "absent")
+            {
+                "absent"
+            } else if local_geo_rect_profile
+                .iter()
+                .all(|profile| *profile == "single_scalar")
+            {
+                "complete_scalars"
+            } else if local_geo_rect_profile.iter().any(|profile| {
+                matches!(*profile, "malformed_or_complex" | "duplicate_scalar")
+            }) {
+                "ambiguous"
+            } else {
+                "partial_scalars"
+            };
+            bump(
+                &mut page.restored_local_geo_rect_profile_histogram,
+                local_geo_rect_profile,
+            );
+            bump(
+                &mut page.restored_local_shape_path_profile_histogram,
+                scalar_property_profile(&shape.fopts, SHAPE_PATH),
+            );
+            bump(
+                &mut page.restored_local_vertices_profile_histogram,
+                complex_property_profile(&shape.fopts, P_VERTICES),
+            );
+            bump(
+                &mut page.restored_local_segment_info_profile_histogram,
+                complex_property_profile(&shape.fopts, P_SEGMENT_INFO),
+            );
+            bump(
                 &mut page.restored_local_fill_rect_profile_histogram,
                 fill_rect_presence_profile(&shape.fopts),
             );
@@ -1019,6 +1177,44 @@ fn exact_virginia_restored_fill_stack_probe() {
             })
             .unwrap_or("absent")
             .to_owned(),
+        dgg_primary_geometry_profile: dgg
+            .map(|group| geometry_layer_profile(&group.primary_options))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_geo_rect_profile: dgg
+            .map(|group| {
+                let profiles = [
+                    scalar_property_profile(&group.primary_options, GEO_LEFT),
+                    scalar_property_profile(&group.primary_options, GEO_TOP),
+                    scalar_property_profile(&group.primary_options, GEO_RIGHT),
+                    scalar_property_profile(&group.primary_options, GEO_BOTTOM),
+                ];
+                if profiles.iter().all(|profile| *profile == "absent") {
+                    "absent"
+                } else if profiles.iter().all(|profile| *profile == "single_scalar") {
+                    "complete_scalars"
+                } else if profiles.iter().any(|profile| {
+                    matches!(*profile, "malformed_or_complex" | "duplicate_scalar")
+                }) {
+                    "ambiguous"
+                } else {
+                    "partial_scalars"
+                }
+            })
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_shape_path_profile: dgg
+            .map(|group| scalar_property_profile(&group.primary_options, SHAPE_PATH))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_vertices_profile: dgg
+            .map(|group| complex_property_profile(&group.primary_options, P_VERTICES))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_segment_info_profile: dgg
+            .map(|group| complex_property_profile(&group.primary_options, P_SEGMENT_INFO))
+            .unwrap_or("absent")
+            .to_owned(),
         dgg_primary_fill_opacity_profile: dgg
             .map(|group| fill_opacity_profile(&group.primary_options))
             .unwrap_or_else(|| "absent".to_owned()),
@@ -1071,6 +1267,44 @@ fn exact_virginia_restored_fill_stack_probe() {
             })
             .unwrap_or("absent")
             .to_owned(),
+        dgg_tertiary_geometry_profile: dgg
+            .map(|group| geometry_layer_profile(&group.tertiary_options))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_geo_rect_profile: dgg
+            .map(|group| {
+                let profiles = [
+                    scalar_property_profile(&group.tertiary_options, GEO_LEFT),
+                    scalar_property_profile(&group.tertiary_options, GEO_TOP),
+                    scalar_property_profile(&group.tertiary_options, GEO_RIGHT),
+                    scalar_property_profile(&group.tertiary_options, GEO_BOTTOM),
+                ];
+                if profiles.iter().all(|profile| *profile == "absent") {
+                    "absent"
+                } else if profiles.iter().all(|profile| *profile == "single_scalar") {
+                    "complete_scalars"
+                } else if profiles.iter().any(|profile| {
+                    matches!(*profile, "malformed_or_complex" | "duplicate_scalar")
+                }) {
+                    "ambiguous"
+                } else {
+                    "partial_scalars"
+                }
+            })
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_shape_path_profile: dgg
+            .map(|group| scalar_property_profile(&group.tertiary_options, SHAPE_PATH))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_vertices_profile: dgg
+            .map(|group| complex_property_profile(&group.tertiary_options, P_VERTICES))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_segment_info_profile: dgg
+            .map(|group| complex_property_profile(&group.tertiary_options, P_SEGMENT_INFO))
+            .unwrap_or("absent")
+            .to_owned(),
         dgg_tertiary_fill_opacity_profile: dgg
             .map(|group| fill_opacity_profile(&group.tertiary_options))
             .unwrap_or_else(|| "absent".to_owned()),
@@ -1093,6 +1327,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-E COLORREF profiles emit only direct/scheme/other/ambiguous form classes plus effective-color distinct counts; no RGB or scheme ordinal is emitted.",
             "Stage-F fillUseRect profiles emit only participation authority, fillRect completeness, and positive/degenerate/unresolved geometry classes; no fillRect coordinates are emitted.",
             "Stage-G Group Shape Boolean profiles emit only documented hidden/print participation and effective authority classes; raw 0x03BF values are never emitted.",
+            "Stage-H Geometry profiles emit only scalar/complex presence classes and default-rect/explicit-rect-space/custom-path/unresolved buckets; no geometry coordinates, vertices, segments, or raw property values are emitted.",
         ],
     };
 
