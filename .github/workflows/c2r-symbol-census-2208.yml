@@ -1,0 +1,173 @@
+name: C2R Publisher Symbol Census 2208
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Acquire Office Deployment Tool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\odt | Out-Null
+          $url = "https://download.microsoft.com/download/6c1eeb25-cf8b-41d9-8d0d-cc1dbc032140/officedeploymenttool_20326-20112.exe"
+          curl.exe -L --fail --retry 3 -o out\odt\odt.exe $url
+          $sha = (Get-FileHash out\odt\odt.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $dest = (Resolve-Path out\odt).Path
+          $p = Start-Process -FilePath (Resolve-Path out\odt\odt.exe) -ArgumentList "/quiet","/extract:$dest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "ODT extract failed: $($p.ExitCode)" }
+          if (-not (Test-Path out\odt\setup.exe)) { throw "setup.exe missing" }
+          [ordered]@{
+            odt_url = $url
+            odt_sha256 = $sha
+            setup_version = (Get-Item out\odt\setup.exe).VersionInfo.FileVersion
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 out\odt-receipt.json
+
+      - name: Write exact 2208 configuration
+        shell: pwsh
+        run: |
+          $source = "$pwd\out\office"
+          New-Item -ItemType Directory -Force -Path $source | Out-Null
+          @"
+          <Configuration>
+            <Add SourcePath="$source" OfficeClientEdition="32" Channel="Current" Version="16.0.15601.20088">
+              <Product ID="O365ProPlusRetail">
+                <Language ID="en-us" />
+                <ExcludeApp ID="Access" />
+                <ExcludeApp ID="Excel" />
+                <ExcludeApp ID="Groove" />
+                <ExcludeApp ID="Lync" />
+                <ExcludeApp ID="OneDrive" />
+                <ExcludeApp ID="OneNote" />
+                <ExcludeApp ID="Outlook" />
+                <ExcludeApp ID="PowerPoint" />
+                <ExcludeApp ID="Teams" />
+                <ExcludeApp ID="Word" />
+              </Product>
+            </Add>
+            <Updates Enabled="FALSE" />
+            <Display Level="None" AcceptEULA="TRUE" />
+            <Property Name="AUTOACTIVATE" Value="0" />
+          </Configuration>
+          "@ | Set-Content -Encoding UTF8 out\publisher2208.xml
+
+      - name: Download exact Publisher-bearing Office 2208 payload
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = "Stop"
+          $started = Get-Date
+          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/download","$pwd\out\publisher2208.xml" -Wait -PassThru
+          $files = @(Get-ChildItem out\office -Recurse -File -ErrorAction SilentlyContinue)
+          [ordered]@{
+            requested_version = "16.0.15601.20088"
+            architecture = "x86"
+            channel = "Current"
+            product = "O365ProPlusRetail-minus-non-Publisher-apps"
+            exit_code = $p.ExitCode
+            elapsed_seconds = [int]((Get-Date)-$started).TotalSeconds
+            file_count = $files.Count
+            bytes = [int64](($files | Measure-Object Length -Sum).Sum)
+            names = @($files | ForEach-Object { $_.Name })
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 out\download-receipt.json
+          if ($p.ExitCode -ne 0 -or $files.Count -eq 0) { throw "ODT download failed" }
+
+      - name: Install exact 2208 payload
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = "Stop"
+          $started = Get-Date
+          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/configure","$pwd\out\publisher2208.xml" -Wait -PassThru
+          [ordered]@{
+            requested_version = "16.0.15601.20088"
+            exit_code = $p.ExitCode
+            elapsed_seconds = [int]((Get-Date)-$started).TotalSeconds
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 out\install-receipt.json
+          if ($p.ExitCode -ne 0) { throw "ODT configure failed: $($p.ExitCode)" }
+
+      - name: Collect exact Publisher modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\modules | Out-Null
+          $targets = @("MSPUB.EXE","MORPH9.DLL","PTXT9.DLL","PUBCONV.DLL")
+          $roots = @("C:\Program Files (x86)\Microsoft Office","C:\Program Files\Microsoft Office")
+          $rows = @()
+          foreach ($target in $targets) {
+            $matches = @()
+            foreach ($root in $roots) {
+              if (Test-Path $root) {
+                $matches += @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter $target -ErrorAction SilentlyContinue)
+              }
+            }
+            if ($matches.Count -eq 0) {
+              $rows += [pscustomobject]@{ module=$target; found=$false }
+              continue
+            }
+            $m = $matches | Sort-Object FullName | Select-Object -First 1
+            Copy-Item -LiteralPath $m.FullName -Destination (Join-Path out\modules $target) -Force
+            $rows += [pscustomobject]@{
+              module = $target
+              found = $true
+              file_version = $m.VersionInfo.FileVersion
+              product_version = $m.VersionInfo.ProductVersion
+              size = $m.Length
+              sha256 = (Get-FileHash -Algorithm SHA256 $m.FullName).Hash.ToLowerInvariant()
+              source_path = $m.FullName
+            }
+          }
+          $rows | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 out\module-receipt.json
+          if (-not ($rows | Where-Object { $_.module -eq "MSPUB.EXE" -and $_.found })) {
+            throw "MSPUB.EXE not found after install"
+          }
+
+      - name: Probe exact CodeView identities against Microsoft public symbols
+        shell: pwsh
+        run: |
+          python research\c2r_pub_symbol_probe.py out\modules out\symbol-census.json
+
+      - name: Publish receipts
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($f in @("odt-receipt.json","download-receipt.json","install-receipt.json","module-receipt.json","symbol-census.json")) {
+            $p = Join-Path out $f
+            if (Test-Path $p) {
+              "## $f" | Add-Content $env:GITHUB_STEP_SUMMARY
+              Get-Content $p | Add-Content $env:GITHUB_STEP_SUMMARY
+            }
+          }
+
+      - name: Guard evidence boundary
+        if: always()
+        shell: pwsh
+        run: |
+          $bad = Get-ChildItem out -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\modules\\|\\office\\|\\odt\\' -and $_.Extension -match '^\.(exe|dll|pdb|pd_|cab|dat|msi|msp)$' }
+          if ($bad) { throw "Binary escaped private working paths" }
+
+      - name: Upload derived metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c2r-publisher-symbol-census-2208-${{ github.run_id }}
+          path: |
+            out/odt-receipt.json
+            out/download-receipt.json
+            out/install-receipt.json
+            out/module-receipt.json
+            out/symbol-census.json
+          if-no-files-found: warn
+          retention-days: 30
