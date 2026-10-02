@@ -94,7 +94,6 @@ enum ProbeBoolLayer {
     Unresolved,
 }
 
-
 fn officeart_bool_layer(
     records: &[FoptObservation],
     property_id: u16,
