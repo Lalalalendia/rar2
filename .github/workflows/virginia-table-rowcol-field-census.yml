@@ -1,0 +1,57 @@
+name: Virginia TABLE rowcol physical-end census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/bin/table_rowcol_field_census.rs"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - ".github/workflows/virginia-table-rowcol-field-census.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Reacquire exact Virginia fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Census mature TABLE 0x6D item fields
+        run: |
+          set -euo pipefail
+          mkdir -p target/virginia-table-rowcol-fields
+          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin table_rowcol_field_census --             "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"             "$GITHUB_WORKSPACE/target/virginia-table-rowcol-fields/receipt.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: virginia-table-rowcol-field-census
+          path: target/virginia-table-rowcol-fields/
+          if-no-files-found: warn
+          retention-days: 30
