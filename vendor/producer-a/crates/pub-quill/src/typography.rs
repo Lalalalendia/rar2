@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 const FONT: [u8; 4] = *b"FONT";
+const TEXT_COLOR_PALETTE: [u8; 4] = *b"PL  ";
 const FDPC: [u8; 4] = *b"FDPC";
 const FDPP: [u8; 4] = *b"FDPP";
 const STSH: [u8; 4] = *b"STSH";
@@ -20,6 +21,9 @@ const OPL_CHP_EXTENDED_HIGH_BITS: u8 = 0x02;
 const FBOLD_ID: u16 = 0x0202;
 const FBOLD_CS_ID: u16 = 0x0237;
 const FONT_INDEX_CONTAINER_ID: u16 = 0x0224;
+const COLOR_INDEX_CONTAINER_ID: u16 = 0x0244;
+const BARE_COLOR_INDEX_ID: u16 = 0x022E;
+const COLOR_INDEX_ID: u16 = 0x0000;
 const TEXT_SIZE_ID: u16 = 0x020C;
 const PARAGRAPH_ALIGNMENT_ID: u16 = 0x0204;
 const PARAGRAPH_DEFAULT_CHAR_STYLE_ID: u16 = 0x0219;
@@ -40,6 +44,10 @@ pub struct QuillTypographyCatalog {
     pub size_only_runs: Vec<QuillTextSizeRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<QuillParagraphAlignmentRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_color_references: Vec<QuillTextColorReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_color_runs: Vec<QuillTextColorRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_block_types_assumed_zero_length: Vec<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -64,6 +72,8 @@ pub struct QuillTypographyRange {
     pub script_fonts: Vec<QuillScriptFontEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_sizes_emu: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_indices: Vec<u32>,
     pub story_intersections: Vec<QuillTypographyStoryIntersection>,
 }
 
@@ -147,6 +157,43 @@ impl QuillParagraphAlignment {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillTextColorReference {
+    pub index: u32,
+    pub raw_reference: u32,
+    pub source: RawSpan,
+}
+
+impl QuillTextColorReference {
+    pub fn direct_rgb(&self) -> Option<[u8; 3]> {
+        let kind = (self.raw_reference >> 24) as u8;
+        if matches!(kind, 0x08 | 0x10) {
+            return None;
+        }
+        Some([
+            (self.raw_reference & 0xFF) as u8,
+            ((self.raw_reference >> 8) & 0xFF) as u8,
+            ((self.raw_reference >> 16) & 0xFF) as u8,
+        ])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillTextColorRun {
+    pub story_index: u32,
+    pub story_syid: QuillSyid,
+    pub story_start_utf16: u32,
+    pub story_end_utf16: u32,
+    pub color_index: u32,
+    pub raw_reference: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_rgb: Option<[u8; 3]>,
+    pub fdpc_descriptor_ordinal: u32,
+    pub fdpc_style_ordinal: u32,
+    pub fdpc_style_source: RawSpan,
+    pub palette_source: RawSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,6 +319,7 @@ struct StyleObservation {
     font_names: Vec<String>,
     script_fonts: Vec<QuillScriptFontEntry>,
     text_sizes_emu: Vec<u32>,
+    color_indices: Vec<u32>,
 }
 
 #[allow(dead_code)]
@@ -375,6 +423,7 @@ pub fn parse_bounded_typography(
         .collect::<Vec<_>>();
 
     let font_names = parse_font_catalog(bytes, &descriptors)?;
+    let text_color_references = parse_text_color_catalog(bytes, story_catalog, &descriptors)?;
     let mut unknown_block_types = BTreeSet::new();
     let styles = parse_fdpc_styles(
         bytes,
@@ -464,6 +513,7 @@ pub fn parse_bounded_typography(
             font_names: style.font_names,
             script_fonts: style.script_fonts,
             text_sizes_emu: style.text_sizes_emu,
+            color_indices: style.color_indices,
             story_intersections: intersections,
         });
         previous_end_utf16 = global_end_utf16;
@@ -539,6 +589,36 @@ pub fn parse_bounded_typography(
         }
     }
 
+    let mut text_color_runs = Vec::new();
+    if explicit_run_projection_allowed(&unknown_block_types) {
+        for range in &ranges {
+            let mut color_indices = range.color_indices.clone();
+            color_indices.sort_unstable();
+            color_indices.dedup();
+            let [color_index] = color_indices.as_slice() else {
+                continue;
+            };
+            let Some(reference) = text_color_references.get(*color_index as usize) else {
+                continue;
+            };
+            for intersection in &range.story_intersections {
+                text_color_runs.push(QuillTextColorRun {
+                    story_index: intersection.story_index,
+                    story_syid: intersection.story_syid,
+                    story_start_utf16: intersection.story_start_utf16,
+                    story_end_utf16: intersection.story_end_utf16,
+                    color_index: *color_index,
+                    raw_reference: reference.raw_reference,
+                    direct_rgb: reference.direct_rgb(),
+                    fdpc_descriptor_ordinal: range.fdpc_descriptor_ordinal,
+                    fdpc_style_ordinal: range.fdpc_style_ordinal,
+                    fdpc_style_source: range.fdpc_style_source.clone(),
+                    palette_source: reference.source.clone(),
+                });
+            }
+        }
+    }
+
     let mut effective_runs = Vec::new();
     let mut size_only_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
@@ -604,6 +684,8 @@ pub fn parse_bounded_typography(
         effective_runs,
         size_only_runs,
         paragraph_alignments,
+        text_color_references,
+        text_color_runs,
         unknown_block_types_assumed_zero_length: unknown_block_types.into_iter().collect(),
         inheritance_unknown_block_types_assumed_zero_length: inheritance_unknown_block_types
             .into_iter()
@@ -1480,6 +1562,73 @@ fn parse_font_catalog(
     Ok(names)
 }
 
+fn parse_text_color_catalog(
+    bytes: &[u8],
+    story_catalog: &QuillStoryCatalog,
+    descriptors: &[(usize, &crate::QuillChunkDescriptor)],
+) -> Result<Vec<QuillTextColorReference>, QuillTypographyReadError> {
+    let stream = story_catalog.text.source.stream.clone();
+    let mut result = Vec::new();
+    for (_, descriptor) in descriptors
+        .iter()
+        .copied()
+        .filter(|(_, descriptor)| descriptor.name.value == TEXT_COLOR_PALETTE)
+    {
+        let start = to_usize(descriptor.data_offset.value, "PL offset")?;
+        let len = to_usize(descriptor.data_length.value, "PL length")?;
+        let end = checked_end(start, len, bytes.len(), "PL chunk")?;
+        if start + 12 > end {
+            return Err(QuillTypographyReadError::new("PL chunk is shorter than fixed prefix"));
+        }
+        let count = to_usize(read_u32(bytes, start, end)?, "PL entry count")?;
+        let mut cursor = start + 12;
+        for index in 0..count {
+            let record_start = cursor;
+            let record_len = to_usize(read_u32(bytes, record_start, end)?, "PL record length")?;
+            if record_len < 4 {
+                return Err(QuillTypographyReadError::new("PL record length is smaller than header"));
+            }
+            let record_end = checked_end(record_start, record_len, end, "PL record")?;
+            cursor = record_start + 4;
+            let mut raw_reference = None;
+            let mut unknown = BTreeSet::new();
+            while cursor < record_end {
+                let (block, next) = parse_block(bytes, cursor, record_end, &mut unknown)?;
+                if block.id == 0x0001 {
+                    raw_reference = block.value;
+                }
+                cursor = next;
+            }
+            if !unknown.is_empty() {
+                return Err(QuillTypographyReadError::new(format!(
+                    "PL entry {index} contains unknown fixed block widths: {unknown:?}"
+                )));
+            }
+            let raw_reference = raw_reference.ok_or_else(|| {
+                QuillTypographyReadError::new(format!("PL entry {index} has no color reference"))
+            })?;
+            result.push(QuillTextColorReference {
+                index: u32::try_from(index)
+                    .map_err(|_| QuillTypographyReadError::new("PL index exceeds u32"))?,
+                raw_reference,
+                source: RawSpan {
+                    stream: stream.clone(),
+                    offset: record_start as u64,
+                    len: record_len as u64,
+                },
+            });
+            cursor = record_end;
+        }
+        if cursor != end {
+            return Err(QuillTypographyReadError::new(format!(
+                "PL records leave {} trailing bytes",
+                end - cursor
+            )));
+        }
+    }
+    Ok(result)
+}
+
 fn parse_fdpc_styles(
     bytes: &[u8],
     story_catalog: &QuillStoryCatalog,
@@ -1550,6 +1699,7 @@ fn parse_fdpc_styles(
             let mut font_indices = Vec::new();
             let mut script_fonts = Vec::new();
             let mut text_sizes_emu = Vec::new();
+            let mut color_indices = Vec::new();
 
             while cursor < style_end {
                 let (block, next) = parse_block(bytes, cursor, style_end, unknown_block_types)?;
@@ -1579,6 +1729,16 @@ fn parse_fdpc_styles(
                 if block.id == TEXT_SIZE_ID {
                     if let Some(value) = block.value {
                         text_sizes_emu.push(value);
+                    }
+                }
+                if block.id == BARE_COLOR_INDEX_ID {
+                    if let Some(value) = block.value {
+                        color_indices.push(value);
+                    }
+                }
+                if block.id == COLOR_INDEX_CONTAINER_ID {
+                    if let Some(value) = extract_color_index(bytes, block, unknown_block_types)? {
+                        color_indices.push(value);
                     }
                 }
                 cursor = next;
@@ -1614,6 +1774,7 @@ fn parse_fdpc_styles(
                 font_names: joined_names,
                 script_fonts,
                 text_sizes_emu,
+                color_indices,
             });
         }
     }
@@ -1708,6 +1869,28 @@ fn extract_script_font_map(
     }
 
     Ok(entries)
+}
+
+fn extract_color_index(
+    bytes: &[u8],
+    block: BlockObservation,
+    unknown_block_types: &mut BTreeSet<u8>,
+) -> Result<Option<u32>, QuillTypographyReadError> {
+    if !VARIABLE_BLOCK_TYPES.contains(&block.block_type) {
+        return Ok(None);
+    }
+    let mut cursor = block
+        .data_offset
+        .checked_add(4)
+        .ok_or_else(|| QuillTypographyReadError::new("color container payload offset overflows"))?;
+    while cursor < block.end {
+        let (child, next) = parse_block(bytes, cursor, block.end, unknown_block_types)?;
+        if child.id == COLOR_INDEX_ID {
+            return Ok(child.value);
+        }
+        cursor = next;
+    }
+    Ok(None)
 }
 
 fn extract_primary_font_index(
@@ -1899,6 +2082,7 @@ mod tests {
             font_names: Vec::new(),
             script_fonts: Vec::new(),
             text_sizes_emu: Vec::new(),
+            color_indices: Vec::new(),
         }
     }
 
