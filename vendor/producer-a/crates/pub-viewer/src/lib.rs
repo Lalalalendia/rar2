@@ -1618,7 +1618,7 @@ fn viewer_mature_officeart_wmf_preview_images(
                 }
                 None => None,
             };
-            let recolor = resolved.nodes.get(node_id).and_then(|node| {
+            let recolor = source.graph.nodes.get(node_id).and_then(|node| {
                 viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
             });
             if source_window.is_some() || recolor.is_some() {
@@ -2429,7 +2429,7 @@ fn open_mature_0x2c_bundle(
                     };
                     let recolor =
                         pipeline
-                            .resolved
+                            .source
                             .graph
                             .nodes
                             .get(&usage.node_id)
@@ -4144,7 +4144,6 @@ mod tests {
                         image_slot: None,
                         legacy_ole: None,
                         explicit_image_crop: None,
-                        explicit_image_recolor: None,
                         explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                         effective_paint: None,
                         story_frame: Some(PubResolvedStoryFrame {
@@ -4715,7 +4714,6 @@ mod tests {
                 image_slot: None,
                 legacy_ole: None,
                 explicit_image_crop: None,
-                explicit_image_recolor: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                 effective_paint: None,
                 story_frame: Some(PubResolvedStoryFrame {
