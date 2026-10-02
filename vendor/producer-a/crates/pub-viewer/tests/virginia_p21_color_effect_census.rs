@@ -74,11 +74,13 @@ fn property_storage_class(shape: &SpContainerObservation, id: u16) -> String {
         .iter()
         .map(|(_, rec_type)| *rec_type)
         .collect::<BTreeSet<_>>();
-    match record_types.as_slice() {
-        [OFFICE_ART_FOPT] => "primary_fopt".into(),
-        [OFFICE_ART_TERTIARY_FOPT] => "tertiary_fopt".into(),
-        [_] => "other_fopt".into(),
-        _ => "multiple_fopt_layers".into(),
+    if record_types.len() != 1 {
+        return "multiple_fopt_layers".into();
+    }
+    match record_types.iter().next().copied().expect("one rec type") {
+        OFFICE_ART_FOPT => "primary_fopt".into(),
+        OFFICE_ART_TERTIARY_FOPT => "tertiary_fopt".into(),
+        _ => "other_fopt".into(),
     }
 }
 
