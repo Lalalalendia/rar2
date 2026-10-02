@@ -38,7 +38,10 @@ use crate::{
     public_rate_limit::{
         PublicRateClass, PublicRateDecision, PublicRateLimitError, SqlitePublicRateLimitAuthority,
     },
-    reader_compatibility_report::{ReaderCompatibilityReportV1, build_reader_compatibility_report},
+    reader_compatibility_report::{
+        ReaderCompatibilityReportV1, ReaderEditableRoutesAssessmentV1,
+        build_reader_compatibility_report_with_routes,
+    },
     reader_observability::ReaderObservabilityV1,
     source_ingress_async::{AsyncSourceSecurityScanner, SourceSecurityScanOutcome},
     source_ingress_security::ProductionSourceSecurityScanner,
@@ -58,6 +61,7 @@ const CONTRIBUTION_CAPABILITY_PROTOCOL_V1: &str = "chaptera.reader-contribution-
 const STREAM_BUFFER_BYTES: usize = 64 * 1024;
 const CLEANUP_BATCH: i64 = 16;
 const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_EDITABLE_ROUTES_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct GuestReaderHttpConfig {
@@ -555,6 +559,7 @@ async fn issue_session(
         state: GuestSessionState::Issued,
         classification: None,
         scene_json: None,
+        editable_routes_json: None,
         terminal_code: None,
         failure_classification_json: None,
         created_at_ms: now_ms,
@@ -879,6 +884,7 @@ async fn open_session(
     let mut failure_classification = receipt.failure_classification;
     let mut scene = receipt.scene;
     let mut salvage = receipt.salvage;
+    let mut editable_routes = receipt.editable_routes;
     let mut scene_json = match classification.as_str() {
         "salvage" => salvage.as_ref(),
         _ => scene.as_ref(),
@@ -895,7 +901,22 @@ async fn open_session(
         failure_classification = None;
         scene = None;
         salvage = None;
+        editable_routes = None;
         scene_json = None;
+    }
+
+    let editable_routes_json = editable_routes
+        .as_ref()
+        .map(serde_json::to_vec)
+        .transpose()
+        .map_err(|_| GuestReaderError::internal("guest_editable_routes_serialize_failed"))?;
+    if editable_routes_json
+        .as_ref()
+        .is_some_and(|encoded| encoded.len() > MAX_EDITABLE_ROUTES_BYTES)
+    {
+        return Err(GuestReaderError::internal(
+            "guest_editable_routes_too_large",
+        ));
     }
 
     let failure_classification_json = failure_classification
@@ -911,6 +932,7 @@ async fn open_session(
             &classification,
             &receipt.source_sha256,
             scene_json.as_deref(),
+            editable_routes_json.as_deref(),
             terminal_code.as_deref(),
             failure_classification_json.as_deref(),
             now_ms,
@@ -932,6 +954,7 @@ async fn open_session(
         Some(receipt.source_sha256.as_str()),
         scene.as_ref(),
         salvage.as_ref(),
+        editable_routes.as_ref(),
     )?;
 
     Ok(GuestJson(GuestOpenResponse {
@@ -974,11 +997,13 @@ async fn get_scene(
         .classification
         .clone()
         .unwrap_or_else(|| "rejected".to_owned());
+    let editable_routes = stored_editable_routes(&session)?;
     let compatibility_report = compatibility_report_for_payload(
         &classification,
         session.source_sha256.as_deref(),
         scene.as_ref(),
         salvage.as_ref(),
+        editable_routes.as_ref(),
     )?;
 
     Ok(GuestJson(GuestSceneResponse {
@@ -1193,6 +1218,7 @@ struct GuestReaderSession {
     state: GuestSessionState,
     classification: Option<String>,
     scene_json: Option<Vec<u8>>,
+    editable_routes_json: Option<Vec<u8>>,
     terminal_code: Option<String>,
     failure_classification_json: Option<Vec<u8>>,
     created_at_ms: i64,
@@ -1314,7 +1340,8 @@ impl SqliteGuestReaderSessionStore {
             SELECT session_id, access_token_hash, upload_id, reservation_id,
                    expected_byte_len, observed_byte_len, storage_generation,
                    object_etag, source_sha256, state, classification, scene_json,
-                   terminal_code, failure_classification_json, created_at_ms, updated_at_ms, expires_at_ms,
+                   editable_routes_json, terminal_code, failure_classification_json,
+                   created_at_ms, updated_at_ms, expires_at_ms,
                    quarantine_deleted_at_ms
             FROM reader_guest_sessions
             WHERE session_id = ?
@@ -1569,6 +1596,7 @@ impl SqliteGuestReaderSessionStore {
         classification: &str,
         source_sha256: &str,
         scene_json: Option<&[u8]>,
+        editable_routes_json: Option<&[u8]>,
         terminal_code: Option<&str>,
         failure_classification_json: Option<&[u8]>,
         now_ms: i64,
@@ -1577,13 +1605,14 @@ impl SqliteGuestReaderSessionStore {
             r#"
             UPDATE reader_guest_sessions
             SET state='opened', classification=?, source_sha256=?, scene_json=?,
-                terminal_code=?, failure_classification_json=?, updated_at_ms=?
+                editable_routes_json=?, terminal_code=?, failure_classification_json=?, updated_at_ms=?
             WHERE session_id=? AND state='opening'
             "#,
         )
         .bind(classification)
         .bind(source_sha256.as_bytes())
         .bind(scene_json)
+        .bind(editable_routes_json)
         .bind(terminal_code)
         .bind(failure_classification_json)
         .bind(now_ms)
@@ -1696,7 +1725,8 @@ impl SqliteGuestReaderSessionStore {
             SELECT session_id, access_token_hash, upload_id, reservation_id,
                    expected_byte_len, observed_byte_len, storage_generation,
                    object_etag, source_sha256, state, classification, scene_json,
-                   terminal_code, failure_classification_json, created_at_ms, updated_at_ms, expires_at_ms,
+                   editable_routes_json, terminal_code, failure_classification_json,
+                   created_at_ms, updated_at_ms, expires_at_ms,
                    quarantine_deleted_at_ms
             FROM reader_guest_sessions
             WHERE expires_at_ms<=?
@@ -1740,6 +1770,9 @@ fn session_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<GuestReaderSession,
         )?,
         classification: row.try_get("classification").map_err(sqlite_error)?,
         scene_json: row.try_get("scene_json").map_err(sqlite_error)?,
+        editable_routes_json: row
+            .try_get("editable_routes_json")
+            .map_err(sqlite_error)?,
         terminal_code: row.try_get("terminal_code").map_err(sqlite_error)?,
         failure_classification_json: row
             .try_get("failure_classification_json")
@@ -1788,20 +1821,61 @@ fn stored_public_payload(
     }
 }
 
+fn stored_editable_routes(
+    session: &GuestReaderSession,
+) -> Result<Option<ReaderEditableRoutesAssessmentV1>, GuestReaderError> {
+    let routes = session
+        .editable_routes_json
+        .as_deref()
+        .map(serde_json::from_slice::<ReaderEditableRoutesAssessmentV1>)
+        .transpose()
+        .map_err(|_| GuestReaderError::internal("guest_editable_routes_corrupt"))?;
+
+    match session.classification.as_deref() {
+        Some("supported") | Some("partial") => {
+            if let Some(routes) = routes.as_ref() {
+                let source_sha256 = session.source_sha256.as_deref().ok_or_else(|| {
+                    GuestReaderError::internal("guest_source_identity_missing")
+                })?;
+                routes
+                    .validate_for_source(source_sha256)
+                    .map_err(|_| GuestReaderError::internal("guest_editable_routes_invalid"))?;
+            }
+            Ok(routes)
+        }
+        Some("salvage") | Some("unsupported") | Some("rejected") | None => {
+            if routes.is_some() {
+                return Err(GuestReaderError::internal(
+                    "guest_terminal_editable_routes_invalid",
+                ));
+            }
+            Ok(None)
+        }
+        Some(_) => Err(GuestReaderError::internal("guest_classification_invalid")),
+    }
+}
+
 fn compatibility_report_for_payload(
     classification: &str,
     source_sha256: Option<&str>,
     scene: Option<&Value>,
     salvage: Option<&Value>,
+    editable_routes: Option<&ReaderEditableRoutesAssessmentV1>,
 ) -> Result<Option<ReaderCompatibilityReportV1>, GuestReaderError> {
     if classification == "rejected" {
         return Ok(None);
     }
     let source_sha256 =
         source_sha256.ok_or_else(|| GuestReaderError::internal("guest_source_identity_missing"))?;
-    build_reader_compatibility_report(source_sha256, classification, scene, salvage)
-        .map(Some)
-        .map_err(|_| GuestReaderError::internal("guest_compatibility_report_invalid"))
+    build_reader_compatibility_report_with_routes(
+        source_sha256,
+        classification,
+        scene,
+        salvage,
+        editable_routes,
+    )
+    .map(Some)
+    .map_err(|_| GuestReaderError::internal("guest_compatibility_report_invalid"))
 }
 
 fn open_response_from_stored(
@@ -1816,11 +1890,13 @@ fn open_response_from_stored(
         Some("rejected") | None => "rejected",
         Some(_) => return Err(GuestReaderError::internal("guest_classification_invalid")),
     };
+    let editable_routes = stored_editable_routes(session)?;
     let compatibility_report = compatibility_report_for_payload(
         classification,
         session.source_sha256.as_deref(),
         scene.as_ref(),
         salvage.as_ref(),
+        editable_routes.as_ref(),
     )?;
     Ok(GuestJson(GuestOpenResponse {
         protocol_version: GUEST_PROTOCOL_V1,
@@ -2119,6 +2195,7 @@ mod tests {
             state: GuestSessionState::Issued,
             classification: None,
             scene_json: None,
+            editable_routes_json: None,
             terminal_code: None,
             failure_classification_json: None,
             created_at_ms: now_ms,
@@ -2153,6 +2230,13 @@ mod tests {
                 .unwrap();
         assert_eq!(principal_count, 1);
         assert_eq!(identity_count, 0);
+        let route_column_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('reader_guest_sessions') WHERE name='editable_routes_json'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(route_column_count, 1);
 
         pool.close().await;
         let _ = fs::remove_file(path);
@@ -2202,6 +2286,7 @@ mod tests {
                 Some(br#"{"protocol_version":"chaptera.reader-scene.v1"}"#),
                 None,
                 None,
+                None,
                 1_003,
             )
             .await
@@ -2212,6 +2297,88 @@ mod tests {
         assert_eq!(opened.object_etag.as_deref(), Some("etag-1"));
         assert_eq!(opened.observed_byte_len, Some(1024));
         assert_eq!(opened.quarantine_deleted_at_ms, None);
+
+        store.close().await;
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn editable_routes_survive_session_persistence_and_repeat_response() {
+        let path = migrated_path("editable-routes").await;
+        let store = SqliteGuestReaderSessionStore::open(&path, 1, Duration::from_secs(5))
+            .await
+            .unwrap();
+        let session = session(1_000);
+        store.insert(&session).await.unwrap();
+        store
+            .mark_stored(&session.session_id, 1024, "generation-1", "etag-1", 1_001)
+            .await
+            .unwrap();
+        store.claim_open(&session.session_id, 1_002).await.unwrap();
+
+        let source_sha256 = "a".repeat(64);
+        let scene = serde_json::json!({
+            "protocol_version": "chaptera.reader-scene.v1",
+            "source_hash": source_sha256,
+            "fidelity": {"state": "supported", "reasons": []},
+            "pages": [{"page_id": "p1"}],
+            "nodes": [],
+            "stories": []
+        });
+        let scene_json = serde_json::to_vec(&scene).unwrap();
+        let routes = ReaderEditableRoutesAssessmentV1 {
+            protocol_version:
+                crate::reader_compatibility_report::READER_EDITABLE_ROUTES_ASSESSMENT_V1
+                    .to_owned(),
+            source_sha256: "a".repeat(64),
+            idml: crate::reader_compatibility_report::ReaderEditableTargetAssessmentV1 {
+                state: "available_with_declared_losses".to_owned(),
+                reason_code: "serializable".to_owned(),
+                declared_loss_count: 1,
+                blocking_loss_count: 0,
+            },
+            odg: crate::reader_compatibility_report::ReaderEditableTargetAssessmentV1 {
+                state: "unavailable".to_owned(),
+                reason_code: "blocking_losses".to_owned(),
+                declared_loss_count: 2,
+                blocking_loss_count: 1,
+            },
+        };
+        let route_json = serde_json::to_vec(&routes).unwrap();
+
+        let opened = store
+            .finish_opened(
+                &session.session_id,
+                "supported",
+                &"a".repeat(64),
+                Some(&scene_json),
+                Some(&route_json),
+                None,
+                None,
+                1_003,
+            )
+            .await
+            .unwrap();
+
+        let response = open_response_from_stored(&opened).unwrap().0;
+        let report = response.compatibility_report.unwrap();
+        assert_eq!(
+            report.output_routes.editable_idml,
+            "available_with_declared_losses"
+        );
+        assert_eq!(report.output_routes.editable_odg, "unavailable");
+        assert!(
+            report
+                .limitations
+                .iter()
+                .any(|item| item.code == "idml_editable_export_declared_losses")
+        );
+        assert!(
+            report
+                .limitations
+                .iter()
+                .any(|item| item.code == "odg_editable_export_blocked")
+        );
 
         store.close().await;
         let _ = fs::remove_file(path);
