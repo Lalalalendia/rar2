@@ -1,0 +1,124 @@
+name: Build Carlton paragraph-align native bundle
+
+on:
+  push:
+    branches:
+      - "research/package-carlton-align-841-windows"
+  pull_request:
+    paths:
+      - ".github/workflows/build-carlton-align-native-bundle.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Assemble portable Publisher native bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:RUNNER_TEMP "carlton-paragraph-align-native-bundle"
+          if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+
+          $files = @(
+            "tools/research-runner/experiments/carlton-paragraph-align-reconcile-01.packet.json",
+            "tools/research-runner/operations/carlton_paragraph_align_reconcile_01.ps1",
+            "tools/research-runner/prepare_native_run.ps1",
+            "tools/research-runner/finalize_native_run.ps1",
+            "tools/windows/pub-runtime/PubRuntime.psm1"
+          )
+          foreach ($relative in $files) {
+            $destination = Join-Path $bundle $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $relative -Destination $destination -Force
+          }
+
+          $runner = @'
+          param(
+              [Parameter(Mandatory = $true)][string]$FixturePath,
+              [string]$OutputRoot = ""
+          )
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $root = $PSScriptRoot
+          $manifestPath = Join-Path $root "bundle-manifest.json"
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+          foreach ($property in $manifest.files.PSObject.Properties) {
+              $relative = [string]$property.Name
+              $expected = [string]$property.Value
+              $candidate = Join-Path $root ($relative.Replace("/", "\"))
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                  throw "Portable bundle file missing: $relative"
+              }
+              $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $expected.ToLowerInvariant()) {
+                  throw "Portable bundle SHA-256 mismatch: $relative"
+              }
+          }
+
+          $fixture = (Resolve-Path -LiteralPath $FixturePath).Path
+          $fixtureSha = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedFixture = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          if ($fixtureSha -ne $expectedFixture) {
+              throw "Fixture SHA-256 mismatch; exact Carlton March 2026 PUB required."
+          }
+
+          $packet = Join-Path $root "tools\research-runner\experiments\carlton-paragraph-align-reconcile-01.packet.json"
+          $env:PUB_RESEARCH_FIXTURE = $fixture
+          $env:PUB_RESEARCH_PACKET_SHA256 = [string]$manifest.files."tools/research-runner/experiments/carlton-paragraph-align-reconcile-01.packet.json"
+
+          if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+              $OutputRoot = Join-Path $root "out\pub-research\carlton-paragraph-align-reconcile-01"
+          }
+
+          $steps = @(
+              (Join-Path $root "tools\research-runner\prepare_native_run.ps1"),
+              (Join-Path $root "tools\research-runner\operations\carlton_paragraph_align_reconcile_01.ps1"),
+              (Join-Path $root "tools\research-runner\finalize_native_run.ps1")
+          )
+          foreach ($script in $steps) {
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -PacketPath $packet -OutputRoot $OutputRoot
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Native research step failed: $script (exit $LASTEXITCODE)"
+              }
+          }
+
+          $verdict = Join-Path $OutputRoot "analysis\carlton-paragraph-align-reconcile-01.json"
+          Get-Content -LiteralPath $verdict -Raw
+          '@
+          Set-Content -LiteralPath (Join-Path $bundle "run-native.ps1") -Value $runner -Encoding UTF8
+
+          $manifestFiles = $files + @("run-native.ps1")
+          $hashes = [ordered]@{}
+          foreach ($relative in $manifestFiles) {
+            $candidate = Join-Path $bundle $relative
+            $hashes[$relative.Replace("\", "/")] = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $manifest = [ordered]@{
+            schema = "chaptera.carlton-paragraph-align-native-portable.v1"
+            source_sha = (git rev-parse HEAD).Trim()
+            experiment_id = "CARLTON-PARAGRAPH-ALIGN-RECONCILE-01"
+            exact_fixture_sha256 = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+            files = $hashes
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
+          Get-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Raw
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carlton-paragraph-align-native-portable-windows
+          path: ${{ runner.temp }}/carlton-paragraph-align-native-bundle/
+          if-no-files-found: error
+          retention-days: 7
