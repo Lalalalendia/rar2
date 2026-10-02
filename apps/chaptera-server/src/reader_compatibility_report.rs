@@ -56,8 +56,7 @@ pub struct ReaderCompatibilityOutputRoutesV1 {
     pub editable_odg: &'static str,
 }
 
-pub const READER_EDITABLE_ROUTES_ASSESSMENT_V1: &str =
-    "chaptera.reader-editable-routes.v1";
+pub const READER_EDITABLE_ROUTES_ASSESSMENT_V1: &str = "chaptera.reader-editable-routes.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,7 +82,9 @@ impl ReaderEditableRoutesAssessmentV1 {
         if self.protocol_version != READER_EDITABLE_ROUTES_ASSESSMENT_V1
             || self.source_sha256 != source_sha256
         {
-            return Err("editable route assessment identity differs from compatibility source".to_owned());
+            return Err(
+                "editable route assessment identity differs from compatibility source".to_owned(),
+            );
         }
         validate_target_assessment(&self.idml)?;
         validate_target_assessment(&self.odg)?;
@@ -154,8 +155,12 @@ pub fn build_reader_compatibility_report_with_routes(
                             "available_with_limitations"
                         },
                         salvage_recovery: "not_applicable",
-                        editable_idml: editable_route_state(editable_routes.map(|routes| &routes.idml))?,
-                        editable_odg: editable_route_state(editable_routes.map(|routes| &routes.odg))?,
+                        editable_idml: editable_route_state(
+                            editable_routes.map(|routes| &routes.idml),
+                        )?,
+                        editable_odg: editable_route_state(
+                            editable_routes.map(|routes| &routes.odg),
+                        )?,
                     },
                     if classification == "supported" {
                         "migration_pilot_preview"
@@ -166,7 +171,10 @@ pub fn build_reader_compatibility_report_with_routes(
             }
             "salvage" => {
                 if editable_routes.is_some() {
-                    return Err("salvage compatibility report cannot carry editable route assessment".to_owned());
+                    return Err(
+                        "salvage compatibility report cannot carry editable route assessment"
+                            .to_owned(),
+                    );
                 }
                 if scene.is_some() {
                     return Err("salvage compatibility report cannot carry Reader Scene".to_owned());
@@ -190,7 +198,10 @@ pub fn build_reader_compatibility_report_with_routes(
             }
             "unsupported" => {
                 if editable_routes.is_some() {
-                    return Err("unsupported compatibility report cannot carry editable route assessment".to_owned());
+                    return Err(
+                        "unsupported compatibility report cannot carry editable route assessment"
+                            .to_owned(),
+                    );
                 }
                 if scene.is_some() || salvage.is_some() {
                     return Err(
@@ -247,9 +258,8 @@ fn validate_target_assessment(value: &ReaderEditableTargetAssessmentV1) -> Resul
     let valid_counts = match (value.state.as_str(), value.reason_code.as_str()) {
         ("available_with_declared_losses", "serializable") => value.blocking_loss_count == 0,
         ("unavailable", "blocking_losses") => {
-            value.blocking_loss_count > 0
-                && value.declared_loss_count >= value.blocking_loss_count
-        },
+            value.blocking_loss_count > 0 && value.declared_loss_count >= value.blocking_loss_count
+        }
         ("unavailable", "editor_profile_unavailable")
         | ("not_verified", "assessment_failed")
         | ("not_verified", "source_identity_mismatch") => {
@@ -319,14 +329,18 @@ fn append_target_route_limitation(
             code: "odg_editable_export_blocked",
             message: "ODG editable export is blocked because required document semantics would be lost.",
         }),
-        ("idml", "unavailable", "editor_profile_unavailable", _) => Some(ReaderCompatibilityLimitationV1 {
-            code: "idml_editable_export_unavailable",
-            message: "IDML editable export is not available for this Publisher profile.",
-        }),
-        ("odg", "unavailable", "editor_profile_unavailable", _) => Some(ReaderCompatibilityLimitationV1 {
-            code: "odg_editable_export_unavailable",
-            message: "ODG editable export is not available for this Publisher profile.",
-        }),
+        ("idml", "unavailable", "editor_profile_unavailable", _) => {
+            Some(ReaderCompatibilityLimitationV1 {
+                code: "idml_editable_export_unavailable",
+                message: "IDML editable export is not available for this Publisher profile.",
+            })
+        }
+        ("odg", "unavailable", "editor_profile_unavailable", _) => {
+            Some(ReaderCompatibilityLimitationV1 {
+                code: "odg_editable_export_unavailable",
+                message: "ODG editable export is not available for this Publisher profile.",
+            })
+        }
         ("idml", "not_verified", _, _) => Some(ReaderCompatibilityLimitationV1 {
             code: "idml_editable_export_not_verified",
             message: "IDML editable export could not be verified for this file.",
@@ -338,7 +352,10 @@ fn append_target_route_limitation(
         _ => None,
     };
     if let Some(item) = item {
-        if !limitations.iter().any(|existing| existing.code == item.code) {
+        if !limitations
+            .iter()
+            .any(|existing| existing.code == item.code)
+        {
             limitations.push(item);
         }
     }
@@ -751,8 +768,8 @@ mod tests {
         });
         let routes = ReaderEditableRoutesAssessmentV1 {
             protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
-            source_sha256:
-                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_owned(),
+            source_sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .to_owned(),
             idml: ReaderEditableTargetAssessmentV1 {
                 state: "not_verified".to_owned(),
                 reason_code: "source_identity_mismatch".to_owned(),
