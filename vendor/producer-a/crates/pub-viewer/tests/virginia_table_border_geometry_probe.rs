@@ -7,7 +7,7 @@ use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     env, fs,
     io::Cursor,
     path::PathBuf,
@@ -54,29 +54,53 @@ fn shape_id(shape: &SpContainerObservation) -> Option<u32> {
     unique_field(shape.client_data.as_ref()?, PUBLISHER_FIELD_SHAPE_ID)
 }
 
-fn grounded(shape: &SpContainerObservation, grounded_ids: &BTreeSet<u32>) -> bool {
-    shape_id(shape).is_some_and(|seq| grounded_ids.contains(&seq))
+fn has_client_data_identity(shape: &SpContainerObservation) -> bool {
+    shape_id(shape).is_some()
 }
 
 fn is_candidate(shape: &SpContainerObservation, table_seq: u32) -> bool {
-    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(RECTANGLE) {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(RECTANGLE)
+        || has_client_data_identity(shape)
+    {
         return false;
     }
     let Some(anchor) = shape.client_anchor.as_ref() else {
         return false;
     };
-    if unique_field(anchor, TABLE_OWNER_REF) != Some(table_seq) {
+    if unique_field(anchor, TABLE_OWNER_REF) != Some(table_seq)
+        || anchor.fields.iter().any(|field| field.id == CELL_ORDINAL)
+    {
         return false;
     }
-    if anchor.fields.iter().any(|field| field.id == CELL_ORDINAL) {
+
+    let allowed = [
+        TABLE_OWNER_REF,
+        SEGMENT_ORIENTATION,
+        ROW_START,
+        COLUMN_START,
+        ROW_END,
+        COLUMN_END,
+    ];
+    if anchor.fields.iter().any(|field| !allowed.contains(&field.id)) {
         return false;
     }
-    anchor.fields.iter().any(|field| {
-        matches!(
-            field.id,
-            SEGMENT_ORIENTATION | ROW_START | COLUMN_START | ROW_END | COLUMN_END
-        )
-    })
+
+    let Some(segment) = decode_segment(shape, u32::MAX, u32::MAX) else {
+        return false;
+    };
+    let valid_nonzero_span = match segment.axis {
+        Axis::Horizontal => segment.column_start < segment.column_end,
+        Axis::Vertical => segment.row_start < segment.row_end,
+    };
+    if !valid_nonzero_span {
+        return false;
+    }
+
+    let direct_color = unique_fopt_scalar(shape, 0x0181)
+        .is_some_and(|value| (value >> 24) == 0);
+    let explicit_width = unique_fopt_scalar(shape, LINE_WIDTH)
+        .is_some_and(|value| value > 0 && value <= 0x0132_F540);
+    direct_color && explicit_width
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -373,13 +397,6 @@ fn exact_virginia_table_border_geometry_probe() {
     )
     .expect("inspect OfficeArt");
 
-    let grounded_ids = bundle
-        .resolved_graph
-        .nodes
-        .values()
-        .map(|node| node.payload.contents_seq_num)
-        .collect::<BTreeSet<_>>();
-
     let mut pages = Vec::new();
     let mut totals = Totals::default();
 
@@ -438,7 +455,6 @@ fn exact_virginia_table_border_geometry_probe() {
             for shape in inventory
                 .shapes
                 .iter()
-                .filter(|shape| !grounded(shape, &grounded_ids))
                 .filter(|shape| is_candidate(shape, table_seq))
             {
                 receipt.candidate_count += 1;
