@@ -4143,7 +4143,8 @@ pub fn resolve_bounded_effective_officeart_paint(
 fn shape_has_explicit_filled_without_fill_color(
     shape: &pub_escher::SpContainerObservation,
 ) -> bool {
-    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(0x0002) {
+    let shape_type = shape.fsp.as_ref().map(|fsp| fsp.shape_type);
+    if !matches!(shape_type, Some(0x0002 | 0x00CA)) {
         return false;
     }
 
@@ -4154,6 +4155,16 @@ fn shape_has_explicit_filled_without_fill_color(
     );
     if !matches!(fill_color, PaintScalarLayer::Absent) {
         return false;
+    }
+
+    if shape_type == Some(0x00CA) {
+        return matches!(
+            fill_visibility_from_records(
+                &shape.fopts,
+                PubEffectivePaintAuthority::ShapeLocal,
+            ),
+            PaintLineVisibilityLayer::Value(value) if value.value
+        );
     }
 
     matches!(
@@ -5827,6 +5838,23 @@ mod tests {
             PubEffectivePaintAuthority::NormativeDefault
         );
         assert!(paint.fill.visible.expect("explicit visibility").value);
+
+        shape.fsp.as_mut().expect("fsp").shape_type = 0x00CA;
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("native-proven sparse TextBox fill remains bounded");
+        let fill_color = paint.fill.color_rgb.expect("normative TextBox fill color");
+        assert_eq!(fill_color.value, [0xFF, 0xFF, 0xFF]);
+        assert_eq!(
+            fill_color.authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+        assert!(
+            paint
+                .fill
+                .visible
+                .expect("explicit TextBox visibility")
+                .value
+        );
 
         shape.fsp.as_mut().expect("fsp").shape_type = 0x0001;
         let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
