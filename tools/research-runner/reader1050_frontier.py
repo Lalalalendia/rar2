@@ -19,37 +19,20 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tools" / "corpus"))
+sys.path.insert(0, str(REPO_ROOT / "tools" / "research-runner"))
 
 from cfb_physical import CFB  # noqa: E402
+from reader1050_knowledge import (  # noqa: E402
+    evidence_for_sha,
+    ledger_for_sha,
+    load_discriminator_ledger,
+    load_evidence_registry,
+    load_runtime_discriminator_cursor,
+    merge_discriminator_history,
+)
 
 SCHEMA = "chaptera.reader1050-hosted-frontier.v1"
 CASE_SCHEMA = "chaptera.reader1050-hosted-frontier-case.v1"
-
-KNOWN_OWNED_ROUTES = {
-    # QUILL-STORY-EARLY-TEXT-BOUNDARY-01 / #315/#337: valid early-mature
-    # Story-bearing sentinel family. These are format/recovery gaps, not
-    # evidence of corruption merely because normal Reader open fails.
-    "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-    "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-    "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-    "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-}
 
 KNOWN_STREAMS = {
     "contents": "Contents",
@@ -146,14 +129,23 @@ def source_free_cfb_shape(data: bytes) -> dict[str, Any]:
     }
 
 
-def suggested_discriminator(row: dict[str, Any]) -> tuple[str, str]:
+def suggested_discriminator(
+    row: dict[str, Any],
+    registry: dict[str, dict[str, Any]] | None = None,
+) -> tuple[str, str]:
     source_sha256 = str(row.get("source_sha256") or "").lower()
-    existing_owner = KNOWN_OWNED_ROUTES.get(source_sha256)
-    if existing_owner is not None:
-        return (
-            "existing_format_owner",
-            "Hand off to the already-grounded format-research owner; do not reinterpret normal-open failure as corruption evidence.",
-        )
+    known_evidence = evidence_for_sha(source_sha256, registry)
+    if known_evidence is not None:
+        if known_evidence.get("kind") == "format_owner":
+            return (
+                "existing_format_owner",
+                "Hand off to the already-grounded format-research owner; do not reinterpret normal-open failure as corruption evidence.",
+            )
+        if known_evidence.get("kind") == "typed_corruption_evidence":
+            return (
+                "existing_typed_corruption_evidence",
+                "Bind the existing exact-SHA corruption authority into the Reader salvage path and validate bounded admission; do not rediscover corruption.",
+            )
     if row.get("cfb_inventory_available") is False:
         return (
             "container_integrity_gap",
@@ -175,17 +167,46 @@ def suggested_discriminator(row: dict[str, Any]) -> tuple[str, str]:
     )
 
 
-def priority(row: dict[str, Any]) -> tuple[int, list[str]]:
+def priority(
+    row: dict[str, Any],
+    registry: dict[str, dict[str, Any]] | None = None,
+    ledger_entries: list[dict[str, Any]] | None = None,
+) -> tuple[int, list[str], bool, str | None]:
     score = 0
     reasons: list[str] = []
+    suppressed = False
+    suppression_reason = None
 
     source_sha256 = str(row.get("source_sha256") or "").lower()
-    existing_owner = KNOWN_OWNED_ROUTES.get(source_sha256)
-    if existing_owner is not None:
-        score -= 500
-        reasons.append(
-            f"already owned by {existing_owner['owner']} ({existing_owner['kind']})"
+    known_evidence = evidence_for_sha(source_sha256, registry)
+    if known_evidence is not None:
+        if known_evidence.get("kind") == "format_owner":
+            score -= 500
+            suppressed = True
+            suppression_reason = (
+                f"reviewed registry owner {known_evidence['owner']} "
+                f"({known_evidence['kind']})"
+            )
+            reasons.append(suppression_reason)
+        elif known_evidence.get("kind") == "typed_corruption_evidence":
+            score += 500
+            reasons.append(
+                f"existing typed corruption evidence from {known_evidence['owner']}"
+            )
+
+    history = ledger_for_sha(source_sha256, ledger_entries)
+    terminal = [
+        item for item in history
+        if item.get("status") in {"executed", "closed", "handoff"}
+    ]
+    if terminal:
+        latest = terminal[-1]
+        suppressed = True
+        suppression_reason = (
+            f"ledger status {latest.get('status')} from discriminator run "
+            f"{latest.get('discriminator_run_id')}"
         )
+        reasons.append(suppression_reason)
 
     if row.get("salvage_eligibility") == "awaiting_typed_corruption_evidence":
         score += 100
@@ -231,13 +252,15 @@ def priority(row: dict[str, Any]) -> tuple[int, list[str]]:
         score += 10
         reasons.append("stable open-error signature available")
 
-    return score, reasons
+    return score, reasons, suppressed, suppression_reason
 
 
 def build_case(
     row: dict[str, Any],
     reader_record: dict[str, Any] | None,
     corpus_root: Path,
+    registry: dict[str, dict[str, Any]],
+    ledger_entries: list[dict[str, Any]],
 ) -> dict[str, Any]:
     source_sha256 = str(row["source_sha256"]).lower()
     pub_path = locate_pub(corpus_root, source_sha256)
@@ -249,13 +272,20 @@ def build_case(
         )
 
     cfb_shape = source_free_cfb_shape(data)
-    score, score_reasons = priority(row)
-    gap_class, next_operation = suggested_discriminator(row)
+    score, score_reasons, suppressed, suppression_reason = priority(
+        row,
+        registry,
+        ledger_entries,
+    )
+    gap_class, next_operation = suggested_discriminator(row, registry)
+    known_evidence = evidence_for_sha(source_sha256, registry)
+    discriminator_history = ledger_for_sha(source_sha256, ledger_entries)
 
     return {
         "schema": CASE_SCHEMA,
         "source_sha256": source_sha256,
-        "existing_owner": KNOWN_OWNED_ROUTES.get(source_sha256),
+        "known_evidence": known_evidence,
+        "discriminator_history": discriminator_history,
         "byte_len": len(data),
         "outcome": row.get("outcome"),
         "reader_route": row.get("reader_route"),
@@ -279,6 +309,8 @@ def build_case(
         "cfb_shape": cfb_shape,
         "frontier_score": score,
         "frontier_score_reasons": score_reasons,
+        "frontier_suppressed": suppressed,
+        "frontier_suppression_reason": suppression_reason,
         "gap_class": gap_class,
         "suggested_next_operation": next_operation,
         "evidence_boundary": (
@@ -294,8 +326,13 @@ def build_frontier(
     out_root: Path,
     source_run_id: str,
     source_sha: str,
+    runtime_ledger_root: Path | None = None,
 ) -> dict[str, Any]:
     salvage, records = load_reader_inputs(reader_root)
+    registry = load_evidence_registry()
+    reviewed_ledger = load_discriminator_ledger(registry=registry)
+    runtime_cursor = load_runtime_discriminator_cursor(runtime_ledger_root)
+    ledger_entries = merge_discriminator_history(reviewed_ledger, runtime_cursor)
     unsupported = [
         row for row in salvage.get("rows", []) if row.get("outcome") == "unsupported"
     ]
@@ -305,24 +342,35 @@ def build_frontier(
             row,
             records.get(str(row.get("source_sha256", "")).lower()),
             corpus_root,
+            registry,
+            ledger_entries,
         )
         for row in unsupported
     ]
     cases.sort(key=lambda row: (-int(row["frontier_score"]), row["source_sha256"]))
 
-    selected = cases[0] if cases else None
+    selectable = [row for row in cases if not row.get("frontier_suppressed")]
+    selected = selectable[0] if selectable else None
+    if not cases:
+        status = "exhausted"
+    elif selected is None:
+        status = "awaiting_ledger_or_new_evidence"
+    else:
+        status = "frontier_selected"
     payload = {
         "schema": SCHEMA,
         "source_reader_run_id": str(source_run_id),
         "source_main_sha": source_sha,
         "unsupported_count": len(cases),
-        "status": "frontier_selected" if selected else "exhausted",
+        "status": status,
         "selected": selected,
         "queue": [
             {
                 "source_sha256": row["source_sha256"],
                 "frontier_score": row["frontier_score"],
-                "existing_owner": row.get("existing_owner"),
+                "frontier_suppressed": row.get("frontier_suppressed"),
+                "frontier_suppression_reason": row.get("frontier_suppression_reason"),
+                "known_evidence": row.get("known_evidence"),
                 "gap_class": row["gap_class"],
                 "contents_family": row["contents_family"],
                 "salvage_eligibility": row["salvage_eligibility"],
@@ -395,11 +443,19 @@ def render_markdown(payload: dict[str, Any]) -> str:
             ]
         )
     else:
+        if payload["status"] == "exhausted":
+            message = "No Reader-1050 rows currently have salvage outcome `unsupported`."
+        else:
+            message = (
+                "Unsupported rows remain, but every current candidate is suppressed by the "
+                "durable discriminator ledger. A reviewed ledger/evidence change is required "
+                "before repeating a completed discriminator."
+            )
         lines.extend(
             [
-                "## Frontier exhausted",
+                "## No selectable frontier",
                 "",
-                "No Reader-1050 rows currently have salvage outcome `unsupported`.",
+                message,
                 "",
             ]
         )
@@ -450,6 +506,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--runtime-ledger-root", type=Path)
     args = parser.parse_args()
 
     payload = build_frontier(
@@ -458,6 +515,7 @@ def main() -> int:
         args.out,
         args.source_run_id,
         args.source_sha,
+        args.runtime_ledger_root,
     )
     print(
         json.dumps(
