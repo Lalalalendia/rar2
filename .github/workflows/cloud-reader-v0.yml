@@ -101,6 +101,13 @@ jobs:
           toolchain: "1.94.1"
       - name: Build the existing canonical guest Scene producer
         run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - name: Export exact #861 chaptera binary for private local witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: ephemeral-chaptera-861-linux
+          path: target/debug/chaptera
+          if-no-files-found: error
+          retention-days: 1
       - name: Measure pinned real PUB scenes in the same browser consumer
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
