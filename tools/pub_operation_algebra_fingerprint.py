@@ -64,6 +64,15 @@ def normalize_publisher_pdf(data: bytes) -> bytes:
     return out
 
 
+def canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def persistence_fingerprint(pub_data: bytes) -> dict[str, Any]:
     _, streams = stream_inventory(pub_data)
     logical_streams = sorted(
@@ -77,18 +86,32 @@ def persistence_fingerprint(pub_data: bytes) -> dict[str, Any]:
         ),
         key=lambda item: (item["name"], item["size"], item["sha256"]),
     )
-    return {
+    payload = {
         "contract": "chaptera.pub-logical-stream-multiset.v1",
         "stream_count": len(logical_streams),
         "streams": logical_streams,
     }
+    payload["sha256"] = sha256(canonical_json_bytes(payload))
+    return payload
 
 
-def build_fingerprint(pub_path: Path, pdf_path: Path) -> dict[str, Any]:
+def semantic_fingerprint(semantic_path: Path) -> dict[str, Any]:
+    value = json.loads(semantic_path.read_text(encoding="utf-8-sig"))
+    return {
+        "contract": "chaptera.publisher-com-table-snapshot.v1",
+        "sha256": sha256(canonical_json_bytes(value)),
+    }
+
+
+def build_fingerprint(
+    pub_path: Path,
+    pdf_path: Path,
+    semantic_path: Path | None = None,
+) -> dict[str, Any]:
     pub_data = pub_path.read_bytes()
     pdf_data = pdf_path.read_bytes()
     normalized_pdf = normalize_publisher_pdf(pdf_data)
-    return {
+    payload = {
         "schema": "chaptera.pub-operation-algebra-fingerprint.v1",
         "artifacts": {
             "pub_sha256": sha256(pub_data),
@@ -103,16 +126,20 @@ def build_fingerprint(pub_path: Path, pdf_path: Path) -> dict[str, Any]:
             "sha256": sha256(normalized_pdf),
         },
     }
+    if semantic_path is not None:
+        payload["semantic_fingerprint"] = semantic_fingerprint(semantic_path)
+    return payload
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pub", required=True, type=Path)
     parser.add_argument("--pdf", required=True, type=Path)
+    parser.add_argument("--semantic", type=Path)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
-    payload = build_fingerprint(args.pub, args.pdf)
+    payload = build_fingerprint(args.pub, args.pdf, args.semantic)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
