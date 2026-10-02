@@ -231,12 +231,22 @@ fn parse_bounded_variable_block(
     })
 }
 
-fn explicit_payload_children(contents: &[u8], node: &FieldNode) -> Result<Vec<FieldNode>> {
+fn explicit_typed_98_children(
+    contents: &[u8],
+    node: &FieldNode,
+    semantic_path: &str,
+) -> Result<Vec<FieldNode>> {
+    if node.field.block_type != BLOCK_TYPE_TYPED_CONTAINER_98 {
+        bail!(
+            "{semantic_path} must use Publisher11 typed wire 0x98; got 0x{:02X}",
+            node.field.block_type
+        );
+    }
     match &node.field.body {
         RawContentsBlockBody::Container { content_source, .. } => {
             parse_container_children(contents, content_source)
         }
-        _ => Ok(Vec::new()),
+        _ => bail!("{semantic_path} wire 0x98 lacks bounded container framing"),
     }
 }
 
@@ -253,21 +263,29 @@ fn collect_matching_entries(
             let formatting = last_fmt.and_then(|value| unique_child(&value.children, 0x02));
 
             let formatting_children = match formatting {
-                Some(value) => explicit_payload_children(contents, value)
-                    .context("parse target OplLastFmt.PoFormatting payload")?,
+                Some(value) => explicit_typed_98_children(
+                    contents,
+                    value,
+                    "OplLastFmt.PoFormatting",
+                )
+                .context("parse target OplLastFmt.PoFormatting payload")?,
                 None => Vec::new(),
             };
             let group_shape = unique_child(&formatting_children, 0x0E);
             let ecp_recolor = unique_child(&formatting_children, 0x22);
 
             let group_shape_children = match group_shape {
-                Some(value) => explicit_payload_children(contents, value)
-                    .context("parse target OplOdpo.GroupShape payload")?,
+                Some(value) => {
+                    explicit_typed_98_children(contents, value, "OplOdpo.GroupShape")
+                        .context("parse target OplOdpo.GroupShape payload")?
+                }
                 None => Vec::new(),
             };
             let ecp_recolor_children = match ecp_recolor {
-                Some(value) => explicit_payload_children(contents, value)
-                    .context("parse target OplOdpo.EcpRecolor payload")?,
+                Some(value) => {
+                    explicit_typed_98_children(contents, value, "OplOdpo.EcpRecolor")
+                        .context("parse target OplOdpo.EcpRecolor payload")?
+                }
                 None => Vec::new(),
             };
 
@@ -409,7 +427,7 @@ mod tests {
         assert_eq!(fields[0].field.block_type, BLOCK_TYPE_TYPED_CONTAINER_98);
         assert!(fields[0].children.is_empty());
 
-        let typed = explicit_payload_children(&bytes, &fields[0])
+        let typed = explicit_typed_98_children(&bytes, &fields[0], "test.OplEcp")
             .expect("explicit typed payload path must parse");
         assert_eq!(
             direct_scalar(&typed, 0x01).map(|value| value.value),
