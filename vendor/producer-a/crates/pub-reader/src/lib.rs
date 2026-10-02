@@ -100,10 +100,10 @@ use pub_escher::{
     SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
-    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu, Node,
-    NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
-    SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
-    derive_source_canonical_id,
+    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
+    Node, NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest,
+    Size2D, SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story,
+    StoryId, derive_source_canonical_id,
 };
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillMcldVerticalAlignment,
@@ -221,10 +221,8 @@ fn officeart_rotation_sin_cos_scaled(rotation_op: u32) -> (i128, i128) {
         cosine_sign = -1;
     }
 
-    let radians = div_round_nearest_i128(
-        i128::from(angle) * PI_SCALED,
-        i128::from(HALF_TURN_UNITS),
-    );
+    let radians =
+        div_round_nearest_i128(i128::from(angle) * PI_SCALED, i128::from(HALF_TURN_UNITS));
     let radians_sq = mul_affine_scaled(radians, radians);
 
     let mut sine = radians;
@@ -257,10 +255,8 @@ fn affine_rotation_about_bounds(rotation_op: u32, bounds: RectEmu) -> Option<Aff
     let c = -sine;
     let d = cosine;
 
-    let center_x_twice =
-        i128::from(bounds.x.get()) * 2 + i128::from(bounds.width.get());
-    let center_y_twice =
-        i128::from(bounds.y.get()) * 2 + i128::from(bounds.height.get());
+    let center_x_twice = i128::from(bounds.x.get()) * 2 + i128::from(bounds.width.get());
+    let center_y_twice = i128::from(bounds.y.get()) * 2 + i128::from(bounds.height.get());
     let denominator = 2 * AFFINE_DECIMAL_SCALE;
 
     let tx = div_round_nearest_i128(
@@ -4951,11 +4947,8 @@ mod tests {
 
     #[test]
     fn direct_image_rotation_preserves_signed_quarter_turn_about_center() {
-        let positive = bounded_direct_image_transform(
-            &[(90u32 << 16, false, false)],
-            0,
-            test_bounds(),
-        );
+        let positive =
+            bounded_direct_image_transform(&[(90u32 << 16, false, false)], 0, test_bounds());
         let BoundedDirectImageTransform::Applied(positive) = positive else {
             panic!("positive quarter-turn must be admitted");
         };
