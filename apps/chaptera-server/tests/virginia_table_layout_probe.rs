@@ -12,10 +12,7 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
 }
 
-fn page_table_census(
-    bundle: &pub_viewer::ViewerOpenBundle,
-    one_based_page: u32,
-) -> Value {
+fn page_table_census(bundle: &pub_viewer::ViewerOpenBundle, one_based_page: u32) -> Value {
     let page = bundle
         .geometry
         .document
@@ -58,10 +55,7 @@ fn page_table_census(
                 .as_deref()
                 .is_some_and(|key| key.starts_with("escher/group-ancestor/"))
         });
-        bump(
-            &mut provenance,
-            if grouped { "grouped" } else { "direct" },
-        );
+        bump(&mut provenance, if grouped { "grouped" } else { "direct" });
 
         bump(
             &mut simple_table,
