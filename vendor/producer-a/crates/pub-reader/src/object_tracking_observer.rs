@@ -36,6 +36,8 @@ pub struct PubTrackingWrapObservation {
     pub dx_wrap_dist_right: Option<PubTrackingScalar>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dy_wrap_dist_bottom: Option<PubTrackingScalar>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ecp_recolor_scalars: Vec<PubTrackingScalar>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +163,7 @@ fn collect_matching_entries(
             let last_fmt = unique_child(&node.children, 0x12);
             let formatting = last_fmt.and_then(|value| unique_child(&value.children, 0x02));
             let group_shape = formatting.and_then(|value| unique_child(&value.children, 0x0E));
+            let ecp_recolor = formatting.and_then(|value| unique_child(&value.children, 0x22));
 
             output.push(PubTrackingWrapObservation {
                 tracking_seq_num,
@@ -176,6 +179,9 @@ fn collect_matching_entries(
                     .and_then(|value| direct_scalar(&value.children, 0x07)),
                 dy_wrap_dist_bottom: group_shape
                     .and_then(|value| direct_scalar(&value.children, 0x08)),
+                ecp_recolor_scalars: ecp_recolor
+                    .map(|value| direct_scalars(&value.children))
+                    .unwrap_or_default(),
             });
         }
         collect_matching_entries(tracking_seq_num, target_oh_track, &node.children, output);
@@ -194,6 +200,10 @@ fn unique_child(nodes: &[FieldNode], id: u16) -> Option<&FieldNode> {
 fn direct_scalar(nodes: &[FieldNode], id: u16) -> Option<PubTrackingScalar> {
     let node = unique_child(nodes, id)?;
     scalar(&node.field)
+}
+
+fn direct_scalars(nodes: &[FieldNode]) -> Vec<PubTrackingScalar> {
+    nodes.iter().filter_map(|node| scalar(&node.field)).collect()
 }
 
 fn scalar(field: &RawContentsBlock) -> Option<PubTrackingScalar> {
