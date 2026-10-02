@@ -12,6 +12,7 @@ $TargetShapeId = 356
 $TargetSpid = 1062
 $ExpectedWrapEmu = 36576
 $ExpectedRecolor = 134217731
+$ExpectedSourceRevision = 19
 $WrapPropertyIds = @(900, 901, 902, 903)
 
 $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
@@ -235,6 +236,7 @@ function Get-TrackingSummary {
         $ecpRecolorScalars = @($entry.ecp_recolor_scalars)
     }
     return [ordered]@{
+        serialization_revision = [int]$Receipt.observer.serialization_revision
         tracking_object_count = [int]$Receipt.observer.tracking_object_count
         target_observation_count = $obs.Count
         target_oh_track = [long]$Receipt.target_oh_track
@@ -300,6 +302,9 @@ $sourceTrackingPath = Join-Path $privateDir "source-tracking.json"
 $sourceEscherPath = Join-Path $privateDir "source-escher.json"
 $sourceTracking = Invoke-Tracking -Tool $tools.tracking -Source $source.path -TargetSeq $TargetShapeId -Output $sourceTrackingPath
 $sourceTrackingSummary = Get-TrackingSummary -Receipt $sourceTracking
+if ([int]$sourceTrackingSummary.serialization_revision -ne $ExpectedSourceRevision) {
+    throw "Pinned help.pub serialization revision mismatch: expected $ExpectedSourceRevision, got $($sourceTrackingSummary.serialization_revision)"
+}
 if (-not (Test-ExactTrackingMirror -Summary $sourceTrackingSummary)) {
     throw "Pinned help.pub did not reproduce the exact source OplLastFmt GroupShape + EcpRecolor oracle for OhTrack=$TargetShapeId."
 }
@@ -377,15 +382,15 @@ $activeEscherPreserved = (
     (Test-ExactRecolorFopt -Target $afterTarget)
 )
 
-$afterTracking = $null
-$afterTrackingSummary = $null
-$resolvedAfterShapeId = $null
-if ($null -ne $afterTarget -and $null -ne $afterTarget.publisher_shape_id) {
-    $resolvedAfterShapeId = [long]$afterTarget.publisher_shape_id
-    $afterTrackingPath = Join-Path $privateDir "after-tracking.json"
-    $afterTracking = Invoke-Tracking -Tool $tools.tracking -Source $working -TargetSeq $resolvedAfterShapeId -Output $afterTrackingPath
-    $afterTrackingSummary = Get-TrackingSummary -Receipt $afterTracking
+$resolvedAfterShapeId = if ($null -ne $afterTarget -and $null -ne $afterTarget.publisher_shape_id) {
+    [long]$afterTarget.publisher_shape_id
+} else {
+    $null
 }
+$afterTrackingTarget = if ($null -ne $resolvedAfterShapeId) { $resolvedAfterShapeId } else { $TargetShapeId }
+$afterTrackingPath = Join-Path $privateDir "after-tracking.json"
+$afterTracking = Invoke-Tracking -Tool $tools.tracking -Source $working -TargetSeq $afterTrackingTarget -Output $afterTrackingPath
+$afterTrackingSummary = Get-TrackingSummary -Receipt $afterTracking
 
 $verdict = "semantic-loss"
 if ($activeEscherPreserved) {
@@ -420,6 +425,8 @@ $result = [ordered]@{
         escher = $sourceFoptSummary
     }
     native_lineage = [ordered]@{
+        source_serialization_revision = [int]$sourceTrackingSummary.serialization_revision
+        post_save_serialization_revision = [int]$afterTrackingSummary.serialization_revision
         save_count = 1
         save_operation = "Document.Save"
         semantic_mutation = $false
@@ -462,6 +469,8 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "lastfmt-mirror-moder
     "experiment=$ExpectedExperiment",
     "source_sha256=$($result.source.sha256)",
     "post_save_sha256=$($result.native_lineage.post_save_sha256)",
+    "source_serialization_revision=$($result.native_lineage.source_serialization_revision)",
+    "post_save_serialization_revision=$($result.native_lineage.post_save_serialization_revision)",
     "publisher_version=$($result.publisher.version)",
     "publisher_build=$($result.publisher.build)",
     "identity_route=$($result.identity.route)",
