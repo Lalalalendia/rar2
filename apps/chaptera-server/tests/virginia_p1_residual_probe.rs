@@ -188,8 +188,15 @@ fn text_layout_reason_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> 
     let mut shared_nonempty_lines = 0_usize;
     let mut layout_none = 0_usize;
     let mut backend_fallbacks = BTreeMap::<String, usize>::new();
+    let mut incomplete_story_extent = BTreeMap::<String, usize>::new();
+    let mut incomplete_typography_coverage = BTreeMap::<String, usize>::new();
+    let mut incomplete_text_bounds = BTreeMap::<String, usize>::new();
+    let mut incomplete_viewer_fragment_coverage = BTreeMap::<String, usize>::new();
+    let mut incomplete_viewer_fragment_lines = BTreeMap::<String, usize>::new();
 
     for node in plan.nodes {
+        let node_id = node.node_id;
+        let text_bounds_present = node.text_bounds.is_some();
         let Some(text) = node.text else {
             continue;
         };
@@ -210,6 +217,86 @@ fn text_layout_reason_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> 
             }
             RenderTextLayoutDispositionV1::BackendFallback { reason } => {
                 bump(&mut backend_fallbacks, reason.code());
+
+                if reason.code() == "shared_layout_incomplete" {
+                    let story_len = bundle
+                        .geometry
+                        .document
+                        .stories
+                        .iter()
+                        .find(|story| story.id == text.story_id)
+                        .and_then(|story| u32::try_from(story.text.chars().count()).ok());
+                    let full_story_extent = story_len.is_some_and(|len| {
+                        text.scalar_start == 0 && text.scalar_end == len
+                    });
+                    bump(
+                        &mut incomplete_story_extent,
+                        if full_story_extent {
+                            "full_story"
+                        } else {
+                            "partial_or_unknown"
+                        },
+                    );
+
+                    let typography_class = if text.typography.is_empty() {
+                        "absent"
+                    } else {
+                        let mut cursor = text.scalar_start;
+                        let complete = text.typography.iter().all(|run| {
+                            let ok = run.scalar_start == cursor
+                                && run.scalar_end > run.scalar_start
+                                && run.scalar_end <= text.scalar_end
+                                && run.text_size_emu > 0;
+                            cursor = run.scalar_end;
+                            ok
+                        }) && cursor == text.scalar_end;
+                        if complete {
+                            "complete"
+                        } else {
+                            "gap_or_invalid"
+                        }
+                    };
+                    bump(&mut incomplete_typography_coverage, typography_class);
+                    bump(
+                        &mut incomplete_text_bounds,
+                        if text_bounds_present {
+                            "present"
+                        } else {
+                            "absent"
+                        },
+                    );
+
+                    let viewer_fragments = bundle
+                        .geometry
+                        .text_fragments
+                        .iter()
+                        .filter(|fragment| fragment.frame_id == node_id)
+                        .collect::<Vec<_>>();
+                    let viewer_fragment_class = match viewer_fragments.as_slice() {
+                        [fragment]
+                            if story_len.is_some_and(|len| {
+                                fragment.scalar_start == 0 && fragment.scalar_end == len
+                            }) =>
+                        {
+                            "one_full_story"
+                        }
+                        [_] => "one_partial_story",
+                        [] => "absent",
+                        _ => "multiple",
+                    };
+                    bump(
+                        &mut incomplete_viewer_fragment_coverage,
+                        viewer_fragment_class,
+                    );
+                    let line_class = match viewer_fragments.as_slice() {
+                        [fragment] if fragment.line_count == 0 => "zero",
+                        [fragment] if fragment.line_count == 1 => "one",
+                        [fragment] if fragment.line_count > 1 => "multiple",
+                        [] => "absent",
+                        _ => "ambiguous",
+                    };
+                    bump(&mut incomplete_viewer_fragment_lines, line_class);
+                }
             }
         }
     }
@@ -222,6 +309,11 @@ fn text_layout_reason_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> 
         "shared_nonempty_lines": shared_nonempty_lines,
         "layout_none": layout_none,
         "backend_fallbacks": backend_fallbacks,
+        "shared_layout_incomplete_story_extent": incomplete_story_extent,
+        "shared_layout_incomplete_typography_coverage": incomplete_typography_coverage,
+        "shared_layout_incomplete_text_bounds": incomplete_text_bounds,
+        "shared_layout_incomplete_viewer_fragment_coverage": incomplete_viewer_fragment_coverage,
+        "shared_layout_incomplete_viewer_fragment_lines": incomplete_viewer_fragment_lines,
     })
 }
 
