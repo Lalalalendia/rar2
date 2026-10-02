@@ -1,0 +1,46 @@
+name: Devinettes RoundRectangle line probe
+
+on:
+  push:
+    branches:
+      - "measure/devinettes-roundrect-line-current-01"
+  pull_request:
+    paths:
+      - "apps/chaptera-server/tests/devinettes_roundrect_line_probe.rs"
+      - ".github/workflows/devinettes-roundrect-line-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Reacquire exact Virginia pair
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Trace RoundRectangle line projection
+        env:
+          CHAPTERA_DEVINETTES_ROUNDRECT_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
+          CHAPTERA_DEVINETTES_ROUNDRECT_SHA256: 077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e
+        run: |
+          set -euo pipefail
+          cargo test -p chaptera-server --test devinettes_roundrect_line_probe -- --ignored --nocapture
