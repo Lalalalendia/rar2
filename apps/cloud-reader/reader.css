@@ -219,6 +219,12 @@ footer{padding:12px 20px 18px;text-align:center;color:#566273;font-size:10px}
   .open-card{padding:13px}
   .drop{padding:24px 10px}
   body.reader-open main{padding-top:9px}
+  body.reader-open .open-card{padding:7px}
+  body.reader-open .open-card .drop{display:block;padding:8px;text-align:center}
+  body.reader-open .open-card .file-label{display:block;margin:0 0 6px;white-space:normal}
+  body.reader-open .open-card input[type=file]{display:block;width:100%;max-width:100%}
+  body.reader-open .open-card .actions{display:grid;grid-template-columns:1fr;margin-top:7px}
+  body.reader-open .open-card .actions button{width:100%}
 
   .controls{gap:7px}
   .control-group{width:100%}
