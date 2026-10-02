@@ -195,7 +195,11 @@ pub fn uniform_text_color_rgb_v1(fragment: &RenderTextFragmentV1) -> Option<[u8;
         }
         cursor = run.scalar_end;
     }
-    (cursor == fragment.scalar_end).then_some(rgb?).flatten()
+    if cursor == fragment.scalar_end {
+        rgb
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
