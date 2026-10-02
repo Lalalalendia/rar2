@@ -1,6 +1,7 @@
 use super::{
-    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, PubBridgeDiagnostic, PubNodePayload,
+    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, RAW_TYPE_SHAPE, PubBridgeDiagnostic,
     build_mature_0x2c_source_graph, build_reference_index, chunk_for_reference, seq_u32,
+    single_raw_type,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
@@ -98,72 +99,71 @@ pub fn build_mature_0x2c_structural_base_manifest(
         .context("inspect Escher SpContainers")?;
 
     let mut candidates = Vec::new();
-    for (page_id, page) in &build.graph.pages {
-        for node_id in &page.children {
-            let Some(node) = build.graph.nodes.get(node_id) else {
-                continue;
-            };
-            if node.kind != NodeKind::Shape {
-                continue;
-            }
+    for reference in references
+        .values()
+        .filter(|reference| single_raw_type(reference) == Some(RAW_TYPE_SHAPE))
+    {
+        let seq_num = seq_u32(reference.seq_num)?;
+        let contents_chunk = chunk_for_reference(contents_stream.clone(), &contents, reference)
+            .with_context(|| format!("parse Contents chunk seq {seq_num}"))?;
 
-            let payload: &PubNodePayload = &node.payload;
-            if payload.table.is_some()
-                || payload.table_story.is_some()
-                || payload.image_slot.is_some()
-            {
-                continue;
-            }
-
-            let seq_num = payload.contents_seq_num;
-            let Some(reference) = references.get(&seq_num) else {
-                continue;
-            };
-            if seq_u32(reference.seq_num)? != seq_num {
-                bail!("Contents reference key/seq mismatch for seq {seq_num}");
-            }
-            let contents_chunk = chunk_for_reference(contents_stream.clone(), &contents, reference)
-                .with_context(|| format!("parse Contents chunk seq {seq_num}"))?;
-
-            let (Some(contents_width), Some(contents_height)) = (
-                unique_contents_dimension(&contents_chunk, 0x00AA),
-                unique_contents_dimension(&contents_chunk, 0x00AB),
-            ) else {
-                continue;
-            };
-            if contents_width <= 0 || contents_height <= 0 {
-                continue;
-            }
-
-            // The evidence-only Contents↔Escher crosswalk is geometry-first.
-            // Do not gate candidate discovery on ClientData identity, FSP SPID, or
-            // SourceGraph's already-resolved OfficeArt binding. Those are useful
-            // corroborating observations, but would make the crosswalk circular
-            // and exclude otherwise valid ordinary text shapes.
-            let mut escher_matches = escher_inventory.shapes.iter().filter(|shape| {
-                exact_anchor_extent_matches(shape, contents_width, contents_height)
-            });
-            let Some(escher_shape) = escher_matches.next() else {
-                continue;
-            };
-            if escher_matches.next().is_some() {
-                continue;
-            }
-            let Some(fsp) = escher_shape.fsp.as_ref() else {
-                continue;
-            };
-
-            candidates.push(PubStructuralBaseCandidate {
-                page_id: *page_id,
-                node_id: *node_id,
-                contents_seq_num: seq_num,
-                bounds_emu: node.header.bounds,
-                officeart_spid: fsp.spid,
-                officeart_shape_type: fsp.shape_type,
-                contents_chunk,
-                escher_shape: escher_shape.clone(),
-            });
+        let (Some(contents_width), Some(contents_height)) = (
+            unique_contents_dimension(&contents_chunk, 0x00AA),
+            unique_contents_dimension(&contents_chunk, 0x00AB),
+        ) else {
+            continue;
+        };
+        if contents_width <= 0 || contents_height <= 0 {
+            continue;
         }
+
+        // Discovery is deliberately independent of SourceGraph and Publisher
+        // identity carriers. This is the PUB-RS-XWALK-01 evidence boundary:
+        // raw OplPo AA/AB geometry first, unique ClientAnchor extent second.
+        let mut escher_matches = escher_inventory.shapes.iter().filter(|shape| {
+            exact_anchor_extent_matches(shape, contents_width, contents_height)
+        });
+        let Some(escher_shape) = escher_matches.next() else {
+            continue;
+        };
+        if escher_matches.next().is_some() {
+            continue;
+        }
+        let Some(fsp) = escher_shape.fsp.as_ref() else {
+            continue;
+        };
+
+        // Bind the independently discovered raw crosswalk back to exactly one
+        // current SourceGraph page child only after the geometry match. The
+        // graph is metadata for the manifest, not crosswalk authority.
+        let mut graph_matches = build.graph.pages.iter().flat_map(|(page_id, page)| {
+            page.children.iter().filter_map(|node_id| {
+                let node = build.graph.nodes.get(node_id)?;
+                (node.kind == NodeKind::Shape
+                    && node.payload.contents_seq_num == seq_num
+                    && node.payload.table.is_none()
+                    && node.payload.table_story.is_none()
+                    && node.payload.image_slot.is_none())
+                .then_some((*page_id, *node_id, node.header.bounds))
+            })
+        });
+        let Some((page_id, node_id, bounds_emu)) = graph_matches.next() else {
+            continue;
+        };
+        if graph_matches.next().is_some() {
+            continue;
+        }
+
+        candidates.push(PubStructuralBaseCandidate {
+            page_id,
+            node_id,
+            contents_seq_num: seq_num,
+            bounds_emu,
+            officeart_spid: fsp.spid,
+            officeart_shape_type: fsp.shape_type,
+            contents_chunk,
+            escher_shape: escher_shape.clone(),
+        });
     }
 
     candidates.sort_by_key(|candidate| candidate.contents_seq_num);
@@ -281,6 +281,15 @@ mod tests {
                 .any(|stream| stream.path == ESCHER_STREAM_PATH)
         );
 
+        let candidate_seq_nums = manifest
+            .candidates
+            .iter()
+            .map(|candidate| candidate.contents_seq_num)
+            .collect::<Vec<_>>();
+        assert!(
+            candidate_seq_nums.contains(&293),
+            "Sample3 geometry-first manifest must retain the known seq293 witness; got {candidate_seq_nums:?}"
+        );
         assert!(
             !manifest.candidates.is_empty(),
             "Sample3 must expose at least one unique geometry-first structural-base candidate"
