@@ -1,0 +1,68 @@
+name: Virginia p1 residual probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/chaptera-server/tests/virginia_p1_residual_probe.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/virginia_p1_rotation_probe.rs"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - ".github/workflows/virginia-p1-residual-probe.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Reacquire exact Virginia pair
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Measure p1 product boundary
+        env:
+          CHAPTERA_VIRGINIA_P1_PUB: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_P1_RECEIPT: ${{ github.workspace }}/target/virginia-p1-residual/receipt.json
+        run: |
+          set -euo pipefail
+          cargo test -p chaptera-server --test virginia_p1_residual_probe -- --ignored --nocapture
+
+      - name: Measure p1 raw image rotation
+        env:
+          CHAPTERA_VIRGINIA_P1_PUB: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_P1_ROTATION_RECEIPT: ${{ github.workspace }}/target/virginia-p1-residual/rotation.json
+        run: |
+          set -euo pipefail
+          cargo test -p pub-reader --test virginia_p1_rotation_probe -- --ignored --nocapture
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: virginia-p1-residual-receipt
+          path: target/virginia-p1-residual/
+          if-no-files-found: warn
+          retention-days: 30
