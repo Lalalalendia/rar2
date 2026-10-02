@@ -14,6 +14,9 @@ struct Receipt {
     schema: &'static str,
     viewer_page: u32,
     later_overlapping_image_count: usize,
+    overlapping_story_count: usize,
+    reader_overlapping_story_node_count: usize,
+    reader_story_before_image_count: usize,
     reader_picture_node_count: usize,
     reader_resource_bound_node_count: usize,
     reader_source_window_count: usize,
@@ -89,6 +92,7 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
 
     let graph = &bundle.resolved_graph;
     let mut later_images = BTreeSet::new();
+    let mut overlapping_stories = BTreeSet::new();
 
     for (rank, node_id) in order.node_ids.iter().copied().enumerate() {
         let Some(node) = graph.nodes.get(&node_id) else {
@@ -117,6 +121,7 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
                 continue;
             }
             later_images.insert(later_id);
+            overlapping_stories.insert(node_id);
         }
     }
 
@@ -127,6 +132,10 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
     );
 
     let later_image_ids = later_images
+        .iter()
+        .map(serialized_string)
+        .collect::<BTreeSet<_>>();
+    let overlapping_story_ids = overlapping_stories
         .iter()
         .map(serialized_string)
         .collect::<BTreeSet<_>>();
@@ -145,6 +154,30 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         .iter()
         .filter(|node| later_image_ids.contains(&node.node_id))
         .collect::<Vec<_>>();
+
+    let later_image_scene_positions = scene
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| later_image_ids.contains(&node.node_id))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let reader_overlapping_story_node_count = scene
+        .nodes
+        .iter()
+        .filter(|node| overlapping_story_ids.contains(&node.node_id))
+        .count();
+    let reader_story_before_image_count = later_image_scene_positions
+        .first()
+        .map(|image_position| {
+            scene
+                .nodes
+                .iter()
+                .take(*image_position)
+                .filter(|node| overlapping_story_ids.contains(&node.node_id))
+                .count()
+        })
+        .unwrap_or(0);
 
     let reader_picture_node_count = reader_nodes
         .iter()
@@ -181,6 +214,9 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         schema: "chaptera.virginia-p24-occluder-reader-binding.v1",
         viewer_page,
         later_overlapping_image_count: later_images.len(),
+        overlapping_story_count: overlapping_stories.len(),
+        reader_overlapping_story_node_count,
+        reader_story_before_image_count,
         reader_picture_node_count,
         reader_resource_bound_node_count,
         reader_source_window_count,
@@ -202,6 +238,16 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         "later p24 image must survive as one Reader picture_frame"
     );
     assert_eq!(
+        receipt.reader_overlapping_story_node_count,
+        receipt.overlapping_story_count,
+        "all source-overlapped Story nodes must survive into Reader Scene"
+    );
+    assert_eq!(
+        receipt.reader_story_before_image_count,
+        receipt.overlapping_story_count,
+        "Reader Scene must preserve later-image ordering over the overlapped Story nodes"
+    );
+    assert_eq!(
         receipt.reader_resource_bound_node_count, 1,
         "later p24 image must retain one Reader resource binding"
     );
@@ -220,8 +266,11 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
     .expect("write Reader occlusion receipt");
 
     println!(
-        "VIRGINIA_P24_OCCLUDER_READER_BINDING later_images={} picture_nodes={} resource_bound={} source_window={} descriptors={} inline={}",
+        "VIRGINIA_P24_OCCLUDER_READER_BINDING later_images={} overlapping_stories={} reader_stories={} stories_before_image={} picture_nodes={} resource_bound={} source_window={} descriptors={} inline={}",
         receipt.later_overlapping_image_count,
+        receipt.overlapping_story_count,
+        receipt.reader_overlapping_story_node_count,
+        receipt.reader_story_before_image_count,
         receipt.reader_picture_node_count,
         receipt.reader_resource_bound_node_count,
         receipt.reader_source_window_count,
