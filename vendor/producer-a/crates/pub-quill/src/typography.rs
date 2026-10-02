@@ -1578,7 +1578,9 @@ fn parse_text_color_catalog(
         let len = to_usize(descriptor.data_length.value, "PL length")?;
         let end = checked_end(start, len, bytes.len(), "PL chunk")?;
         if start + 12 > end {
-            return Err(QuillTypographyReadError::new("PL chunk is shorter than fixed prefix"));
+            return Err(QuillTypographyReadError::new(
+                "PL chunk is shorter than fixed prefix",
+            ));
         }
         let count = to_usize(read_u32(bytes, start, end)?, "PL entry count")?;
         let mut cursor = start + 12;
@@ -1586,7 +1588,9 @@ fn parse_text_color_catalog(
             let record_start = cursor;
             let record_len = to_usize(read_u32(bytes, record_start, end)?, "PL record length")?;
             if record_len < 4 {
-                return Err(QuillTypographyReadError::new("PL record length is smaller than header"));
+                return Err(QuillTypographyReadError::new(
+                    "PL record length is smaller than header",
+                ));
             }
             let record_end = checked_end(record_start, record_len, end, "PL record")?;
             cursor = record_start + 4;
