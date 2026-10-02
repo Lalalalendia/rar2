@@ -1,4 +1,5 @@
 name: Migration 1050 corpus matrix
+# Exact-source migration evidence over the pinned Reader-1050 corpus.
 
 on:
   pull_request:
