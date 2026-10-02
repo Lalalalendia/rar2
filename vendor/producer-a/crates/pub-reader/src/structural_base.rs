@@ -259,6 +259,54 @@ mod tests {
         let manifest =
             build_mature_0x2c_structural_base_manifest(&source).expect("structural base manifest");
 
+        let contents = pub_cfb::read_stream_reader(Cursor::new(&source), CONTENTS_STREAM_PATH)
+            .expect("Sample3 Contents");
+        let header = parse_0x2c_header(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
+            .expect("Sample3 Contents header");
+        let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
+            .expect("Sample3 Contents trailer");
+        let references =
+            build_reference_index(&contents, &trailer.directory).expect("Sample3 references");
+        let reference_293 = references.get(&293).expect("Sample3 seq293 reference");
+        assert_eq!(single_raw_type(reference_293), Some(RAW_TYPE_SHAPE));
+        let chunk_293 = chunk_for_reference(
+            StreamPath(CONTENTS_STREAM_PATH.into()),
+            &contents,
+            reference_293,
+        )
+        .expect("Sample3 seq293 chunk");
+        assert_eq!(
+            unique_contents_dimension(&chunk_293, 0x00AA),
+            Some(5_076_000),
+            "Sample3 seq293 AA must survive the current bounded Contents decode; fields={:?}, tail={:?}",
+            chunk_293
+                .fields
+                .iter()
+                .map(|field| (field.id, field.block_type, field.raw_tag))
+                .collect::<Vec<_>>(),
+            chunk_293.unsupported_tail
+        );
+        assert_eq!(
+            unique_contents_dimension(&chunk_293, 0x00AB),
+            Some(972_000),
+            "Sample3 seq293 AB must survive the current bounded Contents decode"
+        );
+
+        let escher = pub_cfb::read_stream_reader(Cursor::new(&source), ESCHER_STREAM_PATH)
+            .expect("Sample3 Escher");
+        let escher_inventory =
+            inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher)
+                .expect("Sample3 Escher inventory");
+        let seq293_geometry_matches = escher_inventory
+            .shapes
+            .iter()
+            .filter(|shape| exact_anchor_extent_matches(shape, 5_076_000, 972_000))
+            .count();
+        assert_eq!(
+            seq293_geometry_matches, 1,
+            "Sample3 seq293 geometry must have exactly one independent ClientAnchor extent match"
+        );
+
         assert_eq!(manifest.schema, PUB_STRUCTURAL_BASE_SCHEMA_V1);
         assert_eq!(manifest.source_sha256, sha256_digest(&source));
 
