@@ -7,7 +7,7 @@ use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::Cursor,
     path::PathBuf,
@@ -54,11 +54,12 @@ fn shape_id(shape: &SpContainerObservation) -> Option<u32> {
     unique_field(shape.client_data.as_ref()?, PUBLISHER_FIELD_SHAPE_ID)
 }
 
+fn grounded(shape: &SpContainerObservation, grounded_ids: &BTreeSet<u32>) -> bool {
+    shape_id(shape).is_some_and(|seq| grounded_ids.contains(&seq))
+}
+
 fn is_candidate(shape: &SpContainerObservation, table_seq: u32) -> bool {
     if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(RECTANGLE) {
-        return false;
-    }
-    if shape.client_data.is_some() {
         return false;
     }
     let Some(anchor) = shape.client_anchor.as_ref() else {
@@ -372,6 +373,13 @@ fn exact_virginia_table_border_geometry_probe() {
     )
     .expect("inspect OfficeArt");
 
+    let grounded_ids = bundle
+        .resolved_graph
+        .nodes
+        .values()
+        .map(|node| node.payload.contents_seq_num)
+        .collect::<BTreeSet<_>>();
+
     let mut pages = Vec::new();
     let mut totals = Totals::default();
 
@@ -430,6 +438,7 @@ fn exact_virginia_table_border_geometry_probe() {
             for shape in inventory
                 .shapes
                 .iter()
+                .filter(|shape| !grounded(shape, &grounded_ids))
                 .filter(|shape| is_candidate(shape, table_seq))
             {
                 receipt.candidate_count += 1;
