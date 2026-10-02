@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 40
     env:
       POI_COMMIT: 942d95d85b15d0dfdb3bc9ba1b4f273f277757c8
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/migration-route-rust
       EVIDENCE_DIR: ${{ github.workspace }}/target/migration-editable-route-matrix
     steps:
       - uses: actions/checkout@v5
