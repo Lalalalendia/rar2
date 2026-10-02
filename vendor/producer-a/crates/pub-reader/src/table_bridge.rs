@@ -15,6 +15,7 @@ pub const TABLE_CELLS_SEQ_NUM_ID: u16 = 0x6B;
 pub const TABLE_WIDTH_ID: u16 = 0x68;
 pub const TABLE_HEIGHT_ID: u16 = 0x69;
 pub const TABLE_ROWCOL_ARRAY_ID: u16 = 0x6D;
+pub const TABLE_ROWCOL_PHYSICAL_END_ID: u16 = 0x01;
 pub const TABLE_ROWCOL_SIZE_ID: u16 = 0x02;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +39,26 @@ pub struct PubTableCellPaintSource {
     pub solid_fill_rgb: [u8; 3],
     /// Resolved effective fill visibility from that same admitted carrier.
     pub fill_visible: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubTableBorderAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTableBorderSegmentSource {
+    pub axis: PubTableBorderAxis,
+    pub row_start: u32,
+    pub column_start: u32,
+    pub row_end: u32,
+    pub column_end: u32,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
 }
@@ -299,6 +320,8 @@ pub struct PubTableSource {
     pub simple_table: Option<SimpleRectangularTable<TableCellId>>,
     pub layout_metrics: Option<PubTableLayoutMetricsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub border_segments: Vec<PubTableBorderSegmentSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
 }
 
@@ -412,6 +435,11 @@ fn populate_bounded_table_cell_fill(
 const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
 const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
 const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
+const TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID: u16 = 0x2001;
+const TABLE_AUTOFORMAT_ROW_START_ID: u16 = 0x2004;
+const TABLE_AUTOFORMAT_COLUMN_START_ID: u16 = 0x2005;
+const TABLE_AUTOFORMAT_ROW_END_ID: u16 = 0x2006;
+const TABLE_AUTOFORMAT_COLUMN_END_ID: u16 = 0x2007;
 
 fn unique_anchor_scalar(anchor: &pub_escher::PublisherFieldRecord, field_id: u16) -> Option<u32> {
     let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
@@ -476,6 +504,159 @@ fn native_autoformat_cell_ordinal(
         table_seq_num,
         cell_count,
     )
+}
+
+fn unique_anchor_scalar_or_zero(
+    anchor: &pub_escher::PublisherFieldRecord,
+    field_id: u16,
+) -> Option<u32> {
+    let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
+    let Some(first) = fields.next() else {
+        return Some(0);
+    };
+    fields.next().is_none().then_some(first.value)
+}
+
+fn populate_native_autoformat_table_borders(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+) -> Vec<PubTableBorderSegmentSource> {
+    let mut candidates = 0_usize;
+    let mut by_key = BTreeMap::<
+        (PubTableBorderAxis, u32, u32, u32, u32),
+        Vec<&pub_escher::SpContainerObservation>,
+    >::new();
+
+    for shape in &context.officeart_inventory.shapes {
+        if shape.fsp.as_ref().map(|fsp| fsp.shape_type)
+            != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+            || has_any_client_data_identity(shape)
+        {
+            continue;
+        }
+        let Some(anchor) = shape.client_anchor.as_ref() else {
+            continue;
+        };
+        if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID) != Some(table_seq_num)
+            || anchor
+                .fields
+                .iter()
+                .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+            || !anchor.fields.iter().any(|field| {
+                matches!(
+                    field.id,
+                    TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID
+                        | TABLE_AUTOFORMAT_ROW_START_ID
+                        | TABLE_AUTOFORMAT_COLUMN_START_ID
+                        | TABLE_AUTOFORMAT_ROW_END_ID
+                        | TABLE_AUTOFORMAT_COLUMN_END_ID
+                )
+            })
+        {
+            continue;
+        }
+        candidates += 1;
+
+        let allowed = [
+            TABLE_AUTOFORMAT_OWNER_REF_ID,
+            TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID,
+            TABLE_AUTOFORMAT_ROW_START_ID,
+            TABLE_AUTOFORMAT_COLUMN_START_ID,
+            TABLE_AUTOFORMAT_ROW_END_ID,
+            TABLE_AUTOFORMAT_COLUMN_END_ID,
+        ];
+        if anchor
+            .fields
+            .iter()
+            .any(|field| !allowed.contains(&field.id))
+        {
+            return Vec::new();
+        }
+
+        let Some(orientation) =
+            unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID)
+        else {
+            return Vec::new();
+        };
+        let Some(row_start) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_START_ID)
+        else {
+            return Vec::new();
+        };
+        let Some(column_start) =
+            unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_START_ID)
+        else {
+            return Vec::new();
+        };
+        let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_END_ID)
+        else {
+            return Vec::new();
+        };
+        let Some(column_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_END_ID)
+        else {
+            return Vec::new();
+        };
+        if row_start > rows || row_end > rows || column_start > columns || column_end > columns {
+            return Vec::new();
+        }
+        let axis = match orientation {
+            1 if row_start == row_end && column_start < column_end => {
+                PubTableBorderAxis::Horizontal
+            }
+            2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
+            _ => return Vec::new(),
+        };
+        by_key
+            .entry((axis, row_start, column_start, row_end, column_end))
+            .or_default()
+            .push(shape);
+    }
+
+    if candidates == 0 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(candidates);
+    for ((axis, row_start, column_start, row_end, column_end), shapes) in by_key {
+        let [shape] = shapes.as_slice() else {
+            return Vec::new();
+        };
+        let Some(rgb) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
+            .and_then(direct_officeart_rgb)
+        else {
+            return Vec::new();
+        };
+        let Some(width_emu) = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
+            .and_then(|value| (value > 0 && value <= 0x0132_F540).then_some(i64::from(value)))
+        else {
+            return Vec::new();
+        };
+        out.push(PubTableBorderSegmentSource {
+            axis,
+            row_start,
+            column_start,
+            row_end,
+            column_end,
+            rgb,
+            width_emu,
+            source_refs: vec![source_ref(
+                context.source,
+                &shape.source,
+                Some(contents_object_key(table_seq_num)),
+                Some("SpContainer/FOPT/table-autoformat-border-segment".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            )],
+        });
+    }
+
+    if out.len() == candidates {
+        out
+    } else {
+        Vec::new()
+    }
 }
 
 fn populate_native_autoformat_table_cell_fill(
@@ -598,6 +779,7 @@ fn populate_exact_table_cell_bounds(
     let mut cursor =
         ContentsCursor::bounded(content_source.stream.clone(), context.contents, start, len)?;
     let mut sizes = Vec::new();
+    let mut physical_ends = Vec::new();
 
     while cursor.remaining() > 0 {
         let item = parse_confirmed_block(&mut cursor)?;
@@ -625,23 +807,31 @@ fn populate_exact_table_cell_bounds(
             item_len,
         )?;
         let mut size = None;
+        let mut physical_end = None;
         while item_cursor.remaining() > 0 {
             let field = parse_confirmed_block(&mut item_cursor)?;
-            if field.id != TABLE_ROWCOL_SIZE_ID {
+            if field.id != TABLE_ROWCOL_SIZE_ID && field.id != TABLE_ROWCOL_PHYSICAL_END_ID {
                 continue;
             }
             let RawContentsBlockBody::U32 { value, .. } = field.body else {
-                bail!("TABLE row/column size is not u32");
+                bail!("TABLE row/column geometry field is not u32");
             };
-            if size.replace(value).is_some() {
-                bail!("TABLE row/column item has duplicate size");
+            if field.id == TABLE_ROWCOL_SIZE_ID {
+                if size.replace(value).is_some() {
+                    bail!("TABLE row/column item has duplicate size");
+                }
+            } else if physical_end.replace(value).is_some() {
+                bail!("TABLE row/column item has duplicate physical end");
             }
         }
         let size = size.context("TABLE row/column item has no size")?;
-        if size == 0 {
-            bail!("TABLE row/column size is zero");
+        let physical_end =
+            physical_end.context("TABLE row/column item has no physical cumulative end")?;
+        if size == 0 || physical_end == 0 {
+            bail!("TABLE row/column size or physical end is zero");
         }
         sizes.push(size);
+        physical_ends.push(physical_end);
     }
 
     let expected = usize::try_from(columns)
@@ -652,16 +842,16 @@ fn populate_exact_table_cell_bounds(
                 .and_then(|rows| columns.checked_add(rows))
         })
         .context("TABLE row/column count overflows usize")?;
-    if sizes.len() != expected {
+    if sizes.len() != expected || physical_ends.len() != expected {
         bail!(
-            "TABLE row/column array count {} differs from columns+rows {}",
-            sizes.len(),
+            "TABLE row/column array count differs from columns+rows {}",
             expected
         );
     }
 
     let split = usize::try_from(columns).context("TABLE column count does not fit usize")?;
     let (column_widths, row_heights) = sizes.split_at(split);
+    let (column_ends, row_ends) = physical_ends.split_at(split);
     let declared_width = unique_table_scalar(table_chunk, tail_scalars, TABLE_WIDTH_ID)?
         .map(|(value, _)| value)
         .context("TABLE width is missing")?;
@@ -680,7 +870,7 @@ fn populate_exact_table_cell_bounds(
     let height_sum = sum(row_heights)?;
     if width_sum != u64::from(declared_width) || height_sum != u64::from(declared_height) {
         bail!(
-            "TABLE track sums {}x{} differ from declared {}x{}",
+            "TABLE logical track sums {}x{} differ from declared {}x{}",
             width_sum,
             height_sum,
             declared_width,
@@ -692,32 +882,34 @@ fn populate_exact_table_cell_bounds(
         .map_err(|_| anyhow!("TABLE owner width is negative"))?;
     let owner_height = u64::try_from(context.table_bounds.height.get())
         .map_err(|_| anyhow!("TABLE owner height is negative"))?;
-    if width_sum > owner_width || height_sum > owner_height {
-        bail!(
-            "TABLE tracks {}x{} exceed owner bounds {}x{}",
-            width_sum,
-            height_sum,
-            owner_width,
-            owner_height
-        );
-    }
 
-    let prefix = |values: &[u32]| -> Result<Vec<u64>> {
-        let mut out = Vec::with_capacity(values.len() + 1);
+    let exact_boundaries = |ends: &[u32], owner_extent: u64, axis: &str| -> Result<Vec<u64>> {
+        let mut out = Vec::with_capacity(ends.len() + 1);
         out.push(0);
-        for value in values {
-            let next = out
-                .last()
-                .copied()
-                .unwrap_or(0_u64)
-                .checked_add(u64::from(*value))
-                .context("TABLE track prefix overflow")?;
-            out.push(next);
+        let mut previous = 0_u64;
+        for end in ends {
+            let end = u64::from(*end);
+            if end <= previous {
+                bail!("TABLE {axis} physical cumulative ends are not strictly increasing");
+            }
+            if end > owner_extent {
+                bail!("TABLE {axis} physical cumulative end exceeds owner extent");
+            }
+            out.push(end);
+            previous = end;
+        }
+        if previous != owner_extent {
+            bail!(
+                "TABLE {axis} physical terminal end {} differs from owner extent {}",
+                previous,
+                owner_extent
+            );
         }
         Ok(out)
     };
-    let column_prefix = prefix(column_widths)?;
-    let row_prefix = prefix(row_heights)?;
+
+    let column_prefix = exact_boundaries(column_ends, owner_width, "column")?;
+    let row_prefix = exact_boundaries(row_ends, owner_height, "row")?;
 
     for cell in cells {
         let coordinates = cell
@@ -775,7 +967,7 @@ fn populate_exact_table_cell_bounds(
             context.source,
             &array.source,
             Some(contents_object_key(table_seq_num)),
-            Some("TABLE/rowcol_array".into()),
+            Some("TABLE/rowcol_array/physical_end".into()),
             SourceRole::Projection,
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
@@ -1016,11 +1208,14 @@ pub(crate) fn build_table_source(
     }
 
     let simple_table = build_simple_table(rows, columns, &joined_cells);
-    if simple_table.is_some() {
+    let border_segments = if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
         let _ =
             populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
-    }
+        populate_native_autoformat_table_borders(context, table_seq_num, rows, columns)
+    } else {
+        Vec::new()
+    };
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
     Ok(Some(PubTableSource {
@@ -1033,6 +1228,7 @@ pub(crate) fn build_table_source(
         cells: joined_cells,
         simple_table,
         layout_metrics,
+        border_segments,
         source_refs: vec![
             source_ref(
                 context.source,
@@ -1610,6 +1806,7 @@ mod tests {
             cells: vec![source_cell],
             simple_table: Some(simple_table),
             layout_metrics: None,
+            border_segments: Vec::new(),
             source_refs: Vec::new(),
         };
         let story = Story {
@@ -1664,6 +1861,7 @@ mod tests {
             }],
             simple_table: None,
             layout_metrics: None,
+            border_segments: Vec::new(),
             source_refs: Vec::new(),
         };
         let story = Story {
