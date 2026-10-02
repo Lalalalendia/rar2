@@ -1,4 +1,4 @@
-name: C2R Publisher Symbol Census 2208
+name: C2R Publisher Symbol Census x64
 
 on:
   pull_request:
@@ -13,6 +13,17 @@ jobs:
   census:
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - "16.0.15601.20088"
+          - "16.0.16731.20170"
+          - "16.0.17928.20156"
+          - "16.0.19127.20154"
+    env:
+      PUB_OFFICE_VERSION: ${{ matrix.version }}
+      PUB_OFFICE_ARCH: x64
     steps:
       - uses: actions/checkout@v5
 
@@ -34,14 +45,14 @@ jobs:
             setup_version = (Get-Item out\odt\setup.exe).VersionInfo.FileVersion
           } | ConvertTo-Json | Set-Content -Encoding UTF8 out\odt-receipt.json
 
-      - name: Write exact 2208 configuration
+      - name: Write exact x64 configuration
         shell: pwsh
         run: |
           $source = "$pwd\out\office"
           New-Item -ItemType Directory -Force -Path $source | Out-Null
           @"
           <Configuration>
-            <Add SourcePath="$source" OfficeClientEdition="32" Channel="Current" Version="16.0.15601.20088">
+            <Add SourcePath="$source" OfficeClientEdition="64" Channel="Current" Version="$env:PUB_OFFICE_VERSION">
               <Product ID="O365ProPlusRetail">
                 <Language ID="en-us" />
                 <ExcludeApp ID="Access" />
@@ -60,19 +71,19 @@ jobs:
             <Display Level="None" AcceptEULA="TRUE" />
             <Property Name="AUTOACTIVATE" Value="0" />
           </Configuration>
-          "@ | Set-Content -Encoding UTF8 out\publisher2208.xml
+          "@ | Set-Content -Encoding UTF8 out\publisher.xml
 
-      - name: Download exact Publisher-bearing Office 2208 payload
+      - name: Download exact Publisher-bearing payload
         shell: pwsh
         timeout-minutes: 20
         run: |
           $ErrorActionPreference = "Stop"
           $started = Get-Date
-          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/download","$pwd\out\publisher2208.xml" -Wait -PassThru
+          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/download","$pwd\out\publisher.xml" -Wait -PassThru
           $files = @(Get-ChildItem out\office -Recurse -File -ErrorAction SilentlyContinue)
           [ordered]@{
-            requested_version = "16.0.15601.20088"
-            architecture = "x86"
+            requested_version = $env:PUB_OFFICE_VERSION
+            architecture = $env:PUB_OFFICE_ARCH
             channel = "Current"
             product = "O365ProPlusRetail-minus-non-Publisher-apps"
             exit_code = $p.ExitCode
@@ -83,15 +94,16 @@ jobs:
           } | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 out\download-receipt.json
           if ($p.ExitCode -ne 0 -or $files.Count -eq 0) { throw "ODT download failed" }
 
-      - name: Install exact 2208 payload
+      - name: Install exact payload
         shell: pwsh
         timeout-minutes: 20
         run: |
           $ErrorActionPreference = "Stop"
           $started = Get-Date
-          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/configure","$pwd\out\publisher2208.xml" -Wait -PassThru
+          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/configure","$pwd\out\publisher.xml" -Wait -PassThru
           [ordered]@{
-            requested_version = "16.0.15601.20088"
+            requested_version = $env:PUB_OFFICE_VERSION
+            architecture = $env:PUB_OFFICE_ARCH
             exit_code = $p.ExitCode
             elapsed_seconds = [int]((Get-Date)-$started).TotalSeconds
           } | ConvertTo-Json | Set-Content -Encoding UTF8 out\install-receipt.json
@@ -103,7 +115,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path out\modules | Out-Null
           $targets = @("MSPUB.EXE","MORPH9.DLL","PTXT9.DLL","PUBCONV.DLL")
-          $roots = @("C:\Program Files (x86)\Microsoft Office","C:\Program Files\Microsoft Office")
+          $roots = @("C:\Program Files\Microsoft Office","C:\Program Files (x86)\Microsoft Office")
           $rows = @()
           foreach ($target in $targets) {
             $matches = @()
@@ -142,10 +154,11 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          "## $env:PUB_OFFICE_VERSION / $env:PUB_OFFICE_ARCH" | Add-Content $env:GITHUB_STEP_SUMMARY
           foreach ($f in @("odt-receipt.json","download-receipt.json","install-receipt.json","module-receipt.json","symbol-census.json")) {
             $p = Join-Path out $f
             if (Test-Path $p) {
-              "## $f" | Add-Content $env:GITHUB_STEP_SUMMARY
+              "### $f" | Add-Content $env:GITHUB_STEP_SUMMARY
               Get-Content $p | Add-Content $env:GITHUB_STEP_SUMMARY
             }
           }
@@ -162,7 +175,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: c2r-publisher-symbol-census-2208-${{ github.run_id }}
+          name: c2r-publisher-symbol-census-x64-${{ matrix.version }}-${{ github.run_id }}
           path: |
             out/odt-receipt.json
             out/download-receipt.json
