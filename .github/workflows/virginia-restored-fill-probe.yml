@@ -6,6 +6,7 @@ on:
     paths:
       - "vendor/producer-a/crates/pub-reader/tests/restored_fill_stack_probe.rs"
       - "vendor/producer-a/crates/pub-viewer/tests/virginia_p24_occluder_viewer_probe.rs"
+      - "apps/chaptera-server/tests/virginia_p24_occluder_reader_probe.rs"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - ".github/workflows/virginia-restored-fill-probe.yml"
 
@@ -63,6 +64,14 @@ jobs:
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p24_occluder_viewer_probe -- --ignored --nocapture
 
 
+
+      - name: Trace p24 later image through Reader Scene
+        env:
+          CHAPTERA_VIRGINIA_RESTORED_FILL_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_OCCLUSION_READER_OUT: ${{ github.workspace }}/target/virginia-restored-fill/reader-occlusion.json
+        run: |
+          set -euo pipefail
+          cargo test -p chaptera-server --test virginia_p24_occluder_reader_probe -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
