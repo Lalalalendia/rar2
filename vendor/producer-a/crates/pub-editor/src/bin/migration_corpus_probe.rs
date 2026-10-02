@@ -89,8 +89,7 @@ fn probe_target(
                 }
                 Err(error) => {
                     result["materialization_state"] = Value::String("failed".to_owned());
-                    result["materialization_error_class"] =
-                        Value::String(error.to_string());
+                    result["materialization_error_class"] = Value::String(error.to_string());
                 }
             }
         } else {
