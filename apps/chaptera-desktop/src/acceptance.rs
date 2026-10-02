@@ -140,7 +140,9 @@ pub(crate) fn story_state(editor: &EditorSession, story_id: StoryId) -> Result<S
     Ok(story_state_id_v1(story_id, &story.text))
 }
 
-pub(crate) fn explicit_loss_flags(report: &pub_export::ExportReport) -> Result<(u64, bool, bool), String> {
+pub(crate) fn explicit_loss_flags(
+    report: &pub_export::ExportReport,
+) -> Result<(u64, bool, bool), String> {
     let value = serde_json::to_value(report)
         .map_err(|error| format!("serialize export report for acceptance: {error}"))?;
     let counts = value
