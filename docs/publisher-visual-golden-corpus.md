@@ -40,3 +40,31 @@ Canonical tranche files:
 - Natural corpus: 40 total / 37 exported
 - Historical/container: 24 total / 6 exported
 
+
+## Batch 01 / Tranche C
+
+- IDs: 065-080
+- Exported PDFs: 12/16
+- Non-empty visual output: 10
+- Empty exported visual output: 2 — IDs 072 and 076 each produce a one-page PDF with 0 text, 0 drawings and 0 images
+- Publisher no-open: 4/16 — natural IDs 069 and 074; historical PAGEWIZ IDs 067 BIZSALE.PUB and 078 MEMBRDIR.PUB
+- External PDF bundle SHA-256: `d82a183026b70948b0001a7f6edbdd2ba66c21279f4fdd90e62ca1ee50d1b38a`
+- Tranche includes a 20-page document (068), a 27-page image-heavy document (075), large/custom page sizes, vector-only output, forms, labels and text-heavy layouts.
+- First-page raster verification passed for all 12 PDFs; 072/076 are intentionally classified as degraded empty-output witnesses rather than clean goldens.
+
+## Batch 01 complete status
+
+- Selected PUB: **80**
+- Publisher PDFs exported: **55**
+- Non-empty visual outputs: **53**
+- Empty exported outputs: **2**
+- Publisher 2019 no-open: **25**
+- Total reference PDF pages: **162**
+- Natural corpus: **49/54 exported**, **5 no-open**
+- Historical/container: **6/26 exported**, **20 no-open**
+- External-dependency warnings explicitly recorded: **024, 025**
+- No clean-golden admission is claimed yet because exact per-ID font/environment warning membership was not captured for the successful exports.
+- Exact pair identity is durable in source-free CSV/JSON receipts; raw PDF bytes remain external oracle data and are validated by committed SHA-256 before comparison.
+
+Canonical complete-batch receipt:
+- `tools/corpus/receipts/publisher-visual-golden-batch-01-summary-2026-10-03.json`
