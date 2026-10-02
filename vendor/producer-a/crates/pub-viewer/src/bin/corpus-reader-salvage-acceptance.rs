@@ -106,6 +106,9 @@ fn corruption_name(value: ReaderSalvageCorruptionEvidence) -> &'static str {
         ReaderSalvageCorruptionEvidence::QuillStrsServiceSpanOutOfBounds => {
             "quill_strs_service_span_out_of_bounds"
         }
+        ReaderSalvageCorruptionEvidence::Publisher97MalformedOrStaleMediaVariant => {
+            "publisher97_malformed_or_stale_media_variant"
+        }
     }
 }
 
