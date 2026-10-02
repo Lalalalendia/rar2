@@ -566,9 +566,17 @@ fn table_span_is_one(value: &u32) -> bool {
 pub struct ViewerNodePaint {
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_shape: Option<ViewerPresetShape>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_fill_rgb: Option<[u8; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_line: Option<ViewerSolidLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerPresetShape {
+    RoundRect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -627,6 +635,21 @@ fn bridge_effective_value<T: Clone>(
     }
 }
 
+fn viewer_preset_shape_from_canonical(
+    node: &Node<PubResolvedNodePayload>,
+) -> Option<ViewerPresetShape> {
+    node.header
+        .source_refs
+        .iter()
+        .any(|source_ref| {
+            source_ref.path.as_deref() == Some("SpContainer/FSP/default-roundrect")
+                && source_ref.authority == AuthorityClass::Authoritative
+                && source_ref.confidence == Some(ReadConfidence::Exact)
+                && matches!(source_ref.role, SourceRole::Projection)
+        })
+        .then_some(ViewerPresetShape::RoundRect)
+}
+
 fn viewer_node_paint_from_canonical_bridge(
     node: &Node<PubResolvedNodePayload>,
 ) -> Result<Option<ViewerNodePaint>> {
@@ -661,6 +684,7 @@ fn viewer_node_paint_from_canonical_bridge(
                     node.payload.table.is_some(),
                     ViewerNodePaint {
                         node_id: node.header.id,
+                        preset_shape: viewer_preset_shape_from_canonical(node),
                         solid_fill_rgb: paint.solid_fill_rgb,
                         solid_line: paint.solid_line.map(|line| ViewerSolidLine {
                             rgb: line.rgb,
@@ -719,6 +743,7 @@ fn viewer_node_paint_from_canonical_bridge(
             node.payload.table.is_some(),
             ViewerNodePaint {
                 node_id: node.header.id,
+                preset_shape: viewer_preset_shape_from_canonical(node),
                 solid_fill_rgb: paint.solid_fill_rgb,
                 solid_line: paint.solid_line.map(|line| ViewerSolidLine {
                     rgb: line.rgb,
@@ -3920,6 +3945,7 @@ mod tests {
             true,
             ViewerNodePaint {
                 node_id: NodeId::from_canonical(id(90)),
+                preset_shape: None,
                 solid_fill_rgb: Some([91, 155, 213]),
                 solid_line: Some(line.clone()),
             },
@@ -3931,6 +3957,7 @@ mod tests {
             false,
             ViewerNodePaint {
                 node_id: NodeId::from_canonical(id(91)),
+                preset_shape: None,
                 solid_fill_rgb: Some([91, 155, 213]),
                 solid_line: Some(line.clone()),
             },
