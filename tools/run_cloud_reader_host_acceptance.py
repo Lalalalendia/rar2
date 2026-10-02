@@ -15,16 +15,15 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import hashlib
-import http.client
 import json
 import os
 import pathlib
 import re
-import ssl
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -387,6 +386,12 @@ def guest_probe(origin: str, fixture: bytes, expected_sha256: str, *, timeout: i
     }
 
 
+def require_probe_equivalence(baseline: dict[str, Any], candidate: dict[str, Any], label: str) -> None:
+    for key in ("classification", "compatibility_state", "page_count"):
+        if candidate.get(key) != baseline.get(key):
+            raise AcceptanceError(f"{label} changed reader {key}")
+
+
 def concurrent_reader_receipt(
     origin: str,
     fixture: bytes,
@@ -597,6 +602,7 @@ def main() -> int:
         restart_ms = restart_services()
         local_health(args.app_port)
         probe = guest_probe(args.origin, fixture, fixture_sha, timeout=args.timeout_seconds)
+        require_probe_equivalence(initial_probe, probe, "restart")
         restart = {
             "exercised": True,
             "restart_ms": restart_ms,
@@ -635,6 +641,7 @@ def main() -> int:
                 previous_probe = guest_probe(
                     args.origin, fixture, fixture_sha, timeout=args.timeout_seconds
                 )
+                require_probe_equivalence(initial_probe, previous_probe, "rollback")
                 rollback.update({
                     "exercised": True,
                     "previous_restart_ms": rollback_restart_ms,
@@ -648,6 +655,7 @@ def main() -> int:
                     restored_probe = guest_probe(
                         args.origin, fixture, fixture_sha, timeout=args.timeout_seconds
                     )
+                    require_probe_equivalence(initial_probe, restored_probe, "restore")
                     rollback["restored_current"] = True
                     rollback["restore_restart_ms"] = restore_restart_ms
                     rollback["restored_reader_probe"] = restored_probe
