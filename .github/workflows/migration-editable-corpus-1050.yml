@@ -2,6 +2,11 @@ name: Migration editable corpus 1050
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - corpus/migration-core65-01
+    paths:
+      - ".github/workflows/migration-editable-corpus-1050.yml"
 
 concurrency:
   group: migration-editable-corpus-1050
