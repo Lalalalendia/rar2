@@ -199,7 +199,8 @@ export function resolvedTextLinePaintPlan(node) {
         text: String(span.text ?? ""),
         x_offset_emu: xOffset,
         measured_width_emu: spanWidth,
-        font_size_emu: spanFontSize
+        font_size_emu: spanFontSize,
+        fill: rgb(span.rgb)
       }));
     }
 
@@ -210,6 +211,7 @@ export function resolvedTextLinePaintPlan(node) {
       text: String(line.text ?? ""),
       measured_width_emu: measuredWidth,
       line_height_emu: currentLineHeight,
+      fill: rgb(line.rgb),
       spans: Object.freeze(spans)
     }));
     cursorY += currentLineHeight;
@@ -276,7 +278,8 @@ function appendText(group, defs, node, fonts, index) {
       "dominant-baseline": "text-before-edge",
       "data-text-authority": "server-shared-resolved",
       "data-text-line-index": line.line_index,
-      "data-measured-width-emu": line.measured_width_emu
+      "data-measured-width-emu": line.measured_width_emu,
+      fill: line.fill
     });
     text.setAttribute("xml:space", "preserve");
     if (line.spans.length) {
@@ -286,7 +289,8 @@ function appendText(group, defs, node, fonts, index) {
           "font-size": span.font_size_emu / EMU_PER_CSS_PX,
           "data-text-span-start": span.scalar_start,
           "data-text-span-end": span.scalar_end,
-          "data-measured-width-emu": span.measured_width_emu
+          "data-measured-width-emu": span.measured_width_emu,
+          fill: span.fill ?? line.fill
         });
         tspan.setAttribute("xml:space", "preserve");
         tspan.textContent = span.text;
