@@ -928,6 +928,54 @@ fn page_area_bucket(bounds: RectEmu, page_width: i64, page_height: i64) -> &'sta
     }
 }
 
+fn source_node_family(node: &pub_model::SourceNode) -> &'static str {
+    if node.payload.table.is_some() {
+        "table"
+    } else if node.payload.image_slot.is_some() {
+        "image"
+    } else if node.payload.story_frame.is_some() {
+        "story"
+    } else {
+        "other_shape"
+    }
+}
+
+fn effective_paint_execution_class(node: &pub_model::SourceNode) -> &'static str {
+    let Some(paint) = node.payload.effective_paint.as_ref() else {
+        return "effective_paint_absent";
+    };
+
+    let visible_solid = paint.fill.solid.as_ref().is_some_and(|value| value.value)
+        && paint.fill.visible.as_ref().is_some_and(|value| value.value)
+        && paint.fill.color_rgb.is_some();
+    if visible_solid {
+        return "complete_visible_solid";
+    }
+
+    let visible_line = paint.line.visible.as_ref().is_some_and(|value| value.value)
+        && paint.line.color_rgb.is_some()
+        && paint
+            .line
+            .width_emu
+            .as_ref()
+            .is_some_and(|value| value.value > 0);
+    if visible_line {
+        return "complete_visible_line";
+    }
+
+    let has_any_fill = paint.fill.solid.is_some()
+        || paint.fill.visible.is_some()
+        || paint.fill.color_rgb.is_some();
+    let has_any_line = paint.line.visible.is_some()
+        || paint.line.color_rgb.is_some()
+        || paint.line.width_emu.is_some();
+    if has_any_fill || has_any_line {
+        "effective_paint_incomplete_or_hidden"
+    } else {
+        "effective_paint_empty"
+    }
+}
+
 fn rects_overlap(a: RectEmu, b: RectEmu) -> bool {
     let (Some(ar), Some(ab), Some(br), Some(bb)) = (a.right(), a.bottom(), b.right(), b.bottom())
     else {
@@ -1072,6 +1120,9 @@ struct PageReceipt {
     restored_local_fopt_property_signature_histogram: BTreeMap<String, usize>,
     restored_local_fopt_storage_form_histogram: BTreeMap<String, usize>,
     restored_local_fopt_coverage_histogram: BTreeMap<String, usize>,
+    restored_later_overlap_count: usize,
+    restored_later_overlap_family_histogram: BTreeMap<String, usize>,
+    restored_later_overlap_paint_histogram: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1524,6 +1575,15 @@ fn exact_virginia_restored_fill_stack_probe() {
                             earlier += 1;
                         } else {
                             later += 1;
+                            page.restored_later_overlap_count += 1;
+                            bump(
+                                &mut page.restored_later_overlap_family_histogram,
+                                source_node_family(other),
+                            );
+                            bump(
+                                &mut page.restored_later_overlap_paint_histogram,
+                                effective_paint_execution_class(other),
+                            );
                         }
                     }
                     format!("earlier={earlier};later={later}")
@@ -1791,6 +1851,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-I extended foreground-color profiles emit only absent/default/non-default representation/modifier and aggregate participation classes; no RGB, scheme ordinal, tint/shade scalar, or raw property value is emitted.",
             "Stage-J resolves supported extended foreground intent only inside the probe and emits equality/no-extended/unsupported classes; no RGB, scheme ordinal, HSL component, tint/shade amount, or raw property value is emitted.",
             "Stage-K local FOPT census emits only property IDs, per-shape unique ID-set signatures, scalar/complex/fBid/duplicate storage classes, and whether an ID was already covered by Stages B-J; no property values are emitted.",
+            "Stage-L source occlusion census emits only counts, node-family classes, and coarse effective-paint execution classes for later source-ordered overlapping nodes; no identities, coordinates, colors, text, offsets, or bytes are emitted.",
         ],
     };
 
