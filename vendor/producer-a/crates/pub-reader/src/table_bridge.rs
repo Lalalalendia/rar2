@@ -34,9 +34,9 @@ pub struct PubTableCellSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellPaintSource {
-    /// Literal sRGB from the exact geometry-matched child OfficeArt FOPT 0x0181.
+    /// Resolved sRGB from one bounded source-backed OfficeArt cell-paint carrier.
     pub solid_fill_rgb: [u8; 3],
-    /// Separate explicit fFilled state from the matched child FOPT 0x01BF.
+    /// Resolved effective fill visibility from that same admitted carrier.
     pub fill_visible: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
@@ -314,6 +314,8 @@ pub(crate) struct TableBridgeContext<'a> {
     pub table_bounds: &'a RectEmu,
     pub officeart_owner_shape: &'a pub_escher::SpContainerObservation,
     pub officeart_inventory: &'a SpContainerInventory,
+    pub color_scheme: Option<&'a MatureColorScheme>,
+    pub dgg_defaults: Option<&'a pub_escher::DggDefaultOptionsObservation>,
 }
 
 fn rect_edges(rect: RectEmu) -> Option<[i128; 4]> {
@@ -405,6 +407,158 @@ fn populate_bounded_table_cell_fill(
     }
 
     Ok(admitted)
+}
+
+
+const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
+const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
+const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
+
+fn unique_anchor_scalar(
+    shape: &pub_escher::SpContainerObservation,
+    field_id: u16,
+) -> Option<u32> {
+    let anchor = shape.client_anchor.as_ref()?;
+    let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
+    let first = fields.next()?.value;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn has_any_client_data_identity(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.client_data.as_ref().is_some_and(|record| {
+        record
+            .fields
+            .iter()
+            .any(|field| field.id == PUBLISHER_FIELD_SHAPE_ID)
+    })
+}
+
+fn native_autoformat_cell_ordinal(
+    shape: &pub_escher::SpContainerObservation,
+    table_seq_num: u32,
+) -> Option<u32> {
+    if shape.fsp.as_ref()?.shape_type != TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE {
+        return None;
+    }
+    if has_any_client_data_identity(shape) {
+        return None;
+    }
+    let anchor = shape.client_anchor.as_ref()?;
+    if unique_anchor_scalar(shape, TABLE_AUTOFORMAT_OWNER_REF_ID)? != table_seq_num {
+        return None;
+    }
+
+    match anchor.fields.as_slice() {
+        [only] if only.id == TABLE_AUTOFORMAT_OWNER_REF_ID => Some(0),
+        [first, second]
+            if ((first.id == TABLE_AUTOFORMAT_OWNER_REF_ID
+                && second.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+                || (first.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID
+                    && second.id == TABLE_AUTOFORMAT_OWNER_REF_ID)) =>
+        {
+            unique_anchor_scalar(shape, TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+        }
+        _ => None,
+    }
+}
+
+fn populate_native_autoformat_table_cell_fill(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    cells: &mut [PubTableCellSource],
+) -> usize {
+    let mut by_ordinal =
+        BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
+
+    for shape in &context.officeart_inventory.shapes {
+        let Some(ordinal) = native_autoformat_cell_ordinal(shape, table_seq_num) else {
+            continue;
+        };
+        if usize::try_from(ordinal)
+            .ok()
+            .is_none_or(|ordinal| ordinal >= cells.len())
+        {
+            continue;
+        }
+        by_ordinal.entry(ordinal).or_default().push(shape);
+    }
+
+    let mut admitted = 0_usize;
+    for cell in cells.iter_mut().filter(|cell| cell.paint.is_none()) {
+        let ordinal = cell.stored_record_index;
+        let Some([shape]) = by_ordinal.get(&ordinal).map(Vec::as_slice) else {
+            continue;
+        };
+
+        let Some(paint) = resolve_bounded_effective_officeart_paint(
+            shape,
+            context.dgg_defaults,
+            context.color_scheme,
+            admits_normative_2d_paint_defaults(shape),
+        ) else {
+            continue;
+        };
+        if paint.fill.solid.as_ref().map(|value| value.value) != Some(true) {
+            continue;
+        }
+        let Some(color) = paint.fill.color_rgb.as_ref().map(|value| value.value) else {
+            continue;
+        };
+        let Some(visible) = paint.fill.visible.as_ref().map(|value| value.value) else {
+            continue;
+        };
+
+        let mut source_refs = vec![source_ref(
+            context.source,
+            &shape.source,
+            Some(format!(
+                "contents/0x2c/seq/{table_seq_num}/cell/stored/{}",
+                cell.stored_record_index
+            )),
+            Some("SpContainer/FOPT/table-autoformat-cell-fill".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )];
+        if paint_context_uses_officeart_scheme_color(shape, context.dgg_defaults) {
+            if let Some(scheme) = context.color_scheme {
+                source_refs.push(source_ref(
+                    context.source,
+                    &scheme.source,
+                    None,
+                    Some("OplSccm/current-color-scheme".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+        }
+        if effective_paint_has_dgg_authority(&paint) {
+            if let Some(dgg) = context.dgg_defaults {
+                source_refs.push(source_ref(
+                    context.source,
+                    &dgg.source,
+                    Some("escher/dgg/default-options".into()),
+                    Some("DggContainer/FOPT-defaults".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+        }
+
+        cell.paint = Some(PubTableCellPaintSource {
+            solid_fill_rgb: color,
+            fill_visible: visible,
+            source_refs,
+        });
+        admitted += 1;
+    }
+
+    admitted
 }
 
 fn populate_exact_table_cell_bounds(
@@ -857,6 +1011,8 @@ pub(crate) fn build_table_source(
     let simple_table = build_simple_table(rows, columns, &joined_cells);
     if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
+        let _ =
+            populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
     }
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
