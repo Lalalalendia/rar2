@@ -466,10 +466,12 @@ fn exact_virginia_table_border_child_anchor_census() {
             let [owner] = owner_matches.as_slice() else {
                 panic!("TABLE owner OfficeArt shape must be unique for seq {table_seq}");
             };
-            let group_rect = coordinate_rect(
-                owner.fspgr.as_ref().expect("TABLE owner must expose FSPGR"),
+            let owner_group_rect = coordinate_rect(
+                owner.child_anchor
+                    .as_ref()
+                    .expect("TABLE owner must expose ChildAnchor in shared group space"),
             )
-            .expect("TABLE FSPGR must be positive");
+            .expect("TABLE owner ChildAnchor must be positive");
             let owner_rect = rect_edges(node.header.bounds).expect("TABLE owner rect");
             let grid_rect = viewer_grid_rect(viewer).expect("complete Viewer grid");
 
@@ -505,8 +507,11 @@ fn exact_virginia_table_border_child_anchor_census() {
                 };
                 stats.child_anchor_count += 1;
 
-                if shape.parent_group_shape_source.as_ref() != Some(&owner.source) {
-                    bump(&mut stats.unresolved_reasons, "parent_group_owner_mismatch");
+                if shape.parent_group_shape_source.as_ref()
+                    != owner.parent_group_shape_source.as_ref()
+                    || shape.parent_group_shape_source.is_none()
+                {
+                    bump(&mut stats.unresolved_reasons, "shared_parent_group_mismatch");
                     continue;
                 }
                 stats.parent_group_match_count += 1;
@@ -515,7 +520,7 @@ fn exact_virginia_table_border_child_anchor_census() {
                     bump(&mut stats.unresolved_reasons, "child_anchor_non_positive");
                     continue;
                 };
-                let Some(projected) = project_rect(child_rect, group_rect, owner_rect) else {
+                let Some(projected) = project_rect(child_rect, owner_group_rect, owner_rect) else {
                     bump(&mut stats.unresolved_reasons, "projection_failed");
                     continue;
                 };
