@@ -621,37 +621,36 @@ def main() -> int:
 
     if args.exercise_rollback:
         if previous_target is None:
-            raise AcceptanceError("--exercise-rollback requested but previous release is absent")
-        if not safe:
-            raise AcceptanceError(
-                "--exercise-rollback requested but exact previous binary is not schema-compatible"
-            )
-        original_target = current_target
-        switched = False
-        try:
-            atomic_switch_current(previous_target)
-            switched = True
-            rollback_restart_ms = restart_services()
-            local_health(args.app_port)
-            previous_probe = guest_probe(
-                args.origin, fixture, fixture_sha, timeout=args.timeout_seconds
-            )
-            rollback.update({
-                "exercised": True,
-                "previous_restart_ms": rollback_restart_ms,
-                "previous_reader_probe": previous_probe,
-            })
-        finally:
-            if switched:
-                atomic_switch_current(original_target)
-                restore_restart_ms = restart_services()
+            rollback["blocked_reason"] = "previous_release_absent"
+        elif not safe:
+            rollback["blocked_reason"] = "previous_binary_schema_incompatible"
+        else:
+            original_target = current_target
+            switched = False
+            try:
+                atomic_switch_current(previous_target)
+                switched = True
+                rollback_restart_ms = restart_services()
                 local_health(args.app_port)
-                restored_probe = guest_probe(
+                previous_probe = guest_probe(
                     args.origin, fixture, fixture_sha, timeout=args.timeout_seconds
                 )
-                rollback["restored_current"] = True
-                rollback["restore_restart_ms"] = restore_restart_ms
-                rollback["restored_reader_probe"] = restored_probe
+                rollback.update({
+                    "exercised": True,
+                    "previous_restart_ms": rollback_restart_ms,
+                    "previous_reader_probe": previous_probe,
+                })
+            finally:
+                if switched:
+                    atomic_switch_current(original_target)
+                    restore_restart_ms = restart_services()
+                    local_health(args.app_port)
+                    restored_probe = guest_probe(
+                        args.origin, fixture, fixture_sha, timeout=args.timeout_seconds
+                    )
+                    rollback["restored_current"] = True
+                    rollback["restore_restart_ms"] = restore_restart_ms
+                    rollback["restored_reader_probe"] = restored_probe
 
     complete = bool(
         args.exercise_restart
@@ -691,7 +690,8 @@ def main() -> int:
             "document_text_emitted": False,
             "guest_credentials_emitted": False,
             "storage_locators_emitted": False,
-            "database_mutated_by_harness": False,
+            "guest_session_state_created_via_public_api": True,
+            "database_reset_by_harness": False,
             "schema_migration_run_by_harness": False,
         },
     }
