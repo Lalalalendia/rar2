@@ -52,6 +52,9 @@ fn native_t840_cell_ordinal(
     shape: &SpContainerObservation,
     table_seq_num: u32,
 ) -> Option<u32> {
+    if shape.fsp.as_ref()?.shape_type != OFFICE_ART_RECTANGLE {
+        return None;
+    }
     let anchor = shape.client_anchor.as_ref()?;
     if unique_field(anchor, PUBLISHER_FIELD_TABLE_OWNER_REF)? != table_seq_num {
         return None;
@@ -228,7 +231,11 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
                     continue;
                 };
                 receipt.cell_carrier_candidate_count += 1;
-                if usize::try_from(ordinal).ok().is_none_or(|value| value >= cell_count) {
+                let Ok(ordinal_usize) = usize::try_from(ordinal) else {
+                    receipt.out_of_range_cell_ordinal_count += 1;
+                    continue;
+                };
+                if ordinal_usize >= cell_count {
                     receipt.out_of_range_cell_ordinal_count += 1;
                     continue;
                 }
