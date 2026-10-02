@@ -66,6 +66,7 @@ jobs:
             gh workflow run "$workflow" --ref main
           }
           dispatch_once "cloud-reader-reference-pairs.yml"
+          dispatch_once "publisher-visual-golden-batch01.yml"
           dispatch_once "viewer-page-role-virginia.yml"
 
   research:
