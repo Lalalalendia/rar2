@@ -629,8 +629,7 @@ fn is_native_table_border_candidate(
     shape: &pub_escher::SpContainerObservation,
     table_seq_num: u32,
 ) -> bool {
-    if shape.fsp.as_ref().map(|fsp| fsp.shape_type)
-        != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
         || has_any_client_data_identity(shape)
     {
         return false;
