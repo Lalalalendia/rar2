@@ -350,3 +350,5 @@ jobs:
             ${{ runner.temp }}/chaptera-reader-artifact/Chaptera-Reader.package.json
             ${{ runner.temp }}/chaptera-reader-artifact/chaptera-reader.clean-smoke.json
           if-no-files-found: error
+
+# Manual comparison artifact refresh: 2026-10-03. Workflow-only no-op; product sources remain exact main.
