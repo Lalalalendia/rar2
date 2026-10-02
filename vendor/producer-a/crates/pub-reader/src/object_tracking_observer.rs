@@ -203,7 +203,10 @@ fn direct_scalar(nodes: &[FieldNode], id: u16) -> Option<PubTrackingScalar> {
 }
 
 fn direct_scalars(nodes: &[FieldNode]) -> Vec<PubTrackingScalar> {
-    nodes.iter().filter_map(|node| scalar(&node.field)).collect()
+    nodes
+        .iter()
+        .filter_map(|node| scalar(&node.field))
+        .collect()
 }
 
 fn scalar(field: &RawContentsBlock) -> Option<PubTrackingScalar> {
