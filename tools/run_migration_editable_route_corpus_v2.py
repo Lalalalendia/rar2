@@ -5,7 +5,6 @@ import hashlib
 import json
 import pathlib
 import subprocess
-import sys
 
 
 SCHEMA = "chaptera.migration-editable-route-corpus.v2"
@@ -31,7 +30,6 @@ def select_evenly(paths, count):
         if idx not in used:
             picked.append(paths[idx])
             used.add(idx)
-    # Rounding can theoretically collapse indices. Fill deterministically.
     if len(picked) < count:
         for idx, path in enumerate(paths):
             if idx not in used:
@@ -65,6 +63,7 @@ def run_one(probe, path, output_root, materialize, timeout_seconds):
             "source_sha256": before,
             "hard_violation": True,
             "failure": "probe_timeout",
+            "requested_materialization": materialize,
         }
 
     after = sha256_file(path)
@@ -74,6 +73,7 @@ def run_one(probe, path, output_root, materialize, timeout_seconds):
             "source_sha256": before,
             "hard_violation": True,
             "failure": "source_mutated",
+            "requested_materialization": materialize,
         }
     if completed.returncode != 0:
         return {
@@ -83,6 +83,7 @@ def run_one(probe, path, output_root, materialize, timeout_seconds):
             "failure": "probe_failed",
             "returncode": completed.returncode,
             "stderr_tail": completed.stderr[-2000:],
+            "requested_materialization": materialize,
         }
     try:
         receipt = json.loads(completed.stdout)
@@ -94,6 +95,7 @@ def run_one(probe, path, output_root, materialize, timeout_seconds):
             "failure": "probe_receipt_invalid",
             "detail": str(error),
             "stdout_tail": completed.stdout[-2000:],
+            "requested_materialization": materialize,
         }
 
     if receipt.get("source_sha256") != before:
@@ -103,6 +105,7 @@ def run_one(probe, path, output_root, materialize, timeout_seconds):
             "hard_violation": True,
             "failure": "probe_source_identity_mismatch",
             "receipt_source_sha256": receipt.get("source_sha256"),
+            "requested_materialization": materialize,
         }
 
     receipt["source_path"] = path.name
@@ -126,6 +129,41 @@ def run_one(probe, path, output_root, materialize, timeout_seconds):
     return receipt
 
 
+def run_many(probe, paths, output_root, materialize, workers, timeout_seconds):
+    rows = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = {
+            pool.submit(
+                run_one,
+                probe,
+                path,
+                output_root,
+                materialize,
+                timeout_seconds,
+            ): path
+            for path in paths
+        }
+        for future in concurrent.futures.as_completed(futures):
+            row = future.result()
+            rows.append(row)
+            print(
+                json.dumps(
+                    {
+                        "phase": "materialize" if materialize else "admission",
+                        "source": row.get("source_path"),
+                        "sha256": row.get("source_sha256"),
+                        "open_state": row.get("open_state"),
+                        "idml": (row.get("targets") or {}).get("idml", {}).get("state"),
+                        "odg": (row.get("targets") or {}).get("odg", {}).get("state"),
+                        "hard_violation": row.get("hard_violation"),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+    return rows
+
+
 def state_counts(rows, target):
     states = {
         "available_with_declared_losses": 0,
@@ -137,6 +175,16 @@ def state_counts(rows, target):
         if state in states:
             states[state] += 1
     return states
+
+
+def materializable(row):
+    if row.get("hard_violation") or row.get("open_state") != "admitted":
+        return False
+    targets = row.get("targets") or {}
+    return any(
+        (targets.get(target) or {}).get("state") == "available_with_declared_losses"
+        for target in ("idml", "odg")
+    )
 
 
 def main():
@@ -155,44 +203,47 @@ def main():
         raise SystemExit("no .pub files found")
 
     selected = select_evenly(paths, args.sample_count)
-    materialize_set = {
-        path
-        for path in select_evenly(selected, min(args.materialize_count, len(selected)))
-    }
-
     args.out.mkdir(parents=True, exist_ok=True)
-    rows = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        futures = {
-            pool.submit(
-                run_one,
-                args.probe,
-                path,
-                args.out / "per-file",
-                path in materialize_set,
-                args.timeout_seconds,
-            ): path
-            for path in selected
-        }
-        for future in concurrent.futures.as_completed(futures):
-            row = future.result()
-            rows.append(row)
-            print(
-                json.dumps(
-                    {
-                        "source": row.get("source_path"),
-                        "sha256": row.get("source_sha256"),
-                        "open_state": row.get("open_state"),
-                        "idml": (row.get("targets") or {}).get("idml", {}).get("state"),
-                        "odg": (row.get("targets") or {}).get("odg", {}).get("state"),
-                        "hard_violation": row.get("hard_violation"),
-                    },
-                    sort_keys=True,
-                ),
-                flush=True,
-            )
+    per_file = args.out / "per-file"
 
-    rows.sort(key=lambda row: row.get("source_sha256", ""))
+    # Phase 1 is admission-only for every selected exact source.
+    rows = run_many(
+        args.probe,
+        selected,
+        per_file,
+        False,
+        args.workers,
+        args.timeout_seconds,
+    )
+    rows_by_sha = {row.get("source_sha256"): row for row in rows}
+
+    # Phase 2 chooses from files already proven materializable, so a request
+    # for N consumer artifacts is not wasted on unsupported source profiles.
+    eligible_rows = sorted(
+        [row for row in rows if materializable(row)],
+        key=lambda row: row.get("source_sha256", ""),
+    )
+    chosen_rows = select_evenly(
+        eligible_rows,
+        min(args.materialize_count, len(eligible_rows)),
+    )
+    chosen_paths = [
+        args.corpus_dir / row["source_path"]
+        for row in chosen_rows
+    ]
+    if chosen_paths:
+        materialized_rows = run_many(
+            args.probe,
+            chosen_paths,
+            per_file,
+            True,
+            args.workers,
+            args.timeout_seconds,
+        )
+        for row in materialized_rows:
+            rows_by_sha[row.get("source_sha256")] = row
+
+    rows = sorted(rows_by_sha.values(), key=lambda row: row.get("source_sha256", ""))
     hard = [row for row in rows if row.get("hard_violation")]
     admitted = [row for row in rows if row.get("open_state") == "admitted"]
     not_admitted = [row for row in rows if row.get("open_state") == "not_admitted"]
@@ -211,7 +262,9 @@ def main():
             "source_sha_list_digest": "sha256:" + source_digest,
         },
         "materialization": {
-            "requested_count": len(materialize_set),
+            "requested_count": args.materialize_count,
+            "eligible_count": len(eligible_rows),
+            "selected_for_materialization_count": len(chosen_rows),
             "idml_materialized_count": sum(
                 1
                 for row in rows
