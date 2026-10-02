@@ -27,7 +27,7 @@ function previewForeignObject(bounds, attrs) {
   });
 }
 
-function previewTextStyle(div, plan = null) {
+function previewTextStyle(div, plan = null, color = null) {
   div.style.width = "100%";
   div.style.height = "100%";
   div.style.overflow = "hidden";
@@ -35,7 +35,7 @@ function previewTextStyle(div, plan = null) {
   div.style.fontFamily = "system-ui, sans-serif";
   div.style.fontSize = ((plan?.font_size_emu ?? PREVIEW_FONT_SIZE_EMU) / EMU_PER_CSS_PX) + "px";
   div.style.lineHeight = ((plan?.line_height_emu ?? PREVIEW_LINE_HEIGHT_EMU) / EMU_PER_CSS_PX) + "px";
-  div.style.color = "#000";
+  div.style.color = color ?? "#000";
 }
 
 function safeInteger(value, label) {
@@ -232,7 +232,7 @@ function appendPreviewText(group, node, plan = null) {
     "data-text-authority": "browser-preview-only"
   });
   const div = document.createElementNS(XHTML_NS, "div");
-  previewTextStyle(div, plan);
+  previewTextStyle(div, plan, rgb(node.text_color_rgb));
   div.textContent = node.text;
   foreign.appendChild(div);
   group.appendChild(foreign);
@@ -269,6 +269,7 @@ function appendText(group, defs, node, fonts, index) {
   for (const line of plan.lines) {
     const text = svgNode("text", {
       x: (line.x - plan.bounds.x) / EMU_PER_CSS_PX,
+      fill: rgb(node.text_color_rgb) ?? "#000",
       y: (line.y - plan.bounds.y) / EMU_PER_CSS_PX,
       "font-family": installed.family,
       "font-size": plan.font_size_emu / EMU_PER_CSS_PX,
