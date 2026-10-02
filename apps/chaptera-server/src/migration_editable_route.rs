@@ -1165,7 +1165,10 @@ mod tests {
             filesystem_confinement: true,
         };
 
-        let (profile, assessment) = admitted_target(&receipt, "idml").unwrap();
+        let (profile, assessment) = match admitted_target(&receipt, "idml") {
+            Ok(value) => value,
+            Err(_) => panic!("idml route should be admitted"),
+        };
         assert_eq!(profile, IDML_BOUNDED_EDITABLE_PROFILE);
         assert_eq!(assessment.declared_loss_count, 4);
 
