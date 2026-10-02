@@ -101,6 +101,48 @@ class Reader1050OfflineDiscriminatorTests(unittest.TestCase):
         )
         return reader, frontier
 
+    def test_existing_format_owner_wins_before_forced_salvage_route(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            selected_sha = "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157"
+            control_sha = "f" * 64
+            reader, frontier = self.make_inputs(root, selected_sha, control_sha)
+            frontier.write_text(
+                json.dumps(
+                    {
+                        "schema": "chaptera.reader1050-hosted-frontier.v1",
+                        "source_reader_run_id": "123",
+                        "source_main_sha": "deadbeef",
+                        "selected": {
+                            "source_sha256": selected_sha,
+                            "existing_owner": {
+                                "kind": "format_gap",
+                                "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+                                "route": "existing_format_owner",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = discriminator.build_discriminator(
+                reader,
+                frontier,
+                root / "out",
+                None,
+            )
+            self.assertEqual(payload["status"], "existing_owner_handoff")
+            self.assertEqual(payload["decision"], "handoff_existing_owner")
+            self.assertEqual(
+                payload["verdict"],
+                "known_format_gap_not_corruption_candidate",
+            )
+            self.assertEqual(
+                payload["next_discriminator"]["owner"],
+                "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+            )
+
     def test_forced_trigger_same_witness_wins_before_control_search(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
