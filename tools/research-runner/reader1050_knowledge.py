@@ -22,6 +22,7 @@ LEDGER_PATH = REPO_ROOT / "tools" / "research-runner" / "reader1050_discriminato
 
 REGISTRY_SCHEMA = "chaptera.reader-known-evidence-registry.v1"
 LEDGER_SCHEMA = "chaptera.reader1050-discriminator-ledger.v1"
+PROPOSED_LEDGER_ENTRY_SCHEMA = "chaptera.reader1050-discriminator-ledger-entry.v1"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_KINDS = {"format_owner", "typed_corruption_evidence"}
 ALLOWED_ROUTES = {"existing_format_owner", "existing_typed_corruption_evidence"}
@@ -132,6 +133,63 @@ def load_discriminator_ledger(
         rows.append(row)
 
     return rows
+
+
+def load_runtime_discriminator_cursor(root: Path | None) -> list[dict[str, Any]]:
+    if root is None or not root.exists():
+        return []
+
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for path in sorted(root.rglob("ledger-entry.proposed.json")):
+        raw = _read_json(path)
+        if raw.get("schema") != PROPOSED_LEDGER_ENTRY_SCHEMA:
+            raise ValueError(
+                f"unexpected proposed discriminator ledger schema at {path}: "
+                f"{raw.get('schema')!r}"
+            )
+        sha = _validate_sha(raw.get("source_sha256"), "runtime.source_sha256")
+        discriminator_kind = str(raw.get("discriminator_kind") or "")
+        run_id = str(raw.get("discriminator_run_id") or "")
+        status = raw.get("status")
+        if not discriminator_kind or not run_id:
+            raise ValueError(
+                f"runtime discriminator entry {path} lacks discriminator kind or run id"
+            )
+        if status not in {"executed", "closed", "handoff"}:
+            raise ValueError(
+                f"runtime discriminator entry {path} has unsupported status {status!r}"
+            )
+        key = (sha, discriminator_kind, run_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        row = dict(raw)
+        row.pop("schema", None)
+        row["source_sha256"] = sha
+        row["runtime_cursor_source"] = str(path.relative_to(root))
+        rows.append(row)
+
+    return rows
+
+
+def merge_discriminator_history(
+    reviewed: list[dict[str, Any]],
+    runtime: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in [*reviewed, *runtime]:
+        key = (
+            str(row.get("source_sha256") or ""),
+            str(row.get("discriminator_kind") or ""),
+            str(row.get("discriminator_run_id") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
 
 
 def evidence_for_sha(
