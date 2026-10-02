@@ -1036,9 +1036,7 @@ fn parse_stsh1_character_defaults(
                     text_sizes_emu.push(value);
                 }
             }
-            if let Some(color_index) =
-                extract_color_index(bytes, block, unknown_block_types)?
-            {
+            if let Some(color_index) = extract_color_index(bytes, block, unknown_block_types)? {
                 color_indices.push(color_index);
             }
             cursor = next;
@@ -1111,7 +1109,6 @@ fn apply_bounded_implicit_style_zero(
     }
     true
 }
-
 
 fn build_text_color_runs(
     fdpc_ranges: &[QuillTypographyRange],
@@ -1669,7 +1666,6 @@ fn parse_font_catalog(
     Ok(names)
 }
 
-
 fn parse_text_color_catalog(
     bytes: &[u8],
     story_catalog: &QuillStoryCatalog,
@@ -1733,11 +1729,13 @@ fn parse_text_color_catalog(
                 )));
             }
 
-            if let ([raw_color_reference], [source]) = (raw_values.as_slice(), raw_sources.as_slice())
+            if let ([raw_color_reference], [source]) =
+                (raw_values.as_slice(), raw_sources.as_slice())
             {
                 references.push(QuillTextColorReference {
-                    ordinal: u32::try_from(references.len())
-                        .map_err(|_| QuillTypographyReadError::new("PL color ordinal exceeds u32"))?,
+                    ordinal: u32::try_from(references.len()).map_err(|_| {
+                        QuillTypographyReadError::new("PL color ordinal exceeds u32")
+                    })?,
                     raw_color_reference: *raw_color_reference,
                     source: source.clone(),
                 });
@@ -1862,9 +1860,7 @@ fn parse_fdpc_styles(
                         text_sizes_emu.push(value);
                     }
                 }
-                if let Some(color_index) =
-                    extract_color_index(bytes, block, unknown_block_types)?
-                {
+                if let Some(color_index) = extract_color_index(bytes, block, unknown_block_types)? {
                     color_indices.push(color_index);
                 }
                 cursor = next;
@@ -1997,7 +1993,6 @@ fn extract_script_font_map(
     Ok(entries)
 }
 
-
 fn extract_color_index(
     bytes: &[u8],
     block: BlockObservation,
@@ -2006,9 +2001,7 @@ fn extract_color_index(
     if block.id == BARE_COLOR_INDEX_ID {
         return Ok(block.value);
     }
-    if block.id != COLOR_INDEX_CONTAINER_ID
-        || !VARIABLE_BLOCK_TYPES.contains(&block.block_type)
-    {
+    if block.id != COLOR_INDEX_CONTAINER_ID || !VARIABLE_BLOCK_TYPES.contains(&block.block_type) {
         return Ok(None);
     }
 
@@ -2223,7 +2216,7 @@ mod tests {
             font_names: Vec::new(),
             script_fonts: Vec::new(),
             text_sizes_emu: Vec::new(),
-        color_indices: Vec::new(),
+            color_indices: Vec::new(),
         }
     }
 
@@ -2398,7 +2391,7 @@ mod tests {
             },
             font_pairs: vec![(9, "Default Face".to_owned())],
             text_sizes_emu: vec![12 * QUILL_TEXT_SIZE_EMU_PER_POINT],
-        color_indices: Vec::new(),
+            color_indices: Vec::new(),
         };
 
         let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story])
@@ -2479,7 +2472,7 @@ mod tests {
             },
             font_pairs: vec![(9, "Default".to_owned())],
             text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
-        color_indices: Vec::new(),
+            color_indices: Vec::new(),
         };
 
         let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story])
@@ -2535,7 +2528,7 @@ mod tests {
             },
             font_pairs: vec![(0, "Times New Roman".to_owned())],
             text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
-        color_indices: Vec::new(),
+            color_indices: Vec::new(),
         }];
 
         assert!(apply_bounded_implicit_style_zero(&mut ranges, &defaults));
@@ -2572,7 +2565,7 @@ mod tests {
             },
             font_pairs: vec![(1, "Other".to_owned())],
             text_sizes_emu: vec![11 * QUILL_TEXT_SIZE_EMU_PER_POINT],
-        color_indices: Vec::new(),
+            color_indices: Vec::new(),
         });
         assert!(!apply_bounded_implicit_style_zero(
             &mut multi_default,
@@ -2640,7 +2633,7 @@ mod tests {
             },
             font_pairs: vec![(0, "Times New Roman".to_owned())],
             text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
-        color_indices: Vec::new(),
+            color_indices: Vec::new(),
         };
 
         let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story])
@@ -2720,7 +2713,7 @@ mod tests {
                 },
                 font_pairs: vec![(0, "Calibri".to_owned())],
                 text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
-            color_indices: Vec::new(),
+                color_indices: Vec::new(),
             },
             CharacterDefaultObservation {
                 logical_style_index: 1,
@@ -2733,7 +2726,7 @@ mod tests {
                 },
                 font_pairs: vec![(1, "Other".to_owned())],
                 text_sizes_emu: vec![9 * QUILL_TEXT_SIZE_EMU_PER_POINT],
-            color_indices: Vec::new(),
+                color_indices: Vec::new(),
             },
         ];
 
