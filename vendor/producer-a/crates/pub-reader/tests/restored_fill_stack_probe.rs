@@ -15,6 +15,8 @@ use std::{
     path::PathBuf,
 };
 
+const FILL_TYPE: u16 = 0x0180;
+const FILL_COLOR: u16 = 0x0181;
 const FILL_BOOLEANS: u16 = 0x01BF;
 const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
@@ -80,6 +82,57 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
 }
 
+fn scalar_property_profile(records: &[FoptObservation], property_id: u16) -> &'static str {
+    let matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == property_id)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return "absent";
+    }
+    if matches
+        .iter()
+        .any(|property| property.f_bid() || property.f_complex())
+    {
+        return "malformed_or_complex";
+    }
+    if matches.len() == 1 {
+        "single_scalar"
+    } else {
+        "duplicate_scalar"
+    }
+}
+
+fn fill_boolean_profile(records: &[FoptObservation]) -> String {
+    let mut total = 0usize;
+    let mut malformed = 0usize;
+    let mut participating_true = 0usize;
+    let mut participating_false = 0usize;
+    let mut nonparticipating = 0usize;
+    for property in records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == FILL_BOOLEANS)
+    {
+        total += 1;
+        if property.f_bid() || property.f_complex() {
+            malformed += 1;
+            continue;
+        }
+        if property.op & FILL_USE_FILLED_BIT == 0 {
+            nonparticipating += 1;
+        } else if property.op & FILL_FILLED_BIT != 0 {
+            participating_true += 1;
+        } else {
+            participating_false += 1;
+        }
+    }
+    format!(
+        "total={total};participating_true={participating_true};participating_false={participating_false};nonparticipating={nonparticipating};malformed={malformed}"
+    )
+}
+
 #[derive(Debug, Default, Serialize)]
 struct PageReceipt {
     raw_page_ordinal: usize,
@@ -94,8 +147,12 @@ struct PageReceipt {
     restored_shape_join_unavailable_count: usize,
     restored_family_histogram: BTreeMap<String, usize>,
     restored_shape_type_histogram: BTreeMap<String, usize>,
+    restored_solid_authority_histogram: BTreeMap<String, usize>,
     restored_visibility_authority_histogram: BTreeMap<String, usize>,
     restored_color_authority_histogram: BTreeMap<String, usize>,
+    restored_local_fill_type_profile_histogram: BTreeMap<String, usize>,
+    restored_local_fill_color_profile_histogram: BTreeMap<String, usize>,
+    restored_local_fill_boolean_profile_histogram: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,6 +161,12 @@ struct Receipt {
     source_sha256: String,
     raw_page_count: usize,
     dgg_default_group_count: usize,
+    dgg_primary_fill_type_profile: String,
+    dgg_primary_fill_color_profile: String,
+    dgg_primary_fill_boolean_profile: String,
+    dgg_tertiary_fill_type_profile: String,
+    dgg_tertiary_fill_color_profile: String,
+    dgg_tertiary_fill_boolean_profile: String,
     pages: Vec<PageReceipt>,
     restored_visible_solid_fill_total: usize,
     restored_in_source_order_total: usize,
@@ -255,6 +318,12 @@ fn exact_virginia_restored_fill_stack_probe() {
                     .map(|fsp| format!("0x{:04X}", fsp.shape_type))
                     .unwrap_or_else(|| "none".to_owned()),
             );
+            if let Some(solid) = paint.fill.solid.as_ref() {
+                bump(
+                    &mut page.restored_solid_authority_histogram,
+                    authority_bucket(solid.authority),
+                );
+            }
             if let Some(visible) = paint.fill.visible.as_ref() {
                 bump(
                     &mut page.restored_visibility_authority_histogram,
@@ -267,6 +336,18 @@ fn exact_virginia_restored_fill_stack_probe() {
                     authority_bucket(color.authority),
                 );
             }
+            bump(
+                &mut page.restored_local_fill_type_profile_histogram,
+                scalar_property_profile(&shape.fopts, FILL_TYPE),
+            );
+            bump(
+                &mut page.restored_local_fill_color_profile_histogram,
+                scalar_property_profile(&shape.fopts, FILL_COLOR),
+            );
+            bump(
+                &mut page.restored_local_fill_boolean_profile_histogram,
+                fill_boolean_profile(&shape.fopts),
+            );
         }
 
         pages.push(page);
@@ -290,6 +371,28 @@ fn exact_virginia_restored_fill_stack_probe() {
         source_sha256: actual_sha,
         raw_page_count: pages.len(),
         dgg_default_group_count: dgg_inventory.drawing_groups.len(),
+        dgg_primary_fill_type_profile: dgg
+            .map(|group| scalar_property_profile(&group.primary_options, FILL_TYPE))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_fill_color_profile: dgg
+            .map(|group| scalar_property_profile(&group.primary_options, FILL_COLOR))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_fill_boolean_profile: dgg
+            .map(|group| fill_boolean_profile(&group.primary_options))
+            .unwrap_or_else(|| fill_boolean_profile(&[])),
+        dgg_tertiary_fill_type_profile: dgg
+            .map(|group| scalar_property_profile(&group.tertiary_options, FILL_TYPE))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_fill_color_profile: dgg
+            .map(|group| scalar_property_profile(&group.tertiary_options, FILL_COLOR))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_fill_boolean_profile: dgg
+            .map(|group| fill_boolean_profile(&group.tertiary_options))
+            .unwrap_or_else(|| fill_boolean_profile(&[])),
         pages,
         restored_visible_solid_fill_total,
         restored_in_source_order_total,
@@ -300,6 +403,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "PDF/raster comparison is validation only and is not used as stack, color, or visibility authority.",
             "No source text, object ids, SPIDs, offsets, filenames, or raw bytes are emitted.",
             "Grouped/direct and source-order buckets come only from current persisted source provenance.",
+            "Stage-B property profiles emit only presence/participation classes and effective-authority buckets, never raw property values.",
         ],
     };
 
