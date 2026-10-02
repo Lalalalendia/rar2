@@ -41,6 +41,8 @@ const READER_GUEST_FAILURE_CLASSIFICATION_SQL: &str =
     include_str!("../migrations/0018_reader_guest_failure_classification.sql");
 const READER_RESEARCH_SUBMISSIONS_SQL: &str =
     include_str!("../migrations/0019_reader_research_submissions.sql");
+const READER_GUEST_EDITABLE_ROUTES_SQL: &str =
+    include_str!("../migrations/0020_reader_guest_editable_routes.sql");
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -145,9 +147,14 @@ const MIGRATIONS: &[MigrationSpec] = &[
         name: "reader_research_submissions",
         sql: READER_RESEARCH_SUBMISSIONS_SQL,
     },
+    MigrationSpec {
+        version: 20,
+        name: "reader_guest_editable_routes",
+        sql: READER_GUEST_EDITABLE_ROUTES_SQL,
+    },
 ];
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 19;
+pub const CURRENT_SCHEMA_VERSION: i64 = 20;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MigrationReport {
@@ -664,7 +671,7 @@ mod tests {
         assert_eq!(
             report.pending_versions,
             vec![
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
             ]
         );
         assert!(!path.exists());
@@ -680,7 +687,7 @@ mod tests {
         assert_eq!(
             first.applied_versions,
             vec![
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
             ]
         );
 
@@ -778,7 +785,7 @@ mod tests {
             assert_eq!(
                 final_report.applied_versions,
                 vec![
-                    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+                    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
                 ]
             );
 
