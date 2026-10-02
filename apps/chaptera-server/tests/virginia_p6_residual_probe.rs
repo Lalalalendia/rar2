@@ -363,7 +363,7 @@ fn exact_virginia_p6_product_boundary_census() {
         .expect("open exact Virginia Remplacante through shared Viewer bundle");
     assert!(
         bundle.geometry.document.pages.len() >= 7,
-        "p23-p6 census requires at least 7 admitted Viewer pages"
+        "p5-p7 census requires at least 7 admitted Viewer pages"
     );
 
     let scene = from_viewer_geometry(
