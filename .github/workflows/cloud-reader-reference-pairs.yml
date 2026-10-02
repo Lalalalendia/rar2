@@ -147,6 +147,15 @@ jobs:
             cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
           fi
 
+      - name: Assert exact Virginia TABLE product paint counts
+        env:
+          CHAPTERA_VIRGINIA_TABLE_PRODUCT_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_TABLE_PRODUCT_RECEIPT: ${{ github.workspace }}/target/cloud-reader-reference-pairs/virginia-table-autoformat-product-paint.json
+        run: |
+          set -euo pipefail
+          test -f "$CHAPTERA_VIRGINIA_TABLE_PRODUCT_FIXTURE"
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_autoformat_product_probe -- --ignored --nocapture
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
