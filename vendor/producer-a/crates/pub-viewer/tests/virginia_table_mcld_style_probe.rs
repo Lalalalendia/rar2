@@ -1,6 +1,7 @@
 use pub_model::Sha256Digest;
 use pub_reader::{
-    PubTableMcldStyleSignatureClass, analyze_mature_0x2c_table_mcld_style_fields,
+    PubTableMcldOpaque1dClass, PubTableMcldStyleSignatureClass,
+    analyze_mature_0x2c_table_mcld_style_fields,
 };
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -36,6 +37,15 @@ fn signature_class(value: PubTableMcldStyleSignatureClass) -> &'static str {
     }
 }
 
+fn opaque_1d_class(value: PubTableMcldOpaque1dClass) -> &'static str {
+    match value {
+        PubTableMcldOpaque1dClass::AbsentOrNonSingle => "absent_or_non_single",
+        PubTableMcldOpaque1dClass::PartialOrAmbiguous => "partial_or_ambiguous",
+        PubTableMcldOpaque1dClass::Uniform => "uniform",
+        PubTableMcldOpaque1dClass::VariesByChild => "varies_by_child",
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 struct PageReceipt {
     viewer_page_index: u32,
@@ -51,6 +61,10 @@ struct PageReceipt {
     style_signature_class_histogram: BTreeMap<String, usize>,
     style_field_child_presence_histogram: BTreeMap<String, usize>,
     control_field_child_presence_histogram: BTreeMap<String, usize>,
+    opaque_1d_class_histogram: BTreeMap<String, usize>,
+    opaque_1d_single_child_count: usize,
+    opaque_1d_distinct_payload_count_histogram: BTreeMap<String, usize>,
+    opaque_1d_payload_length_histogram: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,6 +164,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                 &mut receipt.style_signature_class_histogram,
                 signature_class(observation.signature_class),
             );
+
             for (key, count) in &observation.style_field_child_presence {
                 *receipt
                     .style_field_child_presence_histogram
@@ -162,6 +177,29 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                     .entry(key.clone())
                     .or_default() += count;
             }
+
+            if let Some(class) = observation.opaque_1d_class {
+                bump(
+                    &mut receipt.opaque_1d_class_histogram,
+                    opaque_1d_class(class),
+                );
+            }
+            receipt.opaque_1d_single_child_count += observation.opaque_1d_single_child_count;
+            if observation.opaque_1d_class.is_some() {
+                bump(
+                    &mut receipt.opaque_1d_distinct_payload_count_histogram,
+                    format!(
+                        "distinct={}",
+                        observation.opaque_1d_distinct_payload_count
+                    ),
+                );
+            }
+            for (length, count) in &observation.opaque_1d_payload_length_histogram {
+                *receipt
+                    .opaque_1d_payload_length_histogram
+                    .entry(format!("bytes={length}"))
+                    .or_default() += count;
+            }
         }
 
         pages.push(receipt);
@@ -172,14 +210,16 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         .find(|page| page.viewer_page_index == 22)
         .expect("p22 receipt");
     assert_eq!(p22.table_count, 3, "p22 exact TABLE cohort");
+    assert_eq!(p22.joined_mcld_child_count, 110, "p22 exact MCLD child cohort");
 
     let receipt = Receipt {
-        schema: "chaptera.virginia-table-mcld-style-carrier-probe.v1",
+        schema: "chaptera.virginia-table-mcld-style-carrier-probe.v2",
         source_sha256: actual_sha,
         pages,
         guardrails: vec![
             "MCLD joins use the existing TABLE story-layout key authority; no byte-pattern scan is used.",
             "The open 0x1D..0x2C range is reported only as field-id/wire-type presence and uniformity; no Publisher border/fill semantics are assigned.",
+            "For 0x1D/wire0x8A opaque nested state, only equality class, distinct-count, and byte-length histograms are emitted; no payload bytes or hashes leave the probe.",
             "Confirmed 0x04..0x09 fields are retained only as join controls.",
             "No field values, RGB colors, widths, style ordinals, cell coordinates, text, object ids, offsets, filenames, or raw bytes are emitted.",
             "Publisher PDF is not used as semantic authority.",
@@ -196,7 +236,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     .expect("write MCLD style receipt");
 
     println!(
-        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?}",
+        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?}",
         receipt.pages[0].table_count,
         receipt.pages[1].table_count,
         receipt.pages[2].table_count,
@@ -204,5 +244,8 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         receipt.pages[1].mcld_record_present_table_count,
         receipt.pages[1].child_count_matches_cell_count,
         receipt.pages[1].style_signature_class_histogram,
+        receipt.pages[1].opaque_1d_class_histogram,
+        receipt.pages[1].opaque_1d_distinct_payload_count_histogram,
+        receipt.pages[1].opaque_1d_payload_length_histogram,
     );
 }
