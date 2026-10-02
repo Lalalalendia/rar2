@@ -10,7 +10,7 @@ on:
       - "crates/chaptera-viewer-render-plan/**"
       - "vendor/producer-a/crates/pub-viewer/**"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
-      - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"\n      - "vendor/producer-a/crates/pub-reader/src/bin/reference_text_color_discriminator.rs"
       - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
       - "tools/acquire_carlton_march_pair.py"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
@@ -126,6 +126,11 @@ jobs:
           set -euo pipefail
           mkdir -p target/cloud-reader-reference-pairs
           cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --             "$RUNNER_TEMP/carlton-pair/March-2026.pub"             target/cloud-reader-reference-pairs/carlton-fill-state.json
+
+      - name: Discriminate exact Carlton Quill text colors
+        run: |
+          set -euo pipefail
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_text_color_discriminator -- "$RUNNER_TEMP/carlton-pair/March-2026.pub"
 
       - name: Census exact Carlton TABLE cell paint join
         env:
