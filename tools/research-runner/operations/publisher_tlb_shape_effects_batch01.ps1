@@ -531,11 +531,6 @@ function Invoke-Arm {
         persistence_fingerprint = $fingerprint.persistence_fingerprint
         render_fingerprint = $fingerprint.render_fingerprint
         artifacts = $fingerprint.artifacts
-        private_paths = [ordered]@{
-            pub = $output
-            pdf = $pdf
-            semantic = $semanticPath
-        }
     }
 }
 
@@ -588,12 +583,14 @@ function Invoke-BlastRadius {
     $receiptPath = Join-Path $blastDir "$slug-$Mode.json"
     New-BlastEvidence -Spec $Spec -Mode $Mode -Path $evidencePath
 
+    $controlPub = Join-Path $privateDir "$slug/control/output.pub"
+    $mutationPub = Join-Path $privateDir "$slug/$Mode/output.pub"
     $tool = Join-Path $repoRoot "tools/operation_blast_radius_v1.py"
     $toolArgs = @(
         $tool,
         "--source", $BaselinePath,
-        "--control", [string]$Control.private_paths.pub,
-        "--mutation", [string]$Mutation.private_paths.pub,
+        "--control", $controlPub,
+        "--mutation", $mutationPub,
         "--evidence", $evidencePath,
         "--out", $receiptPath
     )
