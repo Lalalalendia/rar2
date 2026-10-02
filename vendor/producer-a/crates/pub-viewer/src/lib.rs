@@ -575,9 +575,9 @@ fn viewer_table_border_segments(
             return None;
         }
         if column == source.columns {
-            let cell = cells.iter().find(|cell| {
-                cell.address.row == 0 && cell.address.column + 1 == source.columns
-            })?;
+            let cell = cells
+                .iter()
+                .find(|cell| cell.address.row == 0 && cell.address.column + 1 == source.columns)?;
             let bounds = cell.bounds?;
             return bounds.x.get().checked_add(bounds.width.get());
         }
@@ -592,9 +592,9 @@ fn viewer_table_border_segments(
             return None;
         }
         if row == source.rows {
-            let cell = cells.iter().find(|cell| {
-                cell.address.column == 0 && cell.address.row + 1 == source.rows
-            })?;
+            let cell = cells
+                .iter()
+                .find(|cell| cell.address.column == 0 && cell.address.row + 1 == source.rows)?;
             let bounds = cell.bounds?;
             return bounds.y.get().checked_add(bounds.height.get());
         }
@@ -3178,7 +3178,7 @@ fn viewer_tables_from_resolved(
             });
         }
 
-        let cells = materialized
+        let cells: Vec<ViewerTableCell> = materialized
             .into_iter()
             .map(|cell| ViewerTableCell {
                 id: cell.id,
