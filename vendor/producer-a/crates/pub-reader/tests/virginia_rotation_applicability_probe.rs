@@ -229,7 +229,14 @@ fn exact_virginia_direct_image_rotation_applicability_probe() {
     }
 
     let mut pages = Vec::new();
-    for (page_index, page_id) in viewer_page_ids.iter().copied().enumerate() {
+    for (page_index, seq_num) in page_selection
+        .customer_page_seq_nums
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let page_id =
+            derive_pub_page_id(&source_hash, seq_num).expect("derive selected customer page id");
         let page_canonical = page_id.into_canonical();
         let mut receipt = PageReceipt {
             viewer_page: page_index + 1,
