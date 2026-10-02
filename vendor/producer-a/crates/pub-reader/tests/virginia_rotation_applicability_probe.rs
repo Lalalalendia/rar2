@@ -21,15 +21,6 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
 }
 
-fn direct_node(node: &pub_reader::PubNode) -> bool {
-    !node.header.source_refs.iter().any(|source| {
-        source
-            .object_key
-            .as_deref()
-            .is_some_and(|key| key.starts_with("escher/group-ancestor/"))
-    })
-}
-
 fn scalar_rotation(records: &[FoptObservation]) -> Result<Option<i64>, &'static str> {
     let matches = records
         .iter()
@@ -206,7 +197,14 @@ fn exact_virginia_direct_image_rotation_applicability_probe() {
             .values()
             .filter(|node| node.header.parent_id == page_canonical)
             .filter(|node| node.payload.image_slot.is_some())
-            .filter(|node| direct_node(node))
+            .filter(|node| {
+                !node.header.source_refs.iter().any(|source| {
+                    source
+                        .object_key
+                        .as_deref()
+                        .is_some_and(|key| key.starts_with("escher/group-ancestor/"))
+                })
+            })
         {
             receipt.direct_image_count += 1;
 
