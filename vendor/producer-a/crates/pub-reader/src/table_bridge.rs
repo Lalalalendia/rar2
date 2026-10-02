@@ -1765,6 +1765,7 @@ mod tests {
             cells: vec![source_cell],
             simple_table: Some(simple_table),
             layout_metrics: None,
+            border_segments: Vec::new(),
             source_refs: Vec::new(),
         };
         let story = Story {
@@ -1819,6 +1820,7 @@ mod tests {
             }],
             simple_table: None,
             layout_metrics: None,
+            border_segments: Vec::new(),
             source_refs: Vec::new(),
         };
         let story = Story {
