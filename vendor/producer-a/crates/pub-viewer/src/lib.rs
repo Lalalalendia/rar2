@@ -2445,7 +2445,10 @@ fn open_mature_0x2c_bundle(
                                     node.payload.explicit_image_recolor.as_ref(),
                                 )
                             });
-                    if source_window.is_some() || content_rotation_degrees.is_some() || recolor.is_some() {
+                    if source_window.is_some()
+                        || content_rotation_degrees.is_some()
+                        || recolor.is_some()
+                    {
                         placements.push(ViewerImagePlacementV1 {
                             node_id: usage.node_id,
                             source_window,
