@@ -72,12 +72,14 @@
 
           <p id="status" role="status" aria-live="polite">Choose a Publisher (.PUB) file.</p>
 
-          <div id="compatibility-report" class="compatibility" hidden aria-label="Compatibility report">
-            <div class="compatibility-head"><strong>Compatibility</strong><span id="compatibility-state"></span></div>
-            <p id="compatibility-summary" class="small"></p>
-            <ul id="compatibility-limitations"></ul>
-            <p id="compatibility-routes" class="small"></p>
-            <p id="compatibility-next" class="small"></p>
+          <div id="compatibility-home">
+            <div id="compatibility-report" class="compatibility" hidden aria-label="Compatibility report">
+              <div class="compatibility-head"><strong>Compatibility</strong><span id="compatibility-state"></span></div>
+              <p id="compatibility-summary" class="small"></p>
+              <ul id="compatibility-limitations"></ul>
+              <p id="compatibility-routes" class="small"></p>
+              <p id="compatibility-next" class="small"></p>
+            </div>
           </div>
 
           <p id="privacy" class="notice">The filename is not sent. Viewing authorizes temporary service processing only.
@@ -138,6 +140,8 @@
               <span class="panel-kicker">Inspector</span>
               <strong>Document details</strong>
             </div>
+
+            <div id="compatibility-inspector-slot"></div>
 
             <details id="text-panel">
               <summary>Recovered text</summary>
