@@ -292,6 +292,7 @@ mod tests {
         assert_ne!(none, v);
         assert_ne!(none, hv);
         assert_eq!(h.a.as_str(), v.d.as_str());
-        assert_eq!(h.b.as_str(), v.c.as_str());
+        assert_eq!(q31(&h.b), -q31(&v.c));
+        assert_eq!(q31(&h.c), -q31(&v.b));
     }
 }
