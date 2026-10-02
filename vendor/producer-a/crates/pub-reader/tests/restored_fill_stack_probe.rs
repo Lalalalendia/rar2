@@ -29,6 +29,11 @@ const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
 const FILL_USE_RECT_USE_BIT: u32 = 1 << 17;
 const FILL_USE_RECT_BIT: u32 = 1 << 1;
+const GROUP_SHAPE_BOOLEANS: u16 = 0x03BF;
+const GROUP_USE_HIDDEN_BIT: u32 = 1 << 17;
+const GROUP_HIDDEN_BIT: u32 = 1 << 1;
+const GROUP_USE_PRINT_BIT: u32 = 1 << 16;
+const GROUP_PRINT_BIT: u32 = 1 << 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LegacyScalarLayer {
@@ -87,6 +92,81 @@ enum ProbeBoolLayer {
     Absent,
     Value(bool),
     Unresolved,
+}
+
+
+fn officeart_bool_layer(
+    records: &[FoptObservation],
+    property_id: u16,
+    use_bit: u32,
+    value_bit: u32,
+) -> ProbeBoolLayer {
+    let mut resolved = None;
+    for property in records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == property_id)
+    {
+        if property.f_bid() || property.f_complex() {
+            return ProbeBoolLayer::Unresolved;
+        }
+        if property.op & use_bit == 0 {
+            continue;
+        }
+        if resolved.is_some() {
+            return ProbeBoolLayer::Unresolved;
+        }
+        resolved = Some(property.op & value_bit != 0);
+    }
+    resolved
+        .map(ProbeBoolLayer::Value)
+        .unwrap_or(ProbeBoolLayer::Absent)
+}
+
+fn officeart_bool_profile(
+    records: &[FoptObservation],
+    property_id: u16,
+    use_bit: u32,
+    value_bit: u32,
+) -> &'static str {
+    match officeart_bool_layer(records, property_id, use_bit, value_bit) {
+        ProbeBoolLayer::Absent => "absent",
+        ProbeBoolLayer::Value(true) => "explicit_true",
+        ProbeBoolLayer::Value(false) => "explicit_false",
+        ProbeBoolLayer::Unresolved => "unresolved",
+    }
+}
+
+fn effective_officeart_bool_profile(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+    property_id: u16,
+    use_bit: u32,
+    value_bit: u32,
+    normative_default: bool,
+) -> String {
+    let mut layers = vec![(
+        "shape_local",
+        officeart_bool_layer(&shape.fopts, property_id, use_bit, value_bit),
+    )];
+    if let Some(dgg) = dgg {
+        layers.push((
+            "drawing_group_primary",
+            officeart_bool_layer(&dgg.primary_options, property_id, use_bit, value_bit),
+        ));
+        layers.push((
+            "drawing_group_tertiary",
+            officeart_bool_layer(&dgg.tertiary_options, property_id, use_bit, value_bit),
+        ));
+    }
+    for (authority, layer) in layers {
+        match layer {
+            ProbeBoolLayer::Absent => {}
+            ProbeBoolLayer::Value(value) => return format!("{authority}:{value}"),
+            ProbeBoolLayer::Unresolved => return format!("{authority}:unresolved"),
+        }
+    }
+    format!("normative_default:{normative_default}")
 }
 
 fn fill_use_rect_layer(records: &[FoptObservation]) -> ProbeBoolLayer {
@@ -474,6 +554,11 @@ struct PageReceipt {
     restored_dgg_color_materialization_histogram: BTreeMap<String, usize>,
     restored_local_fill_use_rect_histogram: BTreeMap<String, usize>,
     restored_effective_fill_use_rect_histogram: BTreeMap<String, usize>,
+    restored_local_group_shape_profile_histogram: BTreeMap<String, usize>,
+    restored_local_hidden_histogram: BTreeMap<String, usize>,
+    restored_effective_hidden_histogram: BTreeMap<String, usize>,
+    restored_local_print_histogram: BTreeMap<String, usize>,
+    restored_effective_print_histogram: BTreeMap<String, usize>,
     restored_local_fill_rect_profile_histogram: BTreeMap<String, usize>,
     restored_effective_fill_rect_geometry_histogram: BTreeMap<String, usize>,
     restored_local_fill_opacity_profile_histogram: BTreeMap<String, usize>,
@@ -497,6 +582,9 @@ struct Receipt {
     dgg_primary_fill_color_form: String,
     dgg_primary_fill_use_rect_profile: String,
     dgg_primary_fill_rect_profile: String,
+    dgg_primary_group_shape_profile: String,
+    dgg_primary_hidden_profile: String,
+    dgg_primary_print_profile: String,
     dgg_primary_fill_opacity_profile: String,
     dgg_primary_fill_boolean_profile: String,
     dgg_tertiary_fill_type_profile: String,
@@ -504,6 +592,9 @@ struct Receipt {
     dgg_tertiary_fill_color_form: String,
     dgg_tertiary_fill_use_rect_profile: String,
     dgg_tertiary_fill_rect_profile: String,
+    dgg_tertiary_group_shape_profile: String,
+    dgg_tertiary_hidden_profile: String,
+    dgg_tertiary_print_profile: String,
     dgg_tertiary_fill_opacity_profile: String,
     dgg_tertiary_fill_boolean_profile: String,
     pages: Vec<PageReceipt>,
@@ -729,6 +820,50 @@ fn exact_virginia_restored_fill_stack_probe() {
                 effective_fill_use_rect_profile(shape, dgg),
             );
             bump(
+                &mut page.restored_local_group_shape_profile_histogram,
+                scalar_property_profile(&shape.fopts, GROUP_SHAPE_BOOLEANS),
+            );
+            bump(
+                &mut page.restored_local_hidden_histogram,
+                officeart_bool_profile(
+                    &shape.fopts,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_HIDDEN_BIT,
+                    GROUP_HIDDEN_BIT,
+                ),
+            );
+            bump(
+                &mut page.restored_effective_hidden_histogram,
+                effective_officeart_bool_profile(
+                    shape,
+                    dgg,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_HIDDEN_BIT,
+                    GROUP_HIDDEN_BIT,
+                    false,
+                ),
+            );
+            bump(
+                &mut page.restored_local_print_histogram,
+                officeart_bool_profile(
+                    &shape.fopts,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_PRINT_BIT,
+                    GROUP_PRINT_BIT,
+                ),
+            );
+            bump(
+                &mut page.restored_effective_print_histogram,
+                effective_officeart_bool_profile(
+                    shape,
+                    dgg,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_PRINT_BIT,
+                    GROUP_PRINT_BIT,
+                    true,
+                ),
+            );
+            bump(
                 &mut page.restored_local_fill_rect_profile_histogram,
                 fill_rect_presence_profile(&shape.fopts),
             );
@@ -859,6 +994,32 @@ fn exact_virginia_restored_fill_stack_probe() {
             .map(|group| fill_rect_presence_profile(&group.primary_options))
             .unwrap_or("absent")
             .to_owned(),
+        dgg_primary_group_shape_profile: dgg
+            .map(|group| scalar_property_profile(&group.primary_options, GROUP_SHAPE_BOOLEANS))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_hidden_profile: dgg
+            .map(|group| {
+                officeart_bool_profile(
+                    &group.primary_options,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_HIDDEN_BIT,
+                    GROUP_HIDDEN_BIT,
+                )
+            })
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_print_profile: dgg
+            .map(|group| {
+                officeart_bool_profile(
+                    &group.primary_options,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_PRINT_BIT,
+                    GROUP_PRINT_BIT,
+                )
+            })
+            .unwrap_or("absent")
+            .to_owned(),
         dgg_primary_fill_opacity_profile: dgg
             .map(|group| fill_opacity_profile(&group.primary_options))
             .unwrap_or_else(|| "absent".to_owned()),
@@ -885,6 +1046,32 @@ fn exact_virginia_restored_fill_stack_probe() {
             .map(|group| fill_rect_presence_profile(&group.tertiary_options))
             .unwrap_or("absent")
             .to_owned(),
+        dgg_tertiary_group_shape_profile: dgg
+            .map(|group| scalar_property_profile(&group.tertiary_options, GROUP_SHAPE_BOOLEANS))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_hidden_profile: dgg
+            .map(|group| {
+                officeart_bool_profile(
+                    &group.tertiary_options,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_HIDDEN_BIT,
+                    GROUP_HIDDEN_BIT,
+                )
+            })
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_print_profile: dgg
+            .map(|group| {
+                officeart_bool_profile(
+                    &group.tertiary_options,
+                    GROUP_SHAPE_BOOLEANS,
+                    GROUP_USE_PRINT_BIT,
+                    GROUP_PRINT_BIT,
+                )
+            })
+            .unwrap_or("absent")
+            .to_owned(),
         dgg_tertiary_fill_opacity_profile: dgg
             .map(|group| fill_opacity_profile(&group.tertiary_options))
             .unwrap_or_else(|| "absent".to_owned()),
@@ -906,6 +1093,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-D geometry profiles emit only anchor-equality, transform/rotation classes, page-area buckets and overlap counts; no coordinates or object identities are emitted.",
             "Stage-E COLORREF profiles emit only direct/scheme/other/ambiguous form classes plus effective-color distinct counts; no RGB or scheme ordinal is emitted.",
             "Stage-F fillUseRect profiles emit only participation authority, fillRect completeness, and positive/degenerate/unresolved geometry classes; no fillRect coordinates are emitted.",
+            "Stage-G Group Shape Boolean profiles emit only documented hidden/print participation and effective authority classes; raw 0x03BF values are never emitted.",
         ],
     };
 
