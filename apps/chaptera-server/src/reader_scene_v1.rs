@@ -1481,10 +1481,7 @@ mod tests {
                 for run in runs {
                     println!(
                         "CARLTON_LIBMSPUB_ALIGNMENT_RUN target={target:?} run={}..{} alignment={:?} source_value={}",
-                        run.scalar_start,
-                        run.scalar_end,
-                        run.alignment,
-                        run.source_value
+                        run.scalar_start, run.scalar_end, run.alignment, run.source_value
                     );
                 }
             }
