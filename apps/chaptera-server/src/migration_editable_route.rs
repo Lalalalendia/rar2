@@ -15,6 +15,7 @@ use axum::{
     routing::post,
 };
 use axum_extra::extract::cookie::CookieJar;
+use chaptera_cdm_model::AUTHORING_REVISION_SCHEMA_V1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
 use pub_editor::{EditorEditableTarget, EditorSession, Sha256Digest, open_mature_0x2c_editor};
 use rand::{RngCore, rngs::OsRng};
@@ -27,15 +28,23 @@ use crate::{
     auth_http::{AuthHttpError, AuthHttpState},
     authz_runtime::{AuthzError, CAP_EXPORT, SqliteAuthzAuthority},
     blob_store::BlobStoreService,
+    export_executor::{IDML_BOUNDED_EDITABLE_PROFILE, ODG_BOUNDED_EDITABLE_PROFILE},
+    jobs_runtime::{CreateExportJobRequestV1, JobsRuntime, JobsRuntimeError},
     source_authority::{SourceAuthorityError, SqliteDocumentSourceAuthority},
     source_baseline::SourceBaselineProducerConfig,
+    sqlite_store::{SqliteRevisionStore, SqliteStoreError},
 };
 
 pub const MIGRATION_EDITABLE_ROUTE_REQUEST_V1: &str =
     "chaptera.migration-editable-route-request.v1";
 pub const MIGRATION_EDITABLE_ROUTE_RESPONSE_V1: &str =
     "chaptera.migration-editable-route-response.v1";
+pub const MIGRATION_EXPORT_CREATE_REQUEST_V1: &str =
+    "chaptera.migration-export-create.v1";
+pub const MIGRATION_EXPORT_CREATE_RESPONSE_V1: &str =
+    "chaptera.migration-export-job.v1";
 const MIGRATION_EDITABLE_ROUTE_RECEIPT_V1: &str = "chaptera.migration-editable-route-receipt.v1";
+const MIGRATION_EXPORT_ENVIRONMENT_V1: &str = "chaptera.migration-export-environment.v1";
 const RECEIPT_MAX_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -625,6 +634,8 @@ pub struct MigrationEditableRouteHttpState {
     auth: AuthHttpState,
     source: SqliteDocumentSourceAuthority,
     authz: SqliteAuthzAuthority,
+    revisions: SqliteRevisionStore,
+    jobs: JobsRuntime,
     producer: IsolatedMigrationEditableRouteProducer,
 }
 
@@ -633,12 +644,16 @@ impl MigrationEditableRouteHttpState {
         auth: AuthHttpState,
         source: SqliteDocumentSourceAuthority,
         authz: SqliteAuthzAuthority,
+        revisions: SqliteRevisionStore,
+        jobs: JobsRuntime,
         producer: IsolatedMigrationEditableRouteProducer,
     ) -> Self {
         Self {
             auth,
             source,
             authz,
+            revisions,
+            jobs,
             producer,
         }
     }
@@ -649,6 +664,10 @@ pub fn router(state: MigrationEditableRouteHttpState) -> Router {
         .route(
             "/v1/migration/documents/{document_id}/editable-routes",
             post(assess_editable_routes),
+        )
+        .route(
+            "/v1/migration/documents/{document_id}/exports",
+            post(create_migration_export),
         )
         .with_state(state)
 }
@@ -670,6 +689,212 @@ struct MigrationEditableRouteResponseV1 {
     open_state: String,
     idml: MigrationEditableTargetAssessmentV1,
     odg: MigrationEditableTargetAssessmentV1,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MigrationExportCreateRequestV1 {
+    protocol_version: String,
+    document_id: String,
+    source_sha256: String,
+    target: String,
+    client_request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MigrationExportCreateResponseV1 {
+    protocol_version: &'static str,
+    document_id: String,
+    source_sha256: String,
+    target: String,
+    target_profile: String,
+    revision_id: String,
+    job_id: String,
+    status: String,
+    declared_loss_count: u64,
+    blocking_loss_count: u64,
+}
+
+async fn create_migration_export(
+    State(state): State<MigrationEditableRouteHttpState>,
+    AxumPath(document_id): AxumPath<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(request): Json<MigrationExportCreateRequestV1>,
+) -> Result<Json<MigrationExportCreateResponseV1>, MigrationEditableRouteHttpError> {
+    validate_export_create_request(&request, &document_id)?;
+
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await
+        .map_err(MigrationEditableRouteHttpError::Auth)?;
+
+    let source = state
+        .source
+        .resolve_by_document_id(&document_id)
+        .await
+        .map_err(MigrationEditableRouteHttpError::Source)?;
+    if source.source_sha256 != request.source_sha256 {
+        return Err(MigrationEditableRouteHttpError::conflict(
+            "migration_export_source_hash_mismatch",
+            "requested source_sha256 differs from durable source authority",
+        ));
+    }
+
+    let now = now_ms()?;
+    state
+        .authz
+        .authorize(
+            &source.tenant_id,
+            &document_id,
+            &principal.principal_id,
+            CAP_EXPORT,
+            "migration:export-preflight",
+            now,
+        )
+        .await
+        .map_err(MigrationEditableRouteHttpError::Authz)?;
+
+    let receipt = state
+        .producer
+        .assess(
+            &source.tenant_id,
+            &source.binding_id,
+            &document_id,
+            &source.source_sha256,
+            source.byte_len,
+        )
+        .await
+        .map_err(MigrationEditableRouteHttpError::Producer)?;
+
+    let (target_profile, assessment) = admitted_target(&receipt, &request.target)?;
+
+    let binding = state
+        .revisions
+        .require_revision_identity(&document_id, &source.baseline_revision_id)
+        .await
+        .map_err(MigrationEditableRouteHttpError::Store)?;
+    if binding.canonical_schema_version != AUTHORING_REVISION_SCHEMA_V1 {
+        return Err(MigrationEditableRouteHttpError::conflict(
+            "migration_export_revision_schema_unsupported",
+            "baseline revision is not bound to the supported canonical AuthoringRevision schema",
+        ));
+    }
+
+    let snapshot = state
+        .jobs
+        .create_export(CreateExportJobRequestV1 {
+            tenant_id: source.tenant_id,
+            document_id: document_id.clone(),
+            principal_id: principal.principal_id,
+            exact_revision_id: source.baseline_revision_id.clone(),
+            canonical_authoring_revision_id: binding.canonical_revision_id,
+            target_profile: target_profile.to_owned(),
+            layout_environment_id: migration_export_environment_id(target_profile),
+            client_request_id: request.client_request_id.clone(),
+            operation_id: format!("migration:export:create:{}", request.client_request_id),
+            now_ms: now,
+        })
+        .await
+        .map_err(MigrationEditableRouteHttpError::Jobs)?;
+
+    Ok(Json(MigrationExportCreateResponseV1 {
+        protocol_version: MIGRATION_EXPORT_CREATE_RESPONSE_V1,
+        document_id,
+        source_sha256: source.source_sha256,
+        target: request.target,
+        target_profile: target_profile.to_owned(),
+        revision_id: source.baseline_revision_id,
+        job_id: snapshot.job_id,
+        status: snapshot.status,
+        declared_loss_count: assessment.declared_loss_count,
+        blocking_loss_count: assessment.blocking_loss_count,
+    }))
+}
+
+fn validate_export_create_request(
+    request: &MigrationExportCreateRequestV1,
+    path_document_id: &str,
+) -> Result<(), MigrationEditableRouteHttpError> {
+    if request.protocol_version != MIGRATION_EXPORT_CREATE_REQUEST_V1 {
+        return Err(MigrationEditableRouteHttpError::bad_request(
+            "migration_export_protocol_invalid",
+            "chaptera.migration-export-create.v1 is required",
+        ));
+    }
+    if request.document_id != path_document_id {
+        return Err(MigrationEditableRouteHttpError::bad_request(
+            "migration_export_document_mismatch",
+            "path document_id differs from request document_id",
+        ));
+    }
+    require_ident(&request.document_id, "document_id")
+        .map_err(MigrationEditableRouteHttpError::Producer)?;
+    require_sha256(&request.source_sha256, "source_sha256")
+        .map_err(MigrationEditableRouteHttpError::Producer)?;
+    require_client_request_id(&request.client_request_id)?;
+    target_profile(&request.target)?;
+    Ok(())
+}
+
+fn require_client_request_id(
+    value: &str,
+) -> Result<(), MigrationEditableRouteHttpError> {
+    if value.is_empty()
+        || value.len() > 160
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+    {
+        return Err(MigrationEditableRouteHttpError::bad_request(
+            "migration_export_client_request_id_invalid",
+            "client_request_id must be a bounded opaque identifier",
+        ));
+    }
+    Ok(())
+}
+
+fn target_profile(target: &str) -> Result<&'static str, MigrationEditableRouteHttpError> {
+    match target {
+        "idml" => Ok(IDML_BOUNDED_EDITABLE_PROFILE),
+        "odg" => Ok(ODG_BOUNDED_EDITABLE_PROFILE),
+        _ => Err(MigrationEditableRouteHttpError::bad_request(
+            "migration_export_target_invalid",
+            "target must be idml or odg",
+        )),
+    }
+}
+
+fn admitted_target<'a>(
+    receipt: &'a MigrationEditableRouteReceiptV1,
+    target: &str,
+) -> Result<(&'static str, &'a MigrationEditableTargetAssessmentV1), MigrationEditableRouteHttpError>
+{
+    let profile = target_profile(target)?;
+    let assessment = match target {
+        "idml" => &receipt.idml,
+        "odg" => &receipt.odg,
+        _ => unreachable!("target_profile validated target"),
+    };
+    if assessment.state != "available_with_declared_losses"
+        || assessment.blocking_loss_count != 0
+    {
+        return Err(MigrationEditableRouteHttpError::conflict(
+            "migration_export_route_unavailable",
+            format!(
+                "{target} route is {}; capability assessment must be available before materialization",
+                assessment.state
+            ),
+        ));
+    }
+    Ok((profile, assessment))
+}
+
+fn migration_export_environment_id(target_profile: &str) -> String {
+    let payload = format!("{MIGRATION_EXPORT_ENVIRONMENT_V1}\0{target_profile}");
+    format!("sha256:{:x}", Sha256::digest(payload.as_bytes()))
 }
 
 async fn assess_editable_routes(
@@ -774,6 +999,8 @@ enum MigrationEditableRouteHttpError {
     Auth(AuthHttpError),
     Authz(AuthzError),
     Source(SourceAuthorityError),
+    Store(SqliteStoreError),
+    Jobs(JobsRuntimeError),
     Producer(MigrationEditableRouteError),
     Http {
         status: StatusCode,
@@ -835,6 +1062,35 @@ impl IntoResponse for MigrationEditableRouteHttpError {
                 )
                     .into_response()
             }
+            Self::Store(error) => {
+                let status = if error.code == "canonical_revision_unbound" {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+                (
+                    status,
+                    Json(json!({"error":{"code":error.code,"message":error.message}})),
+                )
+                    .into_response()
+            }
+            Self::Jobs(error) => {
+                let status = match error.code {
+                    "grant_missing" | "authz_denied" | "authz_expired" => StatusCode::FORBIDDEN,
+                    "idempotency_conflict"
+                    | "job_scope_mismatch"
+                    | "job_payload_scope_mismatch" => StatusCode::CONFLICT,
+                    "invalid_client_request_id" | "invalid_operation_id" => {
+                        StatusCode::BAD_REQUEST
+                    }
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                (
+                    status,
+                    Json(json!({"error":{"code":error.code,"message":error.message}})),
+                )
+                    .into_response()
+            }
             Self::Producer(error) => {
                 let status = match error.code {
                     "migration_route_identity_invalid" | "migration_route_length_invalid" => {
@@ -868,6 +1124,68 @@ mod tests {
 
     const DOCUMENT_ID: &str = "document:one";
     const SOURCE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn migration_export_request_rejects_browser_revision_authority() {
+        let value = json!({
+            "protocol_version": MIGRATION_EXPORT_CREATE_REQUEST_V1,
+            "document_id": DOCUMENT_ID,
+            "source_sha256": SOURCE_SHA,
+            "target": "idml",
+            "client_request_id": "migration-one",
+            "revision_id": "browser-chosen-revision",
+            "canonical_authoring_revision_id": "c".repeat(64),
+            "layout_environment_id": format!("sha256:{}", "d".repeat(64))
+        });
+        assert!(serde_json::from_value::<MigrationExportCreateRequestV1>(value).is_err());
+    }
+
+    #[test]
+    fn migration_export_environment_is_stable_and_target_scoped() {
+        let idml_one = migration_export_environment_id(IDML_BOUNDED_EDITABLE_PROFILE);
+        let idml_two = migration_export_environment_id(IDML_BOUNDED_EDITABLE_PROFILE);
+        let odg = migration_export_environment_id(ODG_BOUNDED_EDITABLE_PROFILE);
+        assert_eq!(idml_one, idml_two);
+        assert_ne!(idml_one, odg);
+        assert!(idml_one.starts_with("sha256:"));
+        assert_eq!(idml_one.len(), 71);
+    }
+
+    #[test]
+    fn migration_export_requires_available_exact_target() {
+        let receipt = MigrationEditableRouteReceiptV1 {
+            protocol_version: MIGRATION_EDITABLE_ROUTE_RECEIPT_V1.into(),
+            document_id: DOCUMENT_ID.into(),
+            source_sha256: SOURCE_SHA.into(),
+            source_byte_len: 123,
+            open_state: "admitted".into(),
+            idml: MigrationEditableTargetAssessmentV1 {
+                state: "available_with_declared_losses".into(),
+                reason_code: "serializable".into(),
+                declared_loss_count: 4,
+                blocking_loss_count: 0,
+            },
+            odg: MigrationEditableTargetAssessmentV1 {
+                state: "unavailable".into(),
+                reason_code: "blocking_losses".into(),
+                declared_loss_count: 2,
+                blocking_loss_count: 1,
+            },
+            filesystem_confinement: true,
+        };
+
+        let (profile, assessment) = admitted_target(&receipt, "idml").unwrap();
+        assert_eq!(profile, IDML_BOUNDED_EDITABLE_PROFILE);
+        assert_eq!(assessment.declared_loss_count, 4);
+
+        let error = admitted_target(&receipt, "odg").unwrap_err();
+        match error {
+            MigrationEditableRouteHttpError::Http { code, .. } => {
+                assert_eq!(code, "migration_export_route_unavailable");
+            }
+            _ => panic!("expected bounded HTTP conflict"),
+        }
+    }
 
     #[test]
     fn request_rejects_browser_authority_fields() {
