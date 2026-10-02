@@ -42,6 +42,26 @@ pub struct PubTableCellPaintSource {
     pub source_refs: Vec<SourceRef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubTableBorderAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTableBorderSegmentSource {
+    pub axis: PubTableBorderAxis,
+    pub row_start: u32,
+    pub column_start: u32,
+    pub row_end: u32,
+    pub column_end: u32,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellCoordinates {
     pub start_row: u32,
@@ -295,6 +315,8 @@ pub struct PubTableSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tcd_story_ordinal: Option<u16>,
     pub cells: Vec<PubTableCellSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub border_segments: Vec<PubTableBorderSegmentSource>,
     /// Present only for a complete, unmerged, unambiguous rectangular grid.
     pub simple_table: Option<SimpleRectangularTable<TableCellId>>,
     pub layout_metrics: Option<PubTableLayoutMetricsSource>,
@@ -412,6 +434,22 @@ fn populate_bounded_table_cell_fill(
 const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
 const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
 const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
+const TABLE_BORDER_SEGMENT_ORIENTATION_ID: u16 = 0x2001;
+const TABLE_BORDER_ROW_START_ID: u16 = 0x2004;
+const TABLE_BORDER_COLUMN_START_ID: u16 = 0x2005;
+const TABLE_BORDER_ROW_END_ID: u16 = 0x2006;
+const TABLE_BORDER_COLUMN_END_ID: u16 = 0x2007;
+
+fn unique_anchor_scalar_or_zero(
+    anchor: &pub_escher::PublisherFieldRecord,
+    field_id: u16,
+) -> Option<u32> {
+    let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
+    let Some(first) = fields.next() else {
+        return Some(0);
+    };
+    fields.next().is_none().then_some(first.value)
+}
 
 fn unique_anchor_scalar(anchor: &pub_escher::PublisherFieldRecord, field_id: u16) -> Option<u32> {
     let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
@@ -566,6 +604,139 @@ fn populate_native_autoformat_table_cell_fill(
     }
 
     admitted
+}
+
+fn populate_native_autoformat_table_border_segments(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+) -> Vec<PubTableBorderSegmentSource> {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct SegmentKey {
+        axis: PubTableBorderAxis,
+        row_start: u32,
+        column_start: u32,
+        row_end: u32,
+        column_end: u32,
+    }
+
+    let allowed = [
+        TABLE_AUTOFORMAT_OWNER_REF_ID,
+        TABLE_BORDER_SEGMENT_ORIENTATION_ID,
+        TABLE_BORDER_ROW_START_ID,
+        TABLE_BORDER_COLUMN_START_ID,
+        TABLE_BORDER_ROW_END_ID,
+        TABLE_BORDER_COLUMN_END_ID,
+    ];
+    let mut candidates = BTreeMap::<SegmentKey, Vec<PubTableBorderSegmentSource>>::new();
+
+    for shape in &context.officeart_inventory.shapes {
+        if shape.fsp.as_ref().map(|fsp| fsp.shape_type)
+            != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+            || has_any_client_data_identity(shape)
+        {
+            continue;
+        }
+        let Some(anchor) = shape.client_anchor.as_ref() else {
+            continue;
+        };
+        if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID) != Some(table_seq_num)
+            || anchor
+                .fields
+                .iter()
+                .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+            || anchor.fields.iter().any(|field| !allowed.contains(&field.id))
+        {
+            continue;
+        }
+
+        let Some(orientation) =
+            unique_anchor_scalar(anchor, TABLE_BORDER_SEGMENT_ORIENTATION_ID)
+        else {
+            continue;
+        };
+        let Some(row_start) = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_ROW_START_ID)
+        else {
+            continue;
+        };
+        let Some(column_start) =
+            unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_START_ID)
+        else {
+            continue;
+        };
+        let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_ROW_END_ID) else {
+            continue;
+        };
+        let Some(column_end) =
+            unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_END_ID)
+        else {
+            continue;
+        };
+        if row_start > rows || row_end > rows || column_start > columns || column_end > columns {
+            continue;
+        }
+
+        let axis = match orientation {
+            1 if row_start == row_end && column_start < column_end => {
+                PubTableBorderAxis::Horizontal
+            }
+            2 if column_start == column_end && row_start < row_end => {
+                PubTableBorderAxis::Vertical
+            }
+            _ => continue,
+        };
+
+        let Some(rgb) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
+            .and_then(direct_officeart_rgb)
+        else {
+            continue;
+        };
+        let Some(width_emu) =
+            unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
+                .filter(|value| *value > 0 && *value <= 0x0132_F540)
+                .map(i64::from)
+        else {
+            continue;
+        };
+
+        let key = SegmentKey {
+            axis,
+            row_start,
+            column_start,
+            row_end,
+            column_end,
+        };
+        candidates
+            .entry(key)
+            .or_default()
+            .push(PubTableBorderSegmentSource {
+                axis,
+                row_start,
+                column_start,
+                row_end,
+                column_end,
+                rgb,
+                width_emu,
+                source_refs: vec![source_ref(
+                    context.source,
+                    &shape.source,
+                    Some(contents_object_key(table_seq_num)),
+                    Some("SpContainer/FOPT/table-border-segment".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                )],
+            });
+    }
+
+    candidates
+        .into_values()
+        .filter_map(|segments| match segments.as_slice() {
+            [segment] => Some(segment.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn populate_exact_table_cell_bounds(
@@ -1021,6 +1192,16 @@ pub(crate) fn build_table_source(
         let _ =
             populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
     }
+    let border_segments = if simple_table.is_some() {
+        populate_native_autoformat_table_border_segments(
+            context,
+            table_seq_num,
+            rows,
+            columns,
+        )
+    } else {
+        Vec::new()
+    };
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
     Ok(Some(PubTableSource {
@@ -1031,6 +1212,7 @@ pub(crate) fn build_table_source(
         cells_seq_num: Some(cells_seq_num),
         tcd_story_ordinal: Some(tcd.story_ordinal.value),
         cells: joined_cells,
+        border_segments,
         simple_table,
         layout_metrics,
         source_refs: vec![
