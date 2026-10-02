@@ -149,6 +149,22 @@ def priority(row: dict[str, Any]) -> tuple[int, list[str]]:
     if row.get("salvage_eligibility") == "awaiting_typed_corruption_evidence":
         score += 100
         reasons.append("awaiting typed corruption evidence")
+
+    forced_probe = row.get("forced_trigger_probe")
+    forced_graph = row.get("forced_partial_graph")
+    if isinstance(forced_probe, dict) and isinstance(forced_graph, dict):
+        if forced_probe.get("cfb_inventory_available") is False:
+            score += 260
+            reasons.append("forced trigger still cannot build Reader CFB inventory")
+        elif forced_graph.get("status") == "error":
+            score += 250
+            reasons.append("forced trigger reaches CFB but partial graph fails")
+        elif (
+            forced_graph.get("status") == "constructed"
+            and forced_probe.get("has_surviving_evidence") is True
+        ):
+            score += 240
+            reasons.append("forced trigger constructs partial salvage graph")
     if row.get("has_surviving_evidence") is True:
         score += 80
         reasons.append("surviving evidence exists")
@@ -208,6 +224,8 @@ def build_case(
         "has_surviving_evidence": row.get("has_surviving_evidence"),
         "cfb_inventory_available": row.get("cfb_inventory_available"),
         "open_error_signature_sha256": row.get("open_error_signature_sha256"),
+        "forced_trigger_probe": row.get("forced_trigger_probe"),
+        "forced_partial_graph": row.get("forced_partial_graph"),
         "normal_reader_opened": (
             reader_record.get("opened") if isinstance(reader_record, dict) else None
         ),
