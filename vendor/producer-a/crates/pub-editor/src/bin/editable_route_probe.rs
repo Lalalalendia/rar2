@@ -62,23 +62,36 @@ fn probe_target(
     if preview.report.can_serialize {
         if let Some(dir) = materialize_dir {
             fs::create_dir_all(dir)?;
-            let export = session.export_editable(target, source_label.to_owned())?;
-            if export.report != preview.report {
-                return Err(format!("{name} preview/materialization report mismatch").into());
-            }
+            match session.export_editable(target, source_label.to_owned()) {
+                Ok(export) => {
+                    if export.report != preview.report {
+                        result["state"] = Value::String("not_verified".to_owned());
+                        result["reason_code"] =
+                            Value::String("preview_materialization_report_mismatch".to_owned());
+                        result["materialized"] = Value::Bool(false);
+                        return Ok(result);
+                    }
 
-            let artifact = dir.join(format!("output.{}", target.extension()));
-            fs::write(&artifact, &export.bytes)?;
-            fs::write(
-                dir.join(format!("{name}.report.json")),
-                serde_json::to_vec_pretty(&export.report)?,
-            )?;
-            fs::write(
-                dir.join(format!("{name}.report.txt")),
-                export.human_summary.as_bytes(),
-            )?;
-            result["materialized"] = Value::Bool(true);
-            result["artifact_bytes"] = json!(export.bytes.len());
+                    let artifact = dir.join(format!("output.{}", target.extension()));
+                    fs::write(&artifact, &export.bytes)?;
+                    fs::write(
+                        dir.join(format!("{name}.report.json")),
+                        serde_json::to_vec_pretty(&export.report)?,
+                    )?;
+                    fs::write(
+                        dir.join(format!("{name}.report.txt")),
+                        export.human_summary.as_bytes(),
+                    )?;
+                    result["materialized"] = Value::Bool(true);
+                    result["artifact_bytes"] = json!(export.bytes.len());
+                }
+                Err(error) => {
+                    result["state"] = Value::String("not_verified".to_owned());
+                    result["reason_code"] = Value::String("materialization_failed".to_owned());
+                    result["materialization_error"] = Value::String(error.to_string());
+                    result["materialized"] = Value::Bool(false);
+                }
+            }
         }
     }
 
