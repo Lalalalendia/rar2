@@ -24,6 +24,10 @@ const FILL_RECT_LEFT: u16 = 0x0191;
 const FILL_RECT_TOP: u16 = 0x0192;
 const FILL_RECT_RIGHT: u16 = 0x0193;
 const FILL_RECT_BOTTOM: u16 = 0x0194;
+const FILL_COLOR_EXT: u16 = 0x019E;
+const FILL_COLOR_EXT_MOD: u16 = 0x01A0;
+const FILL_COLOR_EXT_DEFAULT: u32 = 0xFFFF_FFFF;
+const FILL_COLOR_EXT_MOD_DEFAULT: u32 = 0x2000_0000;
 const FILL_BOOLEANS: u16 = 0x01BF;
 const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
@@ -434,6 +438,86 @@ fn colorref_profile(records: &[FoptObservation], property_id: u16) -> &'static s
     }
 }
 
+fn extended_color_profile(records: &[FoptObservation]) -> &'static str {
+    let matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == FILL_COLOR_EXT)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => "absent",
+        [property] if property.f_bid() || property.f_complex() => "malformed_or_complex",
+        [_first, ..] => "duplicate_scalar",
+        [property] if property.op == FILL_COLOR_EXT_DEFAULT => "default_sentinel",
+        [property] => match (property.op >> 24) as u8 {
+            0x00 => "nondefault_direct_rgb",
+            0x08 => "nondefault_scheme_color",
+            _ => "nondefault_other_flagged",
+        },
+    }
+}
+
+fn extended_color_mod_profile(records: &[FoptObservation]) -> &'static str {
+    let matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == FILL_COLOR_EXT_MOD)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => "absent",
+        [property] if property.f_bid() || property.f_complex() => "malformed_or_complex",
+        [_first, ..] => "duplicate_scalar",
+        [property] if property.op == FILL_COLOR_EXT_MOD_DEFAULT => "normative_default",
+        [_] => "nondefault_modifier",
+    }
+}
+
+fn effective_extended_color_profile(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+) -> String {
+    let mut layers = vec![(
+        "shape_local",
+        extended_color_profile(&shape.fopts),
+        extended_color_mod_profile(&shape.fopts),
+    )];
+    if let Some(dgg) = dgg {
+        layers.push((
+            "drawing_group_primary",
+            extended_color_profile(&dgg.primary_options),
+            extended_color_mod_profile(&dgg.primary_options),
+        ));
+        layers.push((
+            "drawing_group_tertiary",
+            extended_color_profile(&dgg.tertiary_options),
+            extended_color_mod_profile(&dgg.tertiary_options),
+        ));
+    }
+
+    for (authority, color, modifier) in layers {
+        let color_absent_or_default = matches!(color, "absent" | "default_sentinel");
+        let modifier_absent_or_default = matches!(modifier, "absent" | "normative_default");
+        if color_absent_or_default && modifier_absent_or_default {
+            continue;
+        }
+        if color.starts_with("malformed")
+            || color == "duplicate_scalar"
+            || modifier.starts_with("malformed")
+            || modifier == "duplicate_scalar"
+        {
+            return format!("{authority}:unresolved");
+        }
+        if color_absent_or_default {
+            return format!("{authority}:unresolved_modifier_without_extended_color");
+        }
+        if modifier == "nondefault_modifier" {
+            return format!("{authority}:extended_color_plus_modifier");
+        }
+        return format!("{authority}:extended_color_present");
+    }
+    "none_or_default".to_owned()
+}
+
 fn scalar_property_profile(records: &[FoptObservation], property_id: u16) -> &'static str {
     let matches = records
         .iter()
@@ -644,6 +728,9 @@ struct PageReceipt {
     restored_local_fill_type_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_color_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_color_form_histogram: BTreeMap<String, usize>,
+    restored_local_fill_color_ext_histogram: BTreeMap<String, usize>,
+    restored_local_fill_color_ext_mod_histogram: BTreeMap<String, usize>,
+    restored_effective_fill_color_ext_histogram: BTreeMap<String, usize>,
     restored_effective_color_distinct_count: usize,
     restored_dgg_color_materialization_histogram: BTreeMap<String, usize>,
     restored_local_fill_use_rect_histogram: BTreeMap<String, usize>,
@@ -680,6 +767,8 @@ struct Receipt {
     dgg_primary_fill_type_profile: String,
     dgg_primary_fill_color_profile: String,
     dgg_primary_fill_color_form: String,
+    dgg_primary_fill_color_ext_profile: String,
+    dgg_primary_fill_color_ext_mod_profile: String,
     dgg_primary_fill_use_rect_profile: String,
     dgg_primary_fill_rect_profile: String,
     dgg_primary_group_shape_profile: String,
@@ -695,6 +784,8 @@ struct Receipt {
     dgg_tertiary_fill_type_profile: String,
     dgg_tertiary_fill_color_profile: String,
     dgg_tertiary_fill_color_form: String,
+    dgg_tertiary_fill_color_ext_profile: String,
+    dgg_tertiary_fill_color_ext_mod_profile: String,
     dgg_tertiary_fill_use_rect_profile: String,
     dgg_tertiary_fill_rect_profile: String,
     dgg_tertiary_group_shape_profile: String,
@@ -922,6 +1013,18 @@ fn exact_virginia_restored_fill_stack_probe() {
                 colorref_profile(&shape.fopts, FILL_COLOR),
             );
             bump(
+                &mut page.restored_local_fill_color_ext_histogram,
+                extended_color_profile(&shape.fopts),
+            );
+            bump(
+                &mut page.restored_local_fill_color_ext_mod_histogram,
+                extended_color_mod_profile(&shape.fopts),
+            );
+            bump(
+                &mut page.restored_effective_fill_color_ext_histogram,
+                effective_extended_color_profile(shape, dgg),
+            );
+            bump(
                 &mut page.restored_local_fill_use_rect_histogram,
                 fill_use_rect_profile(&shape.fopts),
             );
@@ -1143,6 +1246,14 @@ fn exact_virginia_restored_fill_stack_probe() {
             .map(|group| colorref_profile(&group.primary_options, FILL_COLOR))
             .unwrap_or("absent")
             .to_owned(),
+        dgg_primary_fill_color_ext_profile: dgg
+            .map(|group| extended_color_profile(&group.primary_options))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_fill_color_ext_mod_profile: dgg
+            .map(|group| extended_color_mod_profile(&group.primary_options))
+            .unwrap_or("absent")
+            .to_owned(),
         dgg_primary_fill_use_rect_profile: dgg
             .map(|group| fill_use_rect_profile(&group.primary_options))
             .unwrap_or("absent")
@@ -1231,6 +1342,14 @@ fn exact_virginia_restored_fill_stack_probe() {
             .to_owned(),
         dgg_tertiary_fill_color_form: dgg
             .map(|group| colorref_profile(&group.tertiary_options, FILL_COLOR))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_fill_color_ext_profile: dgg
+            .map(|group| extended_color_profile(&group.tertiary_options))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_fill_color_ext_mod_profile: dgg
+            .map(|group| extended_color_mod_profile(&group.tertiary_options))
             .unwrap_or("absent")
             .to_owned(),
         dgg_tertiary_fill_use_rect_profile: dgg
@@ -1328,6 +1447,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-F fillUseRect profiles emit only participation authority, fillRect completeness, and positive/degenerate/unresolved geometry classes; no fillRect coordinates are emitted.",
             "Stage-G Group Shape Boolean profiles emit only documented hidden/print participation and effective authority classes; raw 0x03BF values are never emitted.",
             "Stage-H Geometry profiles emit only scalar/complex presence classes and default-rect/explicit-rect-space/custom-path/unresolved buckets; no geometry coordinates, vertices, segments, or raw property values are emitted.",
+            "Stage-I extended foreground-color profiles emit only absent/default/non-default representation/modifier and aggregate participation classes; no RGB, scheme ordinal, tint/shade scalar, or raw property value is emitted.",
         ],
     };
 
