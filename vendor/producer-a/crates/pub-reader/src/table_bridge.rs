@@ -522,13 +522,15 @@ fn populate_native_autoformat_table_borders(
     rows: u32,
     columns: u32,
 ) -> Vec<PubTableBorderSegmentSource> {
+    let mut candidates = 0_usize;
     let mut by_key = BTreeMap::<
         (PubTableBorderAxis, u32, u32, u32, u32),
         Vec<&pub_escher::SpContainerObservation>,
     >::new();
 
     for shape in &context.officeart_inventory.shapes {
-        if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+        if shape.fsp.as_ref().map(|fsp| fsp.shape_type)
+            != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
             || has_any_client_data_identity(shape)
         {
             continue;
@@ -541,9 +543,21 @@ fn populate_native_autoformat_table_borders(
                 .fields
                 .iter()
                 .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+            || !anchor.fields.iter().any(|field| {
+                matches!(
+                    field.id,
+                    TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID
+                        | TABLE_AUTOFORMAT_ROW_START_ID
+                        | TABLE_AUTOFORMAT_COLUMN_START_ID
+                        | TABLE_AUTOFORMAT_ROW_END_ID
+                        | TABLE_AUTOFORMAT_COLUMN_END_ID
+                )
+            })
         {
             continue;
         }
+        candidates += 1;
+
         let allowed = [
             TABLE_AUTOFORMAT_OWNER_REF_ID,
             TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID,
@@ -553,38 +567,38 @@ fn populate_native_autoformat_table_borders(
             TABLE_AUTOFORMAT_COLUMN_END_ID,
         ];
         if anchor.fields.iter().any(|field| !allowed.contains(&field.id)) {
-            continue;
+            return Vec::new();
         }
 
         let Some(orientation) =
             unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID)
         else {
-            continue;
+            return Vec::new();
         };
         let Some(row_start) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_START_ID)
         else {
-            continue;
+            return Vec::new();
         };
         let Some(column_start) =
             unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_START_ID)
         else {
-            continue;
+            return Vec::new();
         };
         let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_END_ID) else {
-            continue;
+            return Vec::new();
         };
         let Some(column_end) =
             unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_END_ID)
         else {
-            continue;
+            return Vec::new();
         };
         if row_start > rows || row_end > rows || column_start > columns || column_end > columns {
-            continue;
+            return Vec::new();
         }
         let axis = match orientation {
             1 if row_start == row_end && column_start < column_end => PubTableBorderAxis::Horizontal,
             2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
-            _ => continue,
+            _ => return Vec::new(),
         };
         by_key
             .entry((axis, row_start, column_start, row_end, column_end))
@@ -592,7 +606,11 @@ fn populate_native_autoformat_table_borders(
             .push(shape);
     }
 
-    let mut out = Vec::new();
+    if candidates == 0 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(candidates);
     for ((axis, row_start, column_start, row_end, column_end), shapes) in by_key {
         let [shape] = shapes.as_slice() else {
             return Vec::new();
@@ -600,12 +618,12 @@ fn populate_native_autoformat_table_borders(
         let Some(rgb) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
             .and_then(direct_officeart_rgb)
         else {
-            continue;
+            return Vec::new();
         };
         let Some(width_emu) = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
             .and_then(|value| (value > 0 && value <= 0x0132_F540).then_some(i64::from(value)))
         else {
-            continue;
+            return Vec::new();
         };
         out.push(PubTableBorderSegmentSource {
             axis,
@@ -626,7 +644,8 @@ fn populate_native_autoformat_table_borders(
             )],
         });
     }
-    out
+
+    (out.len() == candidates).then_some(out).unwrap_or_default()
 }
 
 fn populate_native_autoformat_table_cell_fill(
