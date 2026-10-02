@@ -6,7 +6,7 @@
 
 use chaptera_viewer_render_plan::{
     NodeRenderPlanV1, RenderImageSourceWindowV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1,
+    RenderTextLayoutDispositionV1, uniform_text_color_rgb_v1,
 };
 use eframe::egui;
 
@@ -259,11 +259,15 @@ pub fn paint_document_node_foreground(
         None => "shared_layout_not_requested".to_owned(),
     });
 
+    let text_color = uniform_text_color_rgb_v1(fragment)
+        .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+        .unwrap_or(egui::Color32::BLACK);
     let (layout_job, usage) = layout_document_text(
         fragment,
         scene_scale,
         text_clip_rect.width().max(1.0_f32),
         fragment.backend_font_resource_id.as_deref(),
+        text_color,
     );
     let executed_font_sizes_px = layout_job
         .sections
@@ -289,7 +293,7 @@ pub fn paint_document_node_foreground(
         shared_resolved_line_count: 0,
         backend_fallback_reason,
     };
-    text_painter.galley(text_clip_rect.min, galley, egui::Color32::BLACK);
+    text_painter.galley(text_clip_rect.min, galley, text_color);
 
     NodePaintOutcome {
         text_clipped,
@@ -359,13 +363,12 @@ fn paint_bounded_table_text(
     }
 }
 
-fn shared_resolved_line_job(text: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
-    egui::text::LayoutJob::simple(
-        text.to_owned(),
-        font_id,
-        egui::Color32::BLACK,
-        f32::INFINITY,
-    )
+fn shared_resolved_line_job(
+    text: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+) -> egui::text::LayoutJob {
+    egui::text::LayoutJob::simple(text.to_owned(), font_id, color, f32::INFINITY)
 }
 
 struct SharedResolvedPaintParams<'a> {
@@ -408,6 +411,9 @@ fn paint_shared_resolved_text(
         egui::FontFamily::Name(font_resource_id.into()),
     );
     let mut max_width_px = 0.0_f32;
+    let text_color = uniform_text_color_rgb_v1(fragment)
+        .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+        .unwrap_or(egui::Color32::BLACK);
 
     for (expected_index, line) in lines.iter().enumerate() {
         if usize::try_from(line.line_index).ok() != Some(expected_index)
@@ -416,12 +422,12 @@ fn paint_shared_resolved_text(
             return None;
         }
 
-        let job = shared_resolved_line_job(&line.text, font_id.clone());
+        let job = shared_resolved_line_job(&line.text, font_id.clone(), text_color);
         let galley = painter.layout_job(job);
         max_width_px = max_width_px.max(galley.size().x);
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
         let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
-        painter.galley(egui::pos2(x, y), galley, egui::Color32::BLACK);
+        painter.galley(egui::pos2(x, y), galley, text_color);
     }
 
     let resolved_height_px = lines.len() as f32 * line_height_px;
@@ -463,6 +469,7 @@ fn layout_document_text(
     scene_scale: f32,
     wrap_width_px: f32,
     backend_font_resource_id: Option<&str>,
+    text_color: egui::Color32,
 ) -> (egui::text::LayoutJob, TextLayoutUsage) {
     let fallback = backend_font_resource_id
         .filter(|resource_id| !resource_id.is_empty())
@@ -478,7 +485,7 @@ fn layout_document_text(
             egui::text::LayoutJob::simple(
                 fragment.text.clone(),
                 fallback.clone(),
-                egui::Color32::BLACK,
+                text_color,
                 wrap_width_px.max(1.0),
             ),
             TextLayoutUsage {
@@ -531,7 +538,7 @@ fn layout_document_text(
             let Some(text) = scalar_slice(&fragment.text, cursor, start) else {
                 return fallback_job();
             };
-            append_text_section(&mut job, text, fallback.clone());
+            append_text_section(&mut job, text, fallback.clone(), text_color);
         }
         let Some(text) = scalar_slice(&fragment.text, start, end) else {
             return fallback_job();
@@ -540,7 +547,7 @@ fn layout_document_text(
             .filter(|resource_id| !resource_id.is_empty())
             .map(|resource_id| egui::FontFamily::Name(resource_id.into()))
             .unwrap_or_else(crate::fallback_font::family);
-        append_text_section(&mut job, text, egui::FontId::new(size, family));
+        append_text_section(&mut job, text, egui::FontId::new(size, family), text_color);
         cursor = end;
     }
 
@@ -548,7 +555,7 @@ fn layout_document_text(
         let Some(text) = scalar_slice(&fragment.text, cursor, fragment_scalar_len) else {
             return fallback_job();
         };
-        append_text_section(&mut job, text, fallback.clone());
+        append_text_section(&mut job, text, fallback.clone(), text_color);
     }
 
     if job.text != fragment.text {
@@ -568,12 +575,13 @@ fn layout_document_text(
     )
 }
 
-fn append_text_section(job: &mut egui::text::LayoutJob, text: &str, font_id: egui::FontId) {
-    job.append(
-        text,
-        0.0,
-        egui::TextFormat::simple(font_id, egui::Color32::BLACK),
-    );
+fn append_text_section(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+) {
+    job.append(text, 0.0, egui::TextFormat::simple(font_id, color));
 }
 
 fn source_text_size_px(text_size_emu: u32, scene_scale: f32) -> Option<f32> {
@@ -704,6 +712,7 @@ mod tests {
         let job = shared_resolved_line_job(
             "one already resolved line",
             egui::FontId::new(12.0, crate::fallback_font::family()),
+            egui::Color32::BLACK,
         );
         assert!(job.wrap.max_width.is_infinite());
         assert_eq!(job.text, "one already resolved line");
@@ -739,7 +748,8 @@ mod tests {
         .expect("render text fragment");
 
         let scene_scale = 1.0 / 12_700.0;
-        let (job, usage) = layout_document_text(&fragment, scene_scale, 400.0, None);
+        let (job, usage) =
+            layout_document_text(&fragment, scene_scale, 400.0, None, egui::Color32::BLACK);
         assert_eq!(job.text, "ABCDEF");
         assert_eq!(job.sections.len(), 3);
         let sizes = job
@@ -784,6 +794,7 @@ mod tests {
             1.0 / 12_700.0,
             400.0,
             fragment.backend_font_resource_id.as_deref(),
+            egui::Color32::BLACK,
         );
         assert_eq!(usage.source_typography_sections, 1);
         assert_eq!(usage.fallback_sections, 0);
@@ -808,7 +819,8 @@ mod tests {
             ]
         }))
         .expect("render text fragment");
-        let (job, usage) = layout_document_text(&fragment, 1.0 / 12_700.0, 400.0, None);
+        let (job, usage) =
+            layout_document_text(&fragment, 1.0 / 12_700.0, 400.0, None, egui::Color32::BLACK);
         assert_eq!(job.sections.len(), 1);
         assert_eq!(usage.source_typography_sections, 0);
         assert_eq!(usage.fallback_sections, 1);
