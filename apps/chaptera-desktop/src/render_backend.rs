@@ -331,6 +331,16 @@ fn paint_bounded_table_text(
             continue;
         }
 
+        if cell.fill_visible == Some(true)
+            && let Some(rgb) = cell.fill_rgb
+        {
+            painter.rect_filled(
+                cell_rect,
+                0.0,
+                egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]),
+            );
+        }
+
         let clip_rect = cell_rect.shrink(2.0);
         if !clip_rect.is_positive() || cell.text.is_empty() {
             continue;

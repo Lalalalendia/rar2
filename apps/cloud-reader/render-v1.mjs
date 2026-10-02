@@ -310,18 +310,39 @@ export function tableCellPaintGeometry(cell) {
   return Object.freeze({ x, y, width, height });
 }
 
+export function tableCellFillPaintPlan(cell) {
+  const geometry = tableCellPaintGeometry(cell);
+  const fill = rgb(cell?.fill_rgb);
+  if (!geometry || cell?.fill_visible !== true || !fill) return null;
+  return Object.freeze({ geometry, fill });
+}
+
 function appendTableText(group, node) {
   const table = node.table;
   if (!table) return;
   for (const cell of table.cells ?? []) {
     const geometry = tableCellPaintGeometry(cell);
-    if (!geometry || !cell.text) continue;
+    if (!geometry) continue;
+
+    const fillPlan = tableCellFillPaintPlan(cell);
+    if (fillPlan) {
+      group.appendChild(svgNode("rect", {
+        x: fillPlan.geometry.x,
+        y: fillPlan.geometry.y,
+        width: fillPlan.geometry.width,
+        height: fillPlan.geometry.height,
+        fill: fillPlan.fill,
+        "data-table-cell-id": cell.cell_id,
+        "data-table-cell-paint-authority": "source-t595"
+      }));
+    }
+    if (!cell.text) continue;
 
     const foreign = previewForeignObject(geometry, {
       "data-table-cell-id": cell.cell_id,
       "data-table-row": cell.row,
       "data-table-column": cell.column,
-      "data-table-paint-authority": "none",
+      "data-table-paint-authority": fillPlan ? "source-t595" : "none",
       "data-text-authority": "browser-preview-only"
     });
     const div = document.createElementNS(XHTML_NS, "div");
