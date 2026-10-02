@@ -51,9 +51,9 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn scalar_fill_color_properties<'a>(
-    dgg: &'a pub_escher::DggDefaultOptionsObservation,
-) -> Vec<&'a pub_escher::Fopte> {
+fn scalar_fill_color_properties(
+    dgg: &pub_escher::DggDefaultOptionsObservation,
+) -> Vec<&pub_escher::Fopte> {
     dgg.primary_options
         .iter()
         .flat_map(|record| record.properties.iter())
