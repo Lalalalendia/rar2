@@ -53,6 +53,13 @@ jobs:
           mkdir -p target/virginia-table-layout
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_layout_probe -- --ignored --nocapture
 
+      - name: Classify Virginia TABLE OfficeArt cell joins
+        env:
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
