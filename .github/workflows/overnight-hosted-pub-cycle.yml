@@ -1,0 +1,150 @@
+name: Overnight hosted PUB cycle
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+    - cron: "20 * * * *"
+    - cron: "40 * * * *"
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Hosted slot to dispatch"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - product
+          - research
+          - build
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+
+concurrency:
+  group: overnight-hosted-cycle-${{ github.event.schedule || inputs.slot || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  product:
+    if: >-
+      github.event.schedule == '0 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.slot == 'all' || inputs.slot == 'product'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - name: Dispatch current-main product fidelity gates once per SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          dispatch_once() {
+            local workflow="$1"
+            local runs
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&per_page=50")"
+            if jq -e --arg sha "$sha" '
+              .workflow_runs[]
+              | select(
+                  .head_sha == $sha
+                  and (
+                    .status == "queued"
+                    or .status == "in_progress"
+                    or .conclusion == "success"
+                  )
+                )
+            ' >/dev/null <<<"$runs"; then
+              echo "SKIP ${workflow}: authoritative run already exists for ${sha}"
+              return
+            fi
+            echo "DISPATCH ${workflow} on main@${sha}"
+            gh workflow run "$workflow" --ref main
+          }
+          dispatch_once "cloud-reader-reference-pairs.yml"
+          dispatch_once "viewer-page-role-virginia.yml"
+
+  research:
+    if: >-
+      github.event.schedule == '20 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.slot == 'all' || inputs.slot == 'research'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - name: Dispatch corpus and unknown-coverage gates once per SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          dispatch_once() {
+            local workflow="$1"
+            local runs
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&per_page=50")"
+            if jq -e --arg sha "$sha" '
+              .workflow_runs[]
+              | select(
+                  .head_sha == $sha
+                  and (
+                    .status == "queued"
+                    or .status == "in_progress"
+                    or .conclusion == "success"
+                  )
+                )
+            ' >/dev/null <<<"$runs"; then
+              echo "SKIP ${workflow}: authoritative run already exists for ${sha}"
+              return
+            fi
+            echo "DISPATCH ${workflow} on main@${sha}"
+            gh workflow run "$workflow" --ref main
+          }
+          dispatch_once "reader-1050-corpus-baseline.yml"
+          dispatch_once "legacy22-full-corpus-replay.yml"
+          dispatch_once "corpus-structural-novelty.yml"
+
+  build:
+    if: >-
+      github.event.schedule == '40 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.slot == 'all' || inputs.slot == 'build'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - name: Dispatch current-main Reader build artifacts once per SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          dispatch_once() {
+            local workflow="$1"
+            local runs
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&per_page=50")"
+            if jq -e --arg sha "$sha" '
+              .workflow_runs[]
+              | select(
+                  .head_sha == $sha
+                  and (
+                    .status == "queued"
+                    or .status == "in_progress"
+                    or .conclusion == "success"
+                  )
+                )
+            ' >/dev/null <<<"$runs"; then
+              echo "SKIP ${workflow}: authoritative run already exists for ${sha}"
+              return
+            fi
+            echo "DISPATCH ${workflow} on main@${sha}"
+            gh workflow run "$workflow" --ref main
+          }
+          dispatch_once "chaptera-reader-windows.yml"
+          dispatch_once "chaptera-local-portable-windows.yml"
