@@ -96,7 +96,7 @@ use pub_escher::{
     OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
     OFFICE_ART_PROPERTY_CROP_FROM_RIGHT, OFFICE_ART_PROPERTY_CROP_FROM_TOP,
     OFFICE_ART_PROPERTY_PIB, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
-    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, Fopte, FoptObservation, PublisherField,
+    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, FoptObservation, PublisherField,
     PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
@@ -3015,6 +3015,18 @@ pub fn build_mature_0x2c_from_streams(
             (None, None)
         };
 
+        let consumes_direct_image_rotation = grouped_sources.is_empty()
+            && image_slot.is_some()
+            && !shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_H)
+            && !shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_V)
+            && unique_officeart_rotation_raw16_16(&shape.fopts).is_some_and(|raw| raw != 0);
+        let transform = direct_unflipped_image_officeart_transform(
+            shape,
+            bounds,
+            grouped_sources.is_empty(),
+            image_slot.is_some(),
+        );
+
         let object_key = contents_object_key(seq_num);
         let mut source_refs = vec![source_ref(
             &graph.source,
@@ -3038,7 +3050,7 @@ pub fn build_mature_0x2c_from_streams(
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
         ));
-        if has_explicit_officeart_paint_observation(shape) {
+        if has_explicit_officeart_paint_observation(shape) || consumes_direct_image_rotation {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -3104,19 +3116,13 @@ pub fn build_mature_0x2c_from_streams(
             source_refs.extend(table_story.source_refs.clone());
         }
 
-        let transform = direct_unflipped_image_officeart_transform(
-            shape,
-            bounds,
-            grouped_sources.is_empty(),
-            image_slot.is_some(),
-        );
-
         graph.nodes.insert(
             node_id,
             Node {
-                // Grouped Story/image shapes and TABLEs are projected to page-relative
-                // geometry while exact group ancestry remains in provenance.
-                // The current resolver does not yet compose Group transforms.
+                // Grouped Story/image shapes and TABLEs remain page-relative while exact
+                // group ancestry stays in provenance; grouped transform composition is
+                // still unsupported. Direct unflipped IMAGE rotation is consumed above
+                // from source-backed OfficeArt FOPT 0x0004.
                 kind: if raw_type == Some(RAW_TYPE_TABLE) {
                     NodeKind::Table
                 } else {
@@ -4817,7 +4823,7 @@ mod tests {
         }
     }
 
-    fn rotation_observation(properties: Vec<Fopte>) -> FoptObservation {
+    fn rotation_observation(properties: Vec<pub_escher::Fopte>) -> FoptObservation {
         FoptObservation {
             rec_type: 0xF00B,
             source: rotation_test_span(),
@@ -4825,8 +4831,8 @@ mod tests {
         }
     }
 
-    fn rotation_property(opid: u16, op: u32) -> Fopte {
-        Fopte {
+    fn rotation_property(opid: u16, op: u32) -> pub_escher::Fopte {
+        pub_escher::Fopte {
             opid,
             op,
             source: rotation_test_span(),
