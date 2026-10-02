@@ -7,6 +7,7 @@ import {
   imageResourcePaintPlan,
   presetShapePaintGeometry,
   resolvedTextLinePaintPlan,
+  tableBorderPaintPlan,
   tableCellFillPaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
@@ -129,6 +130,49 @@ test("table cell fill plan uses source-neutral fill on authoritative bounds", ()
       bounds: { x: 100, y: 200, width: 300, height: 400 },
       fill_rgb: [10, 20, 30],
       fill_visible: false
+    }),
+    null
+  );
+});
+
+test("table border plan preserves source-backed line geometry, color and EMU width", () => {
+  assert.deepEqual(
+    tableBorderPaintPlan({
+      x1_emu: 100,
+      y1_emu: 200,
+      x2_emu: 500,
+      y2_emu: 200,
+      rgb: [12, 34, 56],
+      width_emu: 12700
+    }),
+    {
+      x1: 100,
+      y1: 200,
+      x2: 500,
+      y2: 200,
+      width: 12700,
+      stroke: "rgb(12 34 56)"
+    }
+  );
+  assert.equal(
+    tableBorderPaintPlan({
+      x1_emu: 1,
+      y1_emu: 1,
+      x2_emu: 1,
+      y2_emu: 1,
+      rgb: [0, 0, 0],
+      width_emu: 12700
+    }),
+    null
+  );
+  assert.equal(
+    tableBorderPaintPlan({
+      x1_emu: 1,
+      y1_emu: 1,
+      x2_emu: 2,
+      y2_emu: 1,
+      rgb: [0, 0, 0],
+      width_emu: 0
     }),
     null
   );
