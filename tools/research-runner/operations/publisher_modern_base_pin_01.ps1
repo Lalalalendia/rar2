@@ -131,20 +131,23 @@ function Build-StructuralBaseTool {
         return $resolved
     }
 
+    $targetDir = Join-Path $privateDir "cargo-target"
+    New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+
     Push-Location $repoRoot
     try {
-        & cargo build --locked --release --manifest-path "vendor/producer-a/Cargo.toml" -p pub-reader --bin structural_base_manifest
+        & cargo build --locked --offline --release --target-dir $targetDir --manifest-path "vendor/producer-a/Cargo.toml" -p pub-reader --bin structural_base_manifest
         if ($LASTEXITCODE -ne 0) {
-            throw "structural_base_manifest build failed with exit code $LASTEXITCODE"
+            throw "structural_base_manifest offline build failed with exit code $LASTEXITCODE"
         }
     }
     finally {
         Pop-Location
     }
 
-    $exe = Join-Path $repoRoot "vendor/producer-a/target/release/structural_base_manifest.exe"
+    $exe = Join-Path $targetDir "release/structural_base_manifest.exe"
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
-        throw "structural_base_manifest.exe missing after build"
+        throw "structural_base_manifest.exe missing after offline private-target build"
     }
     return $exe
 }
