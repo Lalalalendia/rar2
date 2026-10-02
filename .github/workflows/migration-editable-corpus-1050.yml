@@ -7,6 +7,8 @@ on:
       - corpus/migration-core65-01
     paths:
       - ".github/workflows/migration-editable-corpus-1050.yml"
+      - "vendor/producer-a/crates/pub-editor/src/bin/migration_editable_route_probe.rs"
+      - "tools/migration_editable_corpus_v2.py"
 
 concurrency:
   group: migration-editable-corpus-1050
