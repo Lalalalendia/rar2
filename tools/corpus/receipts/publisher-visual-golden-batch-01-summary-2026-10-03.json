@@ -83,5 +83,16 @@
     "comparative_oracle_pdf_count": 55,
     "note": "Exact warning membership was not captured for all successful exports. PDFs are retained as comparative-oracle candidates; warning-bearing and empty-output witnesses remain explicitly non-clean."
   },
-  "authority_rule": "Publisher PDF is visual authority only; hidden PUB semantics require PUB/native evidence."
+  "authority_rule": "Publisher PDF is visual authority only; hidden PUB semantics require PUB/native evidence.",
+  "normalized_manual_oracle_bundle": {
+    "pair_count": 55,
+    "file_name": "publisher-visual-golden-batch-01-manual-oracle.zip",
+    "sha256": "72949ba7cda9404f4d72cef5e18bc38d3f708fb14e9b310a6c4b912906bc2a76",
+    "bytes": 91039995,
+    "pairs_csv_sha256": "8f47ca1df8f8377193f07ab990fcdc5d10cc6410da3d56c0ddc1640a607985e5",
+    "layout": "tools/cloud_reader_manual_oracle_bundle_v1.py compatible",
+    "durable_registry_path": "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv",
+    "selection_manifest_path": "tools/corpus/receipts/publisher-visual-golden-batch-01-selection.csv",
+    "raw_bundle_committed_to_git": false
+  }
 }
