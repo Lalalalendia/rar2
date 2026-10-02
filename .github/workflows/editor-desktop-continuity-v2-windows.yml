@@ -91,7 +91,7 @@ jobs:
           "CHAPTERA_CONTINUITY_REPLACEMENT=$replacement" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build current Chaptera desktop
-        run: cargo build --locked -p chaptera-desktop --release
+        run: cargo build -p chaptera-desktop --release
 
       - name: Run real imported-PUB continuity V2
         shell: pwsh
