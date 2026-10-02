@@ -310,6 +310,9 @@ fn bounded_direct_image_transform(
     } else if signed_angle < -HALF_TURN_UNITS {
         signed_angle += FULL_TURN_UNITS;
     }
+    if signed_angle == 0 {
+        return BoundedDirectImageTransform::Identity;
+    }
     if matches!(
         signed_angle.abs(),
         QUARTER_TURN_UNITS | HALF_TURN_UNITS
@@ -4957,6 +4960,10 @@ mod tests {
         );
         assert_eq!(
             bounded_direct_image_transform(&[(0, false, false)], 0, test_bounds()),
+            BoundedDirectImageTransform::Identity
+        );
+        assert_eq!(
+            bounded_direct_image_transform(&[((360u32) << 16, false, false)], 0, test_bounds()),
             BoundedDirectImageTransform::Identity
         );
     }
