@@ -1,8 +1,8 @@
 use std::{env, fs, io::Cursor, path::PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_core::StreamPath;
-use pub_escher::{PUBLISHER_FIELD_SHAPE_ID, inspect_sp_containers};
+use pub_escher::{inspect_sp_containers, PUBLISHER_FIELD_SHAPE_ID};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -33,9 +33,7 @@ struct Receipt {
     observations: Vec<ShapeObservation>,
 }
 
-fn unique_publisher_shape_id(
-    record: Option<&pub_escher::PublisherFieldRecord>,
-) -> Option<u32> {
+fn unique_publisher_shape_id(record: Option<&pub_escher::PublisherFieldRecord>) -> Option<u32> {
     let record = record?;
     let values = record.values(PUBLISHER_FIELD_SHAPE_ID).collect::<Vec<_>>();
     match values.as_slice() {
