@@ -17,6 +17,9 @@ use chaptera_server::{
     jobs::UnconfiguredWorkerRuntime,
     jobs_runtime::JobsRuntime,
     migrate,
+    migration_editable_route::{
+        self, IsolatedMigrationEditableRouteProducer, MigrationEditableRouteHttpState,
+    },
     product_api_http::{self, ProductApiHttpState},
     product_export_http::{self, ProductExportHttpState},
     project_persistence_sqlite::SqliteProjectPersistence,
@@ -71,6 +74,25 @@ fn main() -> ExitCode {
     } = &cli.command
     {
         return match source_baseline::run_source_baseline_worker(
+            document_id,
+            expected_sha256,
+            *expected_byte_len,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("chaptera: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if let Command::MigrationEditableRoutes {
+        document_id,
+        expected_sha256,
+        expected_byte_len,
+    } = &cli.command
+    {
+        return match migration_editable_route::run_migration_editable_routes_worker(
             document_id,
             expected_sha256,
             *expected_byte_len,
@@ -232,15 +254,28 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                         )?;
                         let export_state = ProductExportHttpState::new(
                             auth_http.clone(),
-                            source_authority,
+                            source_authority.clone(),
                             revision_stream.clone(),
                             jobs.clone(),
                             blob_store.service().clone(),
                         );
+                        let migration_route_producer = IsolatedMigrationEditableRouteProducer::new(
+                            source_ingress_http::baseline_config(source_config),
+                            blob_store.service().clone(),
+                        )?;
+                        let migration_route_state = MigrationEditableRouteHttpState::new(
+                            auth_http.clone(),
+                            source_authority,
+                            authz.clone(),
+                            revision_stream.clone(),
+                            jobs.clone(),
+                            migration_route_producer,
+                        );
                         Some(
                             source_ingress_http::router(source_state)
                                 .merge(product_api_http::router(product_state))
-                                .merge(product_export_http::router(export_state)),
+                                .merge(product_export_http::router(export_state))
+                                .merge(migration_editable_route::router(migration_route_state)),
                         )
                     } else {
                         None
@@ -391,6 +426,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
         ),
         Command::SourceBaseline { .. } => unreachable!(
             "source-baseline is dispatched synchronously before Tokio runtime creation"
+        ),
+        Command::MigrationEditableRoutes { .. } => unreachable!(
+            "migration-editable-routes is dispatched synchronously before Tokio runtime creation"
         ),
         Command::GuestReaderScene { .. } => unreachable!(
             "guest-reader-scene is dispatched synchronously before Tokio runtime creation"

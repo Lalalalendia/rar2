@@ -4,6 +4,9 @@ import { projectCurrentAuthoringGraphToScene } from "./current-authoring-graph-s
 const COMMIT_REQUEST_V1 = "chaptera.commit-request.v1";
 const COMMIT_REJECTED_V1 = "chaptera.commit-rejected.v1";
 const EXPORT_CREATE_V1 = "chaptera.export-create.v1";
+const MIGRATION_EDITABLE_ROUTE_REQUEST_V1 =
+  "chaptera.migration-editable-route-request.v1";
+const MIGRATION_EXPORT_CREATE_V1 = "chaptera.migration-export-create.v1";
 
 const REJECTABLE_COMMIT_CODES = new Set([
   "stale_revision",
@@ -193,6 +196,79 @@ export class ChapteraProductEditorServiceV1 {
     };
   }
 
+  async migrationEditableRoutes(sourceSha256) {
+    ident(sourceSha256, "sourceSha256");
+    const context = this.#context("migration_capability");
+    const result = await this.#mutationJson(
+      "/v1/migration/documents/" +
+        encodeURIComponent(this.documentId) +
+        "/editable-routes",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          protocol_version: MIGRATION_EDITABLE_ROUTE_REQUEST_V1,
+          document_id: this.documentId,
+          source_sha256: sourceSha256,
+        }),
+      },
+      context,
+    );
+    this.#throwUnlessOk(result, "migration editable routes");
+    const value = ensureProtocol(
+      result.value,
+      "chaptera.migration-editable-route-response.v1",
+      "migration editable routes",
+    );
+    if (
+      value.document_id !== this.documentId ||
+      value.source_sha256 !== sourceSha256
+    ) {
+      throw new Error("migration capability identity mismatch");
+    }
+    return clone(value);
+  }
+
+  async createMigrationExport({ sourceSha256, target, clientRequestId }) {
+    ident(sourceSha256, "sourceSha256");
+    ident(clientRequestId, "clientRequestId");
+    if (!["idml", "odg"].includes(target)) {
+      throw new TypeError("target must be idml or odg");
+    }
+    const context = this.#context("migration_export", clientRequestId);
+    const result = await this.#mutationJson(
+      "/v1/migration/documents/" +
+        encodeURIComponent(this.documentId) +
+        "/exports",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          protocol_version: MIGRATION_EXPORT_CREATE_V1,
+          document_id: this.documentId,
+          source_sha256: sourceSha256,
+          target,
+          client_request_id: clientRequestId,
+        }),
+      },
+      context,
+    );
+    this.#throwUnlessOk(result, "migration export create");
+    const value = ensureProtocol(
+      result.value,
+      "chaptera.migration-export-job.v1",
+      "migration export job",
+    );
+    if (
+      value.document_id !== this.documentId ||
+      value.source_sha256 !== sourceSha256 ||
+      value.target !== target
+    ) {
+      throw new Error("migration export identity mismatch");
+    }
+    return clone(value);
+  }
+
   async createExport({
     revisionId,
     targetProfile,
@@ -273,6 +349,31 @@ export class ChapteraProductEditorServiceV1 {
         result.value,
         "chaptera.export-download.v1",
         "export download",
+      ),
+    );
+  }
+
+  async authorizeLossReportDownload(jobId, lossReportId) {
+    ident(jobId, "jobId");
+    ident(lossReportId, "lossReportId");
+    const context = this.#context("export_loss_download");
+    const result = await this.#mutationJson(
+      "/v1/exports/" +
+        encodeURIComponent(jobId) +
+        "/loss-report/download",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ loss_report_id: lossReportId }),
+      },
+      context,
+    );
+    this.#throwUnlessOk(result, "export loss report download");
+    return clone(
+      ensureProtocol(
+        result.value,
+        "chaptera.export-loss-download.v1",
+        "export loss report download",
       ),
     );
   }

@@ -26,6 +26,7 @@ pub mod job_worker;
 pub mod jobs;
 pub mod jobs_runtime;
 pub mod migrate;
+pub mod migration_editable_route;
 pub mod oidc_authn;
 pub mod product_api_http;
 pub mod product_export_http;

@@ -1,0 +1,32 @@
+name: Web Migration UX V1
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/migration-ux-v1.mjs"
+      - "apps/web/migration-ux-v1.test.mjs"
+      - "apps/web/chaptera-product-editor-service-v1.mjs"
+      - "apps/web/chaptera-product-editor-service-v1.test.mjs"
+      - ".github/workflows/web-migration-ux-01.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  migration-ux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test migration UX controller
+        run: node --test apps/web/migration-ux-v1.test.mjs
+      - name: Test authenticated product service seam
+        run: node --test apps/web/chaptera-product-editor-service-v1.test.mjs

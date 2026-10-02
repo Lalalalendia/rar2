@@ -379,3 +379,94 @@ test("direct export API uses canonical create/status/download/cancel surfaces wi
     assert.equal(call.options.headers["x-csrf-token"], "csrf-token-1");
   }
 });
+
+
+test("migration API binds capability, create, and loss download to exact source", async () => {
+  const { calls, fetchImpl } = recorder((url, options) => {
+    const path = new URL(url).pathname;
+    if (path === "/v1/session") return json(session());
+    if (path === "/v1/migration/documents/" + DOC + "/editable-routes") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.protocol_version, "chaptera.migration-editable-route-request.v1");
+      assert.equal(body.document_id, DOC);
+      assert.equal(body.source_sha256, SOURCE);
+      return json({
+        protocol_version: "chaptera.migration-editable-route-response.v1",
+        document_id: DOC,
+        source_sha256: SOURCE,
+        source_byte_len: 12345,
+        open_state: "admitted",
+        idml: {
+          state: "available_with_declared_losses",
+          reason_code: "serializable",
+          declared_loss_count: 4,
+          blocking_loss_count: 0,
+        },
+        odg: {
+          state: "unavailable",
+          reason_code: "blocking_losses",
+          declared_loss_count: 2,
+          blocking_loss_count: 1,
+        },
+      });
+    }
+    if (path === "/v1/migration/documents/" + DOC + "/exports") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.protocol_version, "chaptera.migration-export-create.v1");
+      assert.equal(body.document_id, DOC);
+      assert.equal(body.source_sha256, SOURCE);
+      assert.equal(body.target, "idml");
+      assert.equal(body.client_request_id, "migration-request-1");
+      return json({
+        protocol_version: "chaptera.migration-export-job.v1",
+        document_id: DOC,
+        source_sha256: SOURCE,
+        target: "idml",
+        target_profile: "idml:bounded-editable",
+        revision_id: BASE,
+        job_id: "job:migration",
+        status: "queued",
+        declared_loss_count: 4,
+        blocking_loss_count: 0,
+      });
+    }
+    if (path === "/v1/exports/job%3Amigration/loss-report/download") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.loss_report_id, "binding:loss");
+      return json({
+        protocol_version: "chaptera.export-loss-download.v1",
+        job_id: "job:migration",
+        loss_report_id: "binding:loss",
+        download_handle: "https://download.invalid/loss",
+        expires_at_ms: Date.now() + 60_000,
+      });
+    }
+    throw new Error("unexpected path " + path);
+  });
+
+  const service = new ChapteraProductEditorServiceV1("https://chaptera.test", {
+    documentId: DOC,
+    fetchImpl,
+  });
+
+  const capability = await service.migrationEditableRoutes(SOURCE);
+  assert.equal(capability.idml.state, "available_with_declared_losses");
+
+  const created = await service.createMigrationExport({
+    sourceSha256: SOURCE,
+    target: "idml",
+    clientRequestId: "migration-request-1",
+  });
+  assert.equal(created.job_id, "job:migration");
+
+  const loss = await service.authorizeLossReportDownload(
+    "job:migration",
+    "binding:loss",
+  );
+  assert.equal(loss.download_handle, "https://download.invalid/loss");
+
+  for (const call of calls.filter((call) => call.options.method === "POST")) {
+    assert.equal(call.options.headers["x-csrf-token"], "csrf-token-1");
+    assert.equal(call.options.credentials, "include");
+  }
+});
