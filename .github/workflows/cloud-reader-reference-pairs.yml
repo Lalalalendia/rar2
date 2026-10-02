@@ -147,6 +147,16 @@ jobs:
             cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
           fi
 
+      - name: Census exact Virginia p22 TABLE layout admission
+        env:
+          CHAPTERA_VIRGINIA_TABLE_LAYOUT_PUB: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_TABLE_LAYOUT_RECEIPT: ${{ github.workspace }}/target/cloud-reader-reference-pairs/virginia-remplacante-table-layout.json
+        run: |
+          set -euo pipefail
+          if [ -f "$CHAPTERA_VIRGINIA_TABLE_LAYOUT_PUB" ]; then
+            cargo test -p chaptera-server --test virginia_table_layout_probe -- --ignored --nocapture
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
