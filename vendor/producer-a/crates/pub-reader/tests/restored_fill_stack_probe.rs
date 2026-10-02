@@ -743,6 +743,92 @@ fn main_vs_extended_profile(
     }
 }
 
+fn stage_b_j_covers_property(property_id: u16) -> bool {
+    matches!(
+        property_id,
+        ROTATION
+            | GEO_LEFT
+            | GEO_TOP
+            | GEO_RIGHT
+            | GEO_BOTTOM
+            | SHAPE_PATH
+            | P_VERTICES
+            | P_SEGMENT_INFO
+            | FILL_TYPE
+            | FILL_COLOR
+            | FILL_OPACITY
+            | FILL_RECT_LEFT
+            | FILL_RECT_TOP
+            | FILL_RECT_RIGHT
+            | FILL_RECT_BOTTOM
+            | FILL_COLOR_EXT
+            | FILL_COLOR_EXT_MOD
+            | FILL_BOOLEANS
+            | GROUP_SHAPE_BOOLEANS
+    )
+}
+
+fn local_fopt_property_id_signature(records: &[FoptObservation]) -> String {
+    let ids = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .map(|property| property.property_id())
+        .collect::<BTreeSet<_>>();
+    if ids.is_empty() {
+        "absent".to_owned()
+    } else {
+        ids.into_iter()
+            .map(|property_id| format!("0x{property_id:04X}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+fn classify_local_fopt_structure(
+    records: &[FoptObservation],
+    property_id_histogram: &mut BTreeMap<String, usize>,
+    property_signature_histogram: &mut BTreeMap<String, usize>,
+    storage_form_histogram: &mut BTreeMap<String, usize>,
+    coverage_histogram: &mut BTreeMap<String, usize>,
+) {
+    bump(
+        property_signature_histogram,
+        local_fopt_property_id_signature(records),
+    );
+
+    let mut properties_by_id = BTreeMap::<u16, Vec<_>>::new();
+    for property in records.iter().flat_map(|record| record.properties.iter()) {
+        properties_by_id
+            .entry(property.property_id())
+            .or_default()
+            .push(property);
+    }
+
+    for (property_id, properties) in properties_by_id {
+        let id = format!("0x{property_id:04X}");
+        *property_id_histogram.entry(id.clone()).or_default() += properties.len();
+
+        let storage_form = match properties.as_slice() {
+            [_] if properties[0].f_bid() => "fBid",
+            [_] if properties[0].f_complex() => "complex",
+            [_] => "scalar",
+            _ => "malformed_duplicate",
+        };
+        bump(storage_form_histogram, format!("{id}:{storage_form}"));
+        bump(
+            coverage_histogram,
+            format!(
+                "{id}:{}",
+                if stage_b_j_covers_property(property_id) {
+                    "covered"
+                } else {
+                    "untested"
+                }
+            ),
+        );
+    }
+}
+
 fn scalar_property_profile(records: &[FoptObservation], property_id: u16) -> &'static str {
     let matches = records
         .iter()
@@ -982,6 +1068,10 @@ struct PageReceipt {
     restored_area_bucket_histogram: BTreeMap<String, usize>,
     restored_overlap_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_boolean_profile_histogram: BTreeMap<String, usize>,
+    restored_local_fopt_property_id_histogram: BTreeMap<String, usize>,
+    restored_local_fopt_property_signature_histogram: BTreeMap<String, usize>,
+    restored_local_fopt_storage_form_histogram: BTreeMap<String, usize>,
+    restored_local_fopt_coverage_histogram: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1452,6 +1542,13 @@ fn exact_virginia_restored_fill_stack_probe() {
                 &mut page.restored_local_fill_boolean_profile_histogram,
                 fill_boolean_profile(&shape.fopts),
             );
+            classify_local_fopt_structure(
+                &shape.fopts,
+                &mut page.restored_local_fopt_property_id_histogram,
+                &mut page.restored_local_fopt_property_signature_histogram,
+                &mut page.restored_local_fopt_storage_form_histogram,
+                &mut page.restored_local_fopt_coverage_histogram,
+            );
         }
 
         page.restored_effective_color_distinct_count = restored_effective_colors.len();
@@ -1693,6 +1790,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-H Geometry profiles emit only scalar/complex presence classes and default-rect/explicit-rect-space/custom-path/unresolved buckets; no geometry coordinates, vertices, segments, or raw property values are emitted.",
             "Stage-I extended foreground-color profiles emit only absent/default/non-default representation/modifier and aggregate participation classes; no RGB, scheme ordinal, tint/shade scalar, or raw property value is emitted.",
             "Stage-J resolves supported extended foreground intent only inside the probe and emits equality/no-extended/unsupported classes; no RGB, scheme ordinal, HSL component, tint/shade amount, or raw property value is emitted.",
+            "Stage-K local FOPT census emits only property IDs, per-shape unique ID-set signatures, scalar/complex/fBid/duplicate storage classes, and whether an ID was already covered by Stages B-J; no property values are emitted.",
         ],
     };
 
