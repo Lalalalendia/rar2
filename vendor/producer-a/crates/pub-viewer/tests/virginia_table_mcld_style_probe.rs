@@ -2,6 +2,7 @@ use pub_model::Sha256Digest;
 use pub_reader::{
     PubTableMcldOpaque1dClass, PubTableMcldStyleSignatureClass, PubTableOfficeArtOwnerJoinClass,
     analyze_mature_0x2c_table_default_style_fields, analyze_mature_0x2c_table_mcld_style_fields,
+    analyze_mature_0x2c_table_publication_default_topology,
 };
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -90,6 +91,9 @@ struct PageReceipt {
     owner_fopt_signature_histogram: BTreeMap<String, usize>,
     owner_paint_family_signature_histogram: BTreeMap<String, usize>,
     default_style_joint_signature_histogram: BTreeMap<String, usize>,
+    publication_target_signature_histogram: BTreeMap<String, usize>,
+    publication_target_raw_type_signature_histogram: BTreeMap<String, usize>,
+    publication_relation_histogram: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,6 +144,14 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     )
     .expect("observe exact Virginia TABLE default-style field presence");
     let default_style_by_seq = default_style_observations
+        .into_iter()
+        .map(|observation| (observation.contents_seq_num, observation))
+        .collect::<BTreeMap<_, _>>();
+
+    let publication_observations =
+        analyze_mature_0x2c_table_publication_default_topology(Cursor::new(bytes.as_slice()))
+            .expect("observe exact Virginia publication-default topology");
+    let publication_by_seq = publication_observations
         .into_iter()
         .map(|observation| (observation.contents_seq_num, observation))
         .collect::<BTreeMap<_, _>>();
@@ -272,6 +284,22 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                     presence_signature(&default_style.owner_paint_family_property_presence),
                 ),
             );
+
+            let publication = publication_by_seq
+                .get(&node.payload.contents_seq_num)
+                .expect("selected TABLE must have publication-default observation");
+            bump(
+                &mut receipt.publication_target_signature_histogram,
+                presence_signature(&publication.publication_target_presence),
+            );
+            bump(
+                &mut receipt.publication_target_raw_type_signature_histogram,
+                presence_signature(&publication.publication_target_raw_type_presence),
+            );
+            bump(
+                &mut receipt.publication_relation_histogram,
+                publication.relation_class.clone(),
+            );
         }
 
         pages.push(receipt);
@@ -288,7 +316,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     );
 
     let receipt = Receipt {
-        schema: "chaptera.virginia-table-default-style-carrier-probe.v4",
+        schema: "chaptera.virginia-table-default-style-carrier-probe.v5",
         source_sha256: actual_sha,
         pages,
         guardrails: vec![
@@ -300,6 +328,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
             "No field values, RGB colors, widths, style ordinals, cell coordinates, text, object ids, offsets, filenames, or raw bytes are emitted.",
             "TABLE/default-style census emits only field-id/wire-type and OfficeArt FOPT property-id presence signatures; no property values or selector ordinals are emitted.",
             "Stage-C joint signatures correlate only presence of TABLE 0x02A/wire0x08, OfficeArt Protection 0x007F, and the already-presence-only paint-family signature on the same TABLE; no values are read or emitted.",
+            "Stage-D publication-default topology names only independently grounded OplPub fields and emits target raw-type plus TABLE relation classes; no reference values/handles are emitted.",
             "Publisher PDF is not used as semantic authority.",
         ],
     };
@@ -314,7 +343,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     .expect("write MCLD style receipt");
 
     println!(
-        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?} p21_cross_table={:?} p22_cross_table={:?} p23_cross_table={:?} p22_table_candidates={:?} p22_table_signatures={:?} p22_unsupported_tail={} p22_default_fields={:?} p22_default_tail={:?} p22_owner_join={:?} p22_owner_fopt={:?} p22_owner_paint_family={:?} p22_joint={:?}",
+        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?} p21_cross_table={:?} p22_cross_table={:?} p23_cross_table={:?} p22_table_candidates={:?} p22_table_signatures={:?} p22_unsupported_tail={} p22_default_fields={:?} p22_default_tail={:?} p22_owner_join={:?} p22_owner_fopt={:?} p22_owner_paint_family={:?} p22_joint={:?} p22_pub_targets={:?} p22_pub_target_types={:?} p22_pub_relations={:?}",
         receipt.pages[0].table_count,
         receipt.pages[1].table_count,
         receipt.pages[2].table_count,
@@ -337,5 +366,8 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         receipt.pages[1].owner_fopt_signature_histogram,
         receipt.pages[1].owner_paint_family_signature_histogram,
         receipt.pages[1].default_style_joint_signature_histogram,
+        receipt.pages[1].publication_target_signature_histogram,
+        receipt.pages[1].publication_target_raw_type_signature_histogram,
+        receipt.pages[1].publication_relation_histogram,
     );
 }
