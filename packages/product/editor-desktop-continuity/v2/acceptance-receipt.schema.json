@@ -179,7 +179,9 @@
         "projection_kind",
         "origin_node_id",
         "capability_admitted",
-        "after_asset_sha256",
+        "replacement_binding_id",
+        "replacement_binding_content_derived",
+        "asset_sha_redacted",
         "after_asset_mime",
         "after_asset_byte_len",
         "frame_before",
@@ -200,18 +202,15 @@
         "capability_admitted": {
           "const": true
         },
-        "before_asset_sha256": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/sha256"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "replacement_binding_id": {
+          "type": "string",
+          "pattern": "^continuity-v2-[0-9a-f]{32}$"
         },
-        "after_asset_sha256": {
-          "$ref": "#/$defs/sha256"
+        "replacement_binding_content_derived": {
+          "const": false
+        },
+        "asset_sha_redacted": {
+          "const": true
         },
         "after_asset_mime": {
           "enum": [
@@ -278,7 +277,7 @@
         "story_state_id",
         "moved_rect",
         "resized_rect",
-        "replacement_asset_sha256"
+        "replacement_binding_preserved"
       ],
       "properties": {
         "fresh_session": {
@@ -296,8 +295,8 @@
         "resized_rect": {
           "$ref": "#/$defs/rect"
         },
-        "replacement_asset_sha256": {
-          "$ref": "#/$defs/sha256"
+        "replacement_binding_preserved": {
+          "const": true
         }
       }
     },
@@ -448,7 +447,8 @@
         "direct_page_local_gate_used",
         "projected_object_mutation_fails_closed",
         "reopen_used_fresh_session",
-        "export_from_current_editor_state"
+        "export_from_current_editor_state",
+        "replacement_asset_sha_emitted"
       ],
       "properties": {
         "source_pub_immutable": {
@@ -477,6 +477,9 @@
         },
         "export_from_current_editor_state": {
           "const": true
+        },
+        "replacement_asset_sha_emitted": {
+          "const": false
         }
       }
     }
