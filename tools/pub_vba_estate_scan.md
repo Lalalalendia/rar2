@@ -28,13 +28,13 @@ python tools/pub_vba_estate_scan.py scan \
 ## States
 
 - `absent` — parsed CFB, no `VBA` storage found.
-- `vba_storage_incomplete` — a `VBA` storage exists but does not satisfy the structural `_VBA_PROJECT` + `dir` requirement.
+- `non_project_vba_storage` — a storage literally named `VBA` exists, but it does not satisfy the structural `_VBA_PROJECT` + `dir` MS-OVBA project requirement. This is explicitly **not** counted as macro-present.
 - `structural_only` — structurally valid VBA storage exists but source metadata/source could not be safely extracted.
 - `source_extracted` — at least one module source was safely decompressed and all discovered modules were extracted.
 - `source_partial` — at least one module source was extracted and at least one module could not be extracted.
 - `unknown` — the file could not be parsed/read well enough to classify VBA presence.
 
-These are scanner evidence states, not claims that Publisher would execute a project successfully.
+These are scanner evidence states, not claims that Publisher would execute a project successfully. A storage name alone is never treated as macro evidence; `vba_project_present_any` only counts structurally admitted MS-OVBA projects.
 
 ## Current call-family taxonomy
 
