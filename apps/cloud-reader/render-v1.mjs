@@ -317,27 +317,53 @@ export function tableCellFillPaintPlan(cell) {
   return Object.freeze({ geometry, fill });
 }
 
+export function tableBorderPaintPlan(border) {
+  const x1 = safeInteger(border?.x1_emu, "table.border.x1_emu");
+  const y1 = safeInteger(border?.y1_emu, "table.border.y1_emu");
+  const x2 = safeInteger(border?.x2_emu, "table.border.x2_emu");
+  const y2 = safeInteger(border?.y2_emu, "table.border.y2_emu");
+  const width = safeInteger(border?.width_emu, "table.border.width_emu");
+  const stroke = rgb(border?.rgb);
+  if (!stroke || width <= 0 || (x1 === x2 && y1 === y2)) return null;
+  return Object.freeze({ x1, y1, x2, y2, stroke, width });
+}
+
 function appendTableText(group, node) {
   const table = node.table;
   if (!table) return;
+
+  for (const cell of table.cells ?? []) {
+    const fillPlan = tableCellFillPaintPlan(cell);
+    if (!fillPlan) continue;
+    group.appendChild(svgNode("rect", {
+      x: fillPlan.geometry.x,
+      y: fillPlan.geometry.y,
+      width: fillPlan.geometry.width,
+      height: fillPlan.geometry.height,
+      fill: fillPlan.fill,
+      "data-table-cell-id": cell.cell_id,
+      "data-table-cell-paint-authority": "source-t595"
+    }));
+  }
+
+  for (const border of table.borders ?? []) {
+    const plan = tableBorderPaintPlan(border);
+    if (!plan) continue;
+    group.appendChild(svgNode("line", {
+      x1: plan.x1,
+      y1: plan.y1,
+      x2: plan.x2,
+      y2: plan.y2,
+      stroke: plan.stroke,
+      "stroke-width": plan.width,
+      "data-table-border-authority": "source-t840"
+    }));
+  }
+
   for (const cell of table.cells ?? []) {
     const geometry = tableCellPaintGeometry(cell);
-    if (!geometry) continue;
-
+    if (!geometry || !cell.text) continue;
     const fillPlan = tableCellFillPaintPlan(cell);
-    if (fillPlan) {
-      group.appendChild(svgNode("rect", {
-        x: fillPlan.geometry.x,
-        y: fillPlan.geometry.y,
-        width: fillPlan.geometry.width,
-        height: fillPlan.geometry.height,
-        fill: fillPlan.fill,
-        "data-table-cell-id": cell.cell_id,
-        "data-table-cell-paint-authority": "source-t595"
-      }));
-    }
-    if (!cell.text) continue;
-
     const foreign = previewForeignObject(geometry, {
       "data-table-cell-id": cell.cell_id,
       "data-table-row": cell.row,
