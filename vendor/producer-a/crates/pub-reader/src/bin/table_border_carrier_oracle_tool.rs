@@ -249,6 +249,12 @@ fn subtract_exact_matches(
     (exact_matches, before_remaining, after_remaining)
 }
 
+fn changed_group_is_ambiguous(before: &[FoptState], after: &[FoptState]) -> bool {
+    !before.is_empty()
+        && !after.is_empty()
+        && (before.len() != 1 || after.len() != 1)
+}
+
 fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
     let (before_sha256, before_map) = read_carriers(&before)?;
     let (after_sha256, after_map) = read_carriers(&after)?;
@@ -279,11 +285,12 @@ fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
         before_remaining.sort_unstable();
         after_remaining.sort_unstable();
 
-        let changed_pairs = before_remaining.len().min(after_remaining.len());
-        if changed_pairs > 1 {
+        if changed_group_is_ambiguous(&before_remaining, &after_remaining) {
             ambiguous_changed_group_count += 1;
+            continue;
         }
 
+        let changed_pairs = before_remaining.len().min(after_remaining.len());
         for index in 0..changed_pairs {
             let before_state = &before_remaining[index];
             let after_state = &after_remaining[index];
@@ -362,6 +369,21 @@ mod tests {
         assert_eq!(exact, 1);
         assert_eq!(before_remaining, vec![state(0x01c0, 2)]);
         assert_eq!(after_remaining, vec![state(0x01c0, 3)]);
+        assert!(!changed_group_is_ambiguous(
+            &before_remaining,
+            &after_remaining
+        ));
+    }
+
+    #[test]
+    fn one_to_many_or_many_to_one_changed_groups_are_ambiguous() {
+        let one = vec![state(0x01c0, 2)];
+        let two = vec![state(0x01c0, 3), state(0x01cb, 4)];
+
+        assert!(changed_group_is_ambiguous(&one, &two));
+        assert!(changed_group_is_ambiguous(&two, &one));
+        assert!(!changed_group_is_ambiguous(&one, &[]));
+        assert!(!changed_group_is_ambiguous(&[], &two));
     }
 }
 
