@@ -533,7 +533,7 @@ mod tests {
             0x00,
             0x00,
             0x01,
-            BLOCK_TYPE_U32,
+            0x22,
             0x03,
             0x00,
             0x00,
@@ -553,10 +553,9 @@ mod tests {
 
         let typed = explicit_typed_98_children(&bytes, &fields[0], "test.OplEcp")
             .expect("explicit typed payload path must parse");
-        assert_eq!(
-            direct_scalar(&typed, 0x01).map(|value| value.value),
-            Some(0x08000003)
-        );
+        assert_eq!(typed.len(), 1);
+        assert_eq!(typed[0].field.id, 0x0201);
+        assert_eq!(scalar(&typed[0].field).map(|value| value.value), Some(0x08000003));
     }
 
     #[test]
