@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import sys
@@ -127,34 +128,68 @@ def _baseline_maps(baseline: dict | None):
     return page, pair
 
 
-def compare(cloud_path: Path, reference_path: Path, output_path: Path, baseline_path: Path | None = None) -> dict:
+def compare(
+    cloud_path: Path,
+    reference_path: Path,
+    output_path: Path,
+    baseline_path: Path | None = None,
+    admission_path: Path | None = None,
+) -> dict:
     cloud = json.loads(cloud_path.read_text(encoding="utf-8"))
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
     baseline = json.loads(baseline_path.read_text(encoding="utf-8")) if baseline_path else None
+    admission = json.loads(admission_path.read_text(encoding="utf-8")) if admission_path else None
     if cloud.get("protocol") != CLOUD_PROTOCOL:
         raise ValueError(f"unsupported Cloud receipt protocol: {cloud.get('protocol')!r}")
     if reference.get("schema") != SCHEMA:
         raise ValueError(f"unsupported reference schema: {reference.get('schema')!r}")
     fixtures = _fixture_map(cloud)
     baseline_pages, baseline_pairs = _baseline_maps(baseline)
+    excluded_by_id = {}
+    if admission is not None:
+        if admission.get("schema") != "chaptera.publisher-visual-golden-ci-admission.v1":
+            raise ValueError(f"unsupported admission schema: {admission.get('schema')!r}")
+        if admission.get("batch_id") != reference.get("batch_id"):
+            raise ValueError("admission batch_id does not match reference batch")
+        for item in admission.get("excluded", []):
+            oid = item.get("oracle_id")
+            if not isinstance(oid, str) or not oid or oid in excluded_by_id:
+                raise ValueError("admission exclusions must have unique oracle_id values")
+            excluded_by_id[oid] = item
 
     pairs = []
     ranking = []
     regressions = []
     unsupported = 0
+    excluded = 0
+    admitted_reference_pages = 0
     page_count_mismatch = 0
     physical_mismatch = 0
 
     for ref_pair in reference["pairs"]:
         name = ref_pair["fixture"]
+        exclusion = excluded_by_id.get(ref_pair["oracle_id"])
+        if exclusion is not None:
+            excluded += 1
+            pairs.append({
+                "oracle_id": ref_pair["oracle_id"],
+                "fixture": name,
+                "admitted": False,
+                "exclusion_reason": exclusion.get("reason"),
+                "reference_pages": ref_pair["pdf_pages"],
+                "pages": [],
+            })
+            continue
+        admitted_reference_pages += int(ref_pair["pdf_pages"])
         fixture = fixtures.get(name)
         if fixture is None:
-            raise ValueError(f"missing Cloud fixture {name}")
+            raise ValueError(f"missing admitted Cloud fixture {name}")
         if fixture.get("source_sha256") != ref_pair["pub_sha256"]:
             raise ValueError(f"source SHA drift for {name}")
         row = {
             "oracle_id": ref_pair["oracle_id"],
             "fixture": name,
+            "admitted": True,
             "source_pub_sha256": ref_pair["pub_sha256"],
             "rendered": bool(fixture.get("rendered")),
             "classification": fixture.get("classification"),
@@ -232,7 +267,10 @@ def compare(cloud_path: Path, reference_path: Path, output_path: Path, baseline_
         "reference_batch_id": reference.get("batch_id"),
         "reference_sha256": file_sha256(reference_path),
         "pair_count": len(pairs),
+        "admitted_pair_count": len(pairs) - excluded,
+        "excluded_pair_count": excluded,
         "reference_page_count": reference.get("reference_page_count"),
+        "admitted_reference_page_count": admitted_reference_pages,
         "compared_page_count": len(ranking),
         "unsupported_pair_count": unsupported,
         "page_count_mismatch_pair_count": page_count_mismatch,
@@ -256,12 +294,16 @@ def compare(cloud_path: Path, reference_path: Path, output_path: Path, baseline_
 
 
 def main(argv: list[str]) -> None:
-    if len(argv) not in (4,5):
-        raise SystemExit("usage: publisher_visual_perceptual_v1.py CLOUD_RECEIPT.json REFERENCE.json OUTPUT.json [BASELINE.json]")
-    baseline=Path(argv[4]) if len(argv)==5 else None
-    receipt=compare(Path(argv[1]),Path(argv[2]),Path(argv[3]),baseline)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("cloud_receipt", type=Path)
+    parser.add_argument("reference", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--admission", type=Path)
+    args = parser.parse_args(argv[1:])
+    receipt=compare(args.cloud_receipt,args.reference,args.output,args.baseline,args.admission)
     print(json.dumps({"pair_count":receipt["pair_count"],"compared_page_count":receipt["compared_page_count"],"unsupported_pair_count":receipt["unsupported_pair_count"],"page_count_mismatch_pair_count":receipt["page_count_mismatch_pair_count"],"physical_size_mismatch_page_count":receipt["physical_size_mismatch_page_count"],"mean_score":receipt["mean_score"],"max_score":receipt["max_score"],"regression_count":len(receipt["regressions"]),"top10":receipt["ranking"][:10]},indent=2,sort_keys=True))
-    if baseline is not None and receipt["regressions"]:
+    if args.baseline is not None and receipt["regressions"]:
         raise SystemExit(2)
 
 if __name__ == '__main__':
