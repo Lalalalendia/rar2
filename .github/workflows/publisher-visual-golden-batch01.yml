@@ -2,6 +2,7 @@ name: Publisher visual golden Batch 01
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
     branches: [main]
     paths:
