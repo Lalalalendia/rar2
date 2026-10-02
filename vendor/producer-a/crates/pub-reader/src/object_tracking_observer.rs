@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use pub_contents::{
-    ContentsCursor, RawContentsBlock, RawContentsBlockBody, parse_0x2c_header,
-    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root, parse_confirmed_block,
-    parse_confirmed_chunk_reference,
+    BlockReadError, ContentsCursor, RawContentsBlock, RawContentsBlockBody,
+    decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_block, parse_confirmed_chunk_reference,
 };
 use pub_core::{RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ use super::CONTENTS_STREAM_PATH;
 pub const PUB_OBJECT_TRACKING_WRAP_OBSERVER_SCHEMA_V1: &str =
     "pub-object-tracking-wrap-observer/v1";
 const RAW_TYPE_OBJECT_TRACKING: u16 = 0x005A;
+const BLOCK_TYPE_TYPED_CONTAINER_98: u8 = 0x98;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTrackingScalar {
@@ -123,15 +124,26 @@ fn parse_field_nodes(contents: &[u8], fields: &[RawContentsBlock]) -> Result<Vec
         .iter()
         .cloned()
         .map(|field| {
-            let children = match &field.body {
-                RawContentsBlockBody::Container { content_source, .. } => {
-                    parse_container_children(contents, content_source)?
-                }
-                _ => Vec::new(),
-            };
+            let children = nested_children(contents, &field)?;
             Ok(FieldNode { field, children })
         })
         .collect()
+}
+
+fn nested_children(contents: &[u8], field: &RawContentsBlock) -> Result<Vec<FieldNode>> {
+    if !is_recursive_observer_wire(field.block_type) {
+        return Ok(Vec::new());
+    }
+    match &field.body {
+        RawContentsBlockBody::Container { content_source, .. } => {
+            parse_container_children(contents, content_source)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn is_recursive_observer_wire(block_type: u8) -> bool {
+    matches!(block_type, 0x88 | 0x90 | BLOCK_TYPE_TYPED_CONTAINER_98 | 0xA0)
 }
 
 fn parse_container_children(contents: &[u8], source: &RawSpan) -> Result<Vec<FieldNode>> {
@@ -141,17 +153,81 @@ fn parse_container_children(contents: &[u8], source: &RawSpan) -> Result<Vec<Fie
         .context("bound nested Contents container")?;
     let mut fields = Vec::new();
     while cursor.remaining() > 0 {
-        let field = parse_confirmed_block(&mut cursor)
-            .with_context(|| format!("parse nested Contents field at {}", cursor.position()))?;
-        let children = match &field.body {
-            RawContentsBlockBody::Container { content_source, .. } => {
-                parse_container_children(contents, content_source)?
-            }
-            _ => Vec::new(),
-        };
+        let offset = cursor.position();
+        let field = parse_observer_block(&mut cursor)
+            .with_context(|| format!("parse nested Contents field at {offset}"))?;
+        let children = nested_children(contents, &field)?;
         fields.push(FieldNode { field, children });
     }
     Ok(fields)
+}
+
+/// Research-only fallback for the exact Publisher11 tracking oracle.
+///
+/// The paired Publisher11 hidden-XML/binary oracle proved that observed
+/// variable wire classes >= 0x80 use the same bounded framing:
+/// two-byte packed tag + little-endian u32 declared length, where the length
+/// includes its own four-byte word. The production foundation intentionally
+/// supports a narrower semantic set. Here we need only preserve framing while
+/// walking a SHA-pinned rev19 fixture. Only known structural container wires
+/// are recursed into; opaque variable payloads such as 0xC0 are skipped.
+fn parse_observer_block(cursor: &mut ContentsCursor<'_>) -> Result<RawContentsBlock> {
+    match parse_confirmed_block(cursor) {
+        Ok(block) => Ok(block),
+        Err(BlockReadError::UnsupportedType { block_type, .. }) if block_type >= 0x80 => {
+            parse_bounded_variable_block(cursor, block_type)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn parse_bounded_variable_block(
+    cursor: &mut ContentsCursor<'_>,
+    expected_block_type: u8,
+) -> Result<RawContentsBlock> {
+    let start = cursor.position();
+    let (tag0, tag0_source) = cursor.read_u8()?;
+    let (tag1, _) = cursor.read_u8()?;
+    let raw_tag = [tag0, tag1];
+    let (id, block_type) = decode_packed_field_tag(raw_tag);
+    if block_type != expected_block_type {
+        bail!(
+            "variable wire changed while reparsing at {start}: expected 0x{expected_block_type:02X}, got 0x{block_type:02X}"
+        );
+    }
+
+    let tag_source = RawSpan {
+        stream: tag0_source.stream.clone(),
+        offset: tag0_source.offset,
+        len: 2,
+    };
+    let (declared_length, length_source) = cursor.read_u32_le()?;
+    if declared_length < 4 {
+        bail!(
+            "invalid variable Contents length at {start}: wire=0x{block_type:02X}, declared={declared_length}"
+        );
+    }
+    let content_len =
+        usize::try_from(declared_length - 4).context("variable Contents length does not fit usize")?;
+    let (_, content_source) = cursor.take(content_len)?;
+    let end = cursor.position();
+
+    Ok(RawContentsBlock {
+        id,
+        block_type,
+        raw_tag,
+        tag_source,
+        source: RawSpan {
+            stream: tag0_source.stream,
+            offset: tag0_source.offset,
+            len: (end - start) as u64,
+        },
+        body: RawContentsBlockBody::Container {
+            declared_length,
+            length_source,
+            content_source,
+        },
+    })
 }
 
 fn collect_matching_entries(
@@ -297,6 +373,49 @@ mod tests {
             },
             children,
         }
+    }
+
+    #[test]
+    fn observer_skips_opaque_c0_with_proven_variable_framing() {
+        let bytes = [
+            0x0E, 0xC0, 0x08, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00,
+            0x01, BLOCK_TYPE_U32, 0x7B, 0x00, 0x00, 0x00,
+        ];
+        let source = RawSpan {
+            stream: StreamPath("/Contents".into()),
+            offset: 0,
+            len: bytes.len() as u64,
+        };
+
+        let fields = parse_container_children(&bytes, &source).expect("observer framing must parse");
+
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].field.block_type, 0xC0);
+        assert!(fields[0].children.is_empty());
+        assert_eq!(fields[1].field.id, 0x01);
+        assert_eq!(direct_scalar(&fields, 0x01).map(|value| value.value), Some(123));
+    }
+
+    #[test]
+    fn observer_recurses_into_typed_98_payload() {
+        let bytes = [
+            0x22, BLOCK_TYPE_TYPED_CONTAINER_98, 0x0A, 0x00, 0x00, 0x00,
+            0x01, BLOCK_TYPE_U32, 0x03, 0x00, 0x00, 0x08,
+        ];
+        let source = RawSpan {
+            stream: StreamPath("/Contents".into()),
+            offset: 0,
+            len: bytes.len() as u64,
+        };
+
+        let fields = parse_container_children(&bytes, &source).expect("typed payload must parse");
+
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].field.block_type, BLOCK_TYPE_TYPED_CONTAINER_98);
+        assert_eq!(
+            direct_scalar(&fields[0].children, 0x01).map(|value| value.value),
+            Some(0x08000003)
+        );
     }
 
     #[test]
