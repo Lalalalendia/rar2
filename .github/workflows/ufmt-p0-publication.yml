@@ -435,16 +435,19 @@ jobs:
 
           fn decode(bytes: &[u8]) -> Option<Head> {
               if bytes.len() != ROOT_LEN { return None; }
-              let rd = |off: usize| u64::from_le_bytes(bytes[off..off+8].try_into().ok()?);
-              if rd(0) != MAGIC { return None; }
-              let expected = rd(48);
+              fn rd(bytes: &[u8], off: usize) -> Option<u64> {
+                  let raw: [u8; 8] = bytes.get(off..off + 8)?.try_into().ok()?;
+                  Some(u64::from_le_bytes(raw))
+              }
+              if rd(bytes, 0)? != MAGIC { return None; }
+              let expected = rd(bytes, 48)?;
               if fnv64(&bytes[..48]) != expected { return None; }
               Some(Head {
-                  epoch: rd(8),
-                  content_gen: rd(16),
-                  content_commit: rd(24),
-                  maint_epoch: rd(32),
-                  maint_state: rd(40),
+                  epoch: rd(bytes, 8)?,
+                  content_gen: rd(bytes, 16)?,
+                  content_commit: rd(bytes, 24)?,
+                  maint_epoch: rd(bytes, 32)?,
+                  maint_state: rd(bytes, 40)?,
               })
           }
 
@@ -703,6 +706,7 @@ jobs:
           PYEOF
 
       - name: Upload P0 evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ufmt-p0-publication-evidence
