@@ -58,7 +58,26 @@ function Resolve-PublisherExecutable {
         if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) { $candidates += $path }
     }
 
-    $unique = @($candidates | Select-Object -Unique)
+    # Windows paths are case-insensitive. Registry and fallback discovery may
+    # return the same executable with different path casing (for example
+    # "Root" vs "root"); treat those as one Publisher installation.
+    $unique = @()
+    foreach ($candidate in $candidates) {
+        $full = [IO.Path]::GetFullPath([string]$candidate)
+        $duplicate = $false
+        foreach ($existing in $unique) {
+            if ([string]::Equals(
+                [IO.Path]::GetFullPath([string]$existing),
+                $full,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+                $duplicate = $true
+                break
+            }
+        }
+        if (-not $duplicate) { $unique += [string]$candidate }
+    }
+
     if ($unique.Count -eq 0) { return $null }
     if ($unique.Count -gt 1) {
         throw "Multiple Publisher executables found; runner is not version-pinned: $($unique -join '; ')"
