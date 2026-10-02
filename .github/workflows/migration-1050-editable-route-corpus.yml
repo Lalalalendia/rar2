@@ -43,9 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/target/migration-1050-rust
-      EVIDENCE_DIR: ${{ github.workspace }}/target/migration-1050-editable-route
-      MATERIALIZE_DIR: ${{ runner.temp }}/migration-1050-materialized
+      CARGO_TARGET_DIR: target/migration-1050-rust
+      EVIDENCE_DIR: target/migration-1050-editable-route
+      MATERIALIZE_DIR: target/migration-1050-materialized
 
     steps:
       - uses: actions/checkout@v5
