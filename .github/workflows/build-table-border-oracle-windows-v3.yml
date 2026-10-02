@@ -143,7 +143,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: table-border-native-portable-windows-x64-v3/
+          name: table-border-native-portable-windows-x64-v3
           path: ${{ runner.temp }}/table-border-native-bundle/
           if-no-files-found: error
           retention-days: 7
