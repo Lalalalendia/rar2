@@ -1,7 +1,7 @@
-use pub_core::{RawSpan, StreamPath};
+use pub_core::StreamPath;
 use pub_escher::{
-    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
-    PUBLISHER_FIELD_YS, PublisherFieldRecord, SpContainerObservation, inspect_sp_containers,
+    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PublisherFieldRecord,
+    SpContainerObservation, inspect_sp_containers,
 };
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -16,44 +16,13 @@ use std::{
 const EXPECTED_SHA256: &str =
     "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506";
 
-type SpanKey = (u64, u64);
-
-fn span_key(span: &RawSpan) -> SpanKey {
-    (span.offset, span.len)
-}
-
-fn direct_grounded_page(
-    shape: &SpContainerObservation,
-    seq_to_page_index: &BTreeMap<u32, u32>,
-) -> Option<u32> {
-    let client_data = shape.client_data.as_ref()?;
-    let seq = unique_field(client_data, PUBLISHER_FIELD_SHAPE_ID)?;
-    seq_to_page_index.get(&seq).copied()
-}
-
-fn resolve_page_through_group_ancestry(
-    shape: &SpContainerObservation,
-    shape_by_source: &BTreeMap<SpanKey, &SpContainerObservation>,
-    seq_to_page_index: &BTreeMap<u32, u32>,
-) -> Option<u32> {
-    if let Some(page) = direct_grounded_page(shape, seq_to_page_index) {
-        return Some(page);
-    }
-
-    let mut current = shape.parent_group_shape_source.as_ref().map(span_key);
-    let mut seen = BTreeSet::<SpanKey>::new();
-    while let Some(source) = current {
-        if !seen.insert(source) {
-            return None;
-        }
-        let group = shape_by_source.get(&source).copied()?;
-        if let Some(page) = direct_grounded_page(group, seq_to_page_index) {
-            return Some(page);
-        }
-        current = group.parent_group_shape_source.as_ref().map(span_key);
-    }
-    None
-}
+/// Native PUB-T-840 matched-diff authority:
+/// AutoFormat-created TABLE cell rectangles carry ClientAnchor 0x6802 equal
+/// to the owning TABLE Contents seqNum. 0x2003 is absent for cell ordinal 0
+/// and is 1..N-1 for the remaining N-1 cells. This probe tests whether the
+/// same bounded carrier law exists in the exact Virginia source.
+const PUBLISHER_FIELD_TABLE_OWNER_REF: u16 = 0x6802;
+const OFFICE_ART_RECTANGLE: u16 = 0x0001;
 
 fn unique_field(record: &PublisherFieldRecord, id: u16) -> Option<u32> {
     let mut matches = record.fields.iter().filter(|field| field.id == id);
@@ -64,32 +33,42 @@ fn unique_field(record: &PublisherFieldRecord, id: u16) -> Option<u32> {
     Some(first)
 }
 
-fn signed_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
-    let raw = unique_field(record, id)?;
-    Some(i64::from(i32::from_le_bytes(raw.to_le_bytes())))
+fn client_data_grounded(
+    shape: &SpContainerObservation,
+    grounded_seq_nums: &BTreeSet<u32>,
+) -> bool {
+    shape
+        .client_data
+        .as_ref()
+        .and_then(|record| unique_field(record, PUBLISHER_FIELD_SHAPE_ID))
+        .is_some_and(|seq| grounded_seq_nums.contains(&seq))
 }
 
-fn anchor_tuple(record: &PublisherFieldRecord) -> Option<[i64; 4]> {
-    Some([
-        signed_field(record, PUBLISHER_FIELD_XS)?,
-        signed_field(record, PUBLISHER_FIELD_YS)?,
-        signed_field(record, PUBLISHER_FIELD_XE)?,
-        signed_field(record, PUBLISHER_FIELD_YE)?,
-    ])
+fn table_owner_ref(shape: &SpContainerObservation) -> Option<u32> {
+    unique_field(shape.client_anchor.as_ref()?, PUBLISHER_FIELD_TABLE_OWNER_REF)
 }
 
-fn expected_anchor_tuple(
-    page_width: i64,
-    page_height: i64,
-    cell: pub_model::RectEmu,
-) -> Option<[i64; 4]> {
-    // Exact inverse of pub-reader::page_relative_bounds. This is measurement
-    // against the already-shipped geometry law, not a second geometry model.
-    let xs = cell.x.get().checked_sub(page_width.checked_div(2)?)?;
-    let ys = cell.y.get().checked_sub(page_height.checked_div(2)?)?;
-    let xe = xs.checked_add(cell.width.get())?;
-    let ye = ys.checked_add(cell.height.get())?;
-    Some([xs, ys, xe, ye])
+fn native_t840_cell_ordinal(
+    shape: &SpContainerObservation,
+    table_seq_num: u32,
+) -> Option<u32> {
+    let anchor = shape.client_anchor.as_ref()?;
+    if unique_field(anchor, PUBLISHER_FIELD_TABLE_OWNER_REF)? != table_seq_num {
+        return None;
+    }
+
+    match anchor.fields.as_slice() {
+        [only] if only.id == PUBLISHER_FIELD_TABLE_OWNER_REF => Some(0),
+        [first, second]
+            if (first.id == PUBLISHER_FIELD_TABLE_OWNER_REF
+                && second.id == PUBLISHER_FIELD_XE)
+                || (first.id == PUBLISHER_FIELD_XE
+                    && second.id == PUBLISHER_FIELD_TABLE_OWNER_REF) =>
+        {
+            unique_field(anchor, PUBLISHER_FIELD_XE)
+        }
+        _ => None,
+    }
 }
 
 fn fopt_signature(shape: &SpContainerObservation) -> String {
@@ -109,6 +88,18 @@ fn fopt_signature(shape: &SpContainerObservation) -> String {
     }
 }
 
+fn anchor_id_signature(record: &PublisherFieldRecord) -> String {
+    let ids = record.fields.iter().map(|field| field.id).collect::<Vec<_>>();
+    if ids.is_empty() {
+        "absent".to_owned()
+    } else {
+        ids.into_iter()
+            .map(|id| format!("0x{id:04x}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
 fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
 }
@@ -116,18 +107,20 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
 #[derive(Debug, Default, Serialize)]
 struct PageReceipt {
     viewer_page_index: u32,
-    group_resolved_spcontainer_count: usize,
-    raw_spcontainer_count: usize,
-    grounded_spcontainer_count: usize,
-    ungrounded_spcontainer_count: usize,
-    ungrounded_complete_client_anchor_count: usize,
     table_count: usize,
     table_cell_count: usize,
-    exact_unique_cell_match_count: usize,
-    exact_ambiguous_cell_match_count: usize,
-    exact_absent_cell_match_count: usize,
+    table_linked_spcontainer_count: usize,
+    table_linked_ungrounded_spcontainer_count: usize,
+    cell_carrier_candidate_count: usize,
+    other_table_linked_anchor_count: usize,
+    out_of_range_cell_ordinal_count: usize,
+    exact_unique_cell_ordinal_count: usize,
+    exact_ambiguous_cell_ordinal_count: usize,
+    exact_absent_cell_ordinal_count: usize,
+    tables_with_complete_unique_ordinal_cover: usize,
     unique_match_shape_type_histogram: BTreeMap<String, usize>,
     unique_match_fopt_signature_histogram: BTreeMap<String, usize>,
+    other_table_linked_anchor_signature_histogram: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,7 +128,6 @@ struct Receipt {
     schema: &'static str,
     source_sha256: String,
     pages: Vec<PageReceipt>,
-    unresolved_spcontainer_count: usize,
     guardrails: Vec<&'static str>,
 }
 
@@ -171,44 +163,18 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
         pub_reader::ESCHER_STREAM_PATH,
     )
     .expect("read exact Escher stream");
-    let stream = StreamPath(pub_reader::ESCHER_STREAM_PATH.into());
-    let inventory = inspect_sp_containers(stream, &escher).expect("inspect OfficeArt SpContainers");
+    let inventory = inspect_sp_containers(
+        StreamPath(pub_reader::ESCHER_STREAM_PATH.into()),
+        &escher,
+    )
+    .expect("inspect OfficeArt SpContainers");
 
-    let shape_by_source = inventory
-        .shapes
-        .iter()
-        .map(|shape| (span_key(&shape.source), shape))
-        .collect::<BTreeMap<_, _>>();
-
-    let page_index_by_parent = bundle
-        .geometry
-        .document
-        .pages
-        .iter()
-        .enumerate()
-        .map(|(index, page)| (page.id.into_canonical(), (index + 1) as u32))
-        .collect::<BTreeMap<_, _>>();
-
-    let seq_to_page_index = bundle
+    let grounded_seq_nums = bundle
         .resolved_graph
         .nodes
         .values()
-        .filter_map(|node| {
-            page_index_by_parent
-                .get(&node.header.parent_id)
-                .copied()
-                .map(|page_index| (node.payload.contents_seq_num, page_index))
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    let unresolved_spcontainer_count = inventory
-        .shapes
-        .iter()
-        .filter(|shape| {
-            resolve_page_through_group_ancestry(shape, &shape_by_source, &seq_to_page_index)
-                .is_none()
-        })
-        .count();
+        .map(|node| node.payload.contents_seq_num)
+        .collect::<BTreeSet<_>>();
 
     let mut pages = Vec::new();
     for viewer_page_index in [21_u32, 22_u32, 23_u32] {
@@ -218,76 +184,62 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
             .pages
             .get((viewer_page_index - 1) as usize)
             .expect("selected Viewer page exists");
-        let page_id = layout_page.id;
-        let parent = page_id.into_canonical();
-        let source_page = bundle
-            .resolved_graph
-            .pages
-            .get(&page_id)
-            .expect("selected resolved Page exists");
-        let page_width = source_page.size.width.get();
-        let page_height = source_page.size.height.get();
+        let parent = layout_page.id.into_canonical();
 
         let mut receipt = PageReceipt {
             viewer_page_index,
             ..PageReceipt::default()
         };
 
-        let raw_shapes = inventory
-            .shapes
-            .iter()
-            .filter(|shape| {
-                resolve_page_through_group_ancestry(shape, &shape_by_source, &seq_to_page_index)
-                    == Some(viewer_page_index)
-            })
-            .collect::<Vec<_>>();
-        receipt.group_resolved_spcontainer_count = raw_shapes.len();
-        receipt.raw_spcontainer_count = raw_shapes.len();
-
-        let candidates = raw_shapes
-            .iter()
-            .copied()
-            .filter(|shape| {
-                let grounded = direct_grounded_page(shape, &seq_to_page_index).is_some();
-                if grounded {
-                    receipt.grounded_spcontainer_count += 1;
-                } else {
-                    receipt.ungrounded_spcontainer_count += 1;
-                }
-                !grounded
-            })
-            .filter_map(|shape| {
-                let anchor = shape.client_anchor.as_ref()?;
-                let tuple = anchor_tuple(anchor)?;
-                receipt.ungrounded_complete_client_anchor_count += 1;
-                Some((shape, tuple))
-            })
-            .collect::<Vec<_>>();
-
         for table_node in bundle.resolved_graph.nodes.values().filter(|node| {
             node.header.parent_id == parent && node.payload.table.is_some()
         }) {
             let table = table_node.payload.table.as_ref().expect("filtered TABLE");
+            let table_seq_num = table_node.payload.contents_seq_num;
+            let cell_count = table.cells.len();
             receipt.table_count += 1;
-            receipt.table_cell_count += table.cells.len();
+            receipt.table_cell_count += cell_count;
 
-            for cell in &table.cells {
-                let Some(bounds) = cell.bounds else {
-                    receipt.exact_absent_cell_match_count += 1;
+            let linked = inventory
+                .shapes
+                .iter()
+                .filter(|shape| table_owner_ref(shape) == Some(table_seq_num))
+                .collect::<Vec<_>>();
+            receipt.table_linked_spcontainer_count += linked.len();
+
+            let ungrounded = linked
+                .iter()
+                .copied()
+                .filter(|shape| !client_data_grounded(shape, &grounded_seq_nums))
+                .collect::<Vec<_>>();
+            receipt.table_linked_ungrounded_spcontainer_count += ungrounded.len();
+
+            let mut by_ordinal = BTreeMap::<u32, Vec<&SpContainerObservation>>::new();
+            for shape in &ungrounded {
+                let Some(anchor) = shape.client_anchor.as_ref() else {
                     continue;
                 };
-                let Some(expected) = expected_anchor_tuple(page_width, page_height, bounds) else {
-                    receipt.exact_absent_cell_match_count += 1;
+                let Some(ordinal) = native_t840_cell_ordinal(shape, table_seq_num) else {
+                    receipt.other_table_linked_anchor_count += 1;
+                    bump(
+                        &mut receipt.other_table_linked_anchor_signature_histogram,
+                        anchor_id_signature(anchor),
+                    );
                     continue;
                 };
-                let matches = candidates
-                    .iter()
-                    .filter(|(_, anchor)| *anchor == expected)
-                    .collect::<Vec<_>>();
+                receipt.cell_carrier_candidate_count += 1;
+                if usize::try_from(ordinal).ok().is_none_or(|value| value >= cell_count) {
+                    receipt.out_of_range_cell_ordinal_count += 1;
+                    continue;
+                }
+                by_ordinal.entry(ordinal).or_default().push(*shape);
+            }
 
-                match matches.as_slice() {
-                    [(shape, _)] => {
-                        receipt.exact_unique_cell_match_count += 1;
+            let mut table_complete = true;
+            for ordinal in 0..u32::try_from(cell_count).expect("cell count fits u32") {
+                match by_ordinal.get(&ordinal).map(Vec::as_slice) {
+                    Some([shape]) => {
+                        receipt.exact_unique_cell_ordinal_count += 1;
                         bump(
                             &mut receipt.unique_match_shape_type_histogram,
                             shape
@@ -301,18 +253,27 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
                             fopt_signature(shape),
                         );
                     }
-                    [] => receipt.exact_absent_cell_match_count += 1,
-                    _ => receipt.exact_ambiguous_cell_match_count += 1,
+                    Some(_) => {
+                        receipt.exact_ambiguous_cell_ordinal_count += 1;
+                        table_complete = false;
+                    }
+                    None => {
+                        receipt.exact_absent_cell_ordinal_count += 1;
+                        table_complete = false;
+                    }
                 }
+            }
+            if table_complete {
+                receipt.tables_with_complete_unique_ordinal_cover += 1;
             }
         }
 
         assert_eq!(
-            receipt.exact_unique_cell_match_count
-                + receipt.exact_ambiguous_cell_match_count
-                + receipt.exact_absent_cell_match_count,
+            receipt.exact_unique_cell_ordinal_count
+                + receipt.exact_ambiguous_cell_ordinal_count
+                + receipt.exact_absent_cell_ordinal_count,
             receipt.table_cell_count,
-            "every selected TABLE cell must be classified"
+            "every selected TABLE cell ordinal must be classified"
         );
         pages.push(receipt);
     }
@@ -325,16 +286,15 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
     assert_eq!(p22.table_cell_count, 110, "p22 exact TABLE cell cohort");
 
     let receipt = Receipt {
-        schema: "chaptera.virginia-table-raw-spcontainer-probe.v1",
+        schema: "chaptera.virginia-table-raw-spcontainer-probe.v2",
         source_sha256: actual_sha,
         pages,
-        unresolved_spcontainer_count,
         guardrails: vec![
-            "OfficeArt SpContainer parent-group ancestry comes from the existing pub-escher parser; no byte scanner or second parser is introduced.",
-            "An ungrounded SpContainer is assigned to a Viewer page only through an already-grounded ancestor group in the existing OfficeArt topology.",
-            "ClientAnchor comparison is the exact inverse of the already-shipped pub-reader page_relative_bounds law and admits equality only.",
-            "Only ungrounded raw SpContainers are candidates; already-grounded shapes are counted as controls and never double-promoted.",
-            "No PDF pixels, proximity matching, object ids, coordinates, text, filenames, property values or raw bytes are emitted.",
+            "The 0x6802 TABLE-owner ClientAnchor relation and bounded 0x2003 cell-ordinal form come from native PUB-T-840 baseline/AutoFormat/growth matched diffs; Virginia is only tested for the same exact source pattern.",
+            "A candidate must be ungrounded by current ClientData/Contents identity and must reference the exact TABLE Contents seqNum through one unique ClientAnchor 0x6802 field.",
+            "Cell ordinal 0 is admitted only for the exact one-field {0x6802} native form; nonzero ordinals require the exact two-field {0x6802,0x2003} native form.",
+            "No geometry proximity, PDF pixels, default black grid, synthetic TableStyleId, object ids, coordinates, text, filenames, property values or raw bytes are used as authority.",
+            "Other 0x6802-linked anchor forms are counted separately as decoration/border candidates and receive no semantics in this probe.",
         ],
     };
 
@@ -348,19 +308,19 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
     .expect("write raw SpContainer receipt");
 
     println!(
-        "VIRGINIA_TABLE_RAW_SPCONTAINER p21={}/{}/{} p22={}/{}/{} p22_raw={} p22_ungrounded={} p22_anchor={} p23={}/{}/{} unresolved_sp={}",
-        receipt.pages[0].exact_unique_cell_match_count,
-        receipt.pages[0].exact_ambiguous_cell_match_count,
-        receipt.pages[0].exact_absent_cell_match_count,
-        receipt.pages[1].exact_unique_cell_match_count,
-        receipt.pages[1].exact_ambiguous_cell_match_count,
-        receipt.pages[1].exact_absent_cell_match_count,
-        receipt.pages[1].raw_spcontainer_count,
-        receipt.pages[1].ungrounded_spcontainer_count,
-        receipt.pages[1].ungrounded_complete_client_anchor_count,
-        receipt.pages[2].exact_unique_cell_match_count,
-        receipt.pages[2].exact_ambiguous_cell_match_count,
-        receipt.pages[2].exact_absent_cell_match_count,
-        receipt.unresolved_spcontainer_count,
+        "VIRGINIA_TABLE_RAW_SPCONTAINER_V2 p21={}/{}/{} p22={}/{}/{} p22_linked={} p22_ungrounded={} p22_candidates={} p22_complete_tables={} p23={}/{}/{}",
+        receipt.pages[0].exact_unique_cell_ordinal_count,
+        receipt.pages[0].exact_ambiguous_cell_ordinal_count,
+        receipt.pages[0].exact_absent_cell_ordinal_count,
+        receipt.pages[1].exact_unique_cell_ordinal_count,
+        receipt.pages[1].exact_ambiguous_cell_ordinal_count,
+        receipt.pages[1].exact_absent_cell_ordinal_count,
+        receipt.pages[1].table_linked_spcontainer_count,
+        receipt.pages[1].table_linked_ungrounded_spcontainer_count,
+        receipt.pages[1].cell_carrier_candidate_count,
+        receipt.pages[1].tables_with_complete_unique_ordinal_cover,
+        receipt.pages[2].exact_unique_cell_ordinal_count,
+        receipt.pages[2].exact_ambiguous_cell_ordinal_count,
+        receipt.pages[2].exact_absent_cell_ordinal_count,
     );
 }
