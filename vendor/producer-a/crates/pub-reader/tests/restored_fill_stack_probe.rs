@@ -20,9 +20,15 @@ const ROTATION: u16 = 0x0004;
 const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
 const FILL_OPACITY: u16 = 0x0182;
+const FILL_RECT_LEFT: u16 = 0x0191;
+const FILL_RECT_TOP: u16 = 0x0192;
+const FILL_RECT_RIGHT: u16 = 0x0193;
+const FILL_RECT_BOTTOM: u16 = 0x0194;
 const FILL_BOOLEANS: u16 = 0x01BF;
 const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
+const FILL_USE_RECT_USE_BIT: u32 = 1 << 17;
+const FILL_USE_RECT_BIT: u32 = 1 << 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LegacyScalarLayer {
@@ -31,11 +37,11 @@ enum LegacyScalarLayer {
     Unresolved,
 }
 
-fn legacy_scalar_layer(records: &[FoptObservation]) -> LegacyScalarLayer {
+fn scalar_layer(records: &[FoptObservation], property_id: u16) -> LegacyScalarLayer {
     let matches = records
         .iter()
         .flat_map(|record| record.properties.iter())
-        .filter(|property| property.property_id() == FILL_BOOLEANS)
+        .filter(|property| property.property_id() == property_id)
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [] => LegacyScalarLayer::Absent,
@@ -43,6 +49,148 @@ fn legacy_scalar_layer(records: &[FoptObservation]) -> LegacyScalarLayer {
             LegacyScalarLayer::Value(property.op)
         }
         _ => LegacyScalarLayer::Unresolved,
+    }
+}
+
+fn legacy_scalar_layer(records: &[FoptObservation]) -> LegacyScalarLayer {
+    scalar_layer(records, FILL_BOOLEANS)
+}
+
+fn effective_scalar_value(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+    property_id: u16,
+    normative_default: u32,
+) -> Result<u32, ()> {
+    match scalar_layer(&shape.fopts, property_id) {
+        LegacyScalarLayer::Value(value) => return Ok(value),
+        LegacyScalarLayer::Unresolved => return Err(()),
+        LegacyScalarLayer::Absent => {}
+    }
+    if let Some(dgg) = dgg {
+        match scalar_layer(&dgg.primary_options, property_id) {
+            LegacyScalarLayer::Value(value) => return Ok(value),
+            LegacyScalarLayer::Unresolved => return Err(()),
+            LegacyScalarLayer::Absent => {}
+        }
+        match scalar_layer(&dgg.tertiary_options, property_id) {
+            LegacyScalarLayer::Value(value) => return Ok(value),
+            LegacyScalarLayer::Unresolved => return Err(()),
+            LegacyScalarLayer::Absent => {}
+        }
+    }
+    Ok(normative_default)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeBoolLayer {
+    Absent,
+    Value(bool),
+    Unresolved,
+}
+
+fn fill_use_rect_layer(records: &[FoptObservation]) -> ProbeBoolLayer {
+    let mut resolved = None;
+    for property in records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == FILL_BOOLEANS)
+    {
+        if property.f_bid() || property.f_complex() {
+            return ProbeBoolLayer::Unresolved;
+        }
+        if property.op & FILL_USE_RECT_USE_BIT == 0 {
+            continue;
+        }
+        if resolved.is_some() {
+            return ProbeBoolLayer::Unresolved;
+        }
+        resolved = Some(property.op & FILL_USE_RECT_BIT != 0);
+    }
+    resolved
+        .map(ProbeBoolLayer::Value)
+        .unwrap_or(ProbeBoolLayer::Absent)
+}
+
+fn fill_use_rect_profile(records: &[FoptObservation]) -> &'static str {
+    match fill_use_rect_layer(records) {
+        ProbeBoolLayer::Absent => "absent",
+        ProbeBoolLayer::Value(true) => "explicit_true",
+        ProbeBoolLayer::Value(false) => "explicit_false",
+        ProbeBoolLayer::Unresolved => "unresolved",
+    }
+}
+
+fn effective_fill_use_rect_profile(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+) -> String {
+    let mut layers = vec![("shape_local", fill_use_rect_layer(&shape.fopts))];
+    if let Some(dgg) = dgg {
+        layers.push((
+            "drawing_group_primary",
+            fill_use_rect_layer(&dgg.primary_options),
+        ));
+        layers.push((
+            "drawing_group_tertiary",
+            fill_use_rect_layer(&dgg.tertiary_options),
+        ));
+    }
+    for (authority, layer) in layers {
+        match layer {
+            ProbeBoolLayer::Absent => {}
+            ProbeBoolLayer::Value(value) => return format!("{authority}:{value}"),
+            ProbeBoolLayer::Unresolved => return format!("{authority}:unresolved"),
+        }
+    }
+    "normative_default:false".to_owned()
+}
+
+fn fill_rect_presence_profile(records: &[FoptObservation]) -> &'static str {
+    let profiles = [
+        scalar_property_profile(records, FILL_RECT_LEFT),
+        scalar_property_profile(records, FILL_RECT_TOP),
+        scalar_property_profile(records, FILL_RECT_RIGHT),
+        scalar_property_profile(records, FILL_RECT_BOTTOM),
+    ];
+    if profiles.iter().all(|profile| *profile == "absent") {
+        "absent"
+    } else if profiles.iter().all(|profile| *profile == "single_scalar") {
+        "complete_scalars"
+    } else if profiles
+        .iter()
+        .any(|profile| matches!(*profile, "malformed_or_complex" | "duplicate_scalar"))
+    {
+        "ambiguous"
+    } else {
+        "partial_scalars"
+    }
+}
+
+fn effective_fill_rect_geometry_profile(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+) -> &'static str {
+    let values = [
+        effective_scalar_value(shape, dgg, FILL_RECT_LEFT, 0),
+        effective_scalar_value(shape, dgg, FILL_RECT_TOP, 0),
+        effective_scalar_value(shape, dgg, FILL_RECT_RIGHT, 0),
+        effective_scalar_value(shape, dgg, FILL_RECT_BOTTOM, 0),
+    ];
+    if values.iter().any(Result::is_err) {
+        return "unresolved";
+    }
+    let [left, top, right, bottom] = values.map(|value| {
+        i64::from(i32::from_le_bytes(
+            value.expect("checked effective fillRect scalar").to_le_bytes(),
+        ))
+    });
+    if left == 0 && top == 0 && right == 0 && bottom == 0 {
+        "all_zero_or_default"
+    } else if right > left && bottom > top {
+        "positive_rect"
+    } else {
+        "degenerate_or_nonpositive"
     }
 }
 
@@ -322,6 +470,10 @@ struct PageReceipt {
     restored_local_fill_color_form_histogram: BTreeMap<String, usize>,
     restored_effective_color_distinct_count: usize,
     restored_dgg_color_materialization_histogram: BTreeMap<String, usize>,
+    restored_local_fill_use_rect_histogram: BTreeMap<String, usize>,
+    restored_effective_fill_use_rect_histogram: BTreeMap<String, usize>,
+    restored_local_fill_rect_profile_histogram: BTreeMap<String, usize>,
+    restored_effective_fill_rect_geometry_histogram: BTreeMap<String, usize>,
     restored_local_fill_opacity_profile_histogram: BTreeMap<String, usize>,
     restored_effective_fill_opacity_histogram: BTreeMap<String, usize>,
     restored_anchor_geometry_histogram: BTreeMap<String, usize>,
@@ -341,11 +493,15 @@ struct Receipt {
     dgg_primary_fill_type_profile: String,
     dgg_primary_fill_color_profile: String,
     dgg_primary_fill_color_form: String,
+    dgg_primary_fill_use_rect_profile: String,
+    dgg_primary_fill_rect_profile: String,
     dgg_primary_fill_opacity_profile: String,
     dgg_primary_fill_boolean_profile: String,
     dgg_tertiary_fill_type_profile: String,
     dgg_tertiary_fill_color_profile: String,
     dgg_tertiary_fill_color_form: String,
+    dgg_tertiary_fill_use_rect_profile: String,
+    dgg_tertiary_fill_rect_profile: String,
     dgg_tertiary_fill_opacity_profile: String,
     dgg_tertiary_fill_boolean_profile: String,
     pages: Vec<PageReceipt>,
@@ -563,6 +719,22 @@ fn exact_virginia_restored_fill_stack_probe() {
                 colorref_profile(&shape.fopts, FILL_COLOR),
             );
             bump(
+                &mut page.restored_local_fill_use_rect_histogram,
+                fill_use_rect_profile(&shape.fopts),
+            );
+            bump(
+                &mut page.restored_effective_fill_use_rect_histogram,
+                effective_fill_use_rect_profile(shape, dgg),
+            );
+            bump(
+                &mut page.restored_local_fill_rect_profile_histogram,
+                fill_rect_presence_profile(&shape.fopts),
+            );
+            bump(
+                &mut page.restored_effective_fill_rect_geometry_histogram,
+                effective_fill_rect_geometry_profile(shape, dgg),
+            );
+            bump(
                 &mut page.restored_local_fill_opacity_profile_histogram,
                 fill_opacity_profile(&shape.fopts),
             );
@@ -677,6 +849,14 @@ fn exact_virginia_restored_fill_stack_probe() {
             .map(|group| colorref_profile(&group.primary_options, FILL_COLOR))
             .unwrap_or("absent")
             .to_owned(),
+        dgg_primary_fill_use_rect_profile: dgg
+            .map(|group| fill_use_rect_profile(&group.primary_options))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_primary_fill_rect_profile: dgg
+            .map(|group| fill_rect_presence_profile(&group.primary_options))
+            .unwrap_or("absent")
+            .to_owned(),
         dgg_primary_fill_opacity_profile: dgg
             .map(|group| fill_opacity_profile(&group.primary_options))
             .unwrap_or_else(|| "absent".to_owned()),
@@ -693,6 +873,14 @@ fn exact_virginia_restored_fill_stack_probe() {
             .to_owned(),
         dgg_tertiary_fill_color_form: dgg
             .map(|group| colorref_profile(&group.tertiary_options, FILL_COLOR))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_fill_use_rect_profile: dgg
+            .map(|group| fill_use_rect_profile(&group.tertiary_options))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_fill_rect_profile: dgg
+            .map(|group| fill_rect_presence_profile(&group.tertiary_options))
             .unwrap_or("absent")
             .to_owned(),
         dgg_tertiary_fill_opacity_profile: dgg
@@ -715,6 +903,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-C fillOpacity profiles classify only transparent/partial/opaque/invalid and never emit the persisted fixed-point scalar.",
             "Stage-D geometry profiles emit only anchor-equality, transform/rotation classes, page-area buckets and overlap counts; no coordinates or object identities are emitted.",
             "Stage-E COLORREF profiles emit only direct/scheme/other/ambiguous form classes plus effective-color distinct counts; no RGB or scheme ordinal is emitted.",
+            "Stage-F fillUseRect profiles emit only participation authority, fillRect completeness, and positive/degenerate/unresolved geometry classes; no fillRect coordinates are emitted.",
         ],
     };
 
