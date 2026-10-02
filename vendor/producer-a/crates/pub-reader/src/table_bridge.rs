@@ -26,6 +26,18 @@ pub struct PubTableCellSource {
     pub utf16_end: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<RectEmu>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<PubTableCellPaintSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTableCellPaintSource {
+    /// Literal sRGB from the exact geometry-matched child OfficeArt FOPT 0x0181.
+    pub solid_fill_rgb: [u8; 3],
+    /// Separate explicit fFilled state from the matched child FOPT 0x01BF.
+    pub fill_visible: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
 }
@@ -57,6 +69,8 @@ pub struct PubMaterializedTableCell {
     pub column_span: u32,
     pub text: String,
     pub bounds: Option<RectEmu>,
+    pub fill_rgb: Option<[u8; 3]>,
+    pub fill_visible: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +250,8 @@ pub fn materialize_bounded_table_cells(
                 column_span: coordinates.end_column - coordinates.start_column + 1,
                 text,
                 bounds: source.bounds,
+                fill_rgb: source.paint.as_ref().map(|paint| paint.solid_fill_rgb),
+                fill_visible: source.paint.as_ref().map(|paint| paint.fill_visible),
             })
         })
         .collect()
@@ -296,6 +312,99 @@ pub(crate) struct TableBridgeContext<'a> {
     pub story_layout_keys: &'a BTreeMap<u32, (u32, RawSpan)>,
     pub mcld: Option<&'a QuillMcldChunk>,
     pub table_bounds: &'a RectEmu,
+    pub officeart_owner_shape: &'a pub_escher::SpContainerObservation,
+    pub officeart_inventory: &'a SpContainerInventory,
+}
+
+fn rect_edges(rect: RectEmu) -> Option<[i128; 4]> {
+    let left = i128::from(rect.x.get());
+    let top = i128::from(rect.y.get());
+    let right = left.checked_add(i128::from(rect.width.get()))?;
+    let bottom = top.checked_add(i128::from(rect.height.get()))?;
+    Some([left, top, right, bottom])
+}
+
+fn populate_bounded_table_cell_fill(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    cells: &mut [PubTableCellSource],
+) -> Result<usize> {
+    let owner = context.officeart_owner_shape;
+    let group_coords = owner
+        .fspgr
+        .as_ref()
+        .context("plain TABLE OfficeArt owner has no FSPGR")?;
+    let group_rect = coordinate_rect_i128(group_coords)?;
+    let target_rect =
+        rect_edges(*context.table_bounds).context("plain TABLE owner bounds overflow")?;
+
+    let children = context
+        .officeart_inventory
+        .shapes
+        .iter()
+        .filter(|shape| shape.parent_group_shape_source.as_ref() == Some(&owner.source))
+        .filter_map(|shape| {
+            let anchor = shape.child_anchor.as_ref()?;
+            let child_rect = coordinate_rect_i128(anchor).ok()?;
+            let projected = project_rect_trunc(child_rect, group_rect, target_rect).ok()?;
+            Some((shape, projected))
+        })
+        .collect::<Vec<_>>();
+
+    let mut admitted = 0_usize;
+    for cell in cells {
+        let Some(bounds) = cell.bounds.and_then(rect_edges) else {
+            continue;
+        };
+        let matches = children
+            .iter()
+            .filter(|(_, projected)| *projected == bounds)
+            .collect::<Vec<_>>();
+        let [(shape, _)] = matches.as_slice() else {
+            continue;
+        };
+
+        // T595/RUN522 authority is intentionally narrower than ordinary Shape
+        // paint: exact cell geometry join + literal solid fill color + explicit
+        // visibility are all required. Missing/ambiguous state remains absent.
+        if unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_TYPE)
+            .is_some_and(|fill_type| fill_type != 0)
+        {
+            continue;
+        }
+        let Some(color) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
+            .and_then(direct_officeart_rgb)
+        else {
+            continue;
+        };
+        let Some(visible) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_BOOLEANS)
+            .and_then(|value| {
+                (value & FILL_USE_FILLED_BIT != 0).then_some(value & FILL_FILLED_BIT != 0)
+            })
+        else {
+            continue;
+        };
+
+        cell.paint = Some(PubTableCellPaintSource {
+            solid_fill_rgb: color,
+            fill_visible: visible,
+            source_refs: vec![source_ref(
+                context.source,
+                &shape.source,
+                Some(format!(
+                    "contents/0x2c/seq/{table_seq_num}/cell/stored/{}",
+                    cell.stored_record_index
+                )),
+                Some("SpContainer/FOPT/table-cell-fill".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            )],
+        });
+        admitted += 1;
+    }
+
+    Ok(admitted)
 }
 
 fn populate_exact_table_cell_bounds(
@@ -695,6 +804,7 @@ pub(crate) fn build_table_source(
             utf16_start: previous_end,
             utf16_end: end.value,
             bounds: None,
+            paint: None,
             source_refs: vec![
                 source_ref(
                     context.source,
@@ -745,6 +855,9 @@ pub(crate) fn build_table_source(
     }
 
     let simple_table = build_simple_table(rows, columns, &joined_cells);
+    if simple_table.is_some() {
+        let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
+    }
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
     Ok(Some(PubTableSource {
@@ -1114,6 +1227,7 @@ mod tests {
                 utf16_start: 0,
                 utf16_end: 1,
                 bounds: None,
+                paint: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -1128,6 +1242,7 @@ mod tests {
                 utf16_start: 1,
                 utf16_end: 2,
                 bounds: None,
+                paint: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -1142,6 +1257,7 @@ mod tests {
                 utf16_start: 2,
                 utf16_end: 3,
                 bounds: None,
+                paint: None,
                 source_refs: Vec::new(),
             },
             PubTableCellSource {
@@ -1156,6 +1272,7 @@ mod tests {
                 utf16_start: 3,
                 utf16_end: 4,
                 bounds: None,
+                paint: None,
                 source_refs: Vec::new(),
             },
         ];
@@ -1197,6 +1314,7 @@ mod tests {
             utf16_start: 0,
             utf16_end: 1,
             bounds: Some(bounds),
+            paint: None,
             source_refs: Vec::new(),
         };
         let simple_table = SimpleRectangularTable::new(
@@ -1267,6 +1385,7 @@ mod tests {
                 utf16_start: 0,
                 utf16_end: 6,
                 bounds: Some(bounds),
+                paint: None,
                 source_refs: Vec::new(),
             }],
             simple_table: None,
@@ -1309,6 +1428,7 @@ mod tests {
             utf16_start: 0,
             utf16_end: 1,
             bounds: None,
+            paint: None,
             source_refs: Vec::new(),
         }];
 

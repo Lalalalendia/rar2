@@ -16,6 +16,7 @@ const READER_CSS: &[u8] = include_bytes!("../../cloud-reader/reader.css");
 const READER_APP: &[u8] = include_bytes!("../../cloud-reader/reader-app.mjs");
 const READER_MODEL: &[u8] = include_bytes!("../../cloud-reader/reader-model.mjs");
 const RENDER_V1: &[u8] = include_bytes!("../../cloud-reader/render-v1.mjs");
+const OBSERVABILITY_V1: &[u8] = include_bytes!("../../web/observability-v1.mjs");
 
 const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src data:; connect-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'";
 const PERMISSIONS_POLICY: &str = "camera=(), microphone=(), geolocation=()";
@@ -26,7 +27,7 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
-const ASSETS: [EmbeddedAsset; 5] = [
+const ASSETS: [EmbeddedAsset; 6] = [
     EmbeddedAsset {
         name: "index.html",
         content_type: "text/html; charset=utf-8",
@@ -52,6 +53,11 @@ const ASSETS: [EmbeddedAsset; 5] = [
         content_type: "text/javascript; charset=utf-8",
         bytes: RENDER_V1,
     },
+    EmbeddedAsset {
+        name: "observability-v1.mjs",
+        content_type: "text/javascript; charset=utf-8",
+        bytes: OBSERVABILITY_V1,
+    },
 ];
 
 pub fn router<S>() -> Router<S>
@@ -65,6 +71,7 @@ where
         .route("/reader-app.mjs", get(reader_app))
         .route("/reader-model.mjs", get(reader_model))
         .route("/render-v1.mjs", get(render_v1))
+        .route("/observability-v1.mjs", get(observability_v1))
 }
 
 pub fn version_manifest() -> Value {
@@ -104,6 +111,10 @@ async fn reader_model() -> Response {
 
 async fn render_v1() -> Response {
     asset_response(&ASSETS[4])
+}
+
+async fn observability_v1() -> Response {
+    asset_response(&ASSETS[5])
 }
 
 fn asset_response(asset: &EmbeddedAsset) -> Response {
@@ -184,9 +195,9 @@ mod tests {
     fn version_manifest_covers_all_embedded_assets() {
         let manifest = version_manifest();
         assert_eq!(manifest["embedded"], true);
-        assert_eq!(manifest["asset_count"], 5);
+        assert_eq!(manifest["asset_count"], 6);
         let files = manifest["files"].as_array().unwrap();
-        assert_eq!(files.len(), 5);
+        assert_eq!(files.len(), 6);
         assert!(files.iter().all(|file| {
             file["sha256"]
                 .as_str()
