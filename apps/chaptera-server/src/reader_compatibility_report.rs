@@ -351,13 +351,12 @@ fn append_target_route_limitation(
         }),
         _ => None,
     };
-    if let Some(item) = item {
-        if !limitations
+    if let Some(item) = item
+        && !limitations
             .iter()
             .any(|existing| existing.code == item.code)
-        {
-            limitations.push(item);
-        }
+    {
+        limitations.push(item);
     }
 }
 
