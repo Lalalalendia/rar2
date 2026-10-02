@@ -265,12 +265,14 @@ fn reader_page_census(scene: &ReaderSceneV1, one_based_page: u32) -> Value {
 #[test]
 #[ignore = "requires exact public Virginia Remplacante fixture"]
 fn exact_virginia_p10_product_boundary_census() {
-    let fixture = PathBuf::from(
-        env::var_os("CHAPTERA_VIRGINIA_P10_FIXTURE").expect("CHAPTERA_VIRGINIA_P10_FIXTURE"),
-    );
-    let output = PathBuf::from(
-        env::var_os("CHAPTERA_VIRGINIA_P10_OUT").expect("CHAPTERA_VIRGINIA_P10_OUT"),
-    );
+    let (Some(fixture), Some(output)) = (
+        env::var_os("CHAPTERA_VIRGINIA_P10_FIXTURE"),
+        env::var_os("CHAPTERA_VIRGINIA_P10_OUT"),
+    ) else {
+        return;
+    };
+    let fixture = PathBuf::from(fixture);
+    let output = PathBuf::from(output);
 
     let bytes = fs::read(&fixture).expect("read exact Virginia source");
     let actual_sha = Sha256::digest(&bytes)
