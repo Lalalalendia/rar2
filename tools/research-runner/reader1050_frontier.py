@@ -19,6 +19,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tools" / "corpus"))
+sys.path.insert(0, str(REPO_ROOT / "tools" / "research-runner"))
 
 from cfb_physical import CFB  # noqa: E402
 from reader1050_knowledge import (  # noqa: E402
