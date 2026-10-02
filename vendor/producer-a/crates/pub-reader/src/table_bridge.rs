@@ -17,6 +17,11 @@ pub const TABLE_HEIGHT_ID: u16 = 0x69;
 pub const TABLE_ROWCOL_ARRAY_ID: u16 = 0x6D;
 pub const TABLE_ROWCOL_SIZE_ID: u16 = 0x02;
 
+/// Native PUB-T-840 matched-diff authority for materialized TABLE cell paint.
+const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
+const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
+const OFFICE_ART_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellSource {
     pub id: TableCellId,
@@ -34,9 +39,9 @@ pub struct PubTableCellSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellPaintSource {
-    /// Literal sRGB from the exact geometry-matched child OfficeArt FOPT 0x0181.
+    /// Source-backed effective solid fill RGB from a bounded TABLE paint carrier.
     pub solid_fill_rgb: [u8; 3],
-    /// Separate explicit fFilled state from the matched child FOPT 0x01BF.
+    /// Source-backed effective visibility from the same bounded paint carrier.
     pub fill_visible: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
@@ -314,6 +319,8 @@ pub(crate) struct TableBridgeContext<'a> {
     pub table_bounds: &'a RectEmu,
     pub officeart_owner_shape: &'a pub_escher::SpContainerObservation,
     pub officeart_inventory: &'a SpContainerInventory,
+    pub dgg_defaults: Option<&'a pub_escher::DggDefaultOptionsObservation>,
+    pub color_scheme: Option<&'a MatureColorScheme>,
 }
 
 fn rect_edges(rect: RectEmu) -> Option<[i128; 4]> {
@@ -405,6 +412,139 @@ fn populate_bounded_table_cell_fill(
     }
 
     Ok(admitted)
+}
+
+
+fn unique_publisher_field(
+    record: &pub_escher::PublisherFieldRecord,
+    field_id: u16,
+) -> Option<u32> {
+    let mut values = record.values(field_id);
+    let first = values.next()?;
+    values.next().is_none().then_some(first)
+}
+
+fn native_autoformat_cell_ordinal(
+    shape: &pub_escher::SpContainerObservation,
+    table_seq_num: u32,
+) -> Option<u32> {
+    if shape.fsp.as_ref()?.shape_type != OFFICE_ART_RECTANGLE_SHAPE_TYPE {
+        return None;
+    }
+
+    // These carriers are a pre-SourceGraph TABLE paint projection. Any
+    // ordinary ClientData identity stays owned by the existing shape bridge.
+    if shape
+        .client_data
+        .as_ref()
+        .and_then(|record| unique_publisher_field(record, PUBLISHER_FIELD_SHAPE_ID))
+        .is_some()
+    {
+        return None;
+    }
+
+    let anchor = shape.client_anchor.as_ref()?;
+    if unique_publisher_field(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID)? != table_seq_num {
+        return None;
+    }
+
+    match anchor.fields.as_slice() {
+        [only] if only.id == TABLE_AUTOFORMAT_OWNER_REF_ID => Some(0),
+        [first, second]
+            if (first.id == TABLE_AUTOFORMAT_OWNER_REF_ID
+                && second.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+                || (first.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID
+                    && second.id == TABLE_AUTOFORMAT_OWNER_REF_ID) =>
+        {
+            unique_publisher_field(anchor, TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+        }
+        _ => None,
+    }
+}
+
+fn populate_native_autoformat_table_cell_fill(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    cells: &mut [PubTableCellSource],
+) -> usize {
+    let mut carriers = BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
+
+    for shape in &context.officeart_inventory.shapes {
+        let Some(ordinal) = native_autoformat_cell_ordinal(shape, table_seq_num) else {
+            continue;
+        };
+        carriers.entry(ordinal).or_default().push(shape);
+    }
+
+    let mut admitted = 0_usize;
+    for cell in cells {
+        // T595 direct-child authority stays stronger and must not be replaced.
+        if cell.paint.is_some() {
+            continue;
+        }
+
+        let Some(matches) = carriers.get(&cell.stored_record_index) else {
+            continue;
+        };
+        let [shape] = matches.as_slice() else {
+            continue;
+        };
+
+        let Some(paint) = resolve_bounded_effective_officeart_paint(
+            shape,
+            context.dgg_defaults,
+            context.color_scheme,
+            admits_normative_2d_paint_defaults(shape),
+        ) else {
+            continue;
+        };
+
+        if paint.fill.solid.as_ref().map(|value| value.value) != Some(true) {
+            continue;
+        }
+        let Some(color) = paint.fill.color_rgb.as_ref().map(|value| value.value) else {
+            continue;
+        };
+        let Some(visible) = paint.fill.visible.as_ref().map(|value| value.value) else {
+            continue;
+        };
+
+        let mut source_refs = vec![source_ref(
+            context.source,
+            &shape.source,
+            Some(format!(
+                "contents/0x2c/seq/{table_seq_num}/cell/stored/{}",
+                cell.stored_record_index
+            )),
+            Some("SpContainer/ClientAnchor-0x6802/FOPT/table-cell-autoformat-fill".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )];
+
+        if paint_context_uses_officeart_scheme_color(shape, context.dgg_defaults)
+            && let Some(scheme) = context.color_scheme
+        {
+            source_refs.push(source_ref(
+                context.source,
+                &scheme.source,
+                None,
+                Some("OplSccm/current-color-scheme".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        }
+
+        cell.paint = Some(PubTableCellPaintSource {
+            solid_fill_rgb: color,
+            fill_visible: visible,
+            source_refs,
+        });
+        admitted += 1;
+    }
+
+    admitted
 }
 
 fn populate_exact_table_cell_bounds(
@@ -857,6 +997,8 @@ pub(crate) fn build_table_source(
     let simple_table = build_simple_table(rows, columns, &joined_cells);
     if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
+        let _ =
+            populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
     }
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
