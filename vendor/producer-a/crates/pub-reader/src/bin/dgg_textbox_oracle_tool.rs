@@ -194,7 +194,7 @@ fn patch_dgg_fill_color(input: &PathBuf, output: &PathBuf, receipt_path: &PathBu
     anyhow::ensure!(property.source.len == 6);
 
     let old_op = property.op;
-    let new_op = if old_op == 0x0000_00FF {
+    let new_op: u32 = if old_op == 0x0000_00FF {
         0x0000_FF00
     } else {
         0x0000_00FF
