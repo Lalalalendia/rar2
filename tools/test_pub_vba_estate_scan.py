@@ -70,7 +70,13 @@ def directory_entry(name: str, object_type: int, *, left=FREE, right=FREE, child
     return bytes(row)
 
 
-def minimal_cfb(with_vba: bool, *, complete_vba: bool = True) -> bytes:
+def minimal_cfb(
+    with_vba: bool,
+    *,
+    complete_vba: bool = True,
+    include_project_stream: bool = True,
+    project_object_type: int = 2,
+) -> bytes:
     sector_size = 512
     header = bytearray(sector_size)
     header[:8] = module.CFB_MAGIC
@@ -88,13 +94,26 @@ def minimal_cfb(with_vba: bool, *, complete_vba: bool = True) -> bytes:
     struct.pack_into("<I", header, 68, END)
     struct.pack_into("<I", header, 72, 0)
     for i in range(109):
-        struct.pack_into("<I", header, 76 + i * 4, 1 if i == 0 else FREE)
+        struct.pack_into("<I", header, 76 + i * 4, 2 if i == 0 else FREE)
 
-    if with_vba and complete_vba:
+    if with_vba and complete_vba and include_project_stream:
+        # Publisher-like nested project root:
+        # VBA/PROJECT + VBA/VBA/{dir,_VBA_PROJECT}
         entries = [
             directory_entry("Root Entry", 5, child=1),
             directory_entry("VBA", 1, child=2),
-            directory_entry("dir", 2, right=3),
+            directory_entry("PROJECT", project_object_type, right=3),
+            directory_entry("VBA", 1, child=4),
+            directory_entry("dir", 2, right=5),
+            directory_entry("_VBA_PROJECT", 2),
+        ]
+    elif with_vba and complete_vba:
+        # Same nested VBA storage but no sibling PROJECT stream: not a project.
+        entries = [
+            directory_entry("Root Entry", 5, child=1),
+            directory_entry("VBA", 1, child=2),
+            directory_entry("VBA", 1, child=3),
+            directory_entry("dir", 2, right=4),
             directory_entry("_VBA_PROJECT", 2),
         ]
     elif with_vba:
@@ -104,12 +123,14 @@ def minimal_cfb(with_vba: bool, *, complete_vba: bool = True) -> bytes:
         ]
     else:
         entries = [directory_entry("Root Entry", 5)]
-    directory = b"".join(entries).ljust(sector_size, b"\x00")
-    fat = bytearray(sector_size)
-    values = [END, FAT] + [FREE] * (sector_size // 4 - 2)
-    struct.pack_into(f"<{len(values)}I", fat, 0, *values)
-    return bytes(header + directory + fat)
 
+    directory_bytes = b"".join(entries).ljust(sector_size * 2, b"\x00")
+    dir_sector_0 = directory_bytes[:sector_size]
+    dir_sector_1 = directory_bytes[sector_size:sector_size * 2]
+    fat = bytearray(sector_size)
+    values = [1, END, FAT] + [FREE] * (sector_size // 4 - 3)
+    struct.pack_into(f"<{len(values)}I", fat, 0, *values)
+    return bytes(header + dir_sector_0 + dir_sector_1 + fat)
 
 def stream_record(record_id: int, payload: bytes) -> bytes:
     return struct.pack("<HI", record_id, len(payload)) + payload
@@ -160,11 +181,18 @@ def source_macro_cfb(source: bytes) -> bytes:
     for i in range(109):
         struct.pack_into("<I", header, 76 + i * 4, 4 if i == 0 else FREE)
 
+    # Exact synthetic topology:
+    # Root/VBA/PROJECT
+    # Root/VBA/VBA/dir
+    # Root/VBA/VBA/_VBA_PROJECT
+    # Root/VBA/VBA/Module1
     entries = [
         directory_entry("Root Entry", 5, child=1),
         directory_entry("VBA", 1, child=2),
-        directory_entry("dir", 2, right=3, start=2, size=len(dir_stream)),
-        directory_entry("_VBA_PROJECT", 2, right=4),
+        directory_entry("PROJECT", 2, right=3),
+        directory_entry("VBA", 1, child=4),
+        directory_entry("dir", 2, right=5, start=2, size=len(dir_stream)),
+        directory_entry("_VBA_PROJECT", 2, right=6),
         directory_entry("Module1", 2, start=3, size=len(module_stream)),
     ]
     directory_bytes = b"".join(entries).ljust(sector_size * 2, b"\x00")
@@ -176,7 +204,6 @@ def source_macro_cfb(source: bytes) -> bytes:
     values = [1, END, END, END, FAT] + [FREE] * (sector_size // 4 - 5)
     struct.pack_into(f"<{len(values)}I", fat, 0, *values)
     return bytes(header + dir_sector_0 + dir_sector_1 + data_dir + data_module + fat)
-
 
 def main() -> int:
     source = b'Attribute VB_Name = "M"\r\nSub X()\r\nActiveDocument.Pages(1).Shapes(1).TextFrame.TextRange.Text = "x"\r\nEnd Sub\r\n'
@@ -209,7 +236,11 @@ def main() -> int:
     extracted = module.inspect_pub_bytes(source_macro_cfb(extracted_source))
     assert extracted["cfb_status"] == "ok"
     assert extracted["vba_state"] == "source_extracted"
-    assert extracted["vba_projects"][0]["module_sources_extracted"] == 1
+    admitted = [project for project in extracted["vba_projects"] if project["structural_valid"]]
+    assert len(admitted) == 1
+    assert admitted[0]["project_stream_status"] == "present"
+    assert admitted[0]["vba_project_stream_status"] == "present"
+    assert admitted[0]["module_sources_extracted"] == 1
     assert extracted["call_families"]["pages"] >= 1
     assert extracted["call_families"]["shapes"] >= 1
     assert extracted["call_families"]["text"] >= 1
@@ -219,7 +250,22 @@ def main() -> int:
     assert macro["cfb_status"] == "ok"
     assert macro["vba_state"] == "structural_only"
     assert macro["vba_project_count"] == 1
-    assert macro["vba_projects"][0]["structural_valid"] is True
+    assert macro["vba_storage_count"] == 2
+    assert sum(project["structural_valid"] for project in macro["vba_projects"]) == 1
+
+    missing_project = module.inspect_pub_bytes(
+        minimal_cfb(True, complete_vba=True, include_project_stream=False)
+    )
+    assert missing_project["cfb_status"] == "ok"
+    assert missing_project["vba_state"] == "non_project_vba_storage"
+    assert missing_project["vba_project_count"] == 0
+
+    wrong_project_type = module.inspect_pub_bytes(
+        minimal_cfb(True, project_object_type=1)
+    )
+    assert wrong_project_type["cfb_status"] == "ok"
+    assert wrong_project_type["vba_state"] == "non_project_vba_storage"
+    assert wrong_project_type["vba_project_count"] == 0
 
     plain = module.inspect_pub_bytes(minimal_cfb(False))
     assert plain["cfb_status"] == "ok"
