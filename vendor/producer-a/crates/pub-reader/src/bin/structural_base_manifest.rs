@@ -1,9 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
-use pub_contents::{
-    Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32,
-};
+use pub_contents::{Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32};
 use pub_core::RawSpan;
 use pub_escher::{
     PublisherFieldRecord, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
@@ -119,13 +117,15 @@ fn select_target(manifest: &PubStructuralBaseManifest) -> Result<SelectedTarget>
         };
 
         let anchor_width = xe.checked_sub(xs).context("Escher anchor width overflow")?;
-        let anchor_height = ye.checked_sub(ys).context("Escher anchor height overflow")?;
+        let anchor_height = ye
+            .checked_sub(ys)
+            .context("Escher anchor height overflow")?;
         if anchor_width <= 0 || anchor_height <= 0 {
             continue;
         }
 
-        let exact = contents_width.value_emu == anchor_width
-            && contents_height.value_emu == anchor_height;
+        let exact =
+            contents_width.value_emu == anchor_width && contents_height.value_emu == anchor_height;
         if !exact {
             continue;
         }
