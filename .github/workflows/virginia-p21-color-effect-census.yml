@@ -1,0 +1,61 @@
+name: Virginia p21 color-effect source census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-viewer/Cargo.toml"
+      - "vendor/producer-a/crates/pub-viewer/tests/virginia_p21_color_effect_census.rs"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - ".github/workflows/virginia-p21-color-effect-census.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Reacquire exact Virginia fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Census source color-effect carriers
+        env:
+          CHAPTERA_VIRGINIA_P21_COLOR_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_P21_COLOR_OUT: ${{ github.workspace }}/target/virginia-p21-color-effect/receipt.json
+        run: |
+          set -euo pipefail
+          mkdir -p target/virginia-p21-color-effect
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p21_color_effect_census -- --ignored --nocapture
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: virginia-p21-color-effect-census
+          path: target/virginia-p21-color-effect/
+          if-no-files-found: warn
+          retention-days: 30
