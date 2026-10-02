@@ -1,0 +1,147 @@
+name: Build TABLE border oracle Windows artifact v3
+
+on:
+  push:
+    branches:
+      - "research/package-table-border-oracle-windows-03"
+  pull_request:
+    paths:
+      - ".github/workflows/build-table-border-oracle-windows.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build TABLE border oracle helper
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin table_border_carrier_oracle_tool
+          $exe = "vendor/producer-a/target/release/table_border_carrier_oracle_tool.exe"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "TABLE border oracle helper exe missing" }
+          Get-FileHash -Algorithm SHA256 -LiteralPath $exe | Format-List
+
+      - name: Assemble portable Publisher TABLE border bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:RUNNER_TEMP "table-border-native-bundle"
+          if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+
+          $files = @(
+            "tools/research-runner/experiments/viewer-table-autoformat-border-carriers-01.packet.json",
+            "tools/research-runner/operations/publisher_table_border_carrier_map_01.ps1",
+            "tools/research-runner/prepare_native_run.ps1",
+            "tools/research-runner/finalize_native_run.ps1",
+            "tools/windows/pub-runtime/PubRuntime.psm1",
+            "vendor/producer-a/target/release/table_border_carrier_oracle_tool.exe"
+          )
+          foreach ($relative in $files) {
+            $destination = Join-Path $bundle $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $relative -Destination $destination -Force
+          }
+
+          $runner = @'
+          param(
+              [string]$OutputRoot = ""
+          )
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $root = $PSScriptRoot
+          $manifestPath = Join-Path $root "bundle-manifest.json"
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+          foreach ($property in $manifest.files.PSObject.Properties) {
+              $relative = [string]$property.Name
+              $expected = [string]$property.Value
+              $candidate = Join-Path $root ($relative.Replace("/", "\"))
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                  throw "Portable bundle file missing: $relative"
+              }
+              $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $expected.ToLowerInvariant()) {
+                  throw "Portable bundle SHA-256 mismatch: $relative"
+              }
+          }
+
+          $tool = Join-Path $root "vendor\producer-a\target\release\table_border_carrier_oracle_tool.exe"
+          $env:PUB_RESEARCH_TABLE_BORDER_ORACLE_TOOL = $tool
+          $env:PUB_RESEARCH_TABLE_BORDER_ORACLE_TOOL_SHA256 = [string]$manifest.files."vendor/producer-a/target/release/table_border_carrier_oracle_tool.exe"
+
+          $packet = Join-Path $root "tools\research-runner\experiments\viewer-table-autoformat-border-carriers-01.packet.json"
+          if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+              $OutputRoot = Join-Path $root "out\pub-research\table-border-carrier-map-01"
+          }
+
+          $steps = @(
+              (Join-Path $root "tools\research-runner\prepare_native_run.ps1"),
+              (Join-Path $root "tools\research-runner\operations\publisher_table_border_carrier_map_01.ps1"),
+              (Join-Path $root "tools\research-runner\finalize_native_run.ps1")
+          )
+          foreach ($script in $steps) {
+              Write-Host ("NATIVE STEP: " + $script)
+              if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
+                  throw "Native research step missing: $script"
+              }
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -PacketPath $packet -OutputRoot $OutputRoot
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Native research step failed: $script (exit $LASTEXITCODE)"
+              }
+          }
+
+          $verdict = Join-Path $OutputRoot "analysis\table-border-carrier-map-01.json"
+          Get-Content -LiteralPath $verdict -Raw
+          '@
+          Set-Content -LiteralPath (Join-Path $bundle "run-native.ps1") -Value $runner -Encoding UTF8
+
+          $manifestFiles = $files + @("run-native.ps1")
+          $hashes = [ordered]@{}
+          foreach ($relative in $manifestFiles) {
+            $candidate = Join-Path $bundle $relative
+            $hashes[$relative.Replace("\", "/")] = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $manifest = [ordered]@{
+            schema = "chaptera.table-border-native-portable.v1"
+            source_main_sha = (git rev-parse HEAD).Trim()
+            experiment_id = "VIEWER-TABLE-AUTOFORMAT-BORDER-CARRIERS-01"
+            files = $hashes
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
+          Get-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Raw
+
+      - name: Parse-check bundled PowerShell entrypoint
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP "table-border-native-bundle"
+          $entry = Join-Path $bundle "run-native.ps1"
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($entry, [ref]$null, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Host
+            throw "run-native.ps1 parse failed"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: table-border-native-portable-windows-x64-v3/
+          path: ${{ runner.temp }}/table-border-native-bundle/
+          if-no-files-found: error
+          retention-days: 7
