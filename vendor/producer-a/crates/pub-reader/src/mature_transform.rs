@@ -102,10 +102,7 @@ fn cordic_sin_cos_q31(mut angle_bam: i64) -> (i64, i64) {
         y = -y;
     }
 
-    (
-        x.clamp(-Q31_ONE, Q31_ONE),
-        y.clamp(-Q31_ONE, Q31_ONE),
-    )
+    (x.clamp(-Q31_ONE, Q31_ONE), y.clamp(-Q31_ONE, Q31_ONE))
 }
 
 fn q31_decimal(value: i64) -> Decimal {
@@ -262,14 +259,14 @@ mod tests {
         let b = q31(&transform.b);
         let c = q31(&transform.c);
         let d = q31(&transform.d);
-        let transformed_x2 =
-            (i128::from(a) * i128::from(center_x2) + i128::from(c) * i128::from(center_y2))
-                / i128::from(Q31_ONE)
-                + i128::from(2 * transform.tx.get());
-        let transformed_y2 =
-            (i128::from(b) * i128::from(center_x2) + i128::from(d) * i128::from(center_y2))
-                / i128::from(Q31_ONE)
-                + i128::from(2 * transform.ty.get());
+        let transformed_x2 = (i128::from(a) * i128::from(center_x2)
+            + i128::from(c) * i128::from(center_y2))
+            / i128::from(Q31_ONE)
+            + i128::from(2 * transform.tx.get());
+        let transformed_y2 = (i128::from(b) * i128::from(center_x2)
+            + i128::from(d) * i128::from(center_y2))
+            / i128::from(Q31_ONE)
+            + i128::from(2 * transform.ty.get());
         assert_eq!(transformed_x2, i128::from(center_x2));
         assert_eq!(transformed_y2, i128::from(center_y2));
     }
