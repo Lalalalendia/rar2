@@ -1,0 +1,204 @@
+name: Migration editable corpus 1050
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: migration-editable-corpus-1050
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  EXPECTED_COUNT: "1050"
+  EXPECTED_SHA_LIST_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+  PINNED_CORPUS_RUN_ID: "36573574820"
+  PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/migration-corpus-rust
+
+jobs:
+  build-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+      - name: Build exact-source migration probe
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --release --bin migration_editable_route_probe
+      - name: Package probe
+        run: |
+          set -euo pipefail
+          tar -C "$CARGO_TARGET_DIR/release" -czf migration-editable-route-probe-linux.tar.gz migration_editable_route_probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: migration-editable-route-probe-linux
+          path: migration-editable-route-probe-linux.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  corpus-shard:
+    needs: build-probe
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: migration-editable-route-probe-linux
+          path: out/probe
+
+      - name: Extract probe
+        run: |
+          set -euo pipefail
+          mkdir -p out/probe/bin
+          tar -C out/probe/bin -xzf out/probe/migration-editable-route-probe-linux.tar.gz
+          chmod +x out/probe/bin/migration_editable_route_probe
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact 1050 corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path("out/pinned1050/materialized/native")
+          paths = sorted(root.glob("*.pub"))
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256("".join(x + "\n" for x in shas).encode("ascii")).hexdigest()
+          assert len(paths) == int(os.environ["EXPECTED_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate SHA-named corpus entries"
+          assert digest == os.environ["EXPECTED_SHA_LIST_DIGEST"], (digest, os.environ["EXPECTED_SHA_LIST_DIGEST"])
+          print({"count": len(paths), "sha_list_digest": "sha256:" + digest})
+          PY
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
+
+      - name: Probe, serialize, and consumer-open deterministic shard
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: "12"
+        run: |
+          set -euo pipefail
+          evidence="$GITHUB_WORKSPACE/target/migration-corpus-1050-evidence"
+          mkdir -p "$evidence"
+
+          python - <<'PY' > "$RUNNER_TEMP/selected.txt"
+          import os
+          from pathlib import Path
+
+          root = Path("out/pinned1050/materialized/native")
+          paths = sorted(root.glob("*.pub"), key=lambda p: p.stem)
+          shard_index = int(os.environ["SHARD_INDEX"])
+          shard_count = int(os.environ["SHARD_COUNT"])
+          for index, path in enumerate(paths):
+              if index % shard_count == shard_index:
+                  print(path)
+          PY
+
+          selected_count=0
+          while IFS= read -r pub; do
+            test -n "$pub"
+            sha="$(basename "$pub" .pub)"
+            out="$evidence/$sha"
+            mkdir -p "$out"
+            selected_count=$((selected_count + 1))
+
+            out/probe/bin/migration_editable_route_probe \
+              "$pub" \
+              --label "$sha.pub" \
+              --materialize-dir "$out" \
+              > "$out/route.json"
+
+            if test -s "$out/output.idml"; then
+              rm -f "$out/consumer.sla"
+              CHAPTERA_SCRIBUS_SLA_OUT="$out/consumer.sla" \
+                xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- "$out/output.idml"
+              test -s "$out/consumer.sla"
+              touch "$out/idml.consumer.ok"
+            fi
+
+            if test -s "$out/output.odg"; then
+              lo_out="$out/libreoffice"
+              lo_profile="$RUNNER_TEMP/lo-$sha"
+              mkdir -p "$lo_out" "$lo_profile"
+              libreoffice --headless \
+                "-env:UserInstallation=file://$lo_profile" \
+                --convert-to fodg \
+                --outdir "$lo_out" \
+                "$out/output.odg"
+              test -s "$lo_out/output.fodg"
+              touch "$out/odg.consumer.ok"
+            fi
+
+            rm -f "$out/output.idml" "$out/output.odg" "$out/consumer.sla"
+            rm -rf "$out/libreoffice"
+          done < "$RUNNER_TEMP/selected.txt"
+
+          printf '{"schema":"chaptera.migration-corpus-shard.v1","shard_index":%s,"shard_count":12,"selected_count":%s}\n' \
+            "$SHARD_INDEX" "$selected_count" > "$evidence/shard.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: migration-corpus-1050-shard-${{ matrix.shard }}
+          path: target/migration-corpus-1050-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  summarize:
+    needs: corpus-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: migration-corpus-1050-shard-*
+          path: target/migration-corpus-1050-shards
+          merge-multiple: false
+
+      - name: Build aggregate 1050 migration receipt
+        run: |
+          set -euo pipefail
+          python tools/migration_editable_corpus_v2.py summarize \
+            --input target/migration-corpus-1050-shards \
+            --output target/migration-corpus-1050-summary.json \
+            --expected-count "$EXPECTED_COUNT"
+          cat target/migration-corpus-1050-summary.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: migration-corpus-1050-summary
+          path: target/migration-corpus-1050-summary.json
+          if-no-files-found: error
+          retention-days: 90
