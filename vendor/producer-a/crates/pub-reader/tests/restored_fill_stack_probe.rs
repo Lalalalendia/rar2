@@ -1,9 +1,9 @@
 use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
 use pub_escher::{
-    DggDefaultOptionsObservation, FoptObservation, PUBLISHER_FIELD_SHAPE_ID,
-    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
-    PublisherFieldRecord, inspect_dgg_default_options, inspect_sp_containers,
+    DggDefaultOptionsObservation, FoptObservation, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE,
+    PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherFieldRecord,
+    inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{Affine2D, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest};
 use pub_reader::{PubEffectivePaintAuthority, build_mature_0x2c_source_graph};
@@ -189,10 +189,7 @@ fn rects_overlap(a: RectEmu, b: RectEmu) -> bool {
     else {
         return false;
     };
-    a.x.get() < br.get()
-        && b.x.get() < ar.get()
-        && a.y.get() < bb.get()
-        && b.y.get() < ab.get()
+    a.x.get() < br.get() && b.x.get() < ar.get() && a.y.get() < bb.get() && b.y.get() < ab.get()
 }
 
 fn fill_opacity_profile(records: &[FoptObservation]) -> String {
