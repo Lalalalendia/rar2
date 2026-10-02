@@ -75,6 +75,7 @@ def minimal_cfb(
     *,
     complete_vba: bool = True,
     include_project_stream: bool = True,
+    project_object_type: int = 2,
 ) -> bytes:
     sector_size = 512
     header = bytearray(sector_size)
@@ -101,7 +102,7 @@ def minimal_cfb(
         entries = [
             directory_entry("Root Entry", 5, child=1),
             directory_entry("VBA", 1, child=2),
-            directory_entry("PROJECT", 2, right=3),
+            directory_entry("PROJECT", project_object_type, right=3),
             directory_entry("VBA", 1, child=4),
             directory_entry("dir", 2, right=5),
             directory_entry("_VBA_PROJECT", 2),
@@ -258,6 +259,13 @@ def main() -> int:
     assert missing_project["cfb_status"] == "ok"
     assert missing_project["vba_state"] == "non_project_vba_storage"
     assert missing_project["vba_project_count"] == 0
+
+    wrong_project_type = module.inspect_pub_bytes(
+        minimal_cfb(True, project_object_type=1)
+    )
+    assert wrong_project_type["cfb_status"] == "ok"
+    assert wrong_project_type["vba_state"] == "non_project_vba_storage"
+    assert wrong_project_type["vba_project_count"] == 0
 
     plain = module.inspect_pub_bytes(minimal_cfb(False))
     assert plain["cfb_status"] == "ok"
