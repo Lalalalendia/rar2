@@ -2078,8 +2078,50 @@ impl EditorSession {
         target: EditorEditableTarget,
         source_label: impl Into<String>,
     ) -> Result<EditorEditableExportPreview, EditorExportError> {
-        let (report, human_summary, _) =
+        let (report, human_summary, plan) =
             self.build_editable_export_plan(target, source_label.into())?;
+
+        if report.can_serialize {
+            match target {
+                EditorEditableTarget::Idml => {
+                    let projection_plan =
+                        idml_base_projection_plan(&plan, self.image_replacements.keys().copied());
+                    let mut package = project_resolved_graph_to_idml(
+                        &projection_plan,
+                        &self.graph,
+                        &IdmlWireProfile::legacy_dom_7(),
+                        frame_from_payload,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
+                    let placements = self.idml_replacement_placements()?;
+                    add_embedded_images_to_idml(&plan, &mut package, &placements).map_err(
+                        |error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        },
+                    )?;
+                }
+                EditorEditableTarget::Odg => {
+                    let mut package =
+                        project_resolved_graph_to_odg(&plan, &self.graph, frame_from_payload)
+                            .map_err(|error| EditorExportError::Projection {
+                                target,
+                                message: error.to_string(),
+                            })?;
+                    let placements = self.odg_replacement_placements()?;
+                    add_embedded_images_to_odg(&plan, &mut package, &placements).map_err(
+                        |error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        },
+                    )?;
+                }
+            }
+        }
+
         Ok(EditorEditableExportPreview {
             target,
             report,
