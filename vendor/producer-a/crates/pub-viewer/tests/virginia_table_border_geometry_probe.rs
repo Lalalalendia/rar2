@@ -1,6 +1,7 @@
 use pub_core::StreamPath;
 use pub_escher::{
-    PUBLISHER_FIELD_SHAPE_ID, PublisherFieldRecord, SpContainerObservation, inspect_sp_containers,
+    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
+    PUBLISHER_FIELD_YS, PublisherFieldRecord, SpContainerObservation, inspect_sp_containers,
 };
 use pub_model::RectEmu;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
@@ -168,6 +169,39 @@ fn rect_i128(rect: &pub_escher::OfficeArtCoordinateRect) -> Option<[i128; 4]> {
     (out[2] > out[0] && out[3] > out[1]).then_some(out)
 }
 
+fn signed_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
+    let field = record.fields.iter().filter(|field| field.id == id).collect::<Vec<_>>();
+    let [field] = field.as_slice() else {
+        return None;
+    };
+    Some(i64::from(i32::from_le_bytes(field.value.to_le_bytes())))
+}
+
+fn publisher_anchor_rect(anchor: &PublisherFieldRecord) -> Option<[i128; 4]> {
+    let out = [
+        i128::from(signed_field(anchor, PUBLISHER_FIELD_XS)?),
+        i128::from(signed_field(anchor, PUBLISHER_FIELD_YS)?),
+        i128::from(signed_field(anchor, PUBLISHER_FIELD_XE)?),
+        i128::from(signed_field(anchor, PUBLISHER_FIELD_YE)?),
+    ];
+    (out[2] > out[0] && out[3] > out[1]).then_some(out)
+}
+
+fn center_origin_to_page(
+    page_width: i64,
+    page_height: i64,
+    rect: [i128; 4],
+) -> Option<[i128; 4]> {
+    let half_width = i128::from(page_width) / 2;
+    let half_height = i128::from(page_height) / 2;
+    Some([
+        half_width + rect[0],
+        half_height + rect[1],
+        half_width + rect[2],
+        half_height + rect[3],
+    ])
+}
+
 fn bounds_i128(bounds: RectEmu) -> Option<[i128; 4]> {
     let right = bounds.right()?.get();
     let bottom = bounds.bottom()?.get();
@@ -318,7 +352,11 @@ struct PageReceipt {
     viewer_page: u32,
     candidate_count: usize,
     owner_unique_count: usize,
-    parent_group_match_count: usize,
+    candidate_parent_group_count: usize,
+    parent_group_resolved_count: usize,
+    owner_same_parent_group_count: usize,
+    group_fspgr_count: usize,
+    group_client_anchor_count: usize,
     child_anchor_count: usize,
     projected_count: usize,
     table_boundary_count: usize,
@@ -332,7 +370,11 @@ struct PageReceipt {
 struct Totals {
     candidate_count: usize,
     owner_unique_count: usize,
-    parent_group_match_count: usize,
+    candidate_parent_group_count: usize,
+    parent_group_resolved_count: usize,
+    owner_same_parent_group_count: usize,
+    group_fspgr_count: usize,
+    group_client_anchor_count: usize,
     child_anchor_count: usize,
     projected_count: usize,
     table_boundary_count: usize,
@@ -441,15 +483,9 @@ fn exact_virginia_table_border_geometry_probe() {
             let owner = match owners.as_slice() {
                 [owner] => {
                     receipt.owner_unique_count += 1;
-                    *owner
+                    Some(*owner)
                 }
-                _ => continue,
-            };
-            let Some(group_coords) = owner.fspgr.as_ref().and_then(rect_i128) else {
-                continue;
-            };
-            let Some(target) = bounds_i128(node.header.bounds) else {
-                continue;
+                _ => None,
             };
 
             for shape in inventory
@@ -463,11 +499,49 @@ fn exact_virginia_table_border_geometry_probe() {
                 else {
                     continue;
                 };
-                if shape.parent_group_shape_source.as_ref() == Some(&owner.source) {
-                    receipt.parent_group_match_count += 1;
-                } else {
+
+                let Some(parent_source) = shape.parent_group_shape_source.as_ref() else {
                     continue;
+                };
+                receipt.candidate_parent_group_count += 1;
+                let parent_matches = inventory
+                    .shapes
+                    .iter()
+                    .filter(|candidate| &candidate.source == parent_source)
+                    .collect::<Vec<_>>();
+                let parent_group = match parent_matches.as_slice() {
+                    [parent_group] => {
+                        receipt.parent_group_resolved_count += 1;
+                        *parent_group
+                    }
+                    _ => continue,
+                };
+                if owner.is_some_and(|owner| {
+                    owner.parent_group_shape_source.as_ref() == Some(parent_source)
+                }) {
+                    receipt.owner_same_parent_group_count += 1;
                 }
+
+                let Some(group_coords) = parent_group.fspgr.as_ref().and_then(rect_i128) else {
+                    continue;
+                };
+                receipt.group_fspgr_count += 1;
+                let Some(group_anchor) = parent_group
+                    .client_anchor
+                    .as_ref()
+                    .and_then(publisher_anchor_rect)
+                else {
+                    continue;
+                };
+                receipt.group_client_anchor_count += 1;
+                let Some(target) = center_origin_to_page(
+                    page.size.width.get(),
+                    page.size.height.get(),
+                    group_anchor,
+                ) else {
+                    continue;
+                };
+
                 let Some(child) = shape.child_anchor.as_ref().and_then(rect_i128) else {
                     continue;
                 };
@@ -539,7 +613,11 @@ fn exact_virginia_table_border_geometry_probe() {
 
         totals.candidate_count += receipt.candidate_count;
         totals.owner_unique_count += receipt.owner_unique_count;
-        totals.parent_group_match_count += receipt.parent_group_match_count;
+        totals.candidate_parent_group_count += receipt.candidate_parent_group_count;
+        totals.parent_group_resolved_count += receipt.parent_group_resolved_count;
+        totals.owner_same_parent_group_count += receipt.owner_same_parent_group_count;
+        totals.group_fspgr_count += receipt.group_fspgr_count;
+        totals.group_client_anchor_count += receipt.group_client_anchor_count;
         totals.child_anchor_count += receipt.child_anchor_count;
         totals.projected_count += receipt.projected_count;
         totals.table_boundary_count += receipt.table_boundary_count;
@@ -562,7 +640,7 @@ fn exact_virginia_table_border_geometry_probe() {
             pdf_geometry_used: false,
             semantic_side_inferred_from_geometry: false,
             source_geometry_authority:
-                "OfficeArt owner FSPGR + carrier ChildAnchor projected into canonical TABLE bounds",
+                "carrier parent-group FSPGR + carrier ChildAnchor + parent-group ClientAnchor projected into page EMU",
             logical_boundary_authority:
                 "already-resolved Viewer simple TABLE cell bounds + native #740 side grammar",
         },
