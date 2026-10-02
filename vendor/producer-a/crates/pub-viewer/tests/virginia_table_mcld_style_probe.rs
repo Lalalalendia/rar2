@@ -88,6 +88,7 @@ struct PageReceipt {
     officeart_owner_join_histogram: BTreeMap<String, usize>,
     owner_fopt_signature_histogram: BTreeMap<String, usize>,
     owner_paint_family_signature_histogram: BTreeMap<String, usize>,
+    default_style_joint_signature_histogram: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -251,6 +252,19 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                 &mut receipt.owner_paint_family_signature_histogram,
                 presence_signature(&default_style.owner_paint_family_property_presence),
             );
+            let has_table_02a = default_style
+                .table_field_presence
+                .contains("0x02a/wire_0x08");
+            let has_protection_007f = default_style
+                .owner_fopt_property_presence
+                .contains("0x007f");
+            bump(
+                &mut receipt.default_style_joint_signature_histogram,
+                format!(
+                    "table_02a={has_table_02a};protection_007f={has_protection_007f};paint={}",
+                    presence_signature(&default_style.owner_paint_family_property_presence),
+                ),
+            );
         }
 
         pages.push(receipt);
@@ -278,6 +292,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
             "TABLE owner OfficeArt state is emitted only as property-id presence and paint-family membership; no property values or color interpretation are emitted.",
             "No field values, RGB colors, widths, style ordinals, cell coordinates, text, object ids, offsets, filenames, or raw bytes are emitted.",
             "TABLE/default-style census emits only field-id/wire-type and OfficeArt FOPT property-id presence signatures; no property values or selector ordinals are emitted.",
+            "Stage-C joint signatures correlate only presence of TABLE 0x02A/wire0x08, OfficeArt Protection 0x007F, and the already-presence-only paint-family signature on the same TABLE; no values are read or emitted.",
             "Publisher PDF is not used as semantic authority.",
         ],
     };
@@ -292,7 +307,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     .expect("write MCLD style receipt");
 
     println!(
-        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?} p22_table_candidates={:?} p22_table_signatures={:?} p22_unsupported_tail={} p22_default_fields={:?} p22_default_tail={:?} p22_owner_join={:?} p22_owner_fopt={:?} p22_owner_paint_family={:?}",
+        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?} p22_table_candidates={:?} p22_table_signatures={:?} p22_unsupported_tail={} p22_default_fields={:?} p22_default_tail={:?} p22_owner_join={:?} p22_owner_fopt={:?} p22_owner_paint_family={:?} p22_joint={:?}",
         receipt.pages[0].table_count,
         receipt.pages[1].table_count,
         receipt.pages[2].table_count,
@@ -311,5 +326,6 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         receipt.pages[1].officeart_owner_join_histogram,
         receipt.pages[1].owner_fopt_signature_histogram,
         receipt.pages[1].owner_paint_family_signature_histogram,
+        receipt.pages[1].default_style_joint_signature_histogram,
     );
 }
