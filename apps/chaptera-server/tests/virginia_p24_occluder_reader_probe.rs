@@ -19,7 +19,9 @@ struct Receipt {
     reader_story_before_image_count: usize,
     reader_picture_node_count: usize,
     reader_resource_bound_node_count: usize,
+    reader_positive_bounds_count: usize,
     reader_source_window_count: usize,
+    reader_valid_source_window_count: usize,
     reader_bound_resource_descriptor_count: usize,
     reader_bound_resource_inline_count: usize,
     claims: Claims,
@@ -187,9 +189,21 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         .iter()
         .filter(|node| node.resource_id.is_some())
         .count();
+    let reader_positive_bounds_count = reader_nodes
+        .iter()
+        .filter(|node| node.bounds.width > 0 && node.bounds.height > 0)
+        .count();
     let reader_source_window_count = reader_nodes
         .iter()
         .filter(|node| node.image_source_window.is_some())
+        .count();
+    let reader_valid_source_window_count = reader_nodes
+        .iter()
+        .filter(|node| {
+            node.image_source_window.as_ref().is_some_and(|window| {
+                window.right_q16 > window.left_q16 && window.bottom_q16 > window.top_q16
+            })
+        })
         .count();
 
     let bound_resource_ids = reader_nodes
@@ -219,7 +233,9 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         reader_story_before_image_count,
         reader_picture_node_count,
         reader_resource_bound_node_count,
+        reader_positive_bounds_count,
         reader_source_window_count,
+        reader_valid_source_window_count,
         reader_bound_resource_descriptor_count,
         reader_bound_resource_inline_count,
         claims: Claims {
@@ -252,6 +268,15 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         "later p24 image must retain one Reader resource binding"
     );
     assert_eq!(
+        receipt.reader_positive_bounds_count, 1,
+        "later p24 image must retain positive Reader bounds"
+    );
+    assert_eq!(
+        receipt.reader_valid_source_window_count,
+        receipt.reader_source_window_count,
+        "any later p24 image source window must remain geometrically valid"
+    );
+    assert_eq!(
         receipt.reader_bound_resource_descriptor_count, 1,
         "later p24 image resource must exist in Reader resource descriptors"
     );
@@ -266,14 +291,16 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
     .expect("write Reader occlusion receipt");
 
     println!(
-        "VIRGINIA_P24_OCCLUDER_READER_BINDING later_images={} overlapping_stories={} reader_stories={} stories_before_image={} picture_nodes={} resource_bound={} source_window={} descriptors={} inline={}",
+        "VIRGINIA_P24_OCCLUDER_READER_BINDING later_images={} overlapping_stories={} reader_stories={} stories_before_image={} picture_nodes={} resource_bound={} positive_bounds={} source_window={} valid_source_window={} descriptors={} inline={}",
         receipt.later_overlapping_image_count,
         receipt.overlapping_story_count,
         receipt.reader_overlapping_story_node_count,
         receipt.reader_story_before_image_count,
         receipt.reader_picture_node_count,
         receipt.reader_resource_bound_node_count,
+        receipt.reader_positive_bounds_count,
         receipt.reader_source_window_count,
+        receipt.reader_valid_source_window_count,
         receipt.reader_bound_resource_descriptor_count,
         receipt.reader_bound_resource_inline_count,
     );
