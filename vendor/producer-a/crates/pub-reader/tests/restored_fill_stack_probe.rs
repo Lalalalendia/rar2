@@ -1,4 +1,9 @@
 use pub_cfb::read_stream_path;
+use pub_contents::{
+    MatureColorScheme, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    parse_confirmed_mature_color_scheme,
+};
 use pub_core::StreamPath;
 use pub_escher::{
     DggDefaultOptionsObservation, FoptObservation, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE,
@@ -512,6 +517,227 @@ fn effective_extended_color_profile(
     "none_or_default".to_owned()
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtendedColorIntent {
+    NoExtended,
+    Supported([u8; 3]),
+    Unsupported,
+}
+
+fn publication_color_scheme(fixture: &PathBuf) -> MatureColorScheme {
+    let contents = read_stream_path(fixture, "/Contents").expect("read exact Publisher Contents");
+    let stream = StreamPath("/Contents".to_owned());
+    let header = parse_0x2c_header(stream.clone(), &contents).expect("parse Contents header");
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
+        .expect("parse Contents trailer");
+
+    let mut candidates = Vec::new();
+    for seq_num in 0..trailer.directory.slots.len() {
+        let Some(reference) =
+            parse_confirmed_chunk_reference(&contents, &trailer.directory, seq_num)
+                .expect("parse Contents directory reference")
+        else {
+            continue;
+        };
+        if matches!(reference.raw_types.as_slice(), [field] if field.value == 0x5C) {
+            candidates.push(reference);
+        }
+    }
+    let [reference] = candidates.as_slice() else {
+        panic!("exact Virginia fixture must contain one current ColorScheme");
+    };
+    let [offset] = reference.chunk_offsets.as_slice() else {
+        panic!("current ColorScheme must have one chunk offset");
+    };
+    let chunk = parse_confirmed_0x2c_chunk(stream, &contents, offset.value)
+        .expect("parse current ColorScheme chunk");
+    parse_confirmed_mature_color_scheme(&contents, &chunk)
+        .expect("parse current publication ColorScheme")
+}
+
+fn probe_colorref_rgb(value: u32, scheme: &MatureColorScheme) -> Option<[u8; 3]> {
+    match (value >> 24) as u8 {
+        0x00 => {
+            let bytes = value.to_le_bytes();
+            Some([bytes[0], bytes[1], bytes[2]])
+        }
+        0x08 => {
+            let ordinal = usize::try_from(value & 0x00FF_FFFF).ok()?;
+            scheme.slots.get(ordinal)?.rgb
+        }
+        _ => None,
+    }
+}
+
+fn rgb_to_hsl(rgb: [u8; 3]) -> (f64, f64, f64) {
+    let r = f64::from(rgb[0]) / 255.0;
+    let g = f64::from(rgb[1]) / 255.0;
+    let b = f64::from(rgb[2]) / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    if (max - min).abs() < f64::EPSILON {
+        return (0.0, 0.0, l);
+    }
+    let delta = max - min;
+    let s = if l > 0.5 {
+        delta / (2.0 - max - min)
+    } else {
+        delta / (max + min)
+    };
+    let h = if (max - r).abs() < f64::EPSILON {
+        (g - b) / delta + if g < b { 6.0 } else { 0.0 }
+    } else if (max - g).abs() < f64::EPSILON {
+        (b - r) / delta + 2.0
+    } else {
+        (r - g) / delta + 4.0
+    } / 6.0;
+    (h, s, l)
+}
+
+fn hue_to_rgb(p: f64, q: f64, mut t: f64) -> f64 {
+    if t < 0.0 {
+        t += 1.0;
+    }
+    if t > 1.0 {
+        t -= 1.0;
+    }
+    if t < 1.0 / 6.0 {
+        return p + (q - p) * 6.0 * t;
+    }
+    if t < 0.5 {
+        return q;
+    }
+    if t < 2.0 / 3.0 {
+        return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+    }
+    p
+}
+
+fn hsl_to_rgb(h: f64, s: f64, l: f64) -> [u8; 3] {
+    let (r, g, b) = if s.abs() < f64::EPSILON {
+        (l, l, l)
+    } else {
+        let q = if l < 0.5 {
+            l * (1.0 + s)
+        } else {
+            l + s - l * s
+        };
+        let p = 2.0 * l - q;
+        (
+            hue_to_rgb(p, q, h + 1.0 / 3.0),
+            hue_to_rgb(p, q, h),
+            hue_to_rgb(p, q, h - 1.0 / 3.0),
+        )
+    };
+    [
+        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+    ]
+}
+
+fn apply_msotintshade(rgb: [u8; 3], value: u32) -> Option<[u8; 3]> {
+    if value == FILL_COLOR_EXT_MOD_DEFAULT {
+        return Some(rgb);
+    }
+    let reserved = value & 0x0000_FFFF;
+    let amount = ((value >> 16) & 0xFF) as u8;
+    let high = (value >> 24) as u8;
+    if high != 0x10 {
+        return None;
+    }
+    let (h, s, l) = rgb_to_hsl(rgb);
+    let factor = f64::from(amount) / 255.0;
+    let modified_l = match reserved {
+        0x01F4 => l * factor,
+        0x02F4 => 1.0 - (1.0 - l) * factor,
+        _ => return None,
+    };
+    Some(hsl_to_rgb(h, s, modified_l))
+}
+
+fn extended_color_intent_from_records(
+    records: &[FoptObservation],
+    scheme: &MatureColorScheme,
+) -> ExtendedColorIntent {
+    let colors = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == FILL_COLOR_EXT)
+        .collect::<Vec<_>>();
+    let modifiers = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == FILL_COLOR_EXT_MOD)
+        .collect::<Vec<_>>();
+
+    let color = match colors.as_slice() {
+        [] => {
+            return if modifiers.iter().all(|property| {
+                !property.f_bid()
+                    && !property.f_complex()
+                    && property.op == FILL_COLOR_EXT_MOD_DEFAULT
+            }) {
+                ExtendedColorIntent::NoExtended
+            } else {
+                ExtendedColorIntent::Unsupported
+            };
+        }
+        [property] if !property.f_bid() && !property.f_complex() => *property,
+        _ => return ExtendedColorIntent::Unsupported,
+    };
+    if color.op == FILL_COLOR_EXT_DEFAULT {
+        return ExtendedColorIntent::NoExtended;
+    }
+    let Some(mut rgb) = probe_colorref_rgb(color.op, scheme) else {
+        return ExtendedColorIntent::Unsupported;
+    };
+    match modifiers.as_slice() {
+        [] => {}
+        [property] if !property.f_bid() && !property.f_complex() => {
+            let Some(modified) = apply_msotintshade(rgb, property.op) else {
+                return ExtendedColorIntent::Unsupported;
+            };
+            rgb = modified;
+        }
+        _ => return ExtendedColorIntent::Unsupported,
+    }
+    ExtendedColorIntent::Supported(rgb)
+}
+
+fn effective_extended_color_intent(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+    scheme: &MatureColorScheme,
+) -> ExtendedColorIntent {
+    for records in std::iter::once(shape.fopts.as_slice())
+        .chain(dgg.into_iter().map(|group| group.primary_options.as_slice()))
+        .chain(dgg.into_iter().map(|group| group.tertiary_options.as_slice()))
+    {
+        match extended_color_intent_from_records(records, scheme) {
+            ExtendedColorIntent::NoExtended => continue,
+            other => return other,
+        }
+    }
+    ExtendedColorIntent::NoExtended
+}
+
+fn main_vs_extended_profile(
+    main_rgb: [u8; 3],
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+    scheme: &MatureColorScheme,
+) -> &'static str {
+    match effective_extended_color_intent(shape, dgg, scheme) {
+        ExtendedColorIntent::NoExtended => "no_extended",
+        ExtendedColorIntent::Supported(rgb) if rgb == main_rgb => "main_equals_extended",
+        ExtendedColorIntent::Supported(_) => "main_differs_from_extended",
+        ExtendedColorIntent::Unsupported => "unsupported_or_ambiguous",
+    }
+}
+
 fn scalar_property_profile(records: &[FoptObservation], property_id: u16) -> &'static str {
     let matches = records
         .iter()
@@ -725,6 +951,7 @@ struct PageReceipt {
     restored_local_fill_color_ext_histogram: BTreeMap<String, usize>,
     restored_local_fill_color_ext_mod_histogram: BTreeMap<String, usize>,
     restored_effective_fill_color_ext_histogram: BTreeMap<String, usize>,
+    restored_main_vs_extended_histogram: BTreeMap<String, usize>,
     restored_effective_color_distinct_count: usize,
     restored_dgg_color_materialization_histogram: BTreeMap<String, usize>,
     restored_local_fill_use_rect_histogram: BTreeMap<String, usize>,
@@ -834,6 +1061,7 @@ fn exact_virginia_restored_fill_stack_probe() {
         "Stage-A fixture requires unambiguous DGG defaults"
     );
     let dgg = dgg_inventory.drawing_groups.first();
+    let color_scheme = publication_color_scheme(&fixture);
 
     let mut shapes_by_seq = BTreeMap::<u32, Vec<usize>>::new();
     for (index, shape) in inventory.shapes.iter().enumerate() {
@@ -1017,6 +1245,19 @@ fn exact_virginia_restored_fill_stack_probe() {
             bump(
                 &mut page.restored_effective_fill_color_ext_histogram,
                 effective_extended_color_profile(shape, dgg),
+            );
+            bump(
+                &mut page.restored_main_vs_extended_histogram,
+                main_vs_extended_profile(
+                    paint.fill
+                        .color_rgb
+                        .as_ref()
+                        .expect("restored visible solid fill has main RGB")
+                        .value,
+                    shape,
+                    dgg,
+                    &color_scheme,
+                ),
             );
             bump(
                 &mut page.restored_local_fill_use_rect_histogram,
@@ -1445,6 +1686,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-G Group Shape Boolean profiles emit only documented hidden/print participation and effective authority classes; raw 0x03BF values are never emitted.",
             "Stage-H Geometry profiles emit only scalar/complex presence classes and default-rect/explicit-rect-space/custom-path/unresolved buckets; no geometry coordinates, vertices, segments, or raw property values are emitted.",
             "Stage-I extended foreground-color profiles emit only absent/default/non-default representation/modifier and aggregate participation classes; no RGB, scheme ordinal, tint/shade scalar, or raw property value is emitted.",
+            "Stage-J resolves supported extended foreground intent only inside the probe and emits equality/no-extended/unsupported classes; no RGB, scheme ordinal, HSL component, tint/shade amount, or raw property value is emitted.",
         ],
     };
 
