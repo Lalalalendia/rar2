@@ -4,7 +4,14 @@ use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
 use pub_escher::{FoptObservation, PUBLISHER_FIELD_SHAPE_ID, inspect_sp_containers};
 use pub_model::Sha256Digest;
-use pub_reader::build_mature_0x2c_source_graph;
+use pub_presentation_profile::{
+    STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
+    StandardPrintServiceTailProfileInputV1,
+    select_standard_print_service_tail_customer_page_seq_nums_v1,
+};
+use pub_reader::{
+    analyze_mature_0x2c_page_roles, build_mature_0x2c_source_graph, derive_pub_page_id,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -159,8 +166,39 @@ fn exact_virginia_direct_image_rotation_applicability_probe() {
     );
 
     let source_hash: Sha256Digest = actual_sha256.parse().expect("valid exact source SHA-256");
-    let build = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
-        .expect("build exact Virginia source graph");
+    let build = build_mature_0x2c_source_graph(
+        Cursor::new(bytes.as_slice()),
+        source_hash.clone(),
+    )
+    .expect("build exact Virginia source graph");
+    let page_roles = analyze_mature_0x2c_page_roles(Cursor::new(bytes.as_slice()))
+        .expect("inspect exact Virginia page roles");
+    let profile_input = StandardPrintServiceTailProfileInputV1 {
+        schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+        document_page_list_entry_count: page_roles.document_page_list_entry_count,
+        confirmed_page_count: page_roles.confirmed_page_count,
+        special_entry_count: page_roles.special_entry_count,
+        scenario_evidence_list_count: build.effective_pages.scenario_evidence_list_count,
+        observed_scenario_page_count: build.effective_pages.observed_scenario_page_ids.len(),
+        pages: page_roles
+            .pages
+            .into_iter()
+            .map(|page| StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: page.document_ordinal,
+                contents_seq_num: page.contents_seq_num,
+                oid_dword0: page.oid_dword0,
+                oid_dword1: page.oid_dword1,
+                applied_master_seq_num: page.applied_master_seq_num,
+            })
+            .collect(),
+    };
+    let page_selection = select_standard_print_service_tail_customer_page_seq_nums_v1(profile_input)
+        .expect("exact Virginia source must match the admitted standard-print service-tail profile");
+    assert_eq!(
+        page_selection.customer_page_seq_nums.len(),
+        25,
+        "exact Virginia Remplacante selected customer page count drift"
+    );
 
     let escher =
         read_stream_path(&fixture, "/Escher/EscherStm").expect("read exact Virginia Escher stream");
