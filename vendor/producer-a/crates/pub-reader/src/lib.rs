@@ -301,6 +301,22 @@ fn bounded_direct_image_transform(
         return BoundedDirectImageTransform::Identity;
     }
 
+    const FULL_TURN_UNITS: i64 = 360 * 65_536;
+    const HALF_TURN_UNITS: i64 = 180 * 65_536;
+    const QUARTER_TURN_UNITS: i64 = 90 * 65_536;
+    let mut signed_angle = i64::from(rotation_op as i32) % FULL_TURN_UNITS;
+    if signed_angle > HALF_TURN_UNITS {
+        signed_angle -= FULL_TURN_UNITS;
+    } else if signed_angle < -HALF_TURN_UNITS {
+        signed_angle += FULL_TURN_UNITS;
+    }
+    if matches!(
+        signed_angle.abs(),
+        QUARTER_TURN_UNITS | HALF_TURN_UNITS
+    ) {
+        return BoundedDirectImageTransform::Unsupported;
+    }
+
     affine_rotation_about_bounds(rotation_op, bounds)
         .map(BoundedDirectImageTransform::Applied)
         .unwrap_or(BoundedDirectImageTransform::Unsupported)
@@ -4946,33 +4962,18 @@ mod tests {
     }
 
     #[test]
-    fn direct_image_rotation_preserves_signed_quarter_turn_about_center() {
-        let positive =
-            bounded_direct_image_transform(&[(90u32 << 16, false, false)], 0, test_bounds());
-        let BoundedDirectImageTransform::Applied(positive) = positive else {
-            panic!("positive quarter-turn must be admitted");
-        };
-        assert_eq!(positive.a.as_str(), "0");
-        assert_eq!(positive.b.as_str(), "1");
-        assert_eq!(positive.c.as_str(), "-1");
-        assert_eq!(positive.d.as_str(), "0");
-        assert_eq!(positive.tx, LengthEmu::new(700));
-        assert_eq!(positive.ty, LengthEmu::new(200));
-
-        let negative = bounded_direct_image_transform(
-            &[(((-90i32) << 16) as u32, false, false)],
-            0,
-            test_bounds(),
-        );
-        let BoundedDirectImageTransform::Applied(negative) = negative else {
-            panic!("negative quarter-turn must be admitted");
-        };
-        assert_eq!(negative.a.as_str(), "0");
-        assert_eq!(negative.b.as_str(), "-1");
-        assert_eq!(negative.c.as_str(), "1");
-        assert_eq!(negative.d.as_str(), "0");
-        assert_eq!(negative.tx, LengthEmu::new(-200));
-        assert_eq!(negative.ty, LengthEmu::new(700));
+    fn direct_image_rotation_keeps_exact_cardinal_angles_fail_closed() {
+        for rotation_op in [
+            90u32 << 16,
+            ((-90i32) << 16) as u32,
+            180u32 << 16,
+            ((-180i32) << 16) as u32,
+        ] {
+            assert_eq!(
+                bounded_direct_image_transform(&[(rotation_op, false, false)], 0, test_bounds()),
+                BoundedDirectImageTransform::Unsupported
+            );
+        }
     }
 
     #[test]
