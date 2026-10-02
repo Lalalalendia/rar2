@@ -700,13 +700,7 @@ fn projected_text(
             0,
             scalar_end,
         ),
-        text_colors: render_text_color_runs_v1(
-            visual,
-            story_id,
-            &story.text,
-            0,
-            scalar_end,
-        ),
+        text_colors: render_text_color_runs_v1(visual, story_id, &story.text, 0, scalar_end),
         backend_font_resource_id: None,
         layout: None,
     }))
