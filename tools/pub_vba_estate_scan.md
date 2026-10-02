@@ -28,13 +28,13 @@ python tools/pub_vba_estate_scan.py scan \
 ## States
 
 - `absent` — parsed CFB, no `VBA` storage found.
-- `non_project_vba_storage` — a storage literally named `VBA` exists, but it does not satisfy the structural `_VBA_PROJECT` + `dir` MS-OVBA project requirement. This is explicitly **not** counted as macro-present.
+- `non_project_vba_storage` — one or more storages literally named `VBA` exist, but none satisfy the full MS-OVBA project-root relation: the candidate storage parent must contain a `PROJECT` stream and the candidate `VBA` storage must contain `_VBA_PROJECT` + `dir`. This is explicitly **not** counted as macro-present.
 - `structural_only` — structurally valid VBA storage exists but source metadata/source could not be safely extracted.
 - `source_extracted` — at least one module source was safely decompressed and all discovered modules were extracted.
 - `source_partial` — at least one module source was extracted and at least one module could not be extracted.
 - `unknown` — the file could not be parsed/read well enough to classify VBA presence.
 
-These are scanner evidence states, not claims that Publisher would execute a project successfully. A storage name alone is never treated as macro evidence; `vba_project_present_any` only counts structurally admitted MS-OVBA projects.
+These are scanner evidence states, not claims that Publisher would execute a project successfully. A storage name alone is never treated as macro evidence; `vba_project_present_any` only counts structurally admitted MS-OVBA projects. Nested roots are supported, including Publisher-style topologies such as `VBA/PROJECT` plus `VBA/VBA/{_VBA_PROJECT,dir,Module...}`.
 
 ## Current call-family taxonomy
 
@@ -62,6 +62,7 @@ The scanner masks comments and ordinary string literals before classification. T
 - VBA streams are capped at 16 MiB each.
 - VBA module count is capped at 1024.
 - MS-OVBA compressed chunks are capped by the 4096-byte decompressed-chunk contract.
+- project admission is fail-closed against the MS-OVBA root relation: parent `PROJECT` stream + child `VBA/_VBA_PROJECT` + child `VBA/dir`;
 - `dir` module metadata is parsed fail-closed against the documented `PROJECTMODULES` / `MODULE` record sequence.
 
 ## Tests
@@ -71,7 +72,7 @@ python tools/test_pub_vba_estate_scan.py
 python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py
 ```
 
-The source-free synthetic fixtures cover macro-present structural detection, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, and CopyToken decoding including the power-of-two `difference=16` boundary.
+The source-free synthetic fixtures cover nested Publisher-style macro-project detection, a missing-`PROJECT` negative, storage-name collisions, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, and CopyToken decoding including the power-of-two `difference=16` boundary.
 
 ## Corpus integration
 
