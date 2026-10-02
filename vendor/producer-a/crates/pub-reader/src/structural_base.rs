@@ -140,10 +140,9 @@ pub fn build_mature_0x2c_structural_base_manifest(
             // SourceGraph's already-resolved OfficeArt binding. Those are useful
             // corroborating observations, but would make the crosswalk circular
             // and exclude otherwise valid ordinary text shapes.
-            let mut escher_matches = escher_inventory
-                .shapes
-                .iter()
-                .filter(|shape| exact_anchor_extent_matches(shape, contents_width, contents_height));
+            let mut escher_matches = escher_inventory.shapes.iter().filter(|shape| {
+                exact_anchor_extent_matches(shape, contents_width, contents_height)
+            });
             let Some(escher_shape) = escher_matches.next() else {
                 continue;
             };
