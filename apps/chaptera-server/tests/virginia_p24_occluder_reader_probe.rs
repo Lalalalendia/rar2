@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, env, fs, path::PathBuf};
 use chaptera_server::reader_scene_v1::from_viewer_geometry;
 use pub_model::RectEmu;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 const EXPECTED_REMPLACANTE_SHA256: &str =
