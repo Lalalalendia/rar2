@@ -307,12 +307,49 @@ fn main() -> Result<()> {
         rows.push(row);
     }
 
+    let forced_trigger_attempted_count = rows
+        .iter()
+        .filter(|row| row.forced_trigger_probe.is_some())
+        .count();
+    let forced_cfb_inventory_available_count = rows
+        .iter()
+        .filter_map(|row| row.forced_trigger_probe.as_ref())
+        .filter(|probe| probe.cfb_inventory_available)
+        .count();
+    let forced_surviving_evidence_count = rows
+        .iter()
+        .filter_map(|row| row.forced_trigger_probe.as_ref())
+        .filter(|probe| probe.has_surviving_evidence)
+        .count();
+    let forced_partial_graph_constructed_count = rows
+        .iter()
+        .filter_map(|row| row.forced_partial_graph.as_ref())
+        .filter(|graph| graph.status == "constructed")
+        .count();
+    let mut forced_contents_family_counts = BTreeMap::<String, usize>::new();
+    for family in rows
+        .iter()
+        .filter_map(|row| row.forced_trigger_probe.as_ref())
+        .filter_map(|probe| probe.contents_family.as_deref())
+    {
+        *forced_contents_family_counts
+            .entry(family.to_owned())
+            .or_default() += 1;
+    }
+
     let report = serde_json::json!({
         "schema": SCHEMA,
         "corpus_file_count": rows.len(),
         "outcome_counts": outcome_counts,
         "salvage_eligibility_counts": eligibility_counts,
         "corruption_evidence_counts": corruption_evidence_counts,
+        "forced_trigger_summary": {
+            "attempted_count": forced_trigger_attempted_count,
+            "cfb_inventory_available_count": forced_cfb_inventory_available_count,
+            "surviving_evidence_count": forced_surviving_evidence_count,
+            "partial_graph_constructed_count": forced_partial_graph_constructed_count,
+            "contents_family_counts": forced_contents_family_counts,
+        },
         "rows": rows,
         "evidence_boundary": "source-safe acceptance only; no filenames, paths, document text, raw streams, source bytes, repaired PUB materialization, or guessed geometry are retained",
     });
