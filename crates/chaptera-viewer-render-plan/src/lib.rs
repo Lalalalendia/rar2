@@ -439,6 +439,10 @@ pub struct RenderResolvedTextSpanV1 {
     pub x_offset_emu: i64,
     pub measured_width_emu: i64,
     pub font_size_emu: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_fingerprint_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1459,6 +1463,8 @@ fn shape_mixed_line_candidate_v1(
             x_offset_emu: measured_width_emu,
             measured_width_emu: span_width_emu,
             font_size_emu: run.font_size_emu,
+            font_resource_id: None,
+            font_fingerprint_sha256: None,
         });
         measured_width_emu = measured_width_emu
             .checked_add(span_width_emu)
