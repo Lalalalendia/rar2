@@ -918,6 +918,7 @@ pub fn build_page_render_plan_v1(
     })
 }
 
+#[derive(Clone)]
 struct RenderTextLayoutTargetV1 {
     page_id: PageId,
     page_size: Size2D,
@@ -1013,10 +1014,9 @@ where
         if resolved_font.is_none()
             && projected_target_frame_node_id.is_none()
             && let Some(layout) = resolve_mixed_family_text_layout_v1(
+                visual,
+                target.clone(),
                 fragment,
-                target.node_id,
-                &target.bounds,
-                target.vertical_alignment,
                 &mut resolve_span_font,
             )
         {
@@ -1078,7 +1078,7 @@ fn resolved_line_x_offset_emu_v1(
             scalar_start,
             scalar_end,
             content_leading_x_emu: 0,
-            content_width_emu: bounds.width.get(),
+            content_width_emu: target.bounds.width.get(),
             measured_width_emu,
         }],
     };
@@ -1212,7 +1212,7 @@ fn resolve_text_layout_v1(
         Err(reason) => return fallback_layout(reason),
     };
 
-    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+    if target.bounds.width.get() <= 0 || target.bounds.height.get() <= 0 {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::FrameGeometryInvalid);
     }
     if font.resource_id.is_empty()
@@ -1354,8 +1354,8 @@ fn resolve_text_layout_v1(
             line_height_emu,
         },
         vertical_offset_emu: resolved_vertical_offset_emu_v1(
-            vertical_alignment,
-            bounds.height.get(),
+            target.vertical_alignment,
+            target.bounds.height.get(),
             laid_out_height_emu,
         ),
         lines,
@@ -1599,10 +1599,10 @@ fn resolve_mixed_size_text_layout_v1(
                 Ok(evaluated) => evaluated,
                 Err(reason) => return fallback_layout(reason),
             };
-            let fits_width = evaluated.measured_width_emu <= bounds.width.get();
+            let fits_width = evaluated.measured_width_emu <= target.bounds.width.get();
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
-                .is_some_and(|height| height <= bounds.height.get());
+                .is_some_and(|height| height <= target.bounds.height.get());
             if fits_width && fits_height {
                 chosen = Some(evaluated);
             }
@@ -1620,8 +1620,8 @@ fn resolve_mixed_size_text_layout_v1(
         };
         let x_offset_emu = resolved_line_x_offset_emu_v1(
             fragment,
-            node_id,
-            bounds,
+            target.node_id,
+            &target.bounds,
             line_index,
             cursor..chosen.scalar_end,
             chosen.measured_width_emu,
@@ -1669,7 +1669,7 @@ fn resolve_mixed_size_text_layout_v1(
         },
         vertical_offset_emu: resolved_vertical_offset_emu_v1(
             vertical_alignment,
-            bounds.height.get(),
+            target.bounds.height.get(),
             used_height_emu,
         ),
         lines,
@@ -1847,10 +1847,9 @@ fn shape_mixed_family_line_candidate_v1(
 }
 
 fn resolve_mixed_family_text_layout_v1<'a, G>(
+    visual: &ViewerGeometryDocument,
+    target: RenderTextLayoutTargetV1,
     fragment: &RenderTextFragmentV1,
-    node_id: NodeId,
-    bounds: &RectEmu,
-    vertical_alignment: Option<ViewerTextVerticalAlignment>,
     resolve_span_font: &mut G,
 ) -> Option<RenderTextLayoutV1>
 where
@@ -1859,16 +1858,35 @@ where
         &RenderTypographyRunV1,
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
 {
-    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+    if target.projected_target_frame_node_id.is_some()
+        || target.target.bounds.width.get() <= 0
+        || target.target.bounds.height.get() <= 0
+    {
         return None;
     }
-    let runs = admitted_mixed_family_typography_runs_v1(fragment, resolve_span_font)?;
 
-    let scalars: Vec<char> = fragment.text.chars().collect();
-    let scalar_count = u32::try_from(scalars.len()).ok()?;
-    if fragment.scalar_start != 0 || fragment.scalar_end != scalar_count {
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+    let story_scalar_len = u32::try_from(story.text.chars().count()).ok()?;
+    if fragment.scalar_start != 0
+        || fragment.scalar_end != story_scalar_len
+        || fragment.text != story.text
+    {
         return None;
     }
+    admitted_layout_frame_ordinal(
+        visual,
+        fragment.story_id,
+        target.node_id,
+        target.projected_target_frame_node_id,
+    )
+    .ok()?;
+
+    let runs = admitted_mixed_family_typography_runs_v1(fragment, resolve_span_font)?;
+    let scalars: Vec<char> = fragment.text.chars().collect();
 
     let mut policy_glyphs = Vec::new();
     for run in &runs {
@@ -1909,10 +1927,10 @@ where
                 &runs,
             )
             .ok()?;
-            let fits_width = evaluated.measured_width_emu <= bounds.width.get();
+            let fits_width = evaluated.measured_width_emu <= target.bounds.width.get();
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
-                .is_some_and(|height| height <= bounds.height.get());
+                .is_some_and(|height| height <= target.bounds.height.get());
             if fits_width && fits_height {
                 chosen = Some(evaluated);
             }
@@ -1972,7 +1990,7 @@ where
         },
         vertical_offset_emu: resolved_vertical_offset_emu_v1(
             vertical_alignment,
-            bounds.height.get(),
+            target.bounds.height.get(),
             used_height_emu,
         ),
         lines,
