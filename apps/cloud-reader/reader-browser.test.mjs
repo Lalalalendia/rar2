@@ -427,16 +427,32 @@ try {
     }
   };
 
-  await check("cancel before consent sends nothing and clears contribution access", async () => {
-    await open(page, { open: eligible });
+  await check("narrow long-filename consent fits and Escape restores keyboard focus", async () => {
+    const name = "a".repeat(240) + ".pub";
+    await open(page, { open: eligible }, name);
     await status(page, /not supported yet/);
     const before = requests.length;
-    await page.locator("#open-contribution").click();
-    await page.locator("#cancel-contribution").click();
+    await page.locator("#open-contribution").focus();
+    await page.keyboard.press("Enter");
+    assert.equal(await page.locator("#contribution-filename").textContent(), name);
+    await page.setViewportSize({ width: 320, height: 568 });
+    const geometry = await page.locator("#contribution-dialog").evaluate((dialog) => ({
+      width: dialog.clientWidth,
+      scrollWidth: dialog.scrollWidth,
+      height: dialog.getBoundingClientRect().height,
+      viewportHeight: innerHeight
+    }));
+    assert.ok(geometry.scrollWidth <= geometry.width + 1, "consent dialog must not scroll horizontally");
+    assert.ok(geometry.height <= geometry.viewportHeight - 28 + 1, "consent dialog must stay vertically bounded");
+    await page.locator("#cancel-contribution").focus();
+    await page.keyboard.press("Escape");
     await status(page, /Contribution cancelled/);
+    assert.equal(await page.locator("#contribution-dialog").evaluate((dialog) => dialog.open), false);
     assert.equal(await page.locator("#contribution-panel").isVisible(), false);
     assert.equal(await page.locator("#contribution-filename").textContent(), "");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
     assert.equal(requests.length, before);
+    await page.setViewportSize({ width: 1280, height: 900 });
   });
 
   await check("expiry clears eligibility and blocks retention after an expired capability", async () => {
@@ -542,13 +558,15 @@ try {
     assert.deepEqual(unexpectedRequests, []);
   });
 
-  await check("cancelled open cannot replace a later reading session", async () => {
+  await check("cancelled open restores keyboard focus and cannot replace a later reading session", async () => {
     let release;
     const wait = new Promise((resolve) => { release = resolve; });
     await open(page, { wait, open: { scene: fixture("Old cancelled document") } });
     await status(page, /Scanning and opening/);
-    await page.locator("#cancel-open").click();
+    assert.equal(await page.evaluate(() => document.activeElement.id), "cancel-open");
+    await page.keyboard.press("Enter");
     await status(page, /cancelled/);
+    assert.equal(await page.evaluate(() => document.activeElement.id), "open-file");
     await open(page, { open: { scene: fixture("Current document") } });
     await status(page, /Opened with/);
     release();
