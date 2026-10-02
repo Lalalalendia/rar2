@@ -4143,7 +4143,8 @@ pub fn resolve_bounded_effective_officeart_paint(
 fn shape_has_explicit_filled_without_fill_color(
     shape: &pub_escher::SpContainerObservation,
 ) -> bool {
-    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(0x0002) {
+    let shape_type = shape.fsp.as_ref().map(|fsp| fsp.shape_type);
+    if !matches!(shape_type, Some(0x0002 | 0x00CA)) {
         return false;
     }
 
@@ -4154,6 +4155,16 @@ fn shape_has_explicit_filled_without_fill_color(
     );
     if !matches!(fill_color, PaintScalarLayer::Absent) {
         return false;
+    }
+
+    if shape_type == Some(0x00CA) {
+        return matches!(
+            fill_visibility_from_records(
+                &shape.fopts,
+                PubEffectivePaintAuthority::ShapeLocal,
+            ),
+            PaintLineVisibilityLayer::Value(value) if value.value
+        );
     }
 
     matches!(
@@ -5831,6 +5842,43 @@ mod tests {
         shape.fsp.as_mut().expect("fsp").shape_type = 0x0001;
         let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
             .expect("other shape keeps existing DGG fallback");
+        assert_eq!(
+            paint.fill.color_rgb.expect("DGG fill color").authority,
+            PubEffectivePaintAuthority::DrawingGroupPrimary
+        );
+    }
+
+    #[test]
+    fn effective_officeart_paint_bounds_sparse_textbox_color_only_when_explicitly_filled() {
+        let mut shape = crop_test_shape(vec![crop_test_property(
+            OFFICE_ART_FILL_BOOLEANS,
+            FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+        )]);
+        shape.fsp = Some(pub_escher::FspRecord {
+            spid: 1,
+            flags: 0,
+            shape_type: 0x00CA,
+            source: crop_test_span(0, 8),
+            trailing_source: None,
+        });
+        let dgg = dgg_test_defaults(
+            vec![crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF)],
+            Vec::new(),
+        );
+
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("sparse TextBox fill remains bounded");
+        assert_eq!(
+            paint.fill.color_rgb.expect("normative fill color").authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+        assert!(paint.fill.visible.expect("explicit visibility").value);
+
+        let mut hidden = shape.clone();
+        hidden.fopts[0].properties[0] =
+            crop_test_property(OFFICE_ART_FILL_BOOLEANS, FILL_USE_FILLED_BIT);
+        let paint = resolve_bounded_effective_officeart_paint(&hidden, Some(&dgg), None, true)
+            .expect("non-filled TextBox keeps generic DGG authority");
         assert_eq!(
             paint.fill.color_rgb.expect("DGG fill color").authority,
             PubEffectivePaintAuthority::DrawingGroupPrimary
