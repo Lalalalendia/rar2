@@ -1,0 +1,129 @@
+name: Editor Desktop Continuity V2 Windows
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editor-desktop-continuity-v2-windows.yml"
+      - "apps/chaptera-desktop/src/acceptance.rs"
+      - "apps/chaptera-desktop/src/acceptance_v2.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "packages/product/editor-desktop-continuity/v2/**"
+      - "tools/run_editor_desktop_continuity_v2.py"
+      - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "tools/verify_editable_export_geometry.py"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "crates/chaptera-scene-instance/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-continuity-v2:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install receipt validator
+        run: python -m pip install "jsonschema==4.23.0"
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $url = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Generate deterministic replacement PNG witness
+        shell: pwsh
+        run: |
+          $replacement = Join-Path $env:RUNNER_TEMP "continuity-v2-replacement.png"
+          $env:CHAPTERA_CONTINUITY_REPLACEMENT = $replacement
+          @'
+          import binascii
+          import pathlib
+          import struct
+          import zlib
+          import os
+
+          def chunk(kind, data):
+              body = kind + data
+              return struct.pack(">I", len(data)) + body + struct.pack(">I", binascii.crc32(body) & 0xffffffff)
+
+          width = 2
+          height = 2
+          ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+          row0 = b"\x00" + bytes([0x18, 0x62, 0xA0, 0xFF, 0xF2, 0xC1, 0x4E, 0xFF])
+          row1 = b"\x00" + bytes([0x51, 0xA8, 0x54, 0xFF, 0xD9, 0x50, 0x50, 0xFF])
+          png = (
+              b"\x89PNG\r\n\x1a\n"
+              + chunk(b"IHDR", ihdr)
+              + chunk(b"IDAT", zlib.compress(row0 + row1, 9))
+              + chunk(b"IEND", b"")
+          )
+          pathlib.Path(os.environ["CHAPTERA_CONTINUITY_REPLACEMENT"]).write_bytes(png)
+          '@ | python -
+          if (-not (Test-Path $replacement)) { throw "replacement PNG was not generated" }
+          $bytes = (Get-Item $replacement).Length
+          if ($bytes -le 32) { throw "replacement PNG is unexpectedly small" }
+          "CHAPTERA_CONTINUITY_REPLACEMENT=$replacement" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Chaptera desktop
+        run: cargo build --locked -p chaptera-desktop --release
+
+      - name: Run real imported-PUB continuity V2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:RUNNER_TEMP "chaptera-desktop-continuity-v2"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $project = Join-Path $out "continuity-v2.project.json"
+          $export = Join-Path $out "continuity-v2.edited.odg"
+          $receipt = Join-Path $out "editor-desktop-continuity-v2.real.json"
+          python tools/run_editor_desktop_continuity_v2.py --fixture "$env:CHAPTERA_SAMPLE_NEWSLETTER" --replacement "$env:CHAPTERA_CONTINUITY_REPLACEMENT" --project-output "$project" --export-output "$export" --receipt-output "$receipt" -- target/release/chaptera-editor.exe --desktop-acceptance-v2 "{fixture}" "{replacement}" "{project}" "{export}"
+          python tools/validate_editor_desktop_continuity_v2_receipt.py "$receipt"
+          Copy-Item "$receipt" "target/release/editor-desktop-continuity-v2.real.json"
+
+      - name: Ensure retained evidence is source-safe
+        shell: pwsh
+        run: |
+          $receipt = Get-Content "target/release/editor-desktop-continuity-v2.real.json" -Raw
+          $replacementSha = (Get-FileHash $env:CHAPTERA_CONTINUITY_REPLACEMENT -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($receipt.Contains($replacementSha)) {
+            throw "retained V2 receipt leaked replacement asset SHA"
+          }
+          if ($receipt.Contains((Resolve-Path $env:CHAPTERA_SAMPLE_NEWSLETTER).Path)) {
+            throw "retained V2 receipt leaked local fixture path"
+          }
+          if ($receipt.Contains((Resolve-Path $env:CHAPTERA_CONTINUITY_REPLACEMENT).Path)) {
+            throw "retained V2 receipt leaked local replacement path"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: editor-desktop-continuity-v2-real
+          path: target/release/editor-desktop-continuity-v2.real.json
+          if-no-files-found: error
