@@ -1,0 +1,205 @@
+name: Microsoft Symbol Server Calibration
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-control:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Collect Windows positive control
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\modules | Out-Null
+          $src = "C:\Windows\System32\ntdll.dll"
+          Copy-Item -LiteralPath $src -Destination out\modules\NTDLL.DLL -Force
+          [ordered]@{
+            module = "NTDLL.DLL"
+            source_path = $src
+            file_version = (Get-Item $src).VersionInfo.FileVersion
+            size = (Get-Item $src).Length
+            sha256 = (Get-FileHash -Algorithm SHA256 $src).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 out\windows-module.json
+
+      - name: Probe Windows symbol
+        shell: pwsh
+        run: |
+          python research\generic_symbol_probe.py out\windows-symbol.json windows_control=out\modules\NTDLL.DLL
+
+      - name: Publish Windows control
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($f in @("windows-module.json","windows-symbol.json")) {
+            $p = Join-Path out $f
+            if (Test-Path $p) {
+              "## $f" | Add-Content $env:GITHUB_STEP_SUMMARY
+              Get-Content $p | Add-Content $env:GITHUB_STEP_SUMMARY
+            }
+          }
+
+      - name: Upload Windows derived metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: microsoft-symbol-windows-control-${{ github.run_id }}
+          path: |
+            out/windows-module.json
+            out/windows-symbol.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  office-control:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Acquire Office Deployment Tool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\odt | Out-Null
+          $url = "https://download.microsoft.com/download/6c1eeb25-cf8b-41d9-8d0d-cc1dbc032140/officedeploymenttool_20326-20112.exe"
+          curl.exe -L --fail --retry 3 -o out\odt\odt.exe $url
+          $sha = (Get-FileHash out\odt\odt.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $dest = (Resolve-Path out\odt).Path
+          $p = Start-Process -FilePath (Resolve-Path out\odt\odt.exe) -ArgumentList "/quiet","/extract:$dest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "ODT extract failed: $($p.ExitCode)" }
+          [ordered]@{
+            odt_url = $url
+            odt_sha256 = $sha
+            setup_version = (Get-Item out\odt\setup.exe).VersionInfo.FileVersion
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 out\odt-receipt.json
+
+      - name: Configure current Word only
+        shell: pwsh
+        run: |
+          $source = "$pwd\out\office"
+          New-Item -ItemType Directory -Force -Path $source | Out-Null
+          @"
+          <Configuration>
+            <Add SourcePath="$source" OfficeClientEdition="32" Channel="Current">
+              <Product ID="O365ProPlusRetail">
+                <Language ID="en-us" />
+                <ExcludeApp ID="Access" />
+                <ExcludeApp ID="Excel" />
+                <ExcludeApp ID="Groove" />
+                <ExcludeApp ID="Lync" />
+                <ExcludeApp ID="OneDrive" />
+                <ExcludeApp ID="OneNote" />
+                <ExcludeApp ID="Outlook" />
+                <ExcludeApp ID="PowerPoint" />
+                <ExcludeApp ID="Publisher" />
+                <ExcludeApp ID="Teams" />
+              </Product>
+            </Add>
+            <Updates Enabled="FALSE" />
+            <Display Level="None" AcceptEULA="TRUE" />
+            <Property Name="AUTOACTIVATE" Value="0" />
+          </Configuration>
+          "@ | Set-Content -Encoding UTF8 out\word-current.xml
+
+      - name: Download current Word payload
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = "Stop"
+          $started = Get-Date
+          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/download","$pwd\out\word-current.xml" -Wait -PassThru
+          $files = @(Get-ChildItem out\office -Recurse -File -ErrorAction SilentlyContinue)
+          [ordered]@{
+            architecture = "x86"
+            channel = "Current"
+            product = "O365ProPlusRetail-Word-only"
+            exit_code = $p.ExitCode
+            elapsed_seconds = [int]((Get-Date)-$started).TotalSeconds
+            file_count = $files.Count
+            bytes = [int64](($files | Measure-Object Length -Sum).Sum)
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 out\download-receipt.json
+          if ($p.ExitCode -ne 0 -or $files.Count -eq 0) { throw "ODT download failed" }
+
+      - name: Install current Word
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = "Stop"
+          $p = Start-Process -FilePath "$pwd\out\odt\setup.exe" -ArgumentList "/configure","$pwd\out\word-current.xml" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "ODT configure failed: $($p.ExitCode)" }
+
+      - name: Collect current Word modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\modules | Out-Null
+          $roots = @("C:\Program Files (x86)\Microsoft Office","C:\Program Files\Microsoft Office")
+          $targets = @("WINWORD.EXE","WWLIB.DLL")
+          $rows = @()
+          foreach ($target in $targets) {
+            $matches = @()
+            foreach ($root in $roots) {
+              if (Test-Path $root) {
+                $matches += @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter $target -ErrorAction SilentlyContinue)
+              }
+            }
+            if ($matches.Count -eq 0) { throw "$target not found" }
+            $m = $matches | Sort-Object FullName | Select-Object -First 1
+            Copy-Item -LiteralPath $m.FullName -Destination (Join-Path out\modules $target) -Force
+            $rows += [pscustomobject]@{
+              module = $target
+              file_version = $m.VersionInfo.FileVersion
+              product_version = $m.VersionInfo.ProductVersion
+              size = $m.Length
+              sha256 = (Get-FileHash -Algorithm SHA256 $m.FullName).Hash.ToLowerInvariant()
+              source_path = $m.FullName
+            }
+          }
+          $rows | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 out\office-modules.json
+
+      - name: Probe current Office symbols
+        shell: pwsh
+        run: |
+          python research\generic_symbol_probe.py out\office-symbol.json office_current=out\modules\WINWORD.EXE office_current=out\modules\WWLIB.DLL
+
+      - name: Publish Office control
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($f in @("odt-receipt.json","download-receipt.json","office-modules.json","office-symbol.json")) {
+            $p = Join-Path out $f
+            if (Test-Path $p) {
+              "## $f" | Add-Content $env:GITHUB_STEP_SUMMARY
+              Get-Content $p | Add-Content $env:GITHUB_STEP_SUMMARY
+            }
+          }
+
+      - name: Guard evidence boundary
+        if: always()
+        shell: pwsh
+        run: |
+          $bad = Get-ChildItem out -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\modules\\|\\office\\|\\odt\\' -and $_.Extension -match '^\.(exe|dll|pdb|pd_|cab|dat|msi|msp)$' }
+          if ($bad) { throw "Binary escaped private working paths" }
+
+      - name: Upload Office derived metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: microsoft-symbol-office-current-control-${{ github.run_id }}
+          path: |
+            out/odt-receipt.json
+            out/download-receipt.json
+            out/office-modules.json
+            out/office-symbol.json
+          if-no-files-found: warn
+          retention-days: 30
