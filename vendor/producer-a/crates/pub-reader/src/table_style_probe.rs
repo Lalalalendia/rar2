@@ -49,11 +49,7 @@ fn contents_field_key(id: u16, block_type: u8) -> String {
     format!("0x{id:02x}/block_0x{block_type:02x}")
 }
 
-type TableFieldProfiles = (
-    BTreeMap<String, usize>,
-    BTreeMap<String, usize>,
-    bool,
-);
+type TableFieldProfiles = (BTreeMap<String, usize>, BTreeMap<String, usize>, bool);
 
 fn table_field_profiles(
     seq_num: u32,
