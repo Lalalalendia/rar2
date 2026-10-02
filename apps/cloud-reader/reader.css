@@ -113,7 +113,19 @@ summary{padding:4px 0;color:#dfe6ef;font-size:12px;font-weight:700;cursor:pointe
 body.reader-open .intro{display:none}
 body.reader-open main{padding-top:14px}
 body.reader-open .workspace-shell{grid-template-columns:minmax(0,1fr);justify-content:stretch;align-items:start}
-body.reader-open .open-card{display:none}
+body.reader-open .open-card{display:block;padding:8px 10px;border-radius:10px;background:#121720}
+body.reader-open .open-card .panel-heading{display:none}
+body.reader-open .open-card .drop{display:flex;align-items:center;gap:8px;padding:7px 9px;border-style:solid;border-color:#2f3947;background:#0f141b;text-align:left}
+body.reader-open .open-card .drop-icon{display:none}
+body.reader-open .open-card .file-label{margin:0;white-space:nowrap;font-size:11px}
+body.reader-open .open-card .drop>p{display:none}
+body.reader-open .open-card input[type=file]{flex:1;min-width:0}
+body.reader-open .open-card .actions{margin:0;flex-wrap:nowrap}
+body.reader-open .open-card #status{min-height:0;margin:5px 2px 0;font-size:10px}
+body.reader-open .open-card .notice,
+body.reader-open .open-card .saved,
+body.reader-open #compatibility-home:empty{display:none}
+body.reader-open .open-card .contribution:not([hidden]){margin-top:8px}
 
 .reader{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(250px,285px);overflow:hidden;border:1px solid var(--line);border-radius:13px;background:#11161d;box-shadow:0 12px 35px #0004}
 .reader-stage{min-width:0;border-right:1px solid var(--line)}
