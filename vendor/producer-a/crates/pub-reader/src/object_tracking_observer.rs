@@ -396,7 +396,7 @@ fn observe_target_entry(
     target_oh_track: u32,
     entry: &FieldNode,
 ) -> Result<PubTrackingWrapObservation> {
-    if !direct_scalar(&entry.children, 0x01).is_some_and(|value| value.value == target_oh_track) {
+    if direct_scalar(&entry.children, 0x01).is_none_or(|value| value.value != target_oh_track) {
         bail!("selected ObjectTracking entry does not carry OhTrack={target_oh_track}");
     }
 
