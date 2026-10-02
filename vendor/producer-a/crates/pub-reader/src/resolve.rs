@@ -1,8 +1,7 @@
 use crate::{
-    PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitImageRecolorSource,
-    PubExplicitShapePaintSource, PubLegacyOleSource, PubNodePayload, PubSourceGraph,
-    PubTableSource, PubTableStoryOwnershipSource, PubTextFrameInsetSource,
-    PubTextFrameVerticalAlignment,
+    PubEffectiveShapePaintSource, PubExplicitImageCropSource, PubExplicitShapePaintSource,
+    PubLegacyOleSource, PubNodePayload, PubSourceGraph, PubTableSource,
+    PubTableStoryOwnershipSource, PubTextFrameInsetSource, PubTextFrameVerticalAlignment,
 };
 use anyhow::{Result, bail};
 use pub_model::{Node, NodeId, ResolvedGraph, StoryId, validate_source_graph_registries};
@@ -23,8 +22,6 @@ pub struct PubResolvedNodePayload {
     pub legacy_ole: Option<PubLegacyOleSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit_image_crop: Option<PubExplicitImageCropSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explicit_image_recolor: Option<PubExplicitImageRecolorSource>,
     pub explicit_paint: PubExplicitShapePaintSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_paint: Option<PubEffectiveShapePaintSource>,
@@ -137,7 +134,6 @@ fn resolve_node_payload(
         image_slot: payload.image_slot,
         legacy_ole: payload.legacy_ole.clone(),
         explicit_image_crop: payload.explicit_image_crop.clone(),
-        explicit_image_recolor: payload.explicit_image_recolor.clone(),
         explicit_paint: payload.explicit_paint.clone(),
         effective_paint: payload.effective_paint.clone(),
         story_frame,
@@ -173,7 +169,6 @@ mod tests {
             image_slot: Some(1),
             legacy_ole: Some(legacy_ole.clone()),
             explicit_image_crop: Some(source_crop.clone()),
-            explicit_image_recolor: None,
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
             story_frame: None,
