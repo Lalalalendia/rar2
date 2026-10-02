@@ -1,9 +1,7 @@
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
-    OFFICE_ART_DG_CONTAINER, OFFICE_ART_SP_CONTAINER, PUBLISHER_FIELD_SHAPE_ID,
-    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
-    OfficeArtBody, OfficeArtRecord, PublisherFieldRecord, SpContainerObservation,
-    inspect_sp_containers, parse_officeart_stream,
+    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
+    PUBLISHER_FIELD_YS, PublisherFieldRecord, SpContainerObservation, inspect_sp_containers,
 };
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -24,32 +22,37 @@ fn span_key(span: &RawSpan) -> SpanKey {
     (span.offset, span.len)
 }
 
-fn collect_sp_sources(records: &[OfficeArtRecord], output: &mut Vec<RawSpan>) {
-    for record in records {
-        if record.header.rec_type == OFFICE_ART_SP_CONTAINER {
-            output.push(record.source.clone());
-            continue;
-        }
-        if let OfficeArtBody::Container { children } = &record.body {
-            collect_sp_sources(children, output);
-        }
-    }
+fn direct_grounded_page(
+    shape: &SpContainerObservation,
+    seq_to_page_index: &BTreeMap<u32, u32>,
+) -> Option<u32> {
+    let client_data = shape.client_data.as_ref()?;
+    let seq = unique_field(client_data, PUBLISHER_FIELD_SHAPE_ID)?;
+    seq_to_page_index.get(&seq).copied()
 }
 
-fn collect_dg_shapes(records: &[OfficeArtRecord], output: &mut Vec<(RawSpan, Vec<RawSpan>)>) {
-    for record in records {
-        if record.header.rec_type == OFFICE_ART_DG_CONTAINER {
-            let mut shapes = Vec::new();
-            if let OfficeArtBody::Container { children } = &record.body {
-                collect_sp_sources(children, &mut shapes);
-            }
-            output.push((record.source.clone(), shapes));
-            continue;
-        }
-        if let OfficeArtBody::Container { children } = &record.body {
-            collect_dg_shapes(children, output);
-        }
+fn resolve_page_through_group_ancestry(
+    shape: &SpContainerObservation,
+    shape_by_source: &BTreeMap<SpanKey, &SpContainerObservation>,
+    seq_to_page_index: &BTreeMap<u32, u32>,
+) -> Option<u32> {
+    if let Some(page) = direct_grounded_page(shape, seq_to_page_index) {
+        return Some(page);
     }
+
+    let mut current = shape.parent_group_shape_source.as_ref().map(span_key);
+    let mut seen = BTreeSet::<SpanKey>::new();
+    while let Some(source) = current {
+        if !seen.insert(source) {
+            return None;
+        }
+        let group = shape_by_source.get(&source).copied()?;
+        if let Some(page) = direct_grounded_page(group, seq_to_page_index) {
+            return Some(page);
+        }
+        current = group.parent_group_shape_source.as_ref().map(span_key);
+    }
+    None
 }
 
 fn unique_field(record: &PublisherFieldRecord, id: u16) -> Option<u32> {
@@ -113,7 +116,7 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
 #[derive(Debug, Default, Serialize)]
 struct PageReceipt {
     viewer_page_index: u32,
-    resolved_dg_count: usize,
+    group_resolved_spcontainer_count: usize,
     raw_spcontainer_count: usize,
     grounded_spcontainer_count: usize,
     ungrounded_spcontainer_count: usize,
@@ -132,8 +135,7 @@ struct Receipt {
     schema: &'static str,
     source_sha256: String,
     pages: Vec<PageReceipt>,
-    unresolved_dg_count: usize,
-    multi_page_dg_count: usize,
+    unresolved_spcontainer_count: usize,
     guardrails: Vec<&'static str>,
 }
 
@@ -170,7 +172,6 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
     )
     .expect("read exact Escher stream");
     let stream = StreamPath(pub_reader::ESCHER_STREAM_PATH.into());
-    let parsed = parse_officeart_stream(stream.clone(), &escher).expect("parse OfficeArt tree");
     let inventory = inspect_sp_containers(stream, &escher).expect("inspect OfficeArt SpContainers");
 
     let shape_by_source = inventory
@@ -178,9 +179,6 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
         .iter()
         .map(|shape| (span_key(&shape.source), shape))
         .collect::<BTreeMap<_, _>>();
-
-    let mut dg_shapes = Vec::new();
-    collect_dg_shapes(&parsed.records, &mut dg_shapes);
 
     let page_index_by_parent = bundle
         .geometry
@@ -203,29 +201,14 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
         })
         .collect::<BTreeMap<_, _>>();
 
-    let mut dg_page = BTreeMap::<SpanKey, u32>::new();
-    let mut unresolved_dg_count = 0_usize;
-    let mut multi_page_dg_count = 0_usize;
-
-    for (dg_source, shape_sources) in &dg_shapes {
-        let pages = shape_sources
-            .iter()
-            .filter_map(|source| shape_by_source.get(&span_key(source)).copied())
-            .filter_map(|shape| {
-                let client_data = shape.client_data.as_ref()?;
-                let seq = unique_field(client_data, PUBLISHER_FIELD_SHAPE_ID)?;
-                seq_to_page_index.get(&seq).copied()
-            })
-            .collect::<BTreeSet<_>>();
-
-        match pages.iter().copied().collect::<Vec<_>>().as_slice() {
-            [page] => {
-                dg_page.insert(span_key(dg_source), *page);
-            }
-            [] => unresolved_dg_count += 1,
-            _ => multi_page_dg_count += 1,
-        }
-    }
+    let unresolved_spcontainer_count = inventory
+        .shapes
+        .iter()
+        .filter(|shape| {
+            resolve_page_through_group_ancestry(shape, &shape_by_source, &seq_to_page_index)
+                .is_none()
+        })
+        .count();
 
     let mut pages = Vec::new();
     for viewer_page_index in [21_u32, 22_u32, 23_u32] {
@@ -250,31 +233,22 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
             ..PageReceipt::default()
         };
 
-        let raw_shapes = dg_shapes
+        let raw_shapes = inventory
+            .shapes
             .iter()
-            .filter(|(dg_source, _)| {
-                dg_page.get(&span_key(dg_source)) == Some(&viewer_page_index)
+            .filter(|shape| {
+                resolve_page_through_group_ancestry(shape, &shape_by_source, &seq_to_page_index)
+                    == Some(viewer_page_index)
             })
-            .flat_map(|(_, shapes)| shapes.iter())
-            .filter_map(|source| shape_by_source.get(&span_key(source)).copied())
             .collect::<Vec<_>>();
-        receipt.resolved_dg_count = dg_shapes
-            .iter()
-            .filter(|(dg_source, _)| {
-                dg_page.get(&span_key(dg_source)) == Some(&viewer_page_index)
-            })
-            .count();
+        receipt.group_resolved_spcontainer_count = raw_shapes.len();
         receipt.raw_spcontainer_count = raw_shapes.len();
 
         let candidates = raw_shapes
             .iter()
             .copied()
             .filter(|shape| {
-                let grounded = shape
-                    .client_data
-                    .as_ref()
-                    .and_then(|record| unique_field(record, PUBLISHER_FIELD_SHAPE_ID))
-                    .is_some_and(|seq| seq_to_page_index.contains_key(&seq));
+                let grounded = direct_grounded_page(shape, &seq_to_page_index).is_some();
                 if grounded {
                     receipt.grounded_spcontainer_count += 1;
                 } else {
@@ -354,11 +328,10 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
         schema: "chaptera.virginia-table-raw-spcontainer-probe.v1",
         source_sha256: actual_sha,
         pages,
-        unresolved_dg_count,
-        multi_page_dg_count,
+        unresolved_spcontainer_count,
         guardrails: vec![
-            "OfficeArt Dg/SpContainer ancestry comes from the existing pub-escher parser; no byte scanner or second parser is introduced.",
-            "A Dg is assigned to a Viewer page only when all already-grounded ClientData-linked shapes in that Dg resolve to one customer page.",
+            "OfficeArt SpContainer parent-group ancestry comes from the existing pub-escher parser; no byte scanner or second parser is introduced.",
+            "An ungrounded SpContainer is assigned to a Viewer page only through an already-grounded ancestor group in the existing OfficeArt topology.",
             "ClientAnchor comparison is the exact inverse of the already-shipped pub-reader page_relative_bounds law and admits equality only.",
             "Only ungrounded raw SpContainers are candidates; already-grounded shapes are counted as controls and never double-promoted.",
             "No PDF pixels, proximity matching, object ids, coordinates, text, filenames, property values or raw bytes are emitted.",
@@ -375,7 +348,7 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
     .expect("write raw SpContainer receipt");
 
     println!(
-        "VIRGINIA_TABLE_RAW_SPCONTAINER p21={}/{}/{} p22={}/{}/{} p22_raw={} p22_ungrounded={} p22_anchor={} p23={}/{}/{} unresolved_dg={} multi_page_dg={}",
+        "VIRGINIA_TABLE_RAW_SPCONTAINER p21={}/{}/{} p22={}/{}/{} p22_raw={} p22_ungrounded={} p22_anchor={} p23={}/{}/{} unresolved_sp={}",
         receipt.pages[0].exact_unique_cell_match_count,
         receipt.pages[0].exact_ambiguous_cell_match_count,
         receipt.pages[0].exact_absent_cell_match_count,
@@ -388,7 +361,6 @@ fn exact_virginia_raw_spcontainer_table_cell_probe() {
         receipt.pages[2].exact_unique_cell_match_count,
         receipt.pages[2].exact_ambiguous_cell_match_count,
         receipt.pages[2].exact_absent_cell_match_count,
-        receipt.unresolved_dg_count,
-        receipt.multi_page_dg_count,
+        receipt.unresolved_spcontainer_count,
     );
 }
