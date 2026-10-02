@@ -58,6 +58,10 @@ struct PageReceipt {
     opaque_1d_single_child_count: usize,
     opaque_1d_distinct_payload_count_histogram: BTreeMap<String, usize>,
     opaque_1d_payload_length_histogram: BTreeMap<String, usize>,
+    table_field_presence_histogram: BTreeMap<String, usize>,
+    table_candidate_field_presence_histogram: BTreeMap<String, usize>,
+    table_candidate_signature_histogram: BTreeMap<String, usize>,
+    table_unsupported_tail_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +172,35 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                     .or_default() += count;
             }
 
+            for (key, count) in &observation.table_field_presence {
+                *receipt
+                    .table_field_presence_histogram
+                    .entry(key.clone())
+                    .or_default() += count;
+            }
+            for (key, count) in &observation.table_candidate_field_presence {
+                *receipt
+                    .table_candidate_field_presence_histogram
+                    .entry(key.clone())
+                    .or_default() += count;
+            }
+            let candidate_signature = if observation.table_candidate_field_presence.is_empty() {
+                "none".to_owned()
+            } else {
+                observation
+                    .table_candidate_field_presence
+                    .iter()
+                    .map(|(key, count)| format!("{key}x{count}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            bump(
+                &mut receipt.table_candidate_signature_histogram,
+                candidate_signature,
+            );
+            receipt.table_unsupported_tail_count +=
+                usize::from(observation.table_unsupported_tail_present);
+
             if let Some(class) = observation.opaque_1d_class {
                 bump(
                     &mut receipt.opaque_1d_class_histogram,
@@ -203,7 +236,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     );
 
     let receipt = Receipt {
-        schema: "chaptera.virginia-table-mcld-style-carrier-probe.v2",
+        schema: "chaptera.virginia-table-mcld-style-carrier-probe.v3",
         source_sha256: actual_sha,
         pages,
         guardrails: vec![
@@ -211,6 +244,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
             "The open 0x1D..0x2C range is reported only as field-id/wire-type presence and uniformity; no Publisher border/fill semantics are assigned.",
             "For 0x1D/wire0x8A opaque nested state, only equality class, distinct-count, and byte-length histograms are emitted; no payload bytes or hashes leave the probe.",
             "Confirmed 0x04..0x09 fields are retained only as join controls.",
+            "TABLE-level Contents state is emitted only as field-id/block-type presence; known identity/topology/geometry fields are separated from the open candidate signature and no values are emitted.",
             "No field values, RGB colors, widths, style ordinals, cell coordinates, text, object ids, offsets, filenames, or raw bytes are emitted.",
             "Publisher PDF is not used as semantic authority.",
         ],
@@ -226,7 +260,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     .expect("write MCLD style receipt");
 
     println!(
-        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?}",
+        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?} p22_table_candidates={:?} p22_table_signatures={:?} p22_unsupported_tail={}",
         receipt.pages[0].table_count,
         receipt.pages[1].table_count,
         receipt.pages[2].table_count,
@@ -237,5 +271,8 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         receipt.pages[1].opaque_1d_class_histogram,
         receipt.pages[1].opaque_1d_distinct_payload_count_histogram,
         receipt.pages[1].opaque_1d_payload_length_histogram,
+        receipt.pages[1].table_candidate_field_presence_histogram,
+        receipt.pages[1].table_candidate_signature_histogram,
+        receipt.pages[1].table_unsupported_tail_count,
     );
 }
