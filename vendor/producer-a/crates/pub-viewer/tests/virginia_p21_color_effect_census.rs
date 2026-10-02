@@ -268,7 +268,7 @@ fn exact_virginia_p21_color_effect_source_census() {
     let mut image_slot_classes = BTreeMap::<u32, usize>::new();
     let mut recolor_value_classes = BTreeMap::<u32, usize>::new();
 
-    for viewer_page in [6_u32, 20, 21, 22] {
+    for viewer_page in 1_u32..=25 {
         let page = bundle
             .geometry
             .document
