@@ -82,3 +82,23 @@ Batch 01 is normalized into the existing `tools/cloud_reader_manual_oracle_bundl
 - committed original selection manifest: `tools/corpus/receipts/publisher-visual-golden-batch-01-selection.csv`
 
 The binary bundle is intentionally not committed to normal git history. Consumers must verify bundle and pair SHA-256 before using it.
+
+## Regular CI integration
+
+The ordinary hosted visual suite now has a public-safe Batch 01 lane:
+
+- workflow: `.github/workflows/publisher-visual-golden-batch01.yml`
+- exact source PUB bytes come from the already-authoritative 1,050 materialization (with the same reconstruction fallback as the corpus baseline);
+- the committed reference is **source-free**: perceptual hashes plus normalized color/edge histograms for 55 documents / 162 Publisher-PDF pages;
+- raw Publisher PDF bytes and document text are not committed to git;
+- the full private 55-pair PDF bundle remains the high-resolution diagnostic oracle when a perceptual regression needs localization;
+- the workflow runs on visual-affecting `main` changes and from the overnight product slot;
+- PRs retain the faster Carlton/Virginia exact-pixel gate instead of paying for 55-document replay on every edit.
+
+Reference receipt:
+`tools/corpus/receipts/publisher-visual-golden-batch-01-perceptual-v1.json`
+
+Comparator:
+`tools/publisher_visual_perceptual_v1.py`
+
+The first current-main run is measurement/baseline establishment. Once its receipt is pinned, subsequent runs may fail only on bounded regressions relative to that baseline; PDF-derived state remains visual authority only and never PUB semantic authority.
