@@ -1,0 +1,28 @@
+name: Build ephemeral cardinal-808 Chaptera Linux
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/build-cardinal-808-ephemeral.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - run: cargo build -p chaptera-server --bin chaptera --jobs 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cardinal-808-chaptera-linux
+          path: target/debug/chaptera
+          if-no-files-found: error
+          retention-days: 1
