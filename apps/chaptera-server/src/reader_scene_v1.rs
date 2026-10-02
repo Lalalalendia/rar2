@@ -118,6 +118,19 @@ pub struct ReaderTableV1 {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ReaderTableCellV1>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub border_segments: Vec<ReaderTableBorderSegmentV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTableBorderSegmentV1 {
+    pub axis: &'static str,
+    pub row_start: u32,
+    pub column_start: u32,
+    pub row_end: u32,
+    pub column_end: u32,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -565,6 +578,22 @@ pub fn from_viewer_geometry_with_fonts(
             rows: table.rows,
             columns: table.columns,
             cells,
+            border_segments: table
+                .border_segments
+                .iter()
+                .map(|segment| ReaderTableBorderSegmentV1 {
+                    axis: match segment.axis {
+                        pub_reader::PubTableBorderAxis::Horizontal => "horizontal",
+                        pub_reader::PubTableBorderAxis::Vertical => "vertical",
+                    },
+                    row_start: segment.row_start,
+                    column_start: segment.column_start,
+                    row_end: segment.row_end,
+                    column_end: segment.column_end,
+                    rgb: segment.rgb,
+                    width_emu: segment.width_emu,
+                })
+                .collect(),
         };
         if table_by_node.insert(node_id.clone(), mapped).is_some() {
             return Err(format!("duplicate table binding for node {node_id}"));
