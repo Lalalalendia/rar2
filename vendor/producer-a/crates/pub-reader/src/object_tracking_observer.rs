@@ -102,11 +102,9 @@ pub fn observe_object_tracking_wrap_state(
         let chunk = parse_confirmed_0x2c_chunk(stream.clone(), &contents, *offset)
             .with_context(|| format!("parse ObjectTracking chunk seq {seq_num}"))?;
 
-        if let Some(entry) = find_target_entry_by_oh_track_marker(
-            &contents,
-            &chunk.source,
-            target_oh_track,
-        )? {
+        if let Some(entry) =
+            find_target_entry_by_oh_track_marker(&contents, &chunk.source, target_oh_track)?
+        {
             let observation = observe_target_entry(
                 &contents,
                 u32::try_from(seq_num).context("ObjectTracking seq does not fit u32")?,
@@ -398,16 +396,13 @@ fn observe_target_entry(
     target_oh_track: u32,
     entry: &FieldNode,
 ) -> Result<PubTrackingWrapObservation> {
-    if !direct_scalar(&entry.children, 0x01)
-        .is_some_and(|value| value.value == target_oh_track)
-    {
+    if !direct_scalar(&entry.children, 0x01).is_some_and(|value| value.value == target_oh_track) {
         bail!("selected ObjectTracking entry does not carry OhTrack={target_oh_track}");
     }
 
     let last_fmt = unique_child(&entry.children, 0x12)
         .context("target OplOt lacks unique OplLastFmt field0x12")?;
-    let last_fmt_children =
-        explicit_container_88_children(contents, last_fmt, "OplOt.OplLastFmt")?;
+    let last_fmt_children = explicit_container_88_children(contents, last_fmt, "OplOt.OplLastFmt")?;
     let formatting = unique_child(&last_fmt_children, 0x02)
         .context("target OplLastFmt lacks unique PoFormatting field0x02")?;
     let formatting_children =
@@ -510,8 +505,7 @@ mod tests {
             len: bytes.len() as u64,
         };
 
-        let fields =
-            parse_container_prefix(&bytes, &source).expect("observer framing must parse");
+        let fields = parse_container_prefix(&bytes, &source).expect("observer framing must parse");
 
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].field.block_type, 0xC0);
@@ -555,7 +549,10 @@ mod tests {
             .expect("explicit typed payload path must parse");
         assert_eq!(typed.len(), 1);
         assert_eq!(typed[0].field.id, 0x0201);
-        assert_eq!(scalar(&typed[0].field).map(|value| value.value), Some(0x08000003));
+        assert_eq!(
+            scalar(&typed[0].field).map(|value| value.value),
+            Some(0x08000003)
+        );
     }
 
     #[test]
@@ -563,19 +560,88 @@ mod tests {
         // A fake unrelated 0x88 payload contains bytes that are not a valid field
         // sequence. The target OplOt entry follows it in the same chunk.
         let payload = [
-            0x09, 0x88, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x02, 0x88, 0x46, 0x00, 0x00, 0x00,
-            0x01, BLOCK_TYPE_REFERENCE_U32, 0x26, 0x01, 0x00, 0x00,
-            0x12, 0x88, 0x3A, 0x00, 0x00, 0x00,
-            0x02, BLOCK_TYPE_CONTAINER_88, 0x34, 0x00, 0x00, 0x00,
-            0x01, BLOCK_TYPE_U32, 0x01, 0x00, 0x00, 0x00,
-            0x0E, BLOCK_TYPE_TYPED_CONTAINER_98, 0x1C, 0x00, 0x00, 0x00,
-            0x05, BLOCK_TYPE_U32, 0x6F, 0x00, 0x00, 0x00,
-            0x06, BLOCK_TYPE_U32, 0xDE, 0x00, 0x00, 0x00,
-            0x07, BLOCK_TYPE_U32, 0x4D, 0x01, 0x00, 0x00,
-            0x08, BLOCK_TYPE_U32, 0xBC, 0x01, 0x00, 0x00,
-            0x22, BLOCK_TYPE_TYPED_CONTAINER_98, 0x0A, 0x00, 0x00, 0x00,
-            0x01, BLOCK_TYPE_U32, 0x03, 0x00, 0x00, 0x08,
+            0x09,
+            0x88,
+            0x08,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x02,
+            0x88,
+            0x46,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            BLOCK_TYPE_REFERENCE_U32,
+            0x26,
+            0x01,
+            0x00,
+            0x00,
+            0x12,
+            0x88,
+            0x3A,
+            0x00,
+            0x00,
+            0x00,
+            0x02,
+            BLOCK_TYPE_CONTAINER_88,
+            0x34,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            BLOCK_TYPE_U32,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x0E,
+            BLOCK_TYPE_TYPED_CONTAINER_98,
+            0x1C,
+            0x00,
+            0x00,
+            0x00,
+            0x05,
+            BLOCK_TYPE_U32,
+            0x6F,
+            0x00,
+            0x00,
+            0x00,
+            0x06,
+            BLOCK_TYPE_U32,
+            0xDE,
+            0x00,
+            0x00,
+            0x00,
+            0x07,
+            BLOCK_TYPE_U32,
+            0x4D,
+            0x01,
+            0x00,
+            0x00,
+            0x08,
+            BLOCK_TYPE_U32,
+            0xBC,
+            0x01,
+            0x00,
+            0x00,
+            0x22,
+            BLOCK_TYPE_TYPED_CONTAINER_98,
+            0x0A,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x22,
+            0x03,
+            0x00,
+            0x00,
+            0x08,
         ];
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&((payload.len() + 4) as u32).to_le_bytes());
@@ -593,23 +659,38 @@ mod tests {
             .expect("schema-guided target path must parse");
 
         assert_eq!(
-            observation.dx_wrap_dist_left.as_ref().map(|value| value.value),
+            observation
+                .dx_wrap_dist_left
+                .as_ref()
+                .map(|value| value.value),
             Some(111)
         );
         assert_eq!(
-            observation.dy_wrap_dist_top.as_ref().map(|value| value.value),
+            observation
+                .dy_wrap_dist_top
+                .as_ref()
+                .map(|value| value.value),
             Some(222)
         );
         assert_eq!(
-            observation.dx_wrap_dist_right.as_ref().map(|value| value.value),
+            observation
+                .dx_wrap_dist_right
+                .as_ref()
+                .map(|value| value.value),
             Some(333)
         );
         assert_eq!(
-            observation.dy_wrap_dist_bottom.as_ref().map(|value| value.value),
+            observation
+                .dy_wrap_dist_bottom
+                .as_ref()
+                .map(|value| value.value),
             Some(444)
         );
         assert_eq!(
-            observation.resolved_shape_type.as_ref().map(|value| value.value),
+            observation
+                .resolved_shape_type
+                .as_ref()
+                .map(|value| value.value),
             Some(1)
         );
         assert_eq!(
@@ -621,5 +702,4 @@ mod tests {
             vec![0x08000003]
         );
     }
-
 }
