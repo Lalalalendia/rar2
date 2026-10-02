@@ -7,8 +7,10 @@ on:
   pull_request:
     paths:
       - ".github/workflows/build-dgg-textbox-oracle-windows.yml"
-      - "vendor/producer-a/**"
-      - "crates/pub-plccmob-projection/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -19,9 +21,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "stable"
+          toolchain: "1.94.1"
+
       - name: Build oracle helper
         shell: pwsh
         run: |
@@ -29,9 +35,107 @@ jobs:
           $exe = "vendor/producer-a/target/release/dgg_textbox_oracle_tool.exe"
           if (-not (Test-Path -LiteralPath $exe)) { throw "oracle helper exe missing" }
           Get-FileHash -Algorithm SHA256 -LiteralPath $exe | Format-List
+
+      - name: Assemble portable Publisher native bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = Join-Path $env:RUNNER_TEMP "dgg-textbox-native-bundle"
+          if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+
+          $files = @(
+            "tools/research-runner/experiments/viewer-publisher-dgg-textbox-applicability-01.packet.json",
+            "tools/research-runner/operations/publisher_dgg_textbox_applicability_01.ps1",
+            "tools/research-runner/prepare_native_run.ps1",
+            "tools/research-runner/finalize_native_run.ps1",
+            "tools/windows/pub-runtime/PubRuntime.psm1",
+            "vendor/producer-a/target/release/dgg_textbox_oracle_tool.exe"
+          )
+          foreach ($relative in $files) {
+            $destination = Join-Path $bundle $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $relative -Destination $destination -Force
+          }
+
+          $runner = @'
+          param(
+              [Parameter(Mandatory = $true)][string]$FixturePath,
+              [string]$OutputRoot = ""
+          )
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $root = $PSScriptRoot
+          $manifestPath = Join-Path $root "bundle-manifest.json"
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+          foreach ($property in $manifest.files.PSObject.Properties) {
+              $relative = [string]$property.Name
+              $expected = [string]$property.Value
+              $candidate = Join-Path $root ($relative.Replace("/", "\"))
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                  throw "Portable bundle file missing: $relative"
+              }
+              $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $expected.ToLowerInvariant()) {
+                  throw "Portable bundle SHA-256 mismatch: $relative"
+              }
+          }
+
+          $fixture = (Resolve-Path -LiteralPath $FixturePath).Path
+          $fixtureSha = (Get-FileHash -LiteralPath $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedFixture = "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506"
+          if ($fixtureSha -ne $expectedFixture) {
+              throw "Fixture SHA-256 mismatch; exact Virginia PUB required."
+          }
+
+          $tool = Join-Path $root "vendor\producer-a\target\release\dgg_textbox_oracle_tool.exe"
+          $env:PUB_RESEARCH_FIXTURE = $fixture
+          $env:PUB_RESEARCH_DGG_ORACLE_TOOL = $tool
+          $env:PUB_RESEARCH_DGG_ORACLE_TOOL_SHA256 = [string]$manifest.files."vendor/producer-a/target/release/dgg_textbox_oracle_tool.exe"
+
+          $packet = Join-Path $root "tools\research-runner\experiments\viewer-publisher-dgg-textbox-applicability-01.packet.json"
+          if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+              $OutputRoot = Join-Path $root "out\pub-research\dgg-textbox-applicability-01"
+          }
+
+          $steps = @(
+              (Join-Path $root "tools\research-runner\prepare_native_run.ps1"),
+              (Join-Path $root "tools\research-runner\operations\publisher_dgg_textbox_applicability_01.ps1"),
+              (Join-Path $root "tools\research-runner\finalize_native_run.ps1")
+          )
+          foreach ($script in $steps) {
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -PacketPath $packet -OutputRoot $OutputRoot
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Native research step failed: $script (exit $LASTEXITCODE)"
+              }
+          }
+
+          $verdict = Join-Path $OutputRoot "analysis\dgg-textbox-applicability-01.json"
+          Get-Content -LiteralPath $verdict -Raw
+          '@
+          Set-Content -LiteralPath (Join-Path $bundle "run-native.ps1") -Value $runner -Encoding UTF8
+
+          $manifestFiles = $files + @("run-native.ps1")
+          $hashes = [ordered]@{}
+          foreach ($relative in $manifestFiles) {
+            $candidate = Join-Path $bundle $relative
+            $hashes[$relative.Replace("\", "/")] = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $manifest = [ordered]@{
+            schema = "chaptera.dgg-textbox-native-portable.v1"
+            source_main_sha = (git rev-parse HEAD).Trim()
+            experiment_id = "VIEWER-PUBLISHER-DGG-TEXTBOX-APPLICABILITY-01"
+            exact_fixture_sha256 = "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506"
+            files = $hashes
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
+          Get-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Raw
+
       - uses: actions/upload-artifact@v4
         with:
-          name: dgg-textbox-oracle-windows-x64
-          path: vendor/producer-a/target/release/dgg_textbox_oracle_tool.exe
+          name: dgg-textbox-native-portable-windows-x64
+          path: ${{ runner.temp }}/dgg-textbox-native-bundle/
           if-no-files-found: error
           retention-days: 7
