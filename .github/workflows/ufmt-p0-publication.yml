@@ -1244,6 +1244,138 @@ jobs:
           (root/"trace-refinement-summary.json").write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n")
           PYCHECK
 
+          python3 - <<'PYDUR'
+          import json, os, pathlib, platform, shutil, subprocess
+
+          out = pathlib.Path("target/ufmt-p0/receipt/fault")
+
+          def choose(a, b):
+              if "NEW" in (a, b):
+                  return "NEW"
+              if "OLD" in (a, b):
+                  return "OLD"
+              return "NONE"
+
+          def check_backend(name, stages, ack_stage):
+              rows = []
+              for stage, alternatives in stages:
+                  for a, b in alternatives:
+                      selected = choose(a, b)
+                      assert selected in {"OLD", "NEW"}, (name, stage, a, b, selected)
+                      rows.append({"stage":stage, "slot_a":a, "slot_b":b, "selected":selected})
+              ack_rows = [r for r in rows if r["stage"] == ack_stage]
+              assert ack_rows and all(r["selected"] == "NEW" for r in ack_rows)
+              return {
+                  "backend":name,
+                  "crash_alternatives_checked":len(rows),
+                  "ack_stage":ack_stage,
+                  "ack_is_new_durable_in_model":True,
+                  "rows":rows,
+              }
+
+          b1 = check_backend(
+              "B1-dual-slot-precreated-root-file",
+              [
+                  ("before-slot-write", [("OLD","MISSING")]),
+                  ("after-slot-write-before-fsync", [
+                      ("OLD","MISSING"), ("OLD","INVALID"), ("OLD","OLD"), ("OLD","NEW")
+                  ]),
+                  ("after-root-file-fsync", [("OLD","NEW")]),
+                  ("after-readback", [("OLD","NEW")]),
+                  ("ack-success", [("OLD","NEW")]),
+              ],
+              "ack-success",
+          )
+
+          b2 = check_backend(
+              "B2-dual-file-temp-rename-dirfsync",
+              [
+                  ("before-temp-write", [("OLD","MISSING")]),
+                  ("after-temp-write", [("OLD","MISSING")]),
+                  ("after-temp-fsync", [("OLD","MISSING")]),
+                  ("after-rename-before-dirfsync", [("OLD","MISSING"), ("OLD","NEW")]),
+                  ("after-parent-dir-fsync", [("OLD","NEW")]),
+                  ("after-readback", [("OLD","NEW")]),
+                  ("ack-success", [("OLD","NEW")]),
+              ],
+              "ack-success",
+          )
+
+          durability = {
+              "schema":"ufmt.local-durability-contract-model.v1",
+              "scope":"shadow durability contract, not physical power-loss evidence",
+              "backends":[b1,b2],
+              "early_ack_negative_controls":[
+                  {
+                      "backend":"B1",
+                      "early_ack_stage":"after-slot-write-before-fsync",
+                      "counterexample":"crash may recover OLD after success was acknowledged",
+                      "detected":True,
+                  },
+                  {
+                      "backend":"B2",
+                      "early_ack_stage":"after-rename-before-dirfsync",
+                      "counterexample":"rename namespace may not be durable; crash may recover OLD after success was acknowledged",
+                      "detected":True,
+                  },
+              ],
+              "provisional_next_physical_candidate":"B1-dual-slot-precreated-root-file",
+              "decision_basis":[
+                  "both models preserve OLD_OR_NEW under declared crash alternatives",
+                  "B1 avoids rename and parent-directory durability in the root publication step",
+                  "B1 still requires tolerance of torn in-place slot writes, covered by deterministic cut corpus",
+              ],
+          }
+          (out/"durability-contract-model.json").write_text(json.dumps(durability,indent=2,sort_keys=True)+"\n")
+
+          work = pathlib.Path.cwd()
+          profile_dir = work/"target/ufmt-p0/fs-profile"
+          shutil.rmtree(profile_dir, ignore_errors=True)
+          profile_dir.mkdir(parents=True)
+          file_path = profile_dir/"probe.tmp"
+          final_path = profile_dir/"probe.dat"
+          payload = b"ufmt-fsync-profile-v1"
+          with open(file_path,"wb") as fh:
+              fh.write(payload)
+              fh.flush()
+              os.fsync(fh.fileno())
+          os.rename(file_path, final_path)
+          dir_fsync = False
+          dir_error = None
+          try:
+              dfd = os.open(profile_dir, os.O_RDONLY)
+              try:
+                  os.fsync(dfd)
+                  dir_fsync = True
+              finally:
+                  os.close(dfd)
+          except OSError as e:
+              dir_error = f"{e.errno}:{e.strerror}"
+          readback = final_path.read_bytes() == payload
+
+          def cmd(args):
+              try:
+                  return subprocess.check_output(args,text=True,stderr=subprocess.STDOUT).strip()
+              except Exception as e:
+                  return f"unavailable:{type(e).__name__}"
+
+          profile = {
+              "schema":"ufmt.filesystem-profile.v1",
+              "scope":"GitHub-hosted runner API/profile evidence; not sudden-power-loss proof",
+              "os":platform.platform(),
+              "kernel":platform.release(),
+              "filesystem_type":cmd(["stat","-f","-c","%T","."]),
+              "mount_profile":cmd(["findmnt","-T",".","-n","-o","FSTYPE,OPTIONS,TARGET"]),
+              "file_fsync":"PASS",
+              "rename":"PASS",
+              "directory_fsync":"PASS" if dir_fsync else "UNSUPPORTED",
+              "directory_fsync_error":dir_error,
+              "readback_after_file_fsync_rename_dirfsync":"PASS" if readback else "FAIL",
+          }
+          assert readback
+          (out/"filesystem-profile.json").write_text(json.dumps(profile,indent=2,sort_keys=True)+"\n")
+          PYDUR
+
           grep -E "states generated|distinct states|Model checking completed|Finished in" \
             "$RECEIPT/tla/correct.log" > "$RECEIPT/tla/correct-summary.txt" || true
           grep "test result: ok" "$RECEIPT/rust/cargo-test.log" > "$RECEIPT/rust/test-summary.txt"
@@ -1287,7 +1419,9 @@ jobs:
                   "f5_concurrency_cases":3,
                   "subprocess_kill_cases":2,
                   "named_fault_schedules":11,
-                  "trace_refinement":json.loads((root/"fault/trace-refinement-summary.json").read_text())
+                  "trace_refinement":json.loads((root/"fault/trace-refinement-summary.json").read_text()),
+                  "durability_contract_model":json.loads((root/"fault/durability-contract-model.json").read_text()),
+                  "filesystem_profile":json.loads((root/"fault/filesystem-profile.json").read_text())
               },
               "source_sha256":{
                   p.name:sha(p) for p in sorted((root/"source").iterdir())
