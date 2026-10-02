@@ -135,25 +135,36 @@ pub fn build_mature_0x2c_structural_base_manifest(
         };
 
         // Bind the independently discovered raw crosswalk back to exactly one
-        // current SourceGraph page child only after the geometry match. The
-        // graph is metadata for the manifest, not crosswalk authority.
-        let mut graph_matches = build.graph.pages.iter().flat_map(|(page_id, page)| {
-            page.children.iter().filter_map(|node_id| {
-                let node = build.graph.nodes.get(node_id)?;
-                (node.kind == NodeKind::Shape
-                    && node.payload.contents_seq_num == seq_num
-                    && node.payload.table.is_none()
-                    && node.payload.table_story.is_none()
-                    && node.payload.image_slot.is_none())
-                .then_some((*page_id, *node_id, node.header.bounds))
-            })
+        // current SourceGraph node only after the geometry match. Page.children
+        // is intentionally empty because membership lives in NodeHeader.parent_id;
+        // therefore it must never be used as a discovery index here.
+        let mut graph_matches = build.graph.nodes.iter().filter_map(|(node_id, node)| {
+            (node.kind == NodeKind::Shape
+                && node.payload.contents_seq_num == seq_num
+                && node.payload.table.is_none()
+                && node.payload.table_story.is_none()
+                && node.payload.image_slot.is_none())
+            .then_some((*node_id, node))
         });
-        let Some((page_id, node_id, bounds_emu)) = graph_matches.next() else {
+        let Some((node_id, node)) = graph_matches.next() else {
             continue;
         };
         if graph_matches.next().is_some() {
             continue;
         }
+
+        let mut page_matches = build
+            .graph
+            .pages
+            .keys()
+            .filter(|page_id| page_id.into_canonical() == node.header.parent_id);
+        let Some(page_id) = page_matches.next().copied() else {
+            continue;
+        };
+        if page_matches.next().is_some() {
+            continue;
+        }
+        let bounds_emu = node.header.bounds;
 
         candidates.push(PubStructuralBaseCandidate {
             page_id,
