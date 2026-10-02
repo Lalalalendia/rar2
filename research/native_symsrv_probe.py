@@ -59,7 +59,10 @@ def find_debuggers():
                 if key not in seen:
                     seen.add(key)
                     pairs.append((dbghelp, symsrv))
-    return pairs
+    def score(pair):
+        p = str(pair[0].parent).lower()
+        return (0 if ("\\x64" in p or "\\amd64" in p) else 1, p)
+    return sorted(pairs, key=score)
 
 def probe_with_pair(dbghelp_path, symsrv_path):
     dll_dir = str(dbghelp_path.parent)
@@ -130,10 +133,24 @@ def main():
         attempt = {
             "dbghelp": str(dbghelp),
             "symsrv": str(symsrv),
-            "result": probe_with_pair(dbghelp, symsrv),
         }
+        try:
+            attempt["result"] = probe_with_pair(dbghelp, symsrv)
+        except OSError as exc:
+            attempt["result"] = {
+                "init": False,
+                "load_error": f"{type(exc).__name__}: {exc}",
+                "winerror": getattr(exc, "winerror", None),
+                "records": [],
+            }
+        except Exception as exc:
+            attempt["result"] = {
+                "init": False,
+                "load_error": f"{type(exc).__name__}: {exc}",
+                "records": [],
+            }
         out["attempts"].append(attempt)
-        if any(r.get("found") for r in attempt["result"].get("records", [])):
+        if attempt["result"].get("init"):
             break
     Path("out").mkdir(exist_ok=True)
     Path("out/native-symsrv.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
