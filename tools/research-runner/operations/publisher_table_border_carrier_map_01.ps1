@@ -324,6 +324,7 @@ function Invoke-SideArm {
             changed_carrier_count = [int]$rawDiff.changed_carrier_count
             removed_carrier_count = [int]$rawDiff.removed_carrier_count
             added_carrier_count = [int]$rawDiff.added_carrier_count
+            ambiguous_changed_group_count = [int]$rawDiff.ambiguous_changed_group_count
             changed_anchor_signature_histogram = $rawDiff.changed_anchor_signature_histogram
             changed_property_id_histogram = $rawDiff.changed_property_id_histogram
             removed_anchor_signature_histogram = $rawDiff.removed_anchor_signature_histogram
@@ -354,7 +355,12 @@ foreach ($arm in $arms) {
     if (-not [bool]$arm.target_border_changed -or -not [bool]$arm.neighbor_opposite_border_changed) {
         $allCausal = $false
     }
-    if ([int]$arm.raw.changed_carrier_count -le 0 -and [int]$arm.raw.added_carrier_count -le 0 -and [int]$arm.raw.removed_carrier_count -le 0) {
+    if (
+        ([int]$arm.raw.changed_carrier_count -le 0 -and
+            [int]$arm.raw.added_carrier_count -le 0 -and
+            [int]$arm.raw.removed_carrier_count -le 0) -or
+        [int]$arm.raw.ambiguous_changed_group_count -ne 0
+    ) {
         $allRawLocalized = $false
     }
 }
@@ -373,6 +379,7 @@ $result = [ordered]@{
         columns = 4
         autoformat = "CheckbookRegister"
         all_enabled_border_carrier_count = [int]$profile.border_carrier_count
+        duplicate_anchor_group_count = [int]$profile.duplicate_anchor_group_count
         anchor_signature_histogram = $profile.anchor_signature_histogram
     }
     mutation = [ordered]@{
