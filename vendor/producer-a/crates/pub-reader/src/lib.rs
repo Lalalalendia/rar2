@@ -3171,6 +3171,17 @@ pub fn build_mature_0x2c_from_streams(
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
         ));
+        if has_default_roundrect_geometry(shape) {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/FSP/default-roundrect".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        }
         if direct_image_rotation_applied {
             source_refs.push(source_ref(
                 &graph.source,
@@ -3970,6 +3981,7 @@ fn source_page_paint_orders_v1(
         .collect()
 }
 
+const OFFICE_ART_ADJUST_VALUE: u16 = 0x0147;
 const OFFICE_ART_FILL_TYPE: u16 = 0x0180;
 const OFFICE_ART_FILL_COLOR: u16 = 0x0181;
 const OFFICE_ART_FILL_BOOLEANS: u16 = 0x01BF;
@@ -4007,6 +4019,17 @@ enum PaintLineVisibilityLayer {
     Absent,
     Value(PubEffectivePaintValue<bool>),
     Unresolved,
+}
+
+fn has_default_roundrect_geometry(shape: &pub_escher::SpContainerObservation) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(0x0002) {
+        return false;
+    }
+    !shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| property.property_id() == OFFICE_ART_ADJUST_VALUE)
 }
 
 fn has_explicit_officeart_paint_observation(shape: &pub_escher::SpContainerObservation) -> bool {
