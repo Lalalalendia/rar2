@@ -2,9 +2,10 @@ use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
 use pub_escher::{
     DggDefaultOptionsObservation, FoptObservation, PUBLISHER_FIELD_SHAPE_ID,
-    inspect_dgg_default_options, inspect_sp_containers,
+    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
+    PublisherFieldRecord, inspect_dgg_default_options, inspect_sp_containers,
 };
-use pub_model::{NodeId, PageId, Sha256Digest};
+use pub_model::{Affine2D, LengthEmu, NodeId, PageId, RectEmu, Sha256Digest};
 use pub_reader::{PubEffectivePaintAuthority, build_mature_0x2c_source_graph};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -15,6 +16,7 @@ use std::{
     path::PathBuf,
 };
 
+const ROTATION: u16 = 0x0004;
 const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
 const FILL_OPACITY: u16 = 0x0182;
@@ -103,6 +105,94 @@ fn scalar_property_profile(records: &[FoptObservation], property_id: u16) -> &'s
     } else {
         "duplicate_scalar"
     }
+}
+
+fn rotation_profile(records: &[FoptObservation]) -> String {
+    let matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == ROTATION)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return "absent".to_owned();
+    }
+    if matches
+        .iter()
+        .any(|property| property.f_bid() || property.f_complex())
+    {
+        return "malformed_or_complex".to_owned();
+    }
+    if matches.len() != 1 {
+        return "duplicate_scalar".to_owned();
+    }
+    if matches[0].op == 0 {
+        "single_scalar:zero".to_owned()
+    } else {
+        "single_scalar:nonzero".to_owned()
+    }
+}
+
+fn anchor_signed_field(anchor: &PublisherFieldRecord, id: u16) -> Option<i64> {
+    let mut matches = anchor.fields.iter().filter(|field| field.id == id);
+    let field = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(i64::from(i32::from_le_bytes(field.value.to_le_bytes())))
+}
+
+fn page_relative_anchor_bounds(
+    page_width: i64,
+    page_height: i64,
+    anchor: &PublisherFieldRecord,
+) -> Option<RectEmu> {
+    let xs = anchor_signed_field(anchor, PUBLISHER_FIELD_XS)?;
+    let ys = anchor_signed_field(anchor, PUBLISHER_FIELD_YS)?;
+    let xe = anchor_signed_field(anchor, PUBLISHER_FIELD_XE)?;
+    let ye = anchor_signed_field(anchor, PUBLISHER_FIELD_YE)?;
+    let width = xe.checked_sub(xs)?;
+    let height = ye.checked_sub(ys)?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let x = page_width.checked_div(2)?.checked_add(xs)?;
+    let y = page_height.checked_div(2)?.checked_add(ys)?;
+    Some(RectEmu::new(
+        LengthEmu::new(x),
+        LengthEmu::new(y),
+        LengthEmu::new(width),
+        LengthEmu::new(height),
+    ))
+}
+
+fn page_area_bucket(bounds: RectEmu, page_width: i64, page_height: i64) -> &'static str {
+    if page_width <= 0 || page_height <= 0 || bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+        return "invalid";
+    }
+    let area = i128::from(bounds.width.get()) * i128::from(bounds.height.get());
+    let page_area = i128::from(page_width) * i128::from(page_height);
+    if area <= 0 || page_area <= 0 {
+        return "invalid";
+    }
+    let basis_points = area.saturating_mul(10_000) / page_area;
+    match basis_points {
+        0..=99 => "lt_1pct",
+        100..=499 => "1_to_5pct",
+        500..=1_999 => "5_to_20pct",
+        2_000..=4_999 => "20_to_50pct",
+        _ => "ge_50pct",
+    }
+}
+
+fn rects_overlap(a: RectEmu, b: RectEmu) -> bool {
+    let (Some(ar), Some(ab), Some(br), Some(bb)) = (a.right(), a.bottom(), b.right(), b.bottom())
+    else {
+        return false;
+    };
+    a.x.get() < br.get()
+        && b.x.get() < ar.get()
+        && a.y.get() < bb.get()
+        && b.y.get() < ab.get()
 }
 
 fn fill_opacity_profile(records: &[FoptObservation]) -> String {
@@ -209,6 +299,11 @@ struct PageReceipt {
     restored_local_fill_color_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_opacity_profile_histogram: BTreeMap<String, usize>,
     restored_effective_fill_opacity_histogram: BTreeMap<String, usize>,
+    restored_anchor_geometry_histogram: BTreeMap<String, usize>,
+    restored_transform_histogram: BTreeMap<String, usize>,
+    restored_rotation_profile_histogram: BTreeMap<String, usize>,
+    restored_area_bucket_histogram: BTreeMap<String, usize>,
+    restored_overlap_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_boolean_profile_histogram: BTreeMap<String, usize>,
 }
 
@@ -287,6 +382,11 @@ fn exact_virginia_restored_fill_stack_probe() {
         }
     }
 
+    let source_order_sequence_by_page = build
+        .source_page_paint_orders
+        .iter()
+        .map(|order| (order.page_id, order.node_ids.clone()))
+        .collect::<BTreeMap<PageId, Vec<NodeId>>>();
     let source_order_by_page = build
         .source_page_paint_orders
         .iter()
@@ -301,7 +401,13 @@ fn exact_virginia_restored_fill_stack_probe() {
     let mut pages = Vec::new();
     for (page_index, page_id) in build.graph.document.pages.iter().copied().enumerate() {
         let page_canonical = page_id.into_canonical();
+        let page_model = build
+            .graph
+            .pages
+            .get(&page_id)
+            .expect("document PAGE must exist in SourceGraph registry");
         let source_order = source_order_by_page.get(&page_id);
+        let source_order_sequence = source_order_sequence_by_page.get(&page_id);
         let mut page = PageReceipt {
             raw_page_ordinal: page_index + 1,
             source_order_node_count: source_order.map_or(0, BTreeSet::len),
@@ -411,6 +517,73 @@ fn exact_virginia_restored_fill_stack_probe() {
                 &mut page.restored_effective_fill_opacity_histogram,
                 effective_fill_opacity_profile(shape, dgg),
             );
+
+            let anchor_profile = match shape.client_anchor.as_ref().and_then(|anchor| {
+                page_relative_anchor_bounds(
+                    page_model.size.width.get(),
+                    page_model.size.height.get(),
+                    anchor,
+                )
+            }) {
+                Some(anchor_bounds) if anchor_bounds == node.header.bounds => "exact",
+                Some(_) => "mismatch",
+                None if shape.client_anchor.is_some() => "invalid_or_incomplete",
+                None => "absent",
+            };
+            bump(&mut page.restored_anchor_geometry_histogram, anchor_profile);
+            bump(
+                &mut page.restored_transform_histogram,
+                if node.header.transform == Affine2D::identity() {
+                    "identity"
+                } else {
+                    "non_identity"
+                },
+            );
+            bump(
+                &mut page.restored_rotation_profile_histogram,
+                rotation_profile(&shape.fopts),
+            );
+            bump(
+                &mut page.restored_area_bucket_histogram,
+                page_area_bucket(
+                    node.header.bounds,
+                    page_model.size.width.get(),
+                    page_model.size.height.get(),
+                ),
+            );
+
+            let overlap_profile = if let Some(order) = source_order_sequence {
+                if let Some(rank) = order.iter().position(|id| *id == node.header.id) {
+                    let mut earlier = 0usize;
+                    let mut later = 0usize;
+                    for (other_rank, other_id) in order.iter().enumerate() {
+                        if other_rank == rank {
+                            continue;
+                        }
+                        let Some(other) = build.graph.nodes.get(other_id) else {
+                            continue;
+                        };
+                        if !rects_overlap(node.header.bounds, other.header.bounds) {
+                            continue;
+                        }
+                        if other_rank < rank {
+                            earlier += 1;
+                        } else {
+                            later += 1;
+                        }
+                    }
+                    format!("earlier={earlier};later={later}")
+                } else {
+                    "not_in_source_order".to_owned()
+                }
+            } else {
+                "source_order_unavailable".to_owned()
+            };
+            bump(
+                &mut page.restored_overlap_profile_histogram,
+                overlap_profile,
+            );
+
             bump(
                 &mut page.restored_local_fill_boolean_profile_histogram,
                 fill_boolean_profile(&shape.fopts),
@@ -478,6 +651,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Grouped/direct and source-order buckets come only from current persisted source provenance.",
             "Stage-B property profiles emit only presence/participation classes and effective-authority buckets, never raw property values.",
             "Stage-C fillOpacity profiles classify only transparent/partial/opaque/invalid and never emit the persisted fixed-point scalar.",
+            "Stage-D geometry profiles emit only anchor-equality, transform/rotation classes, page-area buckets and overlap counts; no coordinates or object identities are emitted.",
         ],
     };
 
