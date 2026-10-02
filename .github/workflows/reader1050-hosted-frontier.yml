@@ -5,7 +5,9 @@ on:
     paths:
       - ".github/workflows/reader1050-hosted-frontier.yml"
       - "tools/research-runner/reader1050_frontier.py"
+      - "tools/research-runner/reader1050_offline_discriminator.py"
       - "tools/research-runner/tests/test_reader1050_frontier.py"
+      - "tools/research-runner/tests/test_reader1050_offline_discriminator.py"
       - "tools/corpus/cfb_physical.py"
       - "tools/corpus/cfb_physical_diff.py"
   workflow_run:
@@ -42,11 +44,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate bounded frontier selector
+      - name: Install pinned discriminator dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir olefile==0.47
+
+      - name: Validate bounded frontier and discriminator
         run: |
           set -euo pipefail
-          python -m py_compile tools/research-runner/reader1050_frontier.py
-          python -m unittest tools/research-runner/tests/test_reader1050_frontier.py
+          python -m py_compile \
+            tools/research-runner/reader1050_frontier.py \
+            tools/research-runner/reader1050_offline_discriminator.py
+          python -m unittest \
+            tools/research-runner/tests/test_reader1050_frontier.py \
+            tools/research-runner/tests/test_reader1050_offline_discriminator.py
 
   frontier:
     needs: validate
@@ -71,6 +80,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Install pinned discriminator dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir olefile==0.47
 
       - name: Download exact Reader-1050 receipt
         uses: actions/download-artifact@v4
@@ -102,6 +114,17 @@ jobs:
 
           cat out/reader1050-frontier/frontier.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Execute one bounded offline discriminator
+        run: |
+          set -euo pipefail
+          python tools/research-runner/reader1050_offline_discriminator.py \
+            --reader-root input/reader \
+            --frontier out/reader1050-frontier/frontier.json \
+            --corpus-root input/corpus \
+            --out out/reader1050-discriminator
+
+          cat out/reader1050-discriminator/decision.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Guard source-free artifact boundary
         run: |
           set -euo pipefail
@@ -109,7 +132,7 @@ jobs:
           from pathlib import Path
 
           cfb_signature = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
-          for path in Path("out/reader1050-frontier").rglob("*"):
+          for path in list(Path("out/reader1050-frontier").rglob("*")) + list(Path("out/reader1050-discriminator").rglob("*")):
               if not path.is_file():
                   continue
               data = path.read_bytes()
@@ -127,5 +150,12 @@ jobs:
         with:
           name: reader1050-hosted-frontier-${{ env.READER_RUN_ID }}
           path: out/reader1050-frontier/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reader1050-offline-discriminator-${{ env.READER_RUN_ID }}
+          path: out/reader1050-discriminator/**
           if-no-files-found: error
           retention-days: 30
