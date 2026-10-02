@@ -5060,6 +5060,45 @@ mod tests {
     }
 
     #[test]
+    fn direct_image_cardinal_rotation_is_preserved_for_picture_content_only() {
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((90u32) << 16, false, false)],
+                0,
+            ),
+            Some(90)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((180u32) << 16, false, false)],
+                0,
+            ),
+            Some(180)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((270u32) << 16, false, false)],
+                0,
+            ),
+            Some(270)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((12u32) << 16, false, false)],
+                0,
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((90u32) << 16, false, false)],
+                FSP_FLIP_H,
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn direct_image_rotation_keeps_exact_cardinal_angles_fail_closed() {
         for rotation_op in [
             90u32 << 16,
