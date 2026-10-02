@@ -96,9 +96,8 @@ use pub_escher::{
     OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
     OFFICE_ART_PROPERTY_CROP_FROM_RIGHT, OFFICE_ART_PROPERTY_CROP_FROM_TOP,
     OFFICE_ART_PROPERTY_PIB, OFFICE_ART_TERTIARY_FOPT, PUBLISHER_FIELD_SHAPE_ID,
-    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
-    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField, PublisherFieldRecord,
-    SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
+    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField,
+    PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
     Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
