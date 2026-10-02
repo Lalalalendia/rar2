@@ -46,9 +46,10 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
     let build = build_mature_0x2c_source_graph(Cursor::new(pub_bytes.as_slice()), source_hash)
         .context("build mature source graph for TABLE MCLD style observation")?;
 
-    let quill =
-        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), QUILL_STREAM_PATH)
-            .with_context(|| format!("read {QUILL_STREAM_PATH} for TABLE MCLD style observation"))?;
+    let quill = pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), QUILL_STREAM_PATH)
+        .with_context(|| {
+            format!("read {QUILL_STREAM_PATH} for TABLE MCLD style observation")
+        })?;
     let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
     let catalog = parse_confirmed_story_catalog(quill_stream.clone(), &quill)
         .context("parse Quill story catalog for TABLE MCLD style observation")?;
@@ -80,7 +81,12 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
             .layout_metrics
             .as_ref()
             .map(|metrics| metrics.story_layout_key)
-            .or_else(|| diagnostic_layout_key_by_seq.get(&seq_num).copied().flatten());
+            .or_else(|| {
+                diagnostic_layout_key_by_seq
+                    .get(&seq_num)
+                    .copied()
+                    .flatten()
+            });
 
         let Some(layout_key) = layout_key else {
             observations.push(PubTableMcldStyleObservation {
