@@ -5,8 +5,7 @@ use pub_viewer::{ViewerOpenBundle, open_pub_bundle, viewer_geometry_environment_
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const EXPECTED_SHA256: &str =
-    "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506";
+const EXPECTED_SHA256: &str = "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506";
 const PAGES: [u32; 3] = [9, 10, 11];
 
 fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
@@ -64,12 +63,10 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
             if grouped { "grouped" } else { "direct" },
         );
 
-        positive_bounds += usize::from(
-            node.header.bounds.width.get() > 0 && node.header.bounds.height.get() > 0,
-        );
-        source_order_covered += usize::from(
-            source_order.is_some_and(|order| order.node_ids.contains(&node.header.id)),
-        );
+        positive_bounds +=
+            usize::from(node.header.bounds.width.get() > 0 && node.header.bounds.height.get() > 0);
+        source_order_covered +=
+            usize::from(source_order.is_some_and(|order| order.node_ids.contains(&node.header.id)));
 
         let Some(paint) = node.payload.effective_paint.as_ref() else {
             bump(&mut fill_histogram, "paint_absent");
@@ -279,7 +276,10 @@ fn exact_virginia_p10_product_boundary_census() {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    assert_eq!(actual_sha, EXPECTED_SHA256, "exact Virginia source identity");
+    assert_eq!(
+        actual_sha, EXPECTED_SHA256,
+        "exact Virginia source identity"
+    );
 
     let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
         .expect("open exact Virginia Viewer bundle");
