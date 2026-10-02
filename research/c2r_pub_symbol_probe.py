@@ -9,7 +9,14 @@ import uuid
 from pathlib import Path
 
 SYMBOL_ROOT = "https://msdl.microsoft.com/download/symbols"
-TARGETS = ("MSPUB.EXE", "MORPH9.DLL", "PTXT9.DLL", "PUBCONV.DLL")
+TARGETS = {
+    "MSPUB.EXE": "publisher",
+    "MORPH9.DLL": "publisher",
+    "PTXT9.DLL": "publisher",
+    "PUBCONV.DLL": "publisher",
+    "WINWORD.EXE": "office_control",
+    "WWLIB.DLL": "office_control",
+}
 
 
 def sha256(path: Path) -> str:
@@ -111,7 +118,7 @@ def probe_symbol(cv):
         req = urllib.request.Request(
             url,
             method="GET",
-            headers={"User-Agent": "chaptera-c2r-pub-symbol-census/2", "Range": "bytes=0-0"},
+            headers={"User-Agent": "chaptera-c2r-pub-symbol-census/3", "Range": "bytes=0-0"},
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -142,13 +149,14 @@ def main():
     output = Path(sys.argv[2])
     records = []
 
-    for module in TARGETS:
+    for module, role in TARGETS.items():
         path = module_dir / module
         if not path.exists():
-            records.append({"module": module, "symbol_result": "MODULE_NOT_FOUND"})
+            records.append({"module": module, "role": role, "symbol_result": "MODULE_NOT_FOUND"})
             continue
         base = {
             "module": module,
+            "role": role,
             "sha256": sha256(path),
             "size": path.stat().st_size,
         }
@@ -168,8 +176,10 @@ def main():
                 "probes": probes,
             })
 
+    publisher = [r for r in records if r.get("role") == "publisher"]
+    controls = [r for r in records if r.get("role") == "office_control"]
     summary = {
-        "schema": "c2r-publisher-symbol-census.v2",
+        "schema": "c2r-publisher-symbol-census.v3",
         "requested_office_version": os.environ.get("PUB_OFFICE_VERSION", "unknown"),
         "requested_architecture": os.environ.get("PUB_OFFICE_ARCH", "unknown"),
         "office_public_symbol_boundary": "16.0.15601.20037",
@@ -178,6 +188,10 @@ def main():
         "codeview_present": sum(r.get("codeview") not in (None, "NO_CODEVIEW") for r in records),
         "symbol_present": sum(r.get("symbol_result") == "SYMBOL_PRESENT" for r in records),
         "symbol_missing": sum(r.get("symbol_result") == "CODEVIEW_PRESENT_SYMBOL_NOT_FOUND" for r in records),
+        "publisher_symbol_present": sum(r.get("symbol_result") == "SYMBOL_PRESENT" for r in publisher),
+        "publisher_symbol_missing": sum(r.get("symbol_result") == "CODEVIEW_PRESENT_SYMBOL_NOT_FOUND" for r in publisher),
+        "control_symbol_present": sum(r.get("symbol_result") == "SYMBOL_PRESENT" for r in controls),
+        "control_symbol_missing": sum(r.get("symbol_result") == "CODEVIEW_PRESENT_SYMBOL_NOT_FOUND" for r in controls),
         "records": records,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
