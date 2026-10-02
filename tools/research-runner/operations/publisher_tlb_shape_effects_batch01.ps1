@@ -548,7 +548,7 @@ function Get-ChangedStreams {
         $rightMap[[string]$stream.name] = "$($stream.size):$($stream.sha256)"
     }
 
-    $names = @($leftMap.Keys + $rightMap.Keys | Sort-Object -Unique)
+    $names = @(@($leftMap.Keys) + @($rightMap.Keys) | Sort-Object -Unique)
     $changed = @()
     foreach ($name in $names) {
         if (-not $leftMap.ContainsKey($name) -or -not $rightMap.ContainsKey($name) -or $leftMap[$name] -ne $rightMap[$name]) {
