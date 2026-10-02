@@ -238,6 +238,7 @@ def inspect_pub_bytes(data: bytes) -> dict:
         "cfb_status": "ok",
         "vba_state": "absent",
         "vba_project_count": 0,
+        "vba_storage_count": 0,
         "vba_projects": [],
         "call_families": {},
         "symbols": {},
@@ -254,7 +255,8 @@ def inspect_pub_bytes(data: bytes) -> dict:
     if not storages:
         return base
     projects = [inspect_vba_project(cfb, storage) for storage in storages]
-    base["vba_project_count"] = len(projects)
+    base["vba_project_count"] = sum(1 for project in projects if project["structural_valid"])
+    base["vba_storage_count"] = len(storages)
     base["vba_projects"] = projects
     family_counter: Counter[str] = Counter()
     symbol_counter: Counter[str] = Counter()
@@ -263,15 +265,18 @@ def inspect_pub_bytes(data: bytes) -> dict:
         symbol_counter.update(project["symbols"])
     base["call_families"] = dict(sorted(family_counter.items()))
     base["symbols"] = dict(sorted(symbol_counter.items()))
-    if any(p["module_sources_extracted"] for p in projects):
-        if any(p["module_source_failures"] for p in projects):
+    admitted = [project for project in projects if project["structural_valid"]]
+    if any(p["module_sources_extracted"] for p in admitted):
+        if any(p["module_source_failures"] for p in admitted):
             base["vba_state"] = "source_partial"
         else:
             base["vba_state"] = "source_extracted"
-    elif any(p["structural_valid"] for p in projects):
+    elif admitted:
         base["vba_state"] = "structural_only"
     else:
-        base["vba_state"] = "vba_storage_incomplete"
+        # Publisher files commonly contain a storage literally named VBA that is
+        # not an MS-OVBA project. Do not promote that name collision to macro-present.
+        base["vba_state"] = "non_project_vba_storage"
     return base
 
 
@@ -285,6 +290,7 @@ def scan_path(path: pathlib.Path) -> dict:
             "cfb_status": "read_failed",
             "vba_state": "unknown",
             "vba_project_count": 0,
+            "vba_storage_count": 0,
             "vba_projects": [],
             "call_families": {},
             "symbols": {},
@@ -340,7 +346,11 @@ def build_receipt(files: list[pathlib.Path], *, include_paths: bool = False) -> 
             "cfb_ok": sum(row["cfb_status"] == "ok" for row in rows),
             "cfb_parse_failed": sum(row["cfb_status"] == "parse_failed" for row in rows),
             "read_failed": sum(row["cfb_status"] == "read_failed" for row in rows),
-            "vba_present_any": sum(row["vba_state"] not in ("absent", "unknown") for row in rows),
+            "vba_storage_seen_any": sum(row.get("vba_storage_count", 0) > 0 for row in rows),
+            "vba_project_present_any": sum(
+                row["vba_state"] in ("structural_only", "source_partial", "source_extracted")
+                for row in rows
+            ),
             "vba_state_counts": dict(sorted(state_counts.items())),
             "call_family_files": dict(sorted(family_files.items())),
             "call_family_hits": dict(sorted(family_hits.items())),
