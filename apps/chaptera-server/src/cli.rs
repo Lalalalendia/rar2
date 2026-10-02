@@ -58,6 +58,15 @@ pub enum Command {
         expected_byte_len: u64,
     },
     #[command(hide = true)]
+    MigrationEditableRoutes {
+        #[arg(long)]
+        document_id: String,
+        #[arg(long)]
+        expected_sha256: String,
+        #[arg(long)]
+        expected_byte_len: u64,
+    },
+    #[command(hide = true)]
     GuestReaderScene {
         #[arg(long)]
         session_id: String,
@@ -125,6 +134,21 @@ mod tests {
             .unwrap()
             .command,
             Command::UntrustedPubInspect { .. }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "chaptera",
+                "migration-editable-routes",
+                "--document-id",
+                "document:one",
+                "--expected-sha256",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--expected-byte-len",
+                "123"
+            ])
+            .unwrap()
+            .command,
+            Command::MigrationEditableRoutes { .. }
         ));
         assert!(matches!(
             Cli::try_parse_from(["chaptera", "migrate", "status"])
