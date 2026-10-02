@@ -3920,7 +3920,8 @@ pub fn resolve_bounded_effective_officeart_paint(
 fn shape_has_explicit_filled_without_fill_color(
     shape: &pub_escher::SpContainerObservation,
 ) -> bool {
-    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(0x0002) {
+    let shape_type = shape.fsp.as_ref().map(|fsp| fsp.shape_type);
+    if !matches!(shape_type, Some(0x0002 | 0x00CA)) {
         return false;
     }
 
@@ -3931,6 +3932,16 @@ fn shape_has_explicit_filled_without_fill_color(
     );
     if !matches!(fill_color, PaintScalarLayer::Absent) {
         return false;
+    }
+
+    if shape_type == Some(0x00CA) {
+        return matches!(
+            fill_visibility_from_records(
+                &shape.fopts,
+                PubEffectivePaintAuthority::ShapeLocal,
+            ),
+            PaintLineVisibilityLayer::Value(value) if value.value
+        );
     }
 
     matches!(
@@ -5538,6 +5549,59 @@ mod tests {
         assert_eq!(
             paint.fill.color_rgb.expect("DGG fill color").authority,
             PubEffectivePaintAuthority::DrawingGroupPrimary
+        );
+    }
+
+    #[test]
+    fn sparse_textbox_fill_uses_normative_color_after_split_ffilled_resolution() {
+        let mut shape = crop_test_shape(Vec::new());
+        shape.fsp = Some(pub_escher::FspRecord {
+            spid: 1,
+            flags: 0,
+            shape_type: 0x00CA,
+            source: crop_test_span(0, 8),
+            trailing_source: None,
+        });
+        shape.fopts = vec![
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_FOPT,
+                source: crop_test_span(10, 8),
+                properties: vec![crop_test_property(
+                    OFFICE_ART_FILL_BOOLEANS,
+                    FILL_USE_FILLED_BIT | FILL_FILLED_BIT,
+                )],
+            },
+            pub_escher::FoptObservation {
+                rec_type: pub_escher::OFFICE_ART_TERTIARY_FOPT,
+                source: crop_test_span(20, 8),
+                properties: vec![crop_test_property(OFFICE_ART_FILL_BOOLEANS, 0x0060_0020)],
+            },
+        ];
+        let dgg = dgg_test_defaults(
+            vec![crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_00FF)],
+            Vec::new(),
+        );
+
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("sparse TextBox fill remains bounded");
+        let fill_color = paint.fill.color_rgb.expect("normative TextBox fill color");
+        assert_eq!(fill_color.value, [0xFF, 0xFF, 0xFF]);
+        assert_eq!(
+            fill_color.authority,
+            PubEffectivePaintAuthority::NormativeDefault
+        );
+        let visible = paint.fill.visible.expect("split TextBox visibility");
+        assert!(visible.value);
+        assert_eq!(visible.authority, PubEffectivePaintAuthority::ShapeLocal);
+
+        shape.fopts[0]
+            .properties
+            .push(crop_test_property(OFFICE_ART_FILL_COLOR, 0x0000_FF00));
+        let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
+            .expect("local TextBox fill color remains authoritative");
+        assert_eq!(
+            paint.fill.color_rgb.expect("local TextBox fill color").authority,
+            PubEffectivePaintAuthority::ShapeLocal
         );
     }
 
