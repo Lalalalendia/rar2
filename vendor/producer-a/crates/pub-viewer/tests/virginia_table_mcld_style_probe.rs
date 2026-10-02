@@ -1,8 +1,7 @@
 use pub_model::Sha256Digest;
 use pub_reader::{
-    PubTableMcldOpaque1dClass, PubTableMcldStyleSignatureClass,
-    PubTableOfficeArtOwnerJoinClass, analyze_mature_0x2c_table_default_style_fields,
-    analyze_mature_0x2c_table_mcld_style_fields,
+    PubTableMcldOpaque1dClass, PubTableMcldStyleSignatureClass, PubTableOfficeArtOwnerJoinClass,
+    analyze_mature_0x2c_table_default_style_fields, analyze_mature_0x2c_table_mcld_style_fields,
 };
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
