@@ -15,6 +15,7 @@ pub const TABLE_CELLS_SEQ_NUM_ID: u16 = 0x6B;
 pub const TABLE_WIDTH_ID: u16 = 0x68;
 pub const TABLE_HEIGHT_ID: u16 = 0x69;
 pub const TABLE_ROWCOL_ARRAY_ID: u16 = 0x6D;
+pub const TABLE_ROWCOL_PHYSICAL_END_ID: u16 = 0x01;
 pub const TABLE_ROWCOL_SIZE_ID: u16 = 0x02;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -778,6 +779,7 @@ fn populate_exact_table_cell_bounds(
     let mut cursor =
         ContentsCursor::bounded(content_source.stream.clone(), context.contents, start, len)?;
     let mut sizes = Vec::new();
+    let mut physical_ends = Vec::new();
 
     while cursor.remaining() > 0 {
         let item = parse_confirmed_block(&mut cursor)?;
@@ -805,23 +807,31 @@ fn populate_exact_table_cell_bounds(
             item_len,
         )?;
         let mut size = None;
+        let mut physical_end = None;
         while item_cursor.remaining() > 0 {
             let field = parse_confirmed_block(&mut item_cursor)?;
-            if field.id != TABLE_ROWCOL_SIZE_ID {
+            if field.id != TABLE_ROWCOL_SIZE_ID && field.id != TABLE_ROWCOL_PHYSICAL_END_ID {
                 continue;
             }
             let RawContentsBlockBody::U32 { value, .. } = field.body else {
-                bail!("TABLE row/column size is not u32");
+                bail!("TABLE row/column geometry field is not u32");
             };
-            if size.replace(value).is_some() {
-                bail!("TABLE row/column item has duplicate size");
+            if field.id == TABLE_ROWCOL_SIZE_ID {
+                if size.replace(value).is_some() {
+                    bail!("TABLE row/column item has duplicate size");
+                }
+            } else if physical_end.replace(value).is_some() {
+                bail!("TABLE row/column item has duplicate physical end");
             }
         }
         let size = size.context("TABLE row/column item has no size")?;
-        if size == 0 {
-            bail!("TABLE row/column size is zero");
+        let physical_end =
+            physical_end.context("TABLE row/column item has no physical cumulative end")?;
+        if size == 0 || physical_end == 0 {
+            bail!("TABLE row/column size or physical end is zero");
         }
         sizes.push(size);
+        physical_ends.push(physical_end);
     }
 
     let expected = usize::try_from(columns)
@@ -832,16 +842,16 @@ fn populate_exact_table_cell_bounds(
                 .and_then(|rows| columns.checked_add(rows))
         })
         .context("TABLE row/column count overflows usize")?;
-    if sizes.len() != expected {
+    if sizes.len() != expected || physical_ends.len() != expected {
         bail!(
-            "TABLE row/column array count {} differs from columns+rows {}",
-            sizes.len(),
+            "TABLE row/column array count differs from columns+rows {}",
             expected
         );
     }
 
     let split = usize::try_from(columns).context("TABLE column count does not fit usize")?;
     let (column_widths, row_heights) = sizes.split_at(split);
+    let (column_ends, row_ends) = physical_ends.split_at(split);
     let declared_width = unique_table_scalar(table_chunk, tail_scalars, TABLE_WIDTH_ID)?
         .map(|(value, _)| value)
         .context("TABLE width is missing")?;
@@ -860,7 +870,7 @@ fn populate_exact_table_cell_bounds(
     let height_sum = sum(row_heights)?;
     if width_sum != u64::from(declared_width) || height_sum != u64::from(declared_height) {
         bail!(
-            "TABLE track sums {}x{} differ from declared {}x{}",
+            "TABLE logical track sums {}x{} differ from declared {}x{}",
             width_sum,
             height_sum,
             declared_width,
@@ -872,32 +882,34 @@ fn populate_exact_table_cell_bounds(
         .map_err(|_| anyhow!("TABLE owner width is negative"))?;
     let owner_height = u64::try_from(context.table_bounds.height.get())
         .map_err(|_| anyhow!("TABLE owner height is negative"))?;
-    if width_sum > owner_width || height_sum > owner_height {
-        bail!(
-            "TABLE tracks {}x{} exceed owner bounds {}x{}",
-            width_sum,
-            height_sum,
-            owner_width,
-            owner_height
-        );
-    }
 
-    let prefix = |values: &[u32]| -> Result<Vec<u64>> {
-        let mut out = Vec::with_capacity(values.len() + 1);
+    let exact_boundaries = |ends: &[u32], owner_extent: u64, axis: &str| -> Result<Vec<u64>> {
+        let mut out = Vec::with_capacity(ends.len() + 1);
         out.push(0);
-        for value in values {
-            let next = out
-                .last()
-                .copied()
-                .unwrap_or(0_u64)
-                .checked_add(u64::from(*value))
-                .context("TABLE track prefix overflow")?;
-            out.push(next);
+        let mut previous = 0_u64;
+        for end in ends {
+            let end = u64::from(*end);
+            if end <= previous {
+                bail!("TABLE {axis} physical cumulative ends are not strictly increasing");
+            }
+            if end > owner_extent {
+                bail!("TABLE {axis} physical cumulative end exceeds owner extent");
+            }
+            out.push(end);
+            previous = end;
+        }
+        if previous != owner_extent {
+            bail!(
+                "TABLE {axis} physical terminal end {} differs from owner extent {}",
+                previous,
+                owner_extent
+            );
         }
         Ok(out)
     };
-    let column_prefix = prefix(column_widths)?;
-    let row_prefix = prefix(row_heights)?;
+
+    let column_prefix = exact_boundaries(column_ends, owner_width, "column")?;
+    let row_prefix = exact_boundaries(row_ends, owner_height, "row")?;
 
     for cell in cells {
         let coordinates = cell
@@ -955,7 +967,7 @@ fn populate_exact_table_cell_bounds(
             context.source,
             &array.source,
             Some(contents_object_key(table_seq_num)),
-            Some("TABLE/rowcol_array".into()),
+            Some("TABLE/rowcol_array/physical_end".into()),
             SourceRole::Projection,
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
