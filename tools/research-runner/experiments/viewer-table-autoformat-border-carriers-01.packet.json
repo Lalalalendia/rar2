@@ -16,6 +16,7 @@
     "required": [
       "environment.json",
       "analysis/table-border-carrier-map-01.json",
+      "analysis/table-border-weight-map-01.json",
       "logs/table-border-carrier-map-01.txt"
     ]
   }
