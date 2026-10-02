@@ -1618,7 +1618,7 @@ fn viewer_mature_officeart_wmf_preview_images(
                 }
                 None => None,
             };
-            let recolor = graph.nodes.get(node_id).and_then(|node| {
+            let recolor = resolved.nodes.get(node_id).and_then(|node| {
                 viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
             });
             if source_window.is_some() || recolor.is_some() {
