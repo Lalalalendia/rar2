@@ -6,6 +6,9 @@ on:
       - ".github/workflows/reader1050-hosted-frontier.yml"
       - "tools/research-runner/reader1050_frontier.py"
       - "tools/research-runner/reader1050_offline_discriminator.py"
+      - "tools/research-runner/reader1050_knowledge.py"
+      - "tools/research-runner/reader1050_discriminator_ledger.v1.json"
+      - "vendor/producer-a/crates/pub-reader/data/reader_known_evidence_registry.v1.json"
       - "tools/research-runner/tests/test_reader1050_frontier.py"
       - "tools/research-runner/tests/test_reader1050_offline_discriminator.py"
       - "tools/corpus/cfb_physical.py"
@@ -52,7 +55,9 @@ jobs:
           set -euo pipefail
           python -m py_compile \
             tools/research-runner/reader1050_frontier.py \
-            tools/research-runner/reader1050_offline_discriminator.py
+            tools/research-runner/reader1050_offline_discriminator.py \
+            tools/research-runner/reader1050_knowledge.py
+          python tools/research-runner/reader1050_knowledge.py
           python -m unittest \
             tools/research-runner/tests/test_reader1050_frontier.py \
             tools/research-runner/tests/test_reader1050_offline_discriminator.py
@@ -121,7 +126,8 @@ jobs:
             --reader-root input/reader \
             --frontier out/reader1050-frontier/frontier.json \
             --corpus-root input/corpus \
-            --out out/reader1050-discriminator
+            --out out/reader1050-discriminator \
+            --discriminator-run-id "$GITHUB_RUN_ID"
 
           cat out/reader1050-discriminator/decision.md >> "$GITHUB_STEP_SUMMARY"
 
