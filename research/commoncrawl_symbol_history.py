@@ -1,6 +1,7 @@
 import json
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 INDEXES = [
@@ -53,7 +54,7 @@ def query(index, url, match_type=None):
     endpoint = "https://index.commoncrawl.org/" + index + "-index?" + urllib.parse.urlencode(args)
     req = urllib.request.Request(endpoint, headers={"User-Agent": "chaptera-symbol-archive-probe/1"})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=8) as r:
             body = r.read().decode("utf-8", "replace")
             rows = []
             for line in body.splitlines():
@@ -73,26 +74,46 @@ def query(index, url, match_type=None):
 
 def main():
     result = {"schema": "commoncrawl-symbol-history.v1", "indexes": INDEXES, "targets": {}}
+    work = []
     for name, target in TARGETS.items():
-        exact_hits = []
-        prefix_hits = []
-        for index in INDEXES:
-            ex = query(index, target["exact"])
-            if ex["rows"]:
-                exact_hits.append({"index": index, **ex})
-            # Prefix query once per index. Limit retained rows to avoid an unbounded artifact.
-            pr = query(index, target["prefix"], "prefix")
-            if pr["rows"]:
-                pr["rows"] = pr["rows"][:100]
-                prefix_hits.append({"index": index, **pr})
         result["targets"][name] = {
             "exact_url": target["exact"],
             "prefix": target["prefix"],
-            "exact_hit_indexes": len(exact_hits),
-            "prefix_hit_indexes": len(prefix_hits),
-            "exact_hits": exact_hits,
-            "prefix_hits": prefix_hits,
+            "exact_hits": [],
+            "prefix_hits": [],
+            "errors": [],
         }
+        for index in INDEXES:
+            work.append((name, index, "exact", target["exact"], None))
+            work.append((name, index, "prefix", target["prefix"], "prefix"))
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = {
+            pool.submit(query, index, url, match_type): (name, index, kind)
+            for name, index, kind, url, match_type in work
+        }
+        for future in as_completed(futures):
+            name, index, kind = futures[future]
+            try:
+                item = future.result()
+            except Exception as exc:
+                item = {"status": None, "rows": [], "error": f"{type(exc).__name__}: {exc}"}
+            rows = item.get("rows", [])
+            if rows:
+                if kind == "prefix":
+                    item["rows"] = rows[:100]
+                    result["targets"][name]["prefix_hits"].append({"index": index, **item})
+                else:
+                    result["targets"][name]["exact_hits"].append({"index": index, **item})
+            elif item.get("status") not in (200, 404):
+                result["targets"][name]["errors"].append({"index": index, "kind": kind, **item})
+
+    for target in result["targets"].values():
+        target["exact_hits"].sort(key=lambda x: x["index"])
+        target["prefix_hits"].sort(key=lambda x: x["index"])
+        target["exact_hit_indexes"] = len(target["exact_hits"])
+        target["prefix_hit_indexes"] = len(target["prefix_hits"])
+
     Path("out").mkdir(exist_ok=True)
     Path("out/commoncrawl-symbol-history.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
