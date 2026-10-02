@@ -19,8 +19,8 @@ mod intake_protocol;
 mod legacy22_graph;
 mod legacy22_noquill_graph;
 mod mature_wmf;
-mod ole_presentation;
 mod object_tracking_observer;
+mod ole_presentation;
 mod resolve;
 mod salvage;
 mod structural_base;
@@ -77,8 +77,8 @@ pub use mature_wmf::{
     PubMatureOfficeArtWmfPreviewSource, build_mature_0x2c_wmf_preview_bundle_from_bytes,
 };
 pub use object_tracking_observer::{
-    PUB_OBJECT_TRACKING_WRAP_OBSERVER_SCHEMA_V1, PubObjectTrackingWrapObserver,
-    PubTrackingScalar, PubTrackingWrapObservation, observe_object_tracking_wrap_state,
+    PUB_OBJECT_TRACKING_WRAP_OBSERVER_SCHEMA_V1, PubObjectTrackingWrapObserver, PubTrackingScalar,
+    PubTrackingWrapObservation, observe_object_tracking_wrap_state,
 };
 pub use ole_presentation::{
     LegacyOleCachedPresentation, LegacyOleCachedPresentationDiagnostic,
