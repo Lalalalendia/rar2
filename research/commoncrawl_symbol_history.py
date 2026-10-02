@@ -53,7 +53,7 @@ def query(index, url, match_type=None):
     endpoint = "https://index.commoncrawl.org/" + index + "-index?" + urllib.parse.urlencode(args)
     req = urllib.request.Request(endpoint, headers={"User-Agent": "chaptera-symbol-archive-probe/1"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=10) as r:
             body = r.read().decode("utf-8", "replace")
             rows = []
             for line in body.splitlines():
