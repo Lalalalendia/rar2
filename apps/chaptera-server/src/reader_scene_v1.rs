@@ -178,6 +178,8 @@ pub struct ReaderTextLineV1 {
     pub x_offset_emu: i64,
     pub measured_width_emu: i64,
     pub line_height_emu: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<[u8; 3]>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<ReaderTextSpanV1>,
 }
@@ -190,6 +192,8 @@ pub struct ReaderTextSpanV1 {
     pub x_offset_emu: i64,
     pub measured_width_emu: i64,
     pub font_size_emu: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -300,6 +304,21 @@ fn is_zero_i64(value: &i64) -> bool {
     *value == 0
 }
 
+fn reader_text_color_for_range(
+    text: &RenderTextFragmentV1,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Option<[u8; 3]> {
+    if scalar_start >= scalar_end {
+        return None;
+    }
+    let mut matches = text.text_colors.iter().filter(|run| {
+        run.scalar_start <= scalar_start && run.scalar_end >= scalar_end
+    });
+    let run = matches.next()?;
+    matches.next().is_none().then_some(run.rgb)
+}
+
 fn reader_text_layout_from_render_text(
     text: &RenderTextFragmentV1,
 ) -> (Option<ReaderTextLayoutV1>, bool) {
@@ -336,6 +355,7 @@ fn reader_text_layout_from_render_text(
                 x_offset_emu: line.x_offset_emu,
                 measured_width_emu: line.measured_width_emu,
                 line_height_emu: line.line_height_emu,
+                rgb: reader_text_color_for_range(text, line.scalar_start, line.scalar_end),
                 spans: line
                     .spans
                     .iter()
@@ -346,6 +366,7 @@ fn reader_text_layout_from_render_text(
                         x_offset_emu: span.x_offset_emu,
                         measured_width_emu: span.measured_width_emu,
                         font_size_emu: span.font_size_emu,
+                        rgb: reader_text_color_for_range(text, span.scalar_start, span.scalar_end),
                     })
                     .collect(),
             })
