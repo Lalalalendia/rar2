@@ -1,0 +1,161 @@
+name: Migration editable-route corpus matrix
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "tools/ci/scribus_idml_consumer.py"
+      - ".github/workflows/migration-editable-route-matrix.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  route-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      POI_COMMIT: 942d95d85b15d0dfdb3bc9ba1b4f273f277757c8
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/migration-route-rust
+      EVIDENCE_DIR: ${{ github.workspace }}/target/migration-editable-route-matrix
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb jq
+
+      - name: Acquire exact 10-PUB Publisher oracle sources
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub-corpus"
+          for name in             SampleNewsletter.pub             SampleBrochure.pub             Sample98.pub             Sample2000.pub             Sample_2010.pub             Sample2_2010.pub             Sample3_2010.pub             Sample4_2010.pub             51318.pub             60685.pub
+          do
+            curl --fail --location --silent --show-error               "https://raw.githubusercontent.com/apache/poi/$POI_COMMIT/test-data/publisher/$name"               --output "$RUNNER_TEMP/pub-corpus/$name"
+          done
+          sha256sum "$RUNNER_TEMP/pub-corpus/"*.pub | sort > "$RUNNER_TEMP/pub-corpus/SHA256SUMS.txt"
+          cat "$RUNNER_TEMP/pub-corpus/SHA256SUMS.txt"
+
+      - name: Build exact-source route probe
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin editable_route_probe
+
+      - name: Probe and materialize all source-specific routes
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          cp "$RUNNER_TEMP/pub-corpus/SHA256SUMS.txt" "$EVIDENCE_DIR/source-sha256.txt"
+
+          for pub in "$RUNNER_TEMP/pub-corpus/"*.pub; do
+            base="$(basename "$pub" .pub)"
+            out="$EVIDENCE_DIR/$base"
+            mkdir -p "$out"
+            "$CARGO_TARGET_DIR/debug/editable_route_probe" "$pub" --label "$base.pub" --materialize-dir "$out" > "$out/route.json"
+            cat "$out/route.json"
+          done
+
+      - name: Validate every materialized IDML through Scribus
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for idml in "$EVIDENCE_DIR"/*/output.idml; do
+            dir="$(dirname "$idml")"
+            rm -f "$dir/consumer.sla"
+            CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla" \
+              xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- "$idml"
+            test -s "$dir/consumer.sla"
+          done
+
+      - name: Validate every materialized ODG through LibreOffice Draw
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for odg in "$EVIDENCE_DIR"/*/output.odg; do
+            dir="$(dirname "$odg")"
+            mkdir -p "$dir/libreoffice"
+            libreoffice --headless               --convert-to fodg               --outdir "$dir/libreoffice"               "$odg"
+            test -s "$dir/libreoffice/output.fodg"
+          done
+
+      - name: Build source-safe matrix summary
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_DIR"])
+          rows = []
+          for route in sorted(root.glob("*/route.json")):
+              data = json.loads(route.read_text())
+              row = {
+                  "fixture": data["source_label"],
+                  "source_sha256": data["source_sha256"],
+                  "source_bytes": data["source_bytes"],
+                  "open_state": data["open_state"],
+                  "idml_state": data["targets"]["idml"]["state"],
+                  "idml_counts": data["targets"]["idml"].get("counts"),
+                  "idml_consumer_opened": (route.parent / "consumer.sla").is_file(),
+                  "odg_state": data["targets"]["odg"]["state"],
+                  "odg_counts": data["targets"]["odg"].get("counts"),
+                  "odg_consumer_opened": (route.parent / "libreoffice" / "output.fodg").is_file(),
+              }
+              rows.append(row)
+
+          def count(target, state):
+              return sum(row[f"{target}_state"] == state for row in rows)
+
+          summary = {
+              "schema": "chaptera.migration-editable-route-corpus.v1",
+              "repository_commit_sha": os.environ.get("GITHUB_SHA"),
+              "source_count": len(rows),
+              "rows": rows,
+              "totals": {
+                  "editor_admitted": sum(row["open_state"] == "admitted" for row in rows),
+                  "editor_not_admitted": sum(row["open_state"] != "admitted" for row in rows),
+                  "idml_available_with_declared_losses": count("idml", "available_with_declared_losses"),
+                  "idml_unavailable": count("idml", "unavailable"),
+                  "idml_not_verified": count("idml", "not_verified"),
+                  "odg_available_with_declared_losses": count("odg", "available_with_declared_losses"),
+                  "odg_unavailable": count("odg", "unavailable"),
+                  "odg_not_verified": count("odg", "not_verified"),
+              },
+              "claims": {
+                  "universal_pub_editable_export": False,
+                  "native_pub_save": False,
+                  "exact_source_admission_required": True,
+                  "consumer_validation_required_for_materialized_outputs": True,
+              },
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: migration-editable-route-matrix
+          path: target/migration-editable-route-matrix/
+          if-no-files-found: error
+          retention-days: 30
