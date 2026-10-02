@@ -2,6 +2,33 @@ name: Publisher visual golden Batch 01
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-visual-golden-batch01.yml"
+      - ".github/workflows/overnight-hosted-pub-cycle.yml"
+      - "tools/cloud_reader_visual_fingerprint_v1.py"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
+      - "apps/cloud-reader/**"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publisher-visual-golden-batch01.yml"
+      - ".github/workflows/overnight-hosted-pub-cycle.yml"
+      - "tools/cloud_reader_visual_fingerprint_v1.py"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
+      - "apps/cloud-reader/**"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
 
 permissions:
   contents: read
