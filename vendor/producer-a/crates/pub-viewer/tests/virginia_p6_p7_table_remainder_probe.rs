@@ -1,7 +1,6 @@
 use pub_core::StreamPath;
 use pub_escher::{
-    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PublisherFieldRecord,
-    SpContainerObservation, inspect_sp_containers,
+    PUBLISHER_FIELD_SHAPE_ID, PublisherFieldRecord, SpContainerObservation, inspect_sp_containers,
 };
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
@@ -18,6 +17,8 @@ const EXPECTED_SHA256: &str =
 const TABLE_OWNER_REF: u16 = 0x6802;
 const CELL_ORDINAL: u16 = 0x2003;
 const RECTANGLE: u16 = 0x0001;
+const DIRECT_CELL_FILL_PATH: &str = "SpContainer/FOPT/table-cell-fill";
+const AUTOFORMAT_CELL_FILL_PATH: &str = "SpContainer/FOPT/table-autoformat-cell-fill";
 
 fn unique_field(record: &PublisherFieldRecord, id: u16) -> Option<u32> {
     let mut matches = record.fields.iter().filter(|field| field.id == id);
@@ -28,12 +29,13 @@ fn unique_field(record: &PublisherFieldRecord, id: u16) -> Option<u32> {
     Some(first)
 }
 
-fn grounded(shape: &SpContainerObservation, grounded_seq_nums: &BTreeSet<u32>) -> bool {
-    shape
-        .client_data
-        .as_ref()
-        .and_then(|record| unique_field(record, PUBLISHER_FIELD_SHAPE_ID))
-        .is_some_and(|seq| grounded_seq_nums.contains(&seq))
+fn has_client_data_identity(shape: &SpContainerObservation) -> bool {
+    shape.client_data.as_ref().is_some_and(|record| {
+        record
+            .fields
+            .iter()
+            .any(|field| field.id == PUBLISHER_FIELD_SHAPE_ID)
+    })
 }
 
 fn table_owner(shape: &SpContainerObservation) -> Option<u32> {
@@ -41,7 +43,7 @@ fn table_owner(shape: &SpContainerObservation) -> Option<u32> {
 }
 
 fn exact_t840_ordinal(shape: &SpContainerObservation, table_seq: u32) -> Option<u32> {
-    if shape.fsp.as_ref()?.shape_type != RECTANGLE {
+    if has_client_data_identity(shape) || shape.fsp.as_ref()?.shape_type != RECTANGLE {
         return None;
     }
     let anchor = shape.client_anchor.as_ref()?;
@@ -61,6 +63,9 @@ fn exact_t840_ordinal(shape: &SpContainerObservation, table_seq: u32) -> Option<
 }
 
 fn ordinal_hint(shape: &SpContainerObservation, table_seq: u32) -> Option<u32> {
+    if has_client_data_identity(shape) {
+        return None;
+    }
     let anchor = shape.client_anchor.as_ref()?;
     if unique_field(anchor, TABLE_OWNER_REF)? != table_seq {
         return None;
@@ -75,6 +80,9 @@ fn ordinal_hint(shape: &SpContainerObservation, table_seq: u32) -> Option<u32> {
 }
 
 fn anchor_signature(record: &PublisherFieldRecord) -> String {
+    if record.fields.is_empty() {
+        return "absent".to_owned();
+    }
     record
         .fields
         .iter()
@@ -122,16 +130,46 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
 }
 
 #[derive(Debug, Default, Serialize)]
+struct TableReceipt {
+    cell_count: usize,
+    direct_child_painted_cell_count: usize,
+    t840_painted_cell_count: usize,
+    other_painted_cell_count: usize,
+    unpainted_cell_count: usize,
+    table_linked_no_identity_carrier_count: usize,
+    table_linked_with_identity_carrier_count: usize,
+    exact_t840_unique_ordinal_count: usize,
+    exact_t840_ambiguous_ordinal_count: usize,
+    exact_t840_out_of_range_count: usize,
+    unsupported_linked_carrier_count: usize,
+    unsupported_ordinal_carrier_count: usize,
+    unsupported_unmapped_carrier_count: usize,
+    unsupported_out_of_range_ordinal_count: usize,
+    unpainted_with_exact_unique_carrier_count: usize,
+    unpainted_with_unique_unsupported_ordinal_carrier_count: usize,
+    unpainted_with_ambiguous_unsupported_ordinal_carrier_count: usize,
+    unpainted_with_no_ordinal_carrier_count: usize,
+}
+
+#[derive(Debug, Default, Serialize)]
 struct PageReceipt {
     viewer_page_index: u32,
     table_count: usize,
     cell_count: usize,
-    painted_cell_count: usize,
+    direct_child_painted_cell_count: usize,
+    t840_painted_cell_count: usize,
+    other_painted_cell_count: usize,
     unpainted_cell_count: usize,
-    linked_ungrounded_carrier_count: usize,
+    table_linked_no_identity_carrier_count: usize,
+    table_linked_with_identity_carrier_count: usize,
     exact_t840_unique_ordinal_count: usize,
+    exact_t840_ambiguous_ordinal_count: usize,
+    exact_t840_out_of_range_count: usize,
     unsupported_linked_carrier_count: usize,
-    unpainted_with_exact_carrier_count: usize,
+    unsupported_ordinal_carrier_count: usize,
+    unsupported_unmapped_carrier_count: usize,
+    unsupported_out_of_range_ordinal_count: usize,
+    unpainted_with_exact_unique_carrier_count: usize,
     unpainted_with_unique_unsupported_ordinal_carrier_count: usize,
     unpainted_with_ambiguous_unsupported_ordinal_carrier_count: usize,
     unpainted_with_no_ordinal_carrier_count: usize,
@@ -139,6 +177,7 @@ struct PageReceipt {
     unsupported_shape_type_histogram: BTreeMap<String, usize>,
     unsupported_fopt_signature_histogram: BTreeMap<String, usize>,
     unsupported_paint_class_histogram: BTreeMap<String, usize>,
+    tables: Vec<TableReceipt>,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,6 +186,31 @@ struct Receipt {
     source_sha256: String,
     pages: Vec<PageReceipt>,
     guardrails: Vec<&'static str>,
+}
+
+fn add_table_to_page(page: &mut PageReceipt, table: &TableReceipt) {
+    page.table_count += 1;
+    page.cell_count += table.cell_count;
+    page.direct_child_painted_cell_count += table.direct_child_painted_cell_count;
+    page.t840_painted_cell_count += table.t840_painted_cell_count;
+    page.other_painted_cell_count += table.other_painted_cell_count;
+    page.unpainted_cell_count += table.unpainted_cell_count;
+    page.table_linked_no_identity_carrier_count += table.table_linked_no_identity_carrier_count;
+    page.table_linked_with_identity_carrier_count += table.table_linked_with_identity_carrier_count;
+    page.exact_t840_unique_ordinal_count += table.exact_t840_unique_ordinal_count;
+    page.exact_t840_ambiguous_ordinal_count += table.exact_t840_ambiguous_ordinal_count;
+    page.exact_t840_out_of_range_count += table.exact_t840_out_of_range_count;
+    page.unsupported_linked_carrier_count += table.unsupported_linked_carrier_count;
+    page.unsupported_ordinal_carrier_count += table.unsupported_ordinal_carrier_count;
+    page.unsupported_unmapped_carrier_count += table.unsupported_unmapped_carrier_count;
+    page.unsupported_out_of_range_ordinal_count += table.unsupported_out_of_range_ordinal_count;
+    page.unpainted_with_exact_unique_carrier_count +=
+        table.unpainted_with_exact_unique_carrier_count;
+    page.unpainted_with_unique_unsupported_ordinal_carrier_count +=
+        table.unpainted_with_unique_unsupported_ordinal_carrier_count;
+    page.unpainted_with_ambiguous_unsupported_ordinal_carrier_count +=
+        table.unpainted_with_ambiguous_unsupported_ordinal_carrier_count;
+    page.unpainted_with_no_ordinal_carrier_count += table.unpainted_with_no_ordinal_carrier_count;
 }
 
 #[test]
@@ -170,6 +234,11 @@ fn exact_virginia_p6_p7_table_remainder_probe() {
 
     let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
         .expect("open exact Virginia through shared Viewer bundle");
+    assert_eq!(
+        bundle.geometry.document.pages.len(),
+        25,
+        "bounded Virginia family profile must expose 25 customer pages"
+    );
 
     let escher = pub_cfb::read_stream_reader(
         Cursor::new(bytes.as_slice()),
@@ -181,13 +250,6 @@ fn exact_virginia_p6_p7_table_remainder_probe() {
         &escher,
     )
     .expect("inspect OfficeArt SpContainers");
-
-    let grounded_seq_nums = bundle
-        .resolved_graph
-        .nodes
-        .values()
-        .map(|node| node.payload.contents_seq_num)
-        .collect::<BTreeSet<_>>();
 
     let mut pages = Vec::new();
     for viewer_page_index in [6_u32, 7_u32, 21_u32, 22_u32, 23_u32] {
@@ -211,29 +273,58 @@ fn exact_virginia_p6_p7_table_remainder_probe() {
         {
             let table = table_node.payload.table.as_ref().expect("filtered TABLE");
             let table_seq = table_node.payload.contents_seq_num;
-            page.table_count += 1;
-            page.cell_count += table.cells.len();
-            page.painted_cell_count += table.cells.iter().filter(|cell| cell.paint.is_some()).count();
-            page.unpainted_cell_count += table.cells.iter().filter(|cell| cell.paint.is_none()).count();
+            let cell_count = table.cells.len();
+            let mut table_receipt = TableReceipt {
+                cell_count,
+                ..TableReceipt::default()
+            };
+
+            for cell in &table.cells {
+                let Some(paint) = cell.paint.as_ref() else {
+                    table_receipt.unpainted_cell_count += 1;
+                    continue;
+                };
+                let direct = paint
+                    .source_refs
+                    .iter()
+                    .any(|source| source.path.as_deref() == Some(DIRECT_CELL_FILL_PATH));
+                let autoformat = paint
+                    .source_refs
+                    .iter()
+                    .any(|source| source.path.as_deref() == Some(AUTOFORMAT_CELL_FILL_PATH));
+                match (direct, autoformat) {
+                    (true, false) => table_receipt.direct_child_painted_cell_count += 1,
+                    (false, true) => table_receipt.t840_painted_cell_count += 1,
+                    _ => table_receipt.other_painted_cell_count += 1,
+                }
+            }
 
             let linked = inventory
                 .shapes
                 .iter()
                 .filter(|shape| table_owner(shape) == Some(table_seq))
-                .filter(|shape| !grounded(shape, &grounded_seq_nums))
                 .collect::<Vec<_>>();
-            page.linked_ungrounded_carrier_count += linked.len();
 
             let mut exact_by_ordinal = BTreeMap::<u32, usize>::new();
             let mut unsupported_by_ordinal = BTreeMap::<u32, usize>::new();
 
             for shape in linked {
+                if has_client_data_identity(shape) {
+                    table_receipt.table_linked_with_identity_carrier_count += 1;
+                    continue;
+                }
+                table_receipt.table_linked_no_identity_carrier_count += 1;
+
                 if let Some(ordinal) = exact_t840_ordinal(shape, table_seq) {
-                    *exact_by_ordinal.entry(ordinal).or_default() += 1;
+                    if usize::try_from(ordinal).is_ok_and(|value| value < cell_count) {
+                        *exact_by_ordinal.entry(ordinal).or_default() += 1;
+                    } else {
+                        table_receipt.exact_t840_out_of_range_count += 1;
+                    }
                     continue;
                 }
 
-                page.unsupported_linked_carrier_count += 1;
+                table_receipt.unsupported_linked_carrier_count += 1;
                 if let Some(anchor) = shape.client_anchor.as_ref() {
                     bump(
                         &mut page.unsupported_anchor_signature_histogram,
@@ -256,44 +347,89 @@ fn exact_virginia_p6_p7_table_remainder_probe() {
                     &mut page.unsupported_paint_class_histogram,
                     paint_class(shape),
                 );
+
                 if let Some(ordinal) = ordinal_hint(shape, table_seq) {
-                    *unsupported_by_ordinal.entry(ordinal).or_default() += 1;
+                    if usize::try_from(ordinal).is_ok_and(|value| value < cell_count) {
+                        table_receipt.unsupported_ordinal_carrier_count += 1;
+                        *unsupported_by_ordinal.entry(ordinal).or_default() += 1;
+                    } else {
+                        table_receipt.unsupported_out_of_range_ordinal_count += 1;
+                    }
+                } else {
+                    table_receipt.unsupported_unmapped_carrier_count += 1;
                 }
             }
 
-            page.exact_t840_unique_ordinal_count += exact_by_ordinal
-                .values()
-                .filter(|count| **count == 1)
-                .count();
+            table_receipt.exact_t840_unique_ordinal_count =
+                exact_by_ordinal.values().filter(|count| **count == 1).count();
+            table_receipt.exact_t840_ambiguous_ordinal_count =
+                exact_by_ordinal.values().filter(|count| **count > 1).count();
 
             for cell in table.cells.iter().filter(|cell| cell.paint.is_none()) {
                 let ordinal = cell.stored_record_index;
-                if exact_by_ordinal.get(&ordinal) == Some(&1) {
-                    page.unpainted_with_exact_carrier_count += 1;
-                    continue;
+                match exact_by_ordinal.get(&ordinal).copied().unwrap_or(0) {
+                    1 => {
+                        table_receipt.unpainted_with_exact_unique_carrier_count += 1;
+                        continue;
+                    }
+                    n if n > 1 => {
+                        table_receipt.unpainted_with_ambiguous_unsupported_ordinal_carrier_count += 1;
+                        continue;
+                    }
+                    _ => {}
                 }
+
                 match unsupported_by_ordinal.get(&ordinal).copied().unwrap_or(0) {
-                    0 => page.unpainted_with_no_ordinal_carrier_count += 1,
-                    1 => page.unpainted_with_unique_unsupported_ordinal_carrier_count += 1,
-                    _ => page.unpainted_with_ambiguous_unsupported_ordinal_carrier_count += 1,
+                    0 => table_receipt.unpainted_with_no_ordinal_carrier_count += 1,
+                    1 => {
+                        table_receipt.unpainted_with_unique_unsupported_ordinal_carrier_count += 1
+                    }
+                    _ => {
+                        table_receipt.unpainted_with_ambiguous_unsupported_ordinal_carrier_count += 1
+                    }
                 }
             }
+
+            assert_eq!(
+                table_receipt.direct_child_painted_cell_count
+                    + table_receipt.t840_painted_cell_count
+                    + table_receipt.other_painted_cell_count
+                    + table_receipt.unpainted_cell_count,
+                table_receipt.cell_count,
+                "every TABLE cell must have one current paint/unpainted class"
+            );
+            assert_eq!(
+                table_receipt.unpainted_with_exact_unique_carrier_count
+                    + table_receipt.unpainted_with_unique_unsupported_ordinal_carrier_count
+                    + table_receipt.unpainted_with_ambiguous_unsupported_ordinal_carrier_count
+                    + table_receipt.unpainted_with_no_ordinal_carrier_count,
+                table_receipt.unpainted_cell_count,
+                "every unpainted TABLE cell must have one raw-carrier remainder class"
+            );
+
+            add_table_to_page(&mut page, &table_receipt);
+            page.tables.push(table_receipt);
         }
 
         assert_eq!(
-            page.painted_cell_count + page.unpainted_cell_count,
+            page.direct_child_painted_cell_count
+                + page.t840_painted_cell_count
+                + page.other_painted_cell_count
+                + page.unpainted_cell_count,
             page.cell_count,
-            "every selected TABLE cell classified"
+            "page TABLE cell classification must close"
         );
         pages.push(page);
     }
 
     let receipt = Receipt {
-        schema: "chaptera.virginia-p6-p7-table-remainder.v1",
+        schema: "chaptera.virginia-p6-p7-table-remainder.v2",
         source_sha256: actual_sha,
         pages,
         guardrails: vec![
-            "The exact T840 carrier law is treated as fixed authority and is not widened by this probe.",
+            "The exact T840 carrier law is fixed authority and is not widened by this probe.",
+            "Current admitted paint is separated by existing provenance path: T595 direct-child table-cell-fill versus T840 table-autoformat-cell-fill.",
+            "A raw T840 candidate is excluded when any ordinary Publisher ClientData 0x6801 identity is present, matching the product gate.",
             "Unsupported TABLE-linked carriers are classified only by field-ID shape, OfficeArt shape type, FOPT property-ID presence, and coarse fill/line family presence.",
             "No property values, colors, coordinates, object identities, text, offsets, filenames, PDF-derived semantics, or raw bytes are emitted.",
             "An unsupported ordinal-bearing carrier is only a discriminator candidate; it receives no product semantics from this receipt.",
@@ -311,15 +447,20 @@ fn exact_virginia_p6_p7_table_remainder_probe() {
 
     for page in &receipt.pages {
         println!(
-            "VIRGINIA_TABLE_REMAINDER p{} paint={}/{} unsupported={} no_ordinal={} unique_unsupported={} ambiguous_unsupported={} exact_but_unpainted={}",
+            "VIRGINIA_TABLE_REMAINDER_V2 p{} direct={} t840={} other={} unpainted={}/{} unsupported={} mapped={} unmapped={} no_ordinal={} unique_unsupported={} ambiguous={} exact_but_unpainted={}",
             page.viewer_page_index,
-            page.painted_cell_count,
+            page.direct_child_painted_cell_count,
+            page.t840_painted_cell_count,
+            page.other_painted_cell_count,
+            page.unpainted_cell_count,
             page.cell_count,
             page.unsupported_linked_carrier_count,
+            page.unsupported_ordinal_carrier_count,
+            page.unsupported_unmapped_carrier_count,
             page.unpainted_with_no_ordinal_carrier_count,
             page.unpainted_with_unique_unsupported_ordinal_carrier_count,
             page.unpainted_with_ambiguous_unsupported_ordinal_carrier_count,
-            page.unpainted_with_exact_carrier_count,
+            page.unpainted_with_exact_unique_carrier_count,
         );
     }
 }
