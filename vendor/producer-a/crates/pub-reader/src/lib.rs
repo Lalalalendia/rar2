@@ -93,17 +93,17 @@ use pub_contents::{
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
-    OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
+    FoptObservation, OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
     OFFICE_ART_PROPERTY_CROP_FROM_RIGHT, OFFICE_ART_PROPERTY_CROP_FROM_TOP,
     OFFICE_ART_PROPERTY_PIB, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
-    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, FoptObservation, PublisherField,
-    PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
+    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField, PublisherFieldRecord,
+    SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
-    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu, Node,
-    NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
-    SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
-    derive_source_canonical_id,
+    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
+    Node, NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest,
+    Size2D, SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story,
+    StoryId, derive_source_canonical_id,
 };
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillMcldVerticalAlignment,
