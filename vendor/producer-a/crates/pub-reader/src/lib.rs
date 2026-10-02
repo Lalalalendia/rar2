@@ -96,11 +96,11 @@ use pub_escher::{
     OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
     OFFICE_ART_PROPERTY_CROP_FROM_RIGHT, OFFICE_ART_PROPERTY_CROP_FROM_TOP,
     OFFICE_ART_PROPERTY_PIB, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
-    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField, PublisherFieldRecord,
-    SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
+    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, Fopte, FoptObservation, PublisherField,
+    PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
-    Affine2D, AuthorityClass, ByteRange, CanonicalId, Document, DocumentId, LengthEmu, Node,
+    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu, Node,
     NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
     SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
     derive_source_canonical_id,
@@ -2005,6 +2005,85 @@ fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> boo
     })
 }
 
+fn unique_officeart_rotation_raw16_16(records: &[FoptObservation]) -> Option<i32> {
+    let mut matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICEART_PROPERTY_ROTATION);
+    let property = matches.next()?;
+    if matches.next().is_some() || property.f_bid() || property.f_complex() {
+        return None;
+    }
+    Some(i32::from_le_bytes(property.op.to_le_bytes()))
+}
+
+fn decimal_from_f64(value: f64) -> Option<Decimal> {
+    if !value.is_finite() {
+        return None;
+    }
+    let value = if value.abs() < 0.000_000_000_000_5 {
+        0.0
+    } else {
+        value
+    };
+    format!("{value:.12}").parse().ok()
+}
+
+fn rounded_emu(value: f64) -> Option<LengthEmu> {
+    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return None;
+    }
+    Some(LengthEmu::new(libm::round(value) as i64))
+}
+
+fn officeart_rotation_affine(raw16_16: i32, bounds: RectEmu) -> Option<Affine2D> {
+    if raw16_16 == 0 {
+        return Some(Affine2D::identity());
+    }
+    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
+        return None;
+    }
+
+    let degrees = f64::from(raw16_16) / 65_536.0;
+    let radians = degrees * std::f64::consts::PI / 180.0;
+    let cosine = libm::cos(radians);
+    let sine = libm::sin(radians);
+
+    let center_x = bounds.x.get() as f64 + bounds.width.get() as f64 / 2.0;
+    let center_y = bounds.y.get() as f64 + bounds.height.get() as f64 / 2.0;
+    let tx = center_x - cosine * center_x + sine * center_y;
+    let ty = center_y - sine * center_x - cosine * center_y;
+
+    Some(Affine2D {
+        a: decimal_from_f64(cosine)?,
+        b: decimal_from_f64(sine)?,
+        c: decimal_from_f64(-sine)?,
+        d: decimal_from_f64(cosine)?,
+        tx: rounded_emu(tx)?,
+        ty: rounded_emu(ty)?,
+    })
+}
+
+fn direct_unflipped_image_officeart_transform(
+    shape: &pub_escher::SpContainerObservation,
+    bounds: RectEmu,
+    direct: bool,
+    image_backed: bool,
+) -> Affine2D {
+    if !direct
+        || !image_backed
+        || shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_H)
+        || shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_V)
+    {
+        return Affine2D::identity();
+    }
+
+    let Some(raw16_16) = unique_officeart_rotation_raw16_16(&shape.fopts) else {
+        return Affine2D::identity();
+    };
+    officeart_rotation_affine(raw16_16, bounds).unwrap_or_else(Affine2D::identity)
+}
+
 fn shape_has_fsp_flag(shape: &pub_escher::SpContainerObservation, flag: u32) -> bool {
     shape.fsp.as_ref().is_some_and(|fsp| fsp.flags & flag != 0)
 }
@@ -3025,6 +3104,13 @@ pub fn build_mature_0x2c_from_streams(
             source_refs.extend(table_story.source_refs.clone());
         }
 
+        let transform = direct_unflipped_image_officeart_transform(
+            shape,
+            bounds,
+            grouped_sources.is_empty(),
+            image_slot.is_some(),
+        );
+
         graph.nodes.insert(
             node_id,
             Node {
@@ -3040,7 +3126,7 @@ pub fn build_mature_0x2c_from_streams(
                     id: node_id,
                     parent_id: page_id.into_canonical(),
                     bounds,
-                    transform: Affine2D::identity(),
+                    transform,
                     source_refs,
                     extensions: Vec::new(),
                 },
@@ -4722,6 +4808,93 @@ fn add_missing_link_target_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rotation_test_span() -> RawSpan {
+        RawSpan {
+            stream: StreamPath("/Escher/EscherStm".to_owned()),
+            offset: 0,
+            len: 6,
+        }
+    }
+
+    fn rotation_observation(properties: Vec<Fopte>) -> FoptObservation {
+        FoptObservation {
+            rec_type: 0xF00B,
+            source: rotation_test_span(),
+            properties,
+        }
+    }
+
+    fn rotation_property(opid: u16, op: u32) -> Fopte {
+        Fopte {
+            opid,
+            op,
+            source: rotation_test_span(),
+            complex_source: None,
+            complex_data: None,
+        }
+    }
+
+    #[test]
+    fn officeart_rotation_parser_is_bounded_and_signed() {
+        assert_eq!(unique_officeart_rotation_raw16_16(&[]), None);
+
+        let zero = vec![rotation_observation(vec![rotation_property(
+            OFFICEART_PROPERTY_ROTATION,
+            0,
+        )])];
+        assert_eq!(unique_officeart_rotation_raw16_16(&zero), Some(0));
+
+        let negative_raw = (-90_i32 * 65_536).to_le_bytes();
+        let negative = vec![rotation_observation(vec![rotation_property(
+            OFFICEART_PROPERTY_ROTATION,
+            u32::from_le_bytes(negative_raw),
+        )])];
+        assert_eq!(
+            unique_officeart_rotation_raw16_16(&negative),
+            Some(-90_i32 * 65_536)
+        );
+
+        let duplicate = vec![rotation_observation(vec![
+            rotation_property(OFFICEART_PROPERTY_ROTATION, 1),
+            rotation_property(OFFICEART_PROPERTY_ROTATION, 2),
+        ])];
+        assert_eq!(unique_officeart_rotation_raw16_16(&duplicate), None);
+
+        let bid = vec![rotation_observation(vec![rotation_property(
+            OFFICEART_PROPERTY_ROTATION | 0x4000,
+            1,
+        )])];
+        assert_eq!(unique_officeart_rotation_raw16_16(&bid), None);
+    }
+
+    #[test]
+    fn officeart_quarter_rotation_preserves_bounds_center() {
+        let bounds = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(1_000),
+            LengthEmu::new(500),
+        );
+        let transform =
+            officeart_rotation_affine(90_i32 * 65_536, bounds).expect("90-degree transform");
+
+        assert_eq!(transform.a.as_str(), "0");
+        assert_eq!(transform.b.as_str(), "1");
+        assert_eq!(transform.c.as_str(), "-1");
+        assert_eq!(transform.d.as_str(), "0");
+        assert_eq!(transform.tx.get(), 750);
+        assert_eq!(transform.ty.get(), -250);
+
+        let negative =
+            officeart_rotation_affine(-90_i32 * 65_536, bounds).expect("-90-degree transform");
+        assert_eq!(negative.a.as_str(), "0");
+        assert_eq!(negative.b.as_str(), "-1");
+        assert_eq!(negative.c.as_str(), "1");
+        assert_eq!(negative.d.as_str(), "0");
+        assert_eq!(negative.tx.get(), 250);
+        assert_eq!(negative.ty.get(), 750);
+    }
 
     #[test]
     #[ignore = "requires CHAPTERA_SOURCE_STACK_FIXTURE and CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS"]
