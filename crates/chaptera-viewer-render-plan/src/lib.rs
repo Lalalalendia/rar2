@@ -140,6 +140,8 @@ pub struct RenderTextFragmentV1 {
     pub typography: Vec<RenderTypographyRunV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<RenderParagraphAlignmentRunV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_colors: Vec<RenderTextColorRunV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_font_resource_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,6 +163,39 @@ pub struct RenderParagraphAlignmentRunV1 {
     pub scalar_end: u32,
     pub alignment: RenderParagraphAlignmentV1,
     pub source_value: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTextColorRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub rgb: [u8; 3],
+    pub inherited: bool,
+}
+
+pub fn uniform_text_color_rgb_v1(fragment: &RenderTextFragmentV1) -> Option<[u8; 3]> {
+    if fragment.scalar_start >= fragment.scalar_end || fragment.text_colors.is_empty() {
+        return None;
+    }
+    let mut runs = fragment.text_colors.iter().collect::<Vec<_>>();
+    runs.sort_by_key(|run| (run.scalar_start, run.scalar_end));
+    let mut cursor = fragment.scalar_start;
+    let mut rgb = None;
+    for run in runs {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+        {
+            return None;
+        }
+        match rgb {
+            None => rgb = Some(run.rgb),
+            Some(existing) if existing == run.rgb => {}
+            Some(_) => return None,
+        }
+        cursor = run.scalar_end;
+    }
+    (cursor == fragment.scalar_end).then_some(rgb?).flatten()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -503,6 +538,7 @@ fn clip_render_text_at_story_scalar_end(fragment: &mut RenderTextFragmentV1, sca
         fragment.scalar_end = fragment.scalar_start;
         fragment.text.clear();
         fragment.typography.clear();
+        fragment.text_colors.clear();
         fragment.layout = None;
         fragment.line_count = 0;
         return;
@@ -522,6 +558,12 @@ fn clip_render_text_at_story_scalar_end(fragment: &mut RenderTextFragmentV1, sca
     }
     fragment
         .typography
+        .retain(|run| run.scalar_start < run.scalar_end);
+    for run in &mut fragment.text_colors {
+        run.scalar_end = run.scalar_end.min(clipped_end);
+    }
+    fragment
+        .text_colors
         .retain(|run| run.scalar_start < run.scalar_end);
 }
 
@@ -545,6 +587,33 @@ fn parse_story_id(value: &str, field: &'static str) -> Result<StoryId, RenderPla
             field,
             value: value.to_owned(),
         })
+}
+
+fn render_text_color_runs_v1(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    story_text: &str,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Vec<RenderTextColorRunV1> {
+    let mut runs = visual
+        .text_color_runs
+        .iter()
+        .filter(|run| run.story_id == story_id)
+        .filter(|run| run.applies_to_story_text(story_text))
+        .filter_map(|run| {
+            let start = run.scalar_start.max(scalar_start);
+            let end = run.scalar_end.min(scalar_end);
+            (start < end).then_some(RenderTextColorRunV1 {
+                scalar_start: start,
+                scalar_end: end,
+                rgb: run.rgb,
+                inherited: run.inherited,
+            })
+        })
+        .collect::<Vec<_>>();
+    runs.sort_by_key(|run| (run.scalar_start, run.scalar_end));
+    runs
 }
 
 fn render_paragraph_alignment_runs_v1(
@@ -621,6 +690,13 @@ fn projected_text(
         line_count: 0,
         typography,
         paragraph_alignments: render_paragraph_alignment_runs_v1(
+            visual,
+            story_id,
+            &story.text,
+            0,
+            scalar_end,
+        ),
+        text_colors: render_text_color_runs_v1(
             visual,
             story_id,
             &story.text,
@@ -731,6 +807,21 @@ pub fn build_page_render_plan_v1(
                         .find(|story| story.id == fragment.story_id)
                         .map(|story| {
                             render_paragraph_alignment_runs_v1(
+                                visual,
+                                fragment.story_id,
+                                &story.text,
+                                fragment.scalar_start,
+                                fragment.scalar_end,
+                            )
+                        })
+                        .unwrap_or_default(),
+                    text_colors: visual
+                        .document
+                        .stories
+                        .iter()
+                        .find(|story| story.id == fragment.story_id)
+                        .map(|story| {
+                            render_text_color_runs_v1(
                                 visual,
                                 fragment.story_id,
                                 &story.text,
@@ -1761,6 +1852,7 @@ mod tests {
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
+            text_color_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             images: vec![ViewerEmbeddedImage {
@@ -1794,6 +1886,7 @@ mod tests {
             line_count: 1,
             typography,
             paragraph_alignments: Vec::new(),
+            text_colors: Vec::new(),
             backend_font_resource_id: None,
             layout: None,
         }
