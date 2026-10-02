@@ -100,7 +100,7 @@ impl IsolatedMigrationEditableRouteProducer {
         Ok(Self { config, blob_store })
     }
 
-    pub async fn assess(
+    async fn assess(
         &self,
         tenant_id: &str,
         binding_id: &str,
