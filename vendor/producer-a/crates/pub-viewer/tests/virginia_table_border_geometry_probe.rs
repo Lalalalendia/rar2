@@ -535,8 +535,8 @@ fn exact_virginia_table_border_geometry_probe() {
                 };
                 receipt.group_client_anchor_count += 1;
                 let Some(target) = center_origin_to_page(
-                    page.size.width.get(),
-                    page.size.height.get(),
+                    page.width_emu,
+                    page.height_emu,
                     group_anchor,
                 ) else {
                     continue;
