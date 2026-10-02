@@ -40,7 +40,7 @@ permissions:
 
 concurrency:
   group: migration-1050-corpus-${{ github.event.pull_request.number || github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/target/migration-corpus-rust
