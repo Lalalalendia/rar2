@@ -2632,7 +2632,6 @@ mod tests {
             std::slice::from_ref(&paragraph),
             &defaults,
             &[story],
-            &[],
         )
         .expect("size-only inherited run");
         let [run] = inherited.as_slice() else {
@@ -2695,7 +2694,6 @@ mod tests {
             std::slice::from_ref(&paragraph),
             &defaults,
             &[story],
-            &[],
         )
         .expect("direct size-only run");
         let [run] = direct.as_slice() else {
