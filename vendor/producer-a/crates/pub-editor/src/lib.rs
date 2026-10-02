@@ -3443,7 +3443,6 @@ fn authored_text_box_node_v1(
             image_slot: None,
             legacy_ole: None,
             explicit_image_crop: None,
-            explicit_image_recolor: None,
             explicit_paint: Default::default(),
             effective_paint: None,
             story_frame: Some(PubResolvedStoryFrame {
