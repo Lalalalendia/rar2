@@ -354,7 +354,6 @@ struct CharacterDefaultObservation {
     style_source: RawSpan,
     font_pairs: Vec<(u32, String)>,
     text_sizes_emu: Vec<u32>,
-   color_indices: Vec::new(),
     color_indices: Vec<u32>,
 }
 
@@ -515,7 +514,6 @@ pub fn parse_bounded_typography(
             font_names: style.font_names,
             script_fonts: style.script_fonts,
             text_sizes_emu: style.text_sizes_emu,
-           color_indices: Vec::new(),
             color_indices: style.color_indices,
             story_intersections: intersections,
         });
