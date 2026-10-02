@@ -68,3 +68,17 @@ Canonical tranche files:
 
 Canonical complete-batch receipt:
 - `tools/corpus/receipts/publisher-visual-golden-batch-01-summary-2026-10-03.json`
+
+## Normalized manual-oracle bundle
+
+Batch 01 is normalized into the existing `tools/cloud_reader_manual_oracle_bundle_v1.py` layout:
+
+- exact pair count: **55**
+- bundle name: `publisher-visual-golden-batch-01-manual-oracle.zip`
+- bundle SHA-256: `72949ba7cda9404f4d72cef5e18bc38d3f708fb14e9b310a6c4b912906bc2a76`
+- bundle bytes: **91,039,995**
+- committed executable pair registry: `tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv`
+- pair-registry SHA-256: `8f47ca1df8f8377193f07ab990fcdc5d10cc6410da3d56c0ddc1640a607985e5`
+- committed original selection manifest: `tools/corpus/receipts/publisher-visual-golden-batch-01-selection.csv`
+
+The binary bundle is intentionally not committed to normal git history. Consumers must verify bundle and pair SHA-256 before using it.
