@@ -85,6 +85,31 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
 }
 
+fn colorref_profile(records: &[FoptObservation], property_id: u16) -> &'static str {
+    let matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == property_id)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return "absent";
+    }
+    if matches
+        .iter()
+        .any(|property| property.f_bid() || property.f_complex())
+    {
+        return "malformed_or_complex";
+    }
+    if matches.len() != 1 {
+        return "duplicate_scalar";
+    }
+    match (matches[0].op >> 24) as u8 {
+        0x00 => "direct_rgb",
+        0x08 => "scheme_color",
+        _ => "other_flagged",
+    }
+}
+
 fn scalar_property_profile(records: &[FoptObservation], property_id: u16) -> &'static str {
     let matches = records
         .iter()
@@ -294,6 +319,9 @@ struct PageReceipt {
     restored_color_authority_histogram: BTreeMap<String, usize>,
     restored_local_fill_type_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_color_profile_histogram: BTreeMap<String, usize>,
+    restored_local_fill_color_form_histogram: BTreeMap<String, usize>,
+    restored_effective_color_distinct_count: usize,
+    restored_dgg_color_materialization_histogram: BTreeMap<String, usize>,
     restored_local_fill_opacity_profile_histogram: BTreeMap<String, usize>,
     restored_effective_fill_opacity_histogram: BTreeMap<String, usize>,
     restored_anchor_geometry_histogram: BTreeMap<String, usize>,
@@ -312,10 +340,12 @@ struct Receipt {
     dgg_default_group_count: usize,
     dgg_primary_fill_type_profile: String,
     dgg_primary_fill_color_profile: String,
+    dgg_primary_fill_color_form: String,
     dgg_primary_fill_opacity_profile: String,
     dgg_primary_fill_boolean_profile: String,
     dgg_tertiary_fill_type_profile: String,
     dgg_tertiary_fill_color_profile: String,
+    dgg_tertiary_fill_color_form: String,
     dgg_tertiary_fill_opacity_profile: String,
     dgg_tertiary_fill_boolean_profile: String,
     pages: Vec<PageReceipt>,
@@ -410,6 +440,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             source_order_node_count: source_order.map_or(0, BTreeSet::len),
             ..PageReceipt::default()
         };
+        let mut restored_effective_colors = BTreeSet::<[u8; 3]>::new();
 
         for node in build
             .graph
@@ -497,6 +528,27 @@ fn exact_virginia_restored_fill_stack_probe() {
                     &mut page.restored_color_authority_histogram,
                     authority_bucket(color.authority),
                 );
+                restored_effective_colors.insert(color.value);
+                if matches!(
+                    color.authority,
+                    PubEffectivePaintAuthority::DrawingGroupPrimary
+                        | PubEffectivePaintAuthority::DrawingGroupTertiary
+                ) {
+                    let form = match color.authority {
+                        PubEffectivePaintAuthority::DrawingGroupPrimary => dgg
+                            .map(|group| colorref_profile(&group.primary_options, FILL_COLOR))
+                            .unwrap_or("absent"),
+                        PubEffectivePaintAuthority::DrawingGroupTertiary => dgg
+                            .map(|group| colorref_profile(&group.tertiary_options, FILL_COLOR))
+                            .unwrap_or("absent"),
+                        PubEffectivePaintAuthority::ShapeLocal
+                        | PubEffectivePaintAuthority::NormativeDefault => unreachable!(),
+                    };
+                    bump(
+                        &mut page.restored_dgg_color_materialization_histogram,
+                        format!("{form}:effective_rgb_present"),
+                    );
+                }
             }
             bump(
                 &mut page.restored_local_fill_type_profile_histogram,
@@ -505,6 +557,10 @@ fn exact_virginia_restored_fill_stack_probe() {
             bump(
                 &mut page.restored_local_fill_color_profile_histogram,
                 scalar_property_profile(&shape.fopts, FILL_COLOR),
+            );
+            bump(
+                &mut page.restored_local_fill_color_form_histogram,
+                colorref_profile(&shape.fopts, FILL_COLOR),
             );
             bump(
                 &mut page.restored_local_fill_opacity_profile_histogram,
@@ -587,6 +643,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             );
         }
 
+        page.restored_effective_color_distinct_count = restored_effective_colors.len();
         pages.push(page);
     }
 
@@ -616,6 +673,10 @@ fn exact_virginia_restored_fill_stack_probe() {
             .map(|group| scalar_property_profile(&group.primary_options, FILL_COLOR))
             .unwrap_or("absent")
             .to_owned(),
+        dgg_primary_fill_color_form: dgg
+            .map(|group| colorref_profile(&group.primary_options, FILL_COLOR))
+            .unwrap_or("absent")
+            .to_owned(),
         dgg_primary_fill_opacity_profile: dgg
             .map(|group| fill_opacity_profile(&group.primary_options))
             .unwrap_or_else(|| "absent".to_owned()),
@@ -628,6 +689,10 @@ fn exact_virginia_restored_fill_stack_probe() {
             .to_owned(),
         dgg_tertiary_fill_color_profile: dgg
             .map(|group| scalar_property_profile(&group.tertiary_options, FILL_COLOR))
+            .unwrap_or("absent")
+            .to_owned(),
+        dgg_tertiary_fill_color_form: dgg
+            .map(|group| colorref_profile(&group.tertiary_options, FILL_COLOR))
             .unwrap_or("absent")
             .to_owned(),
         dgg_tertiary_fill_opacity_profile: dgg
@@ -649,6 +714,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "Stage-B property profiles emit only presence/participation classes and effective-authority buckets, never raw property values.",
             "Stage-C fillOpacity profiles classify only transparent/partial/opaque/invalid and never emit the persisted fixed-point scalar.",
             "Stage-D geometry profiles emit only anchor-equality, transform/rotation classes, page-area buckets and overlap counts; no coordinates or object identities are emitted.",
+            "Stage-E COLORREF profiles emit only direct/scheme/other/ambiguous form classes plus effective-color distinct counts; no RGB or scheme ordinal is emitted.",
         ],
     };
 
