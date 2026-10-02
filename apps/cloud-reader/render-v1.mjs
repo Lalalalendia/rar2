@@ -416,13 +416,20 @@ function appendTableText(group, node) {
 export function imageResourcePaintPlan(node, resource) {
   const href = imageDataUrl(resource);
   if (!href) return null;
+  const frame = node?.bounds;
   const sourceWindow = node?.image_source_window ?? null;
-  const geometry = imagePaintGeometry(node?.bounds, sourceWindow);
+  const geometry = imagePaintGeometry(frame, sourceWindow);
   if (!geometry) return null;
 
   const rotation = node?.image_content_rotation_degrees ?? null;
   if (rotation !== null && sourceWindow !== null) return null;
-  const contentGeometry = imageContentRotationGeometry(geometry, rotation);
+  const localGeometry = {
+    x: geometry.x - frame.x,
+    y: geometry.y - frame.y,
+    width: geometry.width,
+    height: geometry.height
+  };
+  const contentGeometry = imageContentRotationGeometry(localGeometry, rotation);
   if (!contentGeometry) return null;
 
   return Object.freeze({
@@ -439,32 +446,35 @@ export function imageResourcePaintPlan(node, resource) {
   });
 }
 
-function appendImage(group, defs, node, resource, clipId) {
+function appendImage(group, node, resource) {
   const plan = imageResourcePaintPlan(node, resource);
   if (!plan) return false;
 
-  const clipPath = svgNode("clipPath", { id: clipId });
-  clipPath.appendChild(svgNode("rect", {
+  // Picture-content placement is resolved in frame-local coordinates. A nested
+  // SVG viewport supplies the fixed frame clip without carrying large page-EMU
+  // clipPath coordinates or rotating the clip together with the image.
+  const viewport = svgNode("svg", {
     x: node.bounds.x,
     y: node.bounds.y,
     width: node.bounds.width,
-    height: node.bounds.height
-  }));
-  defs.appendChild(clipPath);
-
+    height: node.bounds.height,
+    viewBox: "0 0 " + node.bounds.width + " " + node.bounds.height,
+    overflow: "hidden",
+    "data-picture-viewport": "fixed-frame"
+  });
   const image = svgNode("image", {
     x: plan.geometry.x,
     y: plan.geometry.y,
     width: plan.geometry.width,
     height: plan.geometry.height,
     preserveAspectRatio: "none",
-    "clip-path": "url(#" + clipId + ")",
     "data-resource-id": plan.resource_id,
     "data-resource-availability": plan.availability,
     transform: plan.content_transform
   });
   image.setAttribute("href", plan.href);
-  group.appendChild(image);
+  viewport.appendChild(image);
+  group.appendChild(viewport);
   return true;
 }
 
@@ -513,13 +523,7 @@ function renderNode(svg, defs, node, resources, fonts, index) {
   let paintedResource = false;
   if (node.resource_id) {
     const resource = resources.get(node.resource_id) ?? null;
-    paintedResource = appendImage(
-      group,
-      defs,
-      node,
-      resource,
-      "chaptera-reader-clip-" + index
-    );
+    paintedResource = appendImage(group, node, resource);
     if (!paintedResource) {
       const placeholder = svgNode("rect", {
         x: bounds.x,
