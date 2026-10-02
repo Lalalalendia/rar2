@@ -413,10 +413,7 @@ const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
 const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
 const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
 
-fn unique_anchor_scalar(
-    shape: &pub_escher::SpContainerObservation,
-    field_id: u16,
-) -> Option<u32> {
+fn unique_anchor_scalar(shape: &pub_escher::SpContainerObservation, field_id: u16) -> Option<u32> {
     let anchor = shape.client_anchor.as_ref()?;
     let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
     let first = fields.next()?.value;
@@ -1009,11 +1006,8 @@ pub(crate) fn build_table_source(
     let simple_table = build_simple_table(rows, columns, &joined_cells);
     if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
-        let _ = populate_native_autoformat_table_cell_fill(
-            context,
-            table_seq_num,
-            &mut joined_cells,
-        );
+        let _ =
+            populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
     }
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
