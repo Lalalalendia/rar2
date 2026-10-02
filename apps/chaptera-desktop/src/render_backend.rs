@@ -359,11 +359,38 @@ fn paint_bounded_table_text(
     }
 }
 
-fn shared_resolved_line_job(text: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
+fn uniform_text_color(fragment: &RenderTextFragmentV1) -> Option<egui::Color32> {
+    if fragment.typography.is_empty() {
+        return None;
+    }
+    let mut cursor = fragment.scalar_start;
+    let mut color = None::<[u8; 3]>;
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+        {
+            return None;
+        }
+        let rgb = run.color_rgb?;
+        match color {
+            None => color = Some(rgb),
+            Some(existing) if existing == rgb => {}
+            Some(_) => return None,
+        }
+        cursor = run.scalar_end;
+    }
+    if cursor != fragment.scalar_end {
+        return None;
+    }
+    color.map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
+}
+
+fn shared_resolved_line_job(text: &str, font_id: egui::FontId, color: egui::Color32) -> egui::text::LayoutJob {
     egui::text::LayoutJob::simple(
         text.to_owned(),
         font_id,
-        egui::Color32::BLACK,
+        color,
         f32::INFINITY,
     )
 }
@@ -408,6 +435,7 @@ fn paint_shared_resolved_text(
         egui::FontFamily::Name(font_resource_id.into()),
     );
     let mut max_width_px = 0.0_f32;
+    let text_color = uniform_text_color(fragment).unwrap_or(egui::Color32::BLACK);
 
     for (expected_index, line) in lines.iter().enumerate() {
         if usize::try_from(line.line_index).ok() != Some(expected_index)
@@ -416,12 +444,12 @@ fn paint_shared_resolved_text(
             return None;
         }
 
-        let job = shared_resolved_line_job(&line.text, font_id.clone());
+        let job = shared_resolved_line_job(&line.text, font_id.clone(), text_color);
         let galley = painter.layout_job(job);
         max_width_px = max_width_px.max(galley.size().x);
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
         let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
-        painter.galley(egui::pos2(x, y), galley, egui::Color32::BLACK);
+        painter.galley(egui::pos2(x, y), galley, text_color);
     }
 
     let resolved_height_px = lines.len() as f32 * line_height_px;
@@ -473,12 +501,13 @@ fn layout_document_text(
             )
         })
         .unwrap_or_else(|| crate::fallback_font::font_id_for_scene_scale(scene_scale));
+    let text_color = uniform_text_color(fragment).unwrap_or(egui::Color32::BLACK);
     let fallback_job = || {
         (
             egui::text::LayoutJob::simple(
                 fragment.text.clone(),
                 fallback.clone(),
-                egui::Color32::BLACK,
+                text_color,
                 wrap_width_px.max(1.0),
             ),
             TextLayoutUsage {
@@ -531,7 +560,7 @@ fn layout_document_text(
             let Some(text) = scalar_slice(&fragment.text, cursor, start) else {
                 return fallback_job();
             };
-            append_text_section(&mut job, text, fallback.clone());
+            append_text_section(&mut job, text, fallback.clone(), text_color);
         }
         let Some(text) = scalar_slice(&fragment.text, start, end) else {
             return fallback_job();
@@ -540,7 +569,7 @@ fn layout_document_text(
             .filter(|resource_id| !resource_id.is_empty())
             .map(|resource_id| egui::FontFamily::Name(resource_id.into()))
             .unwrap_or_else(crate::fallback_font::family);
-        append_text_section(&mut job, text, egui::FontId::new(size, family));
+        append_text_section(&mut job, text, egui::FontId::new(size, family), text_color);
         cursor = end;
     }
 
@@ -568,11 +597,11 @@ fn layout_document_text(
     )
 }
 
-fn append_text_section(job: &mut egui::text::LayoutJob, text: &str, font_id: egui::FontId) {
+fn append_text_section(job: &mut egui::text::LayoutJob, text: &str, font_id: egui::FontId, color: egui::Color32) {
     job.append(
         text,
         0.0,
-        egui::TextFormat::simple(font_id, egui::Color32::BLACK),
+        egui::TextFormat::simple(font_id, color),
     );
 }
 
