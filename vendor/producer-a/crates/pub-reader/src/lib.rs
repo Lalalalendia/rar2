@@ -283,7 +283,7 @@ fn bounded_direct_image_transform(
     fsp_flags: u32,
     bounds: RectEmu,
 ) -> BoundedDirectImageTransform {
-    if fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0 {
+    if fsp_flags & (OFFICEART_FSP_FLIP_H | OFFICEART_FSP_FLIP_V) != 0 {
         return BoundedDirectImageTransform::Unsupported;
     }
     if rotation_properties
@@ -332,9 +332,6 @@ pub const ESCHER_STREAM_PATH: &str = "/Escher/EscherStm";
 pub const ESCHER_DELAY_STREAM_PATH: &str = "/Escher/EscherDelayStm";
 
 const RAW_TYPE_SHAPE: u16 = 0x01;
-const OFFICE_ART_PROPERTY_ROTATION: u16 = 0x0004;
-const FSP_FLIP_H: u32 = 1 << 6;
-const FSP_FLIP_V: u32 = 1 << 7;
 const AFFINE_DECIMAL_SCALE: i128 = 1_000_000_000_000;
 const PI_SCALED: i128 = 3_141_592_653_590;
 const RAW_TYPE_GROUP: u16 = 0x30;
@@ -3127,7 +3124,7 @@ pub fn build_mature_0x2c_from_streams(
                 .fopts
                 .iter()
                 .flat_map(|record| record.properties.iter())
-                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+                .filter(|property| property.property_id() == OFFICEART_PROPERTY_ROTATION)
                 .map(|property| (property.op, property.f_bid(), property.f_complex()))
                 .collect::<Vec<_>>();
             let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
@@ -4996,7 +4993,7 @@ mod tests {
     #[test]
     fn direct_image_rotation_rejects_flip_duplicate_and_complex_states() {
         assert_eq!(
-            bounded_direct_image_transform(&[(1, false, false)], FSP_FLIP_H, test_bounds()),
+            bounded_direct_image_transform(&[(1, false, false)], OFFICEART_FSP_FLIP_H, test_bounds()),
             BoundedDirectImageTransform::Unsupported
         );
         assert_eq!(
