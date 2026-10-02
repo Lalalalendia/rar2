@@ -1,11 +1,11 @@
 use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
 use pub_escher::{
-    inspect_dgg_default_options, inspect_sp_containers, DggDefaultOptionsObservation,
-    FoptObservation, PUBLISHER_FIELD_SHAPE_ID,
+    DggDefaultOptionsObservation, FoptObservation, PUBLISHER_FIELD_SHAPE_ID,
+    inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{NodeId, PageId, Sha256Digest};
-use pub_reader::{build_mature_0x2c_source_graph, PubEffectivePaintAuthority};
+use pub_reader::{PubEffectivePaintAuthority, build_mature_0x2c_source_graph};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -197,16 +197,8 @@ fn exact_virginia_restored_fill_stack_probe() {
             let Some(paint) = node.payload.effective_paint.as_ref() else {
                 continue;
             };
-            let complete_visible_solid = paint
-                .fill
-                .solid
-                .as_ref()
-                .is_some_and(|value| value.value)
-                && paint
-                    .fill
-                    .visible
-                    .as_ref()
-                    .is_some_and(|value| value.value)
+            let complete_visible_solid = paint.fill.solid.as_ref().is_some_and(|value| value.value)
+                && paint.fill.visible.as_ref().is_some_and(|value| value.value)
                 && paint.fill.color_rgb.is_some();
             if !complete_visible_solid {
                 continue;
@@ -280,10 +272,14 @@ fn exact_virginia_restored_fill_stack_probe() {
         pages.push(page);
     }
 
-    let restored_visible_solid_fill_total =
-        pages.iter().map(|page| page.restored_visible_solid_fill_count).sum();
-    let restored_in_source_order_total =
-        pages.iter().map(|page| page.restored_in_source_order_count).sum();
+    let restored_visible_solid_fill_total = pages
+        .iter()
+        .map(|page| page.restored_visible_solid_fill_count)
+        .sum();
+    let restored_in_source_order_total = pages
+        .iter()
+        .map(|page| page.restored_in_source_order_count)
+        .sum();
     let restored_outside_source_order_total = pages
         .iter()
         .map(|page| page.restored_outside_source_order_count)
