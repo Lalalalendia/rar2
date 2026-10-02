@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_contents::{
     BlockReadError, ContentsCursor, RawContentsBlock, RawContentsBlockBody,
     decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
