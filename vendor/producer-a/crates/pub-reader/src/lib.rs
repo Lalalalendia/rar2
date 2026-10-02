@@ -18,6 +18,7 @@ mod guide_bridge;
 mod intake_protocol;
 mod legacy22_graph;
 mod legacy22_noquill_graph;
+mod mature_transform;
 mod mature_wmf;
 mod ole_presentation;
 mod resolve;
@@ -644,6 +645,10 @@ pub enum PubBridgeDiagnostic {
     AmbiguousImageSlot {
         seq_num: u32,
         slots: Vec<u32>,
+    },
+    OfficeArtTransformUnavailable {
+        seq_num: u32,
+        reason: String,
     },
     IncompleteEscherAnchor {
         seq_num: u32,
@@ -1997,6 +2002,43 @@ fn inspect_grouped_geometry_chain(
     }
 }
 
+fn direct_shape_officeart_transform(
+    shape: &pub_escher::SpContainerObservation,
+    bounds: RectEmu,
+) -> std::result::Result<Affine2D, &'static str> {
+    let rotation = shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICEART_PROPERTY_ROTATION)
+        .collect::<Vec<_>>();
+    let raw_rotation = match rotation.as_slice() {
+        [] => None,
+        [property] if !property.f_bid() && !property.f_complex() => Some(property.op as i32),
+        [..] if rotation
+            .iter()
+            .any(|property| property.f_bid() || property.f_complex()) =>
+        {
+            return Err("rotation_property_complex_or_blip");
+        }
+        _ => return Err("rotation_property_duplicate"),
+    };
+    let flip_h = shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_H);
+    let flip_v = shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_V);
+    mature_transform::direct_shape_affine(bounds, raw_rotation, flip_h, flip_v)
+        .ok_or("transform_derivation_overflow")
+}
+
+fn direct_shape_has_transform_evidence(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fopts.iter().any(|record| {
+        record
+            .properties
+            .iter()
+            .any(|property| property.property_id() == OFFICEART_PROPERTY_ROTATION)
+    }) || shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_H)
+        || shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_V)
+}
+
 fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
     shape.fopts.iter().any(|record| {
         record.properties.iter().any(|property| {
@@ -2809,6 +2851,20 @@ pub fn build_mature_0x2c_from_streams(
         };
 
         let node_id = derive_pub_node_id(&source_hash, seq_num)?;
+        let transform = if grouped_sources.is_empty() && raw_type == Some(RAW_TYPE_SHAPE) {
+            match direct_shape_officeart_transform(shape, bounds) {
+                Ok(transform) => transform,
+                Err(reason) => {
+                    diagnostics.push(PubBridgeDiagnostic::OfficeArtTransformUnavailable {
+                        seq_num,
+                        reason: reason.to_owned(),
+                    });
+                    Affine2D::identity()
+                }
+            }
+        } else {
+            Affine2D::identity()
+        };
         let explicit_paint =
             explicit_officeart_paint(shape, color_scheme.as_ref().map(|scheme| &scheme.scheme));
         let effective_paint = dgg_defaults_unambiguous
@@ -2959,6 +3015,20 @@ pub fn build_mature_0x2c_from_streams(
             AuthorityClass::Authoritative,
             ReadConfidence::Exact,
         ));
+        if grouped_sources.is_empty()
+            && raw_type == Some(RAW_TYPE_SHAPE)
+            && direct_shape_has_transform_evidence(shape)
+        {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/FSP+FOPT/transform".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        }
         if has_explicit_officeart_paint_observation(shape) {
             source_refs.push(source_ref(
                 &graph.source,
@@ -3040,7 +3110,7 @@ pub fn build_mature_0x2c_from_streams(
                     id: node_id,
                     parent_id: page_id.into_canonical(),
                     bounds,
-                    transform: Affine2D::identity(),
+                    transform,
                     source_refs,
                     extensions: Vec::new(),
                 },
