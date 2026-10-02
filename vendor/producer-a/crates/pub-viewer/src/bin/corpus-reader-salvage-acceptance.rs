@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use pub_viewer::{
-    classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
-    viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderSalvageCorruptionEvidence,
-    ReaderSalvageEligibility, ViewerProductOpenOutcome,
+    build_reader_partial_source_graph, classify_pub_family, open_pub_or_salvage,
+    probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
+    viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderPartialSourceGraphError,
+    ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageProbe,
+    ReaderSalvageStreamState, ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
+    ViewerProductOpenOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -46,7 +49,30 @@ struct AcceptanceRow {
     salvage_gap_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     open_error_signature_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forced_trigger_probe: Option<ForcedTriggerProbeReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forced_partial_graph: Option<ForcedPartialGraphReceipt>,
     source_modified: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ForcedTriggerProbeReceipt {
+    eligibility: &'static str,
+    cfb_inventory_available: bool,
+    contents_family: Option<String>,
+    has_surviving_evidence: bool,
+    subsystems: ReaderSalvageSubsystemProbe,
+    source_modified: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ForcedPartialGraphReceipt {
+    status: &'static str,
+    fact_counts: BTreeMap<&'static str, usize>,
+    gap_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'static str>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -95,6 +121,54 @@ fn failed_outcome(eligibility: ReaderSalvageEligibility) -> AcceptanceOutcome {
         | ReaderSalvageEligibility::AwaitingTypedCorruptionEvidence
         | ReaderSalvageEligibility::IneligibleUnproven => AcceptanceOutcome::Unsupported,
     }
+}
+
+fn partial_graph_error_name(value: ReaderPartialSourceGraphError) -> &'static str {
+    match value {
+        ReaderPartialSourceGraphError::SourceIdentityMismatch => "source_identity_mismatch",
+        ReaderPartialSourceGraphError::SourceModified => "source_modified",
+        ReaderPartialSourceGraphError::ProbeMismatch => "probe_mismatch",
+        ReaderPartialSourceGraphError::Ineligible => "ineligible",
+    }
+}
+
+fn forced_trigger_diagnostic(
+    bytes: &[u8],
+    intake_probe: &ReaderSalvageProbe,
+) -> (Option<ForcedTriggerProbeReceipt>, Option<ForcedPartialGraphReceipt>) {
+    if intake_probe.eligibility != ReaderSalvageEligibility::AwaitingTypedCorruptionEvidence {
+        return (None, None);
+    }
+
+    let forced = probe_reader_salvage_candidate_with_trigger(
+        bytes,
+        ReaderSalvageTrigger::ProvenStructuralCorruption,
+    );
+    let probe_receipt = ForcedTriggerProbeReceipt {
+        eligibility: eligibility_name(forced.eligibility),
+        cfb_inventory_available: forced.cfb_inventory_available,
+        contents_family: forced.contents_family.clone(),
+        has_surviving_evidence: forced.has_surviving_evidence(),
+        subsystems: forced.subsystems,
+        source_modified: forced.source_modified,
+    };
+
+    let graph_receipt = match build_reader_partial_source_graph(bytes, &forced) {
+        Ok(graph) => ForcedPartialGraphReceipt {
+            status: "constructed",
+            fact_counts: fact_counts(&graph.facts),
+            gap_count: graph.gaps.len(),
+            error: None,
+        },
+        Err(error) => ForcedPartialGraphReceipt {
+            status: "error",
+            fact_counts: BTreeMap::new(),
+            gap_count: 0,
+            error: Some(partial_graph_error_name(error)),
+        },
+    };
+
+    (Some(probe_receipt), Some(graph_receipt))
 }
 
 fn fact_counts(facts: &[ReaderPartialSourceFact]) -> BTreeMap<&'static str, usize> {
@@ -154,6 +228,8 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
         }
         Err(error) => {
             let probe = probe_reader_salvage_candidate(bytes);
+            let (forced_trigger_probe, forced_partial_graph) =
+                forced_trigger_diagnostic(bytes, &probe);
             AcceptanceRow {
                 source_sha256,
                 byte_len: bytes.len(),
@@ -168,6 +244,8 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 salvage_fact_counts: None,
                 salvage_gap_count: None,
                 open_error_signature_sha256: Some(sha256_hex(format!("{error:#}").as_bytes())),
+                forced_trigger_probe,
+                forced_partial_graph,
                 source_modified: probe.source_modified,
             }
         }
@@ -260,6 +338,18 @@ mod tests {
         ] {
             assert_eq!(failed_outcome(eligibility), AcceptanceOutcome::Unsafe);
         }
+    }
+
+    #[test]
+    fn forced_trigger_diagnostic_error_names_are_stable() {
+        assert_eq!(
+            partial_graph_error_name(ReaderPartialSourceGraphError::Ineligible),
+            "ineligible"
+        );
+        assert_eq!(
+            partial_graph_error_name(ReaderPartialSourceGraphError::ProbeMismatch),
+            "probe_mismatch"
+        );
     }
 
     #[test]
