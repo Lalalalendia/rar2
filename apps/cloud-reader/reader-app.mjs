@@ -139,6 +139,7 @@ function clearReader() {
   pages = [];
   pagesHost.replaceChildren();
   $("#reader").hidden = true;
+  document.body.classList.remove("reader-open");
   for (const id of ["#search-results", "#assets", "#limitations", "#story-select"]) $(id).replaceChildren();
   storyText.value = "";
   $("#search-query").value = "";
@@ -363,6 +364,7 @@ async function render(payload, operation) {
   $("#page-count").textContent = pages.length + (pages.length === 1 ? " page" : " pages");
   $("#revision").textContent = "Read-only document";
   $("#reader").hidden = false;
+  document.body.classList.add("reader-open");
   showDetails();
   applyZoom();
   updatePageControls(0);
