@@ -480,6 +480,8 @@ pub struct PubSourceGraphBuild {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<PubParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_color_runs: Vec<PubTextColorRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<PubScriptFontMap>,
 }
 
@@ -519,6 +521,21 @@ pub enum PubParagraphAlignment {
     Right,
     InterWord,
     Distribute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTextColorRun {
+    pub story_id: StoryId,
+    pub story_utf16_start: u32,
+    pub story_utf16_end: u32,
+    pub story_scalar_start: u32,
+    pub story_scalar_end: u32,
+    pub color_index: u32,
+    pub raw_reference: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_rgb: Option<[u8; 3]>,
+    pub source_ref: SourceRef,
+    pub palette_source_ref: SourceRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2592,6 +2609,7 @@ pub fn build_mature_0x2c_from_streams(
     let mut typography_runs = Vec::new();
     let mut typography_size_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
+    let mut text_color_runs = Vec::new();
     let mut script_font_maps = Vec::new();
     if let Some(catalog) = typography_catalog {
         for map in &catalog.script_font_maps {
@@ -2668,6 +2686,62 @@ pub fn build_mature_0x2c_from_streams(
                     &map.fdpc_style_source,
                     Some(object_key),
                     Some("FDPC/ScriptFonts".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            });
+        }
+        for run in &catalog.text_color_runs {
+            let syid = run.story_syid.0;
+            let Some(story_id) = story_by_syid.get(&syid).copied() else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("text color references missing Story SYID {syid}"),
+                });
+                continue;
+            };
+            let Some(story) = graph.stories.get(&story_id) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("text color Story {story_id:?} is absent"),
+                });
+                continue;
+            };
+            let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                &story.text,
+                run.story_start_utf16,
+                run.story_end_utf16,
+            ) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!(
+                        "text color range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
+                        run.story_start_utf16, run.story_end_utf16
+                    ),
+                });
+                continue;
+            };
+            text_color_runs.push(PubTextColorRun {
+                story_id,
+                story_utf16_start: run.story_start_utf16,
+                story_utf16_end: run.story_end_utf16,
+                story_scalar_start,
+                story_scalar_end,
+                color_index: run.color_index,
+                raw_reference: run.raw_reference,
+                direct_rgb: run.direct_rgb,
+                source_ref: source_ref(
+                    &graph.source,
+                    &run.fdpc_style_source,
+                    Some(quill_story_object_key(syid)),
+                    Some("FDPC/TextColor".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                palette_source_ref: source_ref(
+                    &graph.source,
+                    &run.palette_source,
+                    Some(quill_story_object_key(syid)),
+                    Some("Quill/PL/TextColorReference".into()),
                     SourceRole::Semantic,
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
@@ -3336,6 +3410,7 @@ pub fn build_mature_0x2c_from_streams(
         typography_runs,
         typography_size_runs,
         paragraph_alignments,
+        text_color_runs,
         script_font_maps,
     })
 }
