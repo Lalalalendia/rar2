@@ -17,6 +17,7 @@ on:
       - "tools/test_publisher_visual_perceptual_v1.py"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-perceptual-v1.json"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-ci-admission.json"
       - ".github/workflows/publisher-visual-golden-batch01.yml"
 
 permissions:
@@ -63,7 +64,15 @@ jobs:
           assert data["pair_count"]==55
           assert data["reference_page_count"]==162
           assert data["claims"]["source_free"] is True
+          admission_path=Path("tools/corpus/receipts/publisher-visual-golden-batch-01-ci-admission.json")
+          admission=json.loads(admission_path.read_text())
+          assert admission["schema"]=="chaptera.publisher-visual-golden-ci-admission.v1"
+          assert admission["selected_pair_count"]==55
+          assert admission["admitted_pair_count"]==53
+          assert admission["admitted_reference_page_count"]==150
+          assert {row["oracle_id"] for row in admission["excluded"]}=={"batch01-024","batch01-025"}
           print("reference_sha256", hashlib.sha256(p.read_bytes()).hexdigest())
+          print("admission_sha256", hashlib.sha256(admission_path.read_bytes()).hexdigest())
           PY
 
       - name: Download pinned exact 1050 materialization
@@ -175,7 +184,7 @@ jobs:
           assert digest=="21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
           PY
 
-      - name: Build exact 55-fixture manifest from committed pair registry
+      - name: Build exact 53-fixture CI manifest from committed pair registry
         run: |
           set -euo pipefail
           mkdir -p out/publisher-visual-batch01
@@ -186,8 +195,13 @@ jobs:
           pairs=Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv")
           rows=list(csv.DictReader(pairs.open(newline="", encoding="utf-8-sig")))
           assert len(rows)==55, len(rows)
+          admission=json.loads(Path("tools/corpus/receipts/publisher-visual-golden-batch-01-ci-admission.json").read_text())
+          excluded={row["oracle_id"] for row in admission["excluded"]}
+          assert excluded=={"batch01-024","batch01-025"}, excluded
           fixtures=[]
           for row in rows:
+              if row["oracle_id"] in excluded:
+                  continue
               sha=row["pub_sha256"].strip().lower()
               path=Path("out/materialized/native") / f"{sha}.pub"
               assert path.is_file(), (row["oracle_id"], path)
@@ -202,6 +216,8 @@ jobs:
                   "require_shared_text": False,
                   "source_path": str(path.resolve()),
               })
+          assert len(fixtures)==53, len(fixtures)
+          assert sum(int(row["pdf_pages"]) for row in rows if row["oracle_id"] not in excluded)==150
           manifest={"schema":"chaptera.cloud-reader-real-fixtures.v1","fixtures":fixtures}
           Path("out/publisher-visual-batch01/fixtures.json").write_text(json.dumps(manifest,indent=2,sort_keys=True)+"\n")
           print("fixtures", len(fixtures))
@@ -245,7 +261,7 @@ jobs:
           npm install --no-save playwright@1.55.0
           npx playwright install --with-deps chromium
 
-      - name: Render 55 Publisher-oracle PUBs through Cloud Reader
+      - name: Render 53 admitted Publisher-oracle PUBs through Cloud Reader
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.sha }}
           READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-batch01/debug/chaptera
@@ -260,7 +276,8 @@ jobs:
           python tools/publisher_visual_perceptual_v1.py \
             out/publisher-visual-batch01/render/receipt.json \
             tools/corpus/receipts/publisher-visual-golden-batch-01-perceptual-v1.json \
-            out/publisher-visual-batch01/comparison.json
+            out/publisher-visual-batch01/comparison.json \
+            --admission tools/corpus/receipts/publisher-visual-golden-batch-01-ci-admission.json
 
       - name: Publish compact visual summary
         run: |
@@ -272,7 +289,10 @@ jobs:
               "schema":"chaptera.publisher-visual-golden-batch01-summary.v1",
               "repository_commit_sha":r["repository_commit_sha"],
               "pair_count":r["pair_count"],
+              "admitted_pair_count":r["admitted_pair_count"],
+              "excluded_pair_count":r["excluded_pair_count"],
               "reference_page_count":r["reference_page_count"],
+              "admitted_reference_page_count":r["admitted_reference_page_count"],
               "compared_page_count":r["compared_page_count"],
               "unsupported_pair_count":r["unsupported_pair_count"],
               "page_count_mismatch_pair_count":r["page_count_mismatch_pair_count"],
