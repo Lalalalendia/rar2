@@ -238,6 +238,8 @@ pub struct ViewerGeometryDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_color_runs: Vec<ViewerTextColorRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<ViewerScriptFontMap>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tables: Vec<ViewerTable>,
@@ -969,6 +971,22 @@ pub struct ViewerParagraphAlignmentRun {
 }
 
 impl ViewerParagraphAlignmentRun {
+    pub fn applies_to_story_text(&self, text: &str) -> bool {
+        self.source_story_text_sha256 == viewer_story_text_sha256(text)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTextColorRun {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub rgb: [u8; 3],
+    pub inherited: bool,
+    pub source_story_text_sha256: Sha256Digest,
+}
+
+impl ViewerTextColorRun {
     pub fn applies_to_story_text(&self, text: &str) -> bool {
         self.source_story_text_sha256 == viewer_story_text_sha256(text)
     }
@@ -1997,6 +2015,7 @@ fn open_legacy_0x22_noquill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        text_color_runs: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2126,6 +2145,7 @@ fn open_legacy_0x22_quill_bundle(
         text_fragments,
         typography_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
+        text_color_runs: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
         #[cfg(feature = "cmo-slot-compose")]
@@ -2294,6 +2314,35 @@ fn open_mature_0x2c_bundle(
                 "{} explicit source paragraph-alignment range(s) are preserved; {} use InterWord/Distribute semantics that remain non-executable and stay Partial.",
                 paragraph_alignments.len(),
                 unsupported
+            ),
+        });
+    }
+
+    let text_color_runs = pipeline
+        .source
+        .text_color_runs
+        .iter()
+        .filter_map(|run| {
+            let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
+            Some(ViewerTextColorRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                rgb: run.rgb,
+                inherited: run.inherited,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect::<Vec<_>>();
+    if !text_color_runs.is_empty() {
+        let inherited = text_color_runs.iter().filter(|run| run.inherited).count();
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.text.source_color_preserved".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "{} source text-color range(s) are preserved; {} use bounded inherited character-style authority.",
+                text_color_runs.len(),
+                inherited
             ),
         });
     }
@@ -2531,6 +2580,7 @@ fn open_mature_0x2c_bundle(
         text_fragments,
         typography_runs,
         paragraph_alignments,
+        text_color_runs,
         script_font_maps,
         tables,
         #[cfg(feature = "cmo-slot-compose")]
@@ -4639,6 +4689,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            text_color_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -4795,6 +4846,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            text_color_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5249,6 +5301,7 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            text_color_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5358,6 +5411,7 @@ mod tests {
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            text_color_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
@@ -5426,6 +5480,7 @@ mod tests {
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
+            text_color_runs: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
             #[cfg(feature = "cmo-slot-compose")]
