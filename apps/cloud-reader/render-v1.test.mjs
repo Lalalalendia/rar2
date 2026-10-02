@@ -34,7 +34,7 @@ test("Viewer-materialized OLE preview PNG uses the generic image resource paint 
     href: resource.inline_data_url,
     resource_id: resource.resource_id,
     availability: "inline_data_url",
-    geometry: { x: 100, y: 200, width: 300, height: 400 },
+    geometry: { x: 0, y: 0, width: 300, height: 400 },
     content_transform: null
   });
   assert.equal(
@@ -98,9 +98,28 @@ test("cardinal picture content rotation is a placement transform, not a frame tr
     image_content_rotation_degrees: 270
   };
   const plan = imageResourcePaintPlan(node, resource);
-  assert.deepEqual(plan.geometry, { x: -200, y: 500, width: 900, height: 300 });
-  assert.equal(plan.content_transform, "rotate(270 250 650)");
+  assert.deepEqual(plan.geometry, { x: -300, y: 300, width: 900, height: 300 });
+  assert.equal(plan.content_transform, "rotate(270 150 450)");
   assert.deepEqual(node.bounds, { x: 100, y: 200, width: 300, height: 900 });
+});
+
+test("high-offset picture frame keeps content placement frame-local", () => {
+  const resource = {
+    resource_id: "resource:bottom-border",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+  const node = {
+    node_id: "node:bottom-border",
+    kind: "picture_frame",
+    bounds: { x: 571_500, y: 9_144_000, width: 6_858_000, height: 703_977 },
+    resource_id: resource.resource_id,
+    image_content_rotation_degrees: 180
+  };
+  const plan = imageResourcePaintPlan(node, resource);
+  assert.deepEqual(plan.geometry, { x: 0, y: 0, width: 6_858_000, height: 703_977 });
+  assert.equal(plan.content_transform, "rotate(180 3429000 351988.5)");
 });
 
 test("image crop maps the normalized source window onto the destination frame", () => {
@@ -345,7 +364,12 @@ test("source-backed text bounds affect text only, not outer resource geometry", 
 
   assert.doesNotThrow(() => assertReaderSceneSourceNeutral({ nodes: [node], resources: [resource] }));
   assert.deepEqual(resolvedTextLinePaintPlan(node).bounds, node.text_bounds);
-  assert.deepEqual(imageResourcePaintPlan(node, resource).geometry, node.bounds);
+  assert.deepEqual(imageResourcePaintPlan(node, resource).geometry, {
+    x: 0,
+    y: 0,
+    width: node.bounds.width,
+    height: node.bounds.height
+  });
 });
 
 test("mixed shared text plan preserves server span sizes and cumulative line heights", () => {
