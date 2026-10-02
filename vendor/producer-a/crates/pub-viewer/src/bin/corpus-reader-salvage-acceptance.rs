@@ -4,7 +4,7 @@ use pub_viewer::{
     probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
     viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderPartialSourceGraphError,
     ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageProbe,
-    ReaderSalvageStreamState, ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
+    ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
     ViewerProductOpenOutcome,
 };
 use serde::Serialize;
@@ -203,6 +203,8 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
             salvage_fact_counts: None,
             salvage_gap_count: None,
             open_error_signature_sha256: None,
+            forced_trigger_probe: None,
+            forced_partial_graph: None,
             source_modified: false,
         },
         Ok(ViewerProductOpenOutcome::Salvage(graph)) => {
@@ -223,6 +225,8 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 salvage_fact_counts: Some(fact_counts(&graph.facts)),
                 salvage_gap_count: Some(graph.gaps.len()),
                 open_error_signature_sha256: None,
+                forced_trigger_probe: None,
+                forced_partial_graph: None,
                 source_modified: probe.source_modified,
             }
         }
