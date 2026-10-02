@@ -168,7 +168,7 @@ jobs:
           from pathlib import Path
           p = Path("tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json")
           digest = hashlib.sha256(p.read_bytes()).hexdigest()
-          assert digest == "819cb9237ce7f9df7d5ef85fb20777e161dbb2704defa58318be0f23150be32f", digest
+          assert digest == "c522ebdc72d0b62ef68be3747494c2f5178ff69a70b83f14b3fd6a9bf8128404", digest
           print("reference fingerprint:", digest)
           PY
 
