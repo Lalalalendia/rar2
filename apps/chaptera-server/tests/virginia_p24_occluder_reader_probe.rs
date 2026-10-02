@@ -123,6 +123,7 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
                 continue;
             }
             later_images.insert(later_id);
+            overlap_relations.insert((node_id, later_id));
             overlapping_stories.insert(node_id);
         }
     }
@@ -224,6 +225,25 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         })
         .count();
 
+    let reader_node_rank = scene
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(rank, node)| (node.node_id.as_str(), rank))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut reader_overlap_relation_count = 0_usize;
+    let mut reader_image_after_fill_relation_count = 0_usize;
+    for (fill_id, image_id) in &serialized_overlap_relations {
+        let (Some(fill_rank), Some(image_rank)) = (
+            reader_node_rank.get(fill_id.as_str()),
+            reader_node_rank.get(image_id.as_str()),
+        ) else {
+            continue;
+        };
+        reader_overlap_relation_count += 1;
+        reader_image_after_fill_relation_count += usize::from(image_rank > fill_rank);
+    }
+
     let receipt = Receipt {
         schema: "chaptera.virginia-p24-occluder-reader-binding.v1",
         viewer_page,
@@ -249,6 +269,20 @@ fn exact_virginia_p24_later_image_reader_binding_probe() {
         },
     };
 
+    assert_eq!(
+        receipt.reader_overlap_relation_count,
+        receipt.overlap_relation_count,
+        "all source overlap relations must survive into ReaderScene"
+    );
+    assert_eq!(
+        receipt.reader_image_after_fill_relation_count,
+        receipt.overlap_relation_count,
+        "later p24 image must remain after each overlapping fill in ReaderScene order"
+    );
+    assert!(
+        receipt.reader_source_back_to_front,
+        "ReaderScene must retain the bounded source back-to-front stacking claim"
+    );
     assert_eq!(
         receipt.reader_picture_node_count, 1,
         "later p24 image must survive as one Reader picture_frame"
