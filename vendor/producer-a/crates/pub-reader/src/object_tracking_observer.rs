@@ -342,67 +342,6 @@ mod tests {
     use super::*;
     use pub_contents::{BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U32};
 
-    fn scalar_block(id: u16, block_type: u8, value: u32, offset: u64) -> RawContentsBlock {
-        let source = RawSpan {
-            stream: StreamPath("/Contents".into()),
-            offset,
-            len: 6,
-        };
-        RawContentsBlock {
-            id,
-            block_type,
-            raw_tag: [id as u8, block_type],
-            tag_source: RawSpan {
-                stream: source.stream.clone(),
-                offset,
-                len: 2,
-            },
-            source: source.clone(),
-            body: RawContentsBlockBody::U32 {
-                value,
-                value_source: RawSpan {
-                    stream: source.stream.clone(),
-                    offset: offset + 2,
-                    len: 4,
-                },
-            },
-        }
-    }
-
-    fn container_node(id: u16, children: Vec<FieldNode>, offset: u64) -> FieldNode {
-        FieldNode {
-            field: RawContentsBlock {
-                id,
-                block_type: BLOCK_TYPE_CONTAINER_88,
-                raw_tag: [id as u8, BLOCK_TYPE_CONTAINER_88],
-                tag_source: RawSpan {
-                    stream: StreamPath("/Contents".into()),
-                    offset,
-                    len: 2,
-                },
-                source: RawSpan {
-                    stream: StreamPath("/Contents".into()),
-                    offset,
-                    len: 6,
-                },
-                body: RawContentsBlockBody::Container {
-                    declared_length: 4,
-                    length_source: RawSpan {
-                        stream: StreamPath("/Contents".into()),
-                        offset: offset + 2,
-                        len: 4,
-                    },
-                    content_source: RawSpan {
-                        stream: StreamPath("/Contents".into()),
-                        offset: offset + 6,
-                        len: 0,
-                    },
-                },
-            },
-            children,
-        }
-    }
-
     #[test]
     fn observer_skips_opaque_c0_with_proven_variable_framing() {
         let bytes = [
@@ -479,68 +418,83 @@ mod tests {
     }
 
     #[test]
-    fn extracts_exact_named_wrap_path_from_matching_oh_track_entry() {
-        let group = container_node(
-            0x0E,
-            vec![
-                FieldNode {
-                    field: scalar_block(0x05, BLOCK_TYPE_U32, 111, 40),
-                    children: Vec::new(),
-                },
-                FieldNode {
-                    field: scalar_block(0x06, BLOCK_TYPE_U32, 222, 46),
-                    children: Vec::new(),
-                },
-            ],
-            34,
-        );
-        let formatting = container_node(
-            0x02,
-            vec![
-                FieldNode {
-                    field: scalar_block(0x01, BLOCK_TYPE_U32, 1, 28),
-                    children: Vec::new(),
-                },
-                group,
-            ],
-            22,
-        );
-        let last_fmt = container_node(0x12, vec![formatting], 16);
-        let entry = container_node(
-            0x02,
-            vec![
-                FieldNode {
-                    field: scalar_block(0x01, BLOCK_TYPE_REFERENCE_U32, 294, 10),
-                    children: Vec::new(),
-                },
-                last_fmt,
-            ],
-            4,
-        );
+    fn extracts_exact_named_wrap_and_recolor_path_from_matching_oh_track_entry() {
+        // OplOt entry (0x88)
+        //   OhTrack field0x01/0x68 = 294
+        //   OplLastFmt field0x12/0x88
+        //     PoFormatting field0x02/0x98
+        //       shape type field0x01/0x20 = 1
+        //       GroupShape field0x0E/0x98 -> wrap 0x05..0x08
+        //       EcpRecolor field0x22/0x98 -> Color field0x01/0x20
+        let bytes = [
+            0x02, 0x88, 0x46, 0x00, 0x00, 0x00,
+            0x01, BLOCK_TYPE_REFERENCE_U32, 0x26, 0x01, 0x00, 0x00,
+            0x12, 0x88, 0x3A, 0x00, 0x00, 0x00,
+            0x02, BLOCK_TYPE_TYPED_CONTAINER_98, 0x34, 0x00, 0x00, 0x00,
+            0x01, BLOCK_TYPE_U32, 0x01, 0x00, 0x00, 0x00,
+            0x0E, BLOCK_TYPE_TYPED_CONTAINER_98, 0x1C, 0x00, 0x00, 0x00,
+            0x05, BLOCK_TYPE_U32, 0x6F, 0x00, 0x00, 0x00,
+            0x06, BLOCK_TYPE_U32, 0xDE, 0x00, 0x00, 0x00,
+            0x07, BLOCK_TYPE_U32, 0x4D, 0x01, 0x00, 0x00,
+            0x08, BLOCK_TYPE_U32, 0xBC, 0x01, 0x00, 0x00,
+            0x22, BLOCK_TYPE_TYPED_CONTAINER_98, 0x0A, 0x00, 0x00, 0x00,
+            0x01, BLOCK_TYPE_U32, 0x03, 0x00, 0x00, 0x08,
+        ];
+        let source = RawSpan {
+            stream: StreamPath("/Contents".into()),
+            offset: 0,
+            len: bytes.len() as u64,
+        };
+        let roots = parse_container_children(&bytes, &source).expect("tracking entry must frame");
 
         let mut observations = Vec::new();
-        collect_matching_entries(290, 294, &[entry], &mut observations);
+        collect_matching_entries(&bytes, 290, 294, &roots, &mut observations)
+            .expect("schema-guided target path must parse");
+
         assert_eq!(observations.len(), 1);
+        let observation = &observations[0];
         assert_eq!(
-            observations[0]
+            observation
                 .dx_wrap_dist_left
                 .as_ref()
                 .map(|value| value.value),
             Some(111)
         );
         assert_eq!(
-            observations[0]
+            observation
                 .dy_wrap_dist_top
                 .as_ref()
                 .map(|value| value.value),
             Some(222)
         );
         assert_eq!(
-            observations[0]
+            observation
+                .dx_wrap_dist_right
+                .as_ref()
+                .map(|value| value.value),
+            Some(333)
+        );
+        assert_eq!(
+            observation
+                .dy_wrap_dist_bottom
+                .as_ref()
+                .map(|value| value.value),
+            Some(444)
+        );
+        assert_eq!(
+            observation
                 .resolved_shape_type
                 .as_ref()
                 .map(|value| value.value),
             Some(1)
+        );
+        assert_eq!(
+            observation
+                .ecp_recolor_scalars
+                .iter()
+                .map(|value| value.value)
+                .collect::<Vec<_>>(),
+            vec![0x08000003]
         );
     }
 }
