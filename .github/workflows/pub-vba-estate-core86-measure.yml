@@ -1,0 +1,90 @@
+name: Publisher VBA estate core86 measurement
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub_vba_cfb.py"
+      - "tools/pub_vba_estate_scan.py"
+      - "tools/test_pub_vba_estate_scan.py"
+      - "tools/migration_editable_corpus_v2.py"
+      - "tools/reader_corpus_manifest_v1.json"
+      - "tools/corpus/receipts/lalamu-materialized-35-input-2026-09-29.json"
+      - "tools/corpus/receipts/version-labelled-training-29-input-2026-09-25.json"
+      - ".github/workflows/pub-vba-estate-core86-measure.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pub-vba-estate-core86-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: core65
+            expected: 65
+          - profile: extended86
+            expected: 86
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Scanner source-free unit contract
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py tools/migration_editable_corpus_v2.py
+          python tools/test_pub_vba_estate_scan.py
+      - name: Materialize exact existing corpus profile
+        run: |
+          set -euo pipefail
+          python tools/migration_editable_corpus_v2.py materialize \
+            --repo-root . \
+            --profile "${{ matrix.profile }}" \
+            --out "$RUNNER_TEMP/pub-vba-${{ matrix.profile }}"
+      - name: Inert VBA estate scan
+        run: |
+          set -euo pipefail
+          mkdir -p "target/pub-vba-${{ matrix.profile }}"
+          python tools/pub_vba_estate_scan.py scan \
+            --input "$RUNNER_TEMP/pub-vba-${{ matrix.profile }}/native" \
+            --recursive \
+            --output "target/pub-vba-${{ matrix.profile }}/receipt.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          profile = "${{ matrix.profile }}"
+          expected = int("${{ matrix.expected }}")
+          path = Path(f"target/pub-vba-{profile}/receipt.json")
+          data = json.loads(path.read_text())
+          assert data["totals"]["file_count"] == expected, data["totals"]
+          assert data["totals"]["read_failed"] == 0, data["totals"]
+          assert data["claims"]["vba_executed"] is False
+          assert data["claims"]["ole_com_activated"] is False
+          assert data["claims"]["source_text_emitted"] is False
+          summary = {
+              "profile": profile,
+              "expected": expected,
+              "totals": data["totals"],
+          }
+          Path(f"target/pub-vba-{profile}/summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-estate-${{ matrix.profile }}
+          path: target/pub-vba-${{ matrix.profile }}/
+          if-no-files-found: error
+          retention-days: 90
