@@ -51,6 +51,67 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def forced_trigger_classification(
+    selected_acceptance: dict[str, Any],
+) -> tuple[str, list[str], dict[str, Any]] | None:
+    if selected_acceptance.get("salvage_eligibility") != "awaiting_typed_corruption_evidence":
+        return None
+
+    probe = selected_acceptance.get("forced_trigger_probe")
+    graph = selected_acceptance.get("forced_partial_graph")
+    if not isinstance(probe, dict) or not isinstance(graph, dict):
+        return None
+
+    if not probe.get("cfb_inventory_available"):
+        return (
+            "pub_cfb_inventory_failure_under_forced_trigger",
+            ["intake_policy_gate_only_explanation"],
+            {
+                "kind": "pub_cfb_inventory_error_probe",
+                "reason": (
+                    "even the diagnostic ProvenStructuralCorruption trigger cannot build the Reader CFB inventory; "
+                    "localize the typed pub_cfb inspect error on this exact witness"
+                ),
+                "target_carriers": [],
+            },
+        )
+
+    if graph.get("status") != "constructed":
+        return (
+            "partial_source_graph_failure_under_forced_trigger",
+            ["pub_cfb_inventory_failure"],
+            {
+                "kind": "partial_source_graph_error_probe",
+                "reason": (
+                    "the forced trigger reaches Reader CFB inventory, but partial salvage graph construction still fails"
+                ),
+                "error": graph.get("error"),
+                "target_carriers": [],
+            },
+        )
+
+    closed = ["pub_cfb_inventory_failure", "partial_source_graph_unbuildable"]
+    if probe.get("has_surviving_evidence"):
+        closed.append("no_surviving_salvage_evidence")
+    return (
+        "salvage_path_reachable_if_typed_corruption_were_proven",
+        closed,
+        {
+            "kind": "typed_corruption_evidence_discovery",
+            "reason": (
+                "the same witness reaches Reader CFB inventory and constructs a partial salvage graph under the "
+                "diagnostic ProvenStructuralCorruption trigger; the remaining admission requirement is independent "
+                "typed corruption evidence, not container readability"
+            ),
+            "forced_contents_family": probe.get("contents_family"),
+            "forced_subsystems": probe.get("subsystems") or {},
+            "forced_fact_counts": graph.get("fact_counts") or {},
+            "forced_gap_count": graph.get("gap_count"),
+            "target_carriers": [],
+        },
+    )
+
+
 def index_rows(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -380,6 +441,41 @@ def build_discriminator(
     selected_fp = fingerprints[selected_sha]
     selected_acceptance = acceptance[selected_sha]
 
+    forced = forced_trigger_classification(selected_acceptance)
+    if forced is not None:
+        verdict, closed_hypotheses, next_discriminator = forced
+        payload = {
+            "schema": SCHEMA,
+            "status": "discriminator_executed",
+            "source_reader_run_id": frontier.get("source_reader_run_id"),
+            "source_main_sha": frontier.get("source_main_sha"),
+            "selected_sha256": selected_sha,
+            "control_sha256": None,
+            "control_relation": "same_witness_forced_trigger",
+            "control_distance": None,
+            "verdict": verdict,
+            "closed_hypotheses": closed_hypotheses,
+            "next_discriminator": next_discriminator,
+            "physical_diff": None,
+            "control_shortlist": [],
+            "decision": "continue_offline",
+            "evidence_boundary": (
+                "source-free discriminator: the forced trigger is diagnostic only and does not alter "
+                "Reader admission policy; outputs retain no filenames, document text, raw stream bytes, "
+                "or PUB bytes"
+            ),
+        }
+        out_root.mkdir(parents=True, exist_ok=True)
+        (out_root / "decision.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (out_root / "decision.md").write_text(
+            render_markdown(payload),
+            encoding="utf-8",
+        )
+        return payload
+
     candidates = []
     for sha, control_reader in reader_rows.items():
         if sha == selected_sha or control_reader.get("opened") is not True:
@@ -492,7 +588,11 @@ def render_markdown(payload: dict[str, Any]) -> str:
         "# Reader-1050 offline discriminator",
         "",
         f"- Selected witness: `{payload['selected_sha256']}`",
-        f"- Opened control: `{payload['control_sha256']}`",
+        (
+            f"- Opened control: `{payload['control_sha256']}`"
+            if payload.get("control_sha256")
+            else "- Opened control: **not needed; same-witness discriminator won**"
+        ),
         f"- Control relation: `{payload['control_relation']}`",
         f"- Verdict: **{payload['verdict']}**",
         f"- Decision: **{payload['decision']}**",
