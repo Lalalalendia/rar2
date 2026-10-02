@@ -1,0 +1,710 @@
+name: UFMT P0 publication core execution
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ufmt-p0-publication.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  p0-publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Execute EXP-01 and Rust M0 reference gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$PWD/target/ufmt-p0"
+          TLA="$ROOT/tla"
+          RUST="$ROOT/rust"
+          RECEIPT="$ROOT/receipt"
+          mkdir -p "$TLA" "$RUST/src" "$RECEIPT/tla" "$RECEIPT/rust" "$RECEIPT/source"
+
+          TLA_VERSION="1.7.4"
+          TLA_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+          TLA_JAR="$ROOT/tla2tools.jar"
+          curl -fL --retry 3 \
+            "https://github.com/tlaplus/tlaplus/releases/download/v$TLA_VERSION/tla2tools.jar" \
+            -o "$TLA_JAR"
+          echo "$TLA_SHA256  $TLA_JAR" | sha256sum -c -
+          java -version 2>"$RECEIPT/java-version.txt"
+          rustc --version >"$RECEIPT/rustc-version.txt"
+          cargo --version >"$RECEIPT/cargo-version.txt"
+
+          cat > "$TLA/UFMT_Core.tla" <<'TLAEOF'
+          ----------------------------- MODULE UFMT_Core -----------------------------
+          EXTENDS Naturals, FiniteSets, TLC
+
+          CONSTANT MaxEpoch, BrokenGC, BrokenWriter, BrokenMigration
+
+          ASSUME /\ MaxEpoch \in Nat
+                 /\ MaxEpoch > 0
+                 /\ BrokenGC \in BOOLEAN
+                 /\ BrokenWriter \in BOOLEAN
+                 /\ BrokenMigration \in BOOLEAN
+
+          Objects == {"A", "B"}
+
+          VARIABLES rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                    live, durable, deleted,
+                    writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                    gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                    migrationPending, newPhysical, newVerified, oldRetired,
+                    crashed
+
+          vars == << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                     live, durable, deleted,
+                     writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                     gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                     migrationPending, newPhysical, newVerified, oldRetired,
+                     crashed >>
+
+          TypeOK ==
+            /\ rootEpoch \in 0..MaxEpoch
+            /\ contentGen \in 0..MaxEpoch
+            /\ maintEpoch \in 0..MaxEpoch
+            /\ maxMaintSeen \in 0..MaxEpoch
+            /\ live \subseteq Objects
+            /\ durable \subseteq Objects
+            /\ deleted \subseteq Objects
+            /\ writerPrepared \in BOOLEAN
+            /\ writerExpectedRoot \in 0..MaxEpoch
+            /\ writerExpectedMaint \in 0..MaxEpoch
+            /\ gcPlanned \in BOOLEAN
+            /\ gcPlanEpoch \in 0..MaxEpoch
+            /\ gcTargets \subseteq Objects
+            /\ gcAuthorized \in BOOLEAN
+            /\ migrationPending \in BOOLEAN
+            /\ newPhysical \in BOOLEAN
+            /\ newVerified \in BOOLEAN
+            /\ oldRetired \in BOOLEAN
+            /\ crashed \in BOOLEAN
+
+          Init ==
+            /\ rootEpoch = 0
+            /\ contentGen = 0
+            /\ maintEpoch = 0
+            /\ maxMaintSeen = 0
+            /\ live = {"A"}
+            /\ durable = Objects
+            /\ deleted = {}
+            /\ writerPrepared = FALSE
+            /\ writerExpectedRoot = 0
+            /\ writerExpectedMaint = 0
+            /\ gcPlanned = FALSE
+            /\ gcPlanEpoch = 0
+            /\ gcTargets = {}
+            /\ gcAuthorized = FALSE
+            /\ migrationPending = FALSE
+            /\ newPhysical = FALSE
+            /\ newVerified = FALSE
+            /\ oldRetired = FALSE
+            /\ crashed = FALSE
+
+          PrepareWriter ==
+            /\ ~crashed
+            /\ ~writerPrepared
+            /\ rootEpoch < MaxEpoch
+            /\ contentGen < MaxEpoch
+            /\ writerPrepared' = TRUE
+            /\ writerExpectedRoot' = rootEpoch
+            /\ writerExpectedMaint' = maintEpoch
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, newVerified, oldRetired,
+                             crashed >>
+
+          PublishWriter ==
+            /\ ~crashed
+            /\ writerPrepared
+            /\ rootEpoch < MaxEpoch
+            /\ contentGen < MaxEpoch
+            /\ "B" \notin deleted
+            /\ IF BrokenWriter THEN TRUE ELSE writerExpectedRoot = rootEpoch
+            /\ rootEpoch' = rootEpoch + 1
+            /\ contentGen' = contentGen + 1
+            /\ live' = live \cup {"B"}
+            /\ maintEpoch' = IF BrokenWriter THEN writerExpectedMaint ELSE maintEpoch
+            /\ maxMaintSeen' = maxMaintSeen
+            /\ writerPrepared' = FALSE
+            /\ UNCHANGED << durable, deleted,
+                             writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, newVerified, oldRetired,
+                             crashed >>
+
+          RepairPublish ==
+            /\ ~crashed
+            /\ rootEpoch < MaxEpoch
+            /\ maintEpoch < MaxEpoch
+            /\ rootEpoch' = rootEpoch + 1
+            /\ maintEpoch' = maintEpoch + 1
+            /\ maxMaintSeen' = maintEpoch + 1
+            /\ UNCHANGED << contentGen, live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, newVerified, oldRetired,
+                             crashed >>
+
+          CreateGCPlan ==
+            /\ ~crashed
+            /\ ~gcPlanned
+            /\ gcPlanned' = TRUE
+            /\ gcPlanEpoch' = rootEpoch
+            /\ gcTargets' = durable \ live
+            /\ gcAuthorized' = FALSE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             migrationPending, newPhysical, newVerified, oldRetired,
+                             crashed >>
+
+          AuthorizeGC ==
+            /\ ~crashed
+            /\ gcPlanned
+            /\ ~gcAuthorized
+            /\ IF BrokenGC THEN TRUE ELSE gcPlanEpoch = rootEpoch
+            /\ gcAuthorized' = TRUE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets,
+                             migrationPending, newPhysical, newVerified, oldRetired,
+                             crashed >>
+
+          Reclaim(x) ==
+            /\ ~crashed
+            /\ gcAuthorized
+            /\ x \in gcTargets
+            /\ x \notin deleted
+            /\ IF BrokenGC THEN TRUE ELSE /\ gcPlanEpoch = rootEpoch /\ x \notin live
+            /\ deleted' = deleted \cup {x}
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, newVerified, oldRetired,
+                             crashed >>
+
+          BeginMigration ==
+            /\ ~crashed
+            /\ ~migrationPending
+            /\ migrationPending' = TRUE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             newPhysical, newVerified, oldRetired, crashed >>
+
+          BuildNewRepresentation ==
+            /\ ~crashed
+            /\ migrationPending
+            /\ ~newPhysical
+            /\ newPhysical' = TRUE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newVerified, oldRetired, crashed >>
+
+          VerifyNewRepresentation ==
+            /\ ~crashed
+            /\ migrationPending
+            /\ newPhysical
+            /\ ~newVerified
+            /\ newVerified' = TRUE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, oldRetired, crashed >>
+
+          RetireOldRepresentation ==
+            /\ ~crashed
+            /\ migrationPending
+            /\ ~oldRetired
+            /\ IF BrokenMigration THEN TRUE ELSE newVerified
+            /\ oldRetired' = TRUE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, newVerified, crashed >>
+
+          Crash ==
+            /\ ~crashed
+            /\ crashed' = TRUE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, newVerified, oldRetired >>
+
+          Recover ==
+            /\ crashed
+            /\ crashed' = FALSE
+            /\ UNCHANGED << rootEpoch, contentGen, maintEpoch, maxMaintSeen,
+                             live, durable, deleted,
+                             writerPrepared, writerExpectedRoot, writerExpectedMaint,
+                             gcPlanned, gcPlanEpoch, gcTargets, gcAuthorized,
+                             migrationPending, newPhysical, newVerified, oldRetired >>
+
+          Next ==
+               PrepareWriter
+            \/ PublishWriter
+            \/ RepairPublish
+            \/ CreateGCPlan
+            \/ AuthorizeGC
+            \/ (\E x \in Objects : Reclaim(x))
+            \/ BeginMigration
+            \/ BuildNewRepresentation
+            \/ VerifyNewRepresentation
+            \/ RetireOldRepresentation
+            \/ Crash
+            \/ Recover
+
+          Spec == Init /\ [][Next]_vars
+
+          NoPrematureGC == deleted \cap live = {}
+          PublishedClosure == live \subseteq (durable \ deleted)
+          NoLostAuthorityUpdate == maintEpoch = maxMaintSeen
+          MigrationOverlap == ~oldRetired \/ newVerified
+
+          =============================================================================
+          TLAEOF
+
+          cat > "$TLA/UFMT_Core.cfg" <<'CFGEOF'
+          SPECIFICATION Spec
+          CHECK_DEADLOCK FALSE
+          CONSTANTS
+            MaxEpoch = 3
+            BrokenGC = FALSE
+            BrokenWriter = FALSE
+            BrokenMigration = FALSE
+          INVARIANT TypeOK
+          INVARIANT NoPrematureGC
+          INVARIANT PublishedClosure
+          INVARIANT NoLostAuthorityUpdate
+          INVARIANT MigrationOverlap
+          CFGEOF
+
+          cat > "$TLA/UFMT_Core_BrokenGC.cfg" <<'CFGEOF'
+          SPECIFICATION Spec
+          CHECK_DEADLOCK FALSE
+          CONSTANTS
+            MaxEpoch = 3
+            BrokenGC = TRUE
+            BrokenWriter = FALSE
+            BrokenMigration = FALSE
+          INVARIANT TypeOK
+          INVARIANT PublishedClosure
+          CFGEOF
+
+          cat > "$TLA/UFMT_Core_BrokenWriter.cfg" <<'CFGEOF'
+          SPECIFICATION Spec
+          CHECK_DEADLOCK FALSE
+          CONSTANTS
+            MaxEpoch = 3
+            BrokenGC = FALSE
+            BrokenWriter = TRUE
+            BrokenMigration = FALSE
+          INVARIANT TypeOK
+          INVARIANT NoLostAuthorityUpdate
+          CFGEOF
+
+          cat > "$TLA/UFMT_Core_BrokenMigration.cfg" <<'CFGEOF'
+          SPECIFICATION Spec
+          CHECK_DEADLOCK FALSE
+          CONSTANTS
+            MaxEpoch = 3
+            BrokenGC = FALSE
+            BrokenWriter = FALSE
+            BrokenMigration = TRUE
+          INVARIANT TypeOK
+          INVARIANT MigrationOverlap
+          CFGEOF
+
+          cp "$TLA"/* "$RECEIPT/source/"
+
+          (
+            cd "$TLA"
+            java -cp "$TLA_JAR" tla2sany.SANY UFMT_Core.tla
+          ) >"$RECEIPT/tla/sany.log" 2>&1
+
+          expect_counterexample() {
+            cfg="$1"
+            inv="$2"
+            log="$RECEIPT/tla/$cfg.log"
+            set +e
+            (
+              cd "$TLA"
+              java -jar "$TLA_JAR" -config "$cfg.cfg" UFMT_Core.tla
+            ) >"$log" 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              echo "negative control $cfg unexpectedly passed" >&2
+              exit 1
+            fi
+            grep -F "$inv" "$log" >/dev/null
+            grep -i "violat" "$log" >/dev/null
+          }
+
+          expect_counterexample UFMT_Core_BrokenGC PublishedClosure
+          expect_counterexample UFMT_Core_BrokenWriter NoLostAuthorityUpdate
+          expect_counterexample UFMT_Core_BrokenMigration MigrationOverlap
+
+          (
+            cd "$TLA"
+            java -jar "$TLA_JAR" -config UFMT_Core.cfg UFMT_Core.tla
+          ) >"$RECEIPT/tla/correct.log" 2>&1
+
+          cat > "$RUST/Cargo.toml" <<'CARGOEOF'
+          [package]
+          name = "ufmt-m0-reference"
+          version = "0.0.0"
+          edition = "2021"
+          publish = false
+          CARGOEOF
+
+          cat > "$RUST/src/lib.rs" <<'RUSTEOF'
+          use std::fs::{self, File, OpenOptions};
+          use std::io::{Read, Write};
+          use std::path::{Path, PathBuf};
+          use std::sync::atomic::{AtomicU64, Ordering};
+
+          const MAGIC: u64 = 0x55464d54524f4f54;
+          const ROOT_LEN: usize = 64;
+          static NEXT_DIR: AtomicU64 = AtomicU64::new(1);
+
+          #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+          struct Head {
+              epoch: u64,
+              content_gen: u64,
+              content_commit: u64,
+              maint_epoch: u64,
+              maint_state: u64,
+          }
+
+          #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+          enum Slot { A, B }
+
+          #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+          enum CrashPoint {
+              P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10,
+          }
+
+          #[derive(Debug, PartialEq, Eq)]
+          enum PublishError { Injected(CrashPoint), Conflict }
+
+          fn fnv64(bytes: &[u8]) -> u64 {
+              let mut h = 0xcbf29ce484222325u64;
+              for b in bytes {
+                  h ^= *b as u64;
+                  h = h.wrapping_mul(0x100000001b3);
+              }
+              h
+          }
+
+          fn encode(h: Head) -> [u8; ROOT_LEN] {
+              let mut out = [0u8; ROOT_LEN];
+              let vals = [MAGIC, h.epoch, h.content_gen, h.content_commit, h.maint_epoch, h.maint_state];
+              for (i, v) in vals.into_iter().enumerate() {
+                  out[i*8..i*8+8].copy_from_slice(&v.to_le_bytes());
+              }
+              let sum = fnv64(&out[..48]);
+              out[48..56].copy_from_slice(&sum.to_le_bytes());
+              out
+          }
+
+          fn decode(bytes: &[u8]) -> Option<Head> {
+              if bytes.len() != ROOT_LEN { return None; }
+              let rd = |off: usize| u64::from_le_bytes(bytes[off..off+8].try_into().ok()?);
+              if rd(0) != MAGIC { return None; }
+              let expected = rd(48);
+              if fnv64(&bytes[..48]) != expected { return None; }
+              Some(Head {
+                  epoch: rd(8),
+                  content_gen: rd(16),
+                  content_commit: rd(24),
+                  maint_epoch: rd(32),
+                  maint_state: rd(40),
+              })
+          }
+
+          struct Store { dir: PathBuf }
+
+          impl Store {
+              fn fresh() -> Self {
+                  let n = NEXT_DIR.fetch_add(1, Ordering::SeqCst);
+                  let dir = std::env::temp_dir().join(format!("ufmt-m0-{}-{}", std::process::id(), n));
+                  let _ = fs::remove_dir_all(&dir);
+                  fs::create_dir_all(dir.join("objects")).unwrap();
+                  let s = Self { dir };
+                  s.put_obj(10, b"genesis-content");
+                  s.put_obj(20, b"genesis-maint");
+                  let genesis = Head { epoch:0, content_gen:0, content_commit:10, maint_epoch:0, maint_state:20 };
+                  s.write_root(Slot::A, genesis);
+                  s.sync_dir(&s.dir);
+                  s
+              }
+
+              fn obj_path(&self, id: u64) -> PathBuf {
+                  self.dir.join("objects").join(format!("{id:016x}"))
+              }
+              fn root_path(&self, slot: Slot) -> PathBuf {
+                  self.dir.join(match slot { Slot::A => "root.A", Slot::B => "root.B" })
+              }
+              fn put_obj(&self, id: u64, bytes: &[u8]) {
+                  let path = self.obj_path(id);
+                  if path.exists() { return; }
+                  let mut f = OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+                  f.write_all(bytes).unwrap();
+                  f.sync_all().unwrap();
+              }
+              fn sync_dir(&self, p: &Path) {
+                  File::open(p).unwrap().sync_all().unwrap();
+              }
+              fn write_root(&self, slot: Slot, h: Head) {
+                  let path = self.root_path(slot);
+                  let mut f = File::create(path).unwrap();
+                  f.write_all(&encode(h)).unwrap();
+                  f.sync_all().unwrap();
+              }
+              fn closure_ok(&self, h: Head) -> bool {
+                  self.obj_path(h.content_commit).is_file() && self.obj_path(h.maint_state).is_file()
+              }
+              fn read_slot(&self, slot: Slot) -> Option<Head> {
+                  let mut b = Vec::new();
+                  File::open(self.root_path(slot)).ok()?.read_to_end(&mut b).ok()?;
+                  let h = decode(&b)?;
+                  self.closure_ok(h).then_some(h)
+              }
+              fn select(&self) -> Option<(Slot, Head)> {
+                  let a = self.read_slot(Slot::A);
+                  let b = self.read_slot(Slot::B);
+                  match (a,b) {
+                      (Some(x),Some(y)) => if y.epoch > x.epoch { Some((Slot::B,y)) } else { Some((Slot::A,x)) },
+                      (Some(x),None) => Some((Slot::A,x)),
+                      (None,Some(y)) => Some((Slot::B,y)),
+                      (None,None) => None,
+                  }
+              }
+              fn inactive(slot: Slot) -> Slot { match slot { Slot::A => Slot::B, Slot::B => Slot::A } }
+
+              fn publish_content(&self, expected: Head, gen: u64, crash: Option<CrashPoint>) -> Result<Head,PublishError> {
+                  macro_rules! stop { ($p:ident) => { if crash == Some(CrashPoint::$p) { return Err(PublishError::Injected(CrashPoint::$p)); } } }
+                  stop!(P0);
+                  let content = 1000 + gen*10 + 1;
+                  let manifest = 1000 + gen*10 + 2;
+                  let commit = 1000 + gen*10 + 3;
+                  self.put_obj(content, b"content"); stop!(P1);
+                  self.put_obj(manifest, b"manifest"); stop!(P2);
+                  self.put_obj(commit, b"commit"); stop!(P3);
+                  self.sync_dir(&self.dir.join("objects")); stop!(P4);
+                  let (active,current) = self.select().unwrap(); stop!(P5);
+                  if current != expected { return Err(PublishError::Conflict); }
+                  let candidate = Head {
+                      epoch: current.epoch + 1,
+                      content_gen: current.content_gen + 1,
+                      content_commit: commit,
+                      maint_epoch: current.maint_epoch,
+                      maint_state: current.maint_state,
+                  };
+                  assert!(self.closure_ok(candidate)); stop!(P6);
+                  let inactive = Self::inactive(active);
+                  let tmp = self.dir.join(match inactive { Slot::A => "root.A.tmp", Slot::B => "root.B.tmp" });
+                  let mut f = File::create(&tmp).unwrap();
+                  f.write_all(&encode(candidate)).unwrap(); stop!(P7);
+                  f.sync_all().unwrap(); stop!(P8);
+                  fs::rename(&tmp, self.root_path(inactive)).unwrap(); stop!(P9);
+                  self.sync_dir(&self.dir); stop!(P10);
+                  let (_,selected) = self.select().unwrap();
+                  assert_eq!(selected, candidate);
+                  Ok(candidate)
+              }
+
+              fn publish_maintenance(&self, expected: Head) -> Result<Head,PublishError> {
+                  let next_state = 5000 + expected.maint_epoch + 1;
+                  self.put_obj(next_state, b"maintenance");
+                  let (active,current) = self.select().unwrap();
+                  if current != expected { return Err(PublishError::Conflict); }
+                  let candidate = Head {
+                      epoch: current.epoch + 1,
+                      content_gen: current.content_gen,
+                      content_commit: current.content_commit,
+                      maint_epoch: current.maint_epoch + 1,
+                      maint_state: next_state,
+                  };
+                  let inactive = Self::inactive(active);
+                  self.write_root(inactive, candidate);
+                  self.sync_dir(&self.dir);
+                  Ok(candidate)
+              }
+          }
+
+          impl Drop for Store {
+              fn drop(&mut self) { let _ = fs::remove_dir_all(&self.dir); }
+          }
+
+          #[test]
+          fn crash_boundaries_recover_old_or_new_only() {
+              let points = [CrashPoint::P0,CrashPoint::P1,CrashPoint::P2,CrashPoint::P3,CrashPoint::P4,CrashPoint::P5,CrashPoint::P6,CrashPoint::P7,CrashPoint::P8,CrashPoint::P9,CrashPoint::P10];
+              for p in points {
+                  let s = Store::fresh();
+                  let old = s.select().unwrap().1;
+                  let r = s.publish_content(old, 1, Some(p));
+                  assert_eq!(r, Err(PublishError::Injected(p)));
+                  let recovered = s.select().expect("one valid root").1;
+                  assert!(recovered == old || (recovered.epoch == old.epoch + 1 && recovered.content_gen == old.content_gen + 1));
+                  assert!(s.closure_ok(recovered));
+              }
+          }
+
+          #[test]
+          fn torn_higher_root_is_rejected() {
+              let s = Store::fresh();
+              let old = s.select().unwrap().1;
+              let new = s.publish_content(old,1,None).unwrap();
+              let path = s.root_path(Slot::B);
+              let mut b = fs::read(&path).unwrap();
+              b.truncate(23);
+              fs::write(&path,b).unwrap();
+              assert_eq!(s.select().unwrap().1, old);
+              assert!(new.epoch > old.epoch);
+          }
+
+          #[test]
+          fn checksum_corrupt_higher_root_is_rejected() {
+              let s = Store::fresh();
+              let old = s.select().unwrap().1;
+              s.publish_content(old,1,None).unwrap();
+              let path = s.root_path(Slot::B);
+              let mut b = fs::read(&path).unwrap();
+              b[9] ^= 0x5a;
+              fs::write(&path,b).unwrap();
+              assert_eq!(s.select().unwrap().1, old);
+          }
+
+          #[test]
+          fn dangling_higher_root_is_rejected() {
+              let s = Store::fresh();
+              let old = s.select().unwrap().1;
+              let dangling = Head { epoch:9, content_gen:9, content_commit:999_999, maint_epoch:0, maint_state:20 };
+              s.write_root(Slot::B,dangling);
+              assert_eq!(s.select().unwrap().1, old);
+          }
+
+          #[test]
+          fn negative_control_epoch_only_selector_would_choose_dangling() {
+              let s = Store::fresh();
+              let old = s.select().unwrap().1;
+              let dangling = Head { epoch:9, content_gen:9, content_commit:999_999, maint_epoch:0, maint_state:20 };
+              s.write_root(Slot::B,dangling);
+              let raw_b = decode(&fs::read(s.root_path(Slot::B)).unwrap()).unwrap();
+              assert!(raw_b.epoch > old.epoch);
+              assert_eq!(s.select().unwrap().1, old);
+          }
+
+          #[test]
+          fn maintenance_race_conflicts_then_retry_preserves_progress() {
+              let s = Store::fresh();
+              let writer_snapshot = s.select().unwrap().1;
+              let after_maint = s.publish_maintenance(writer_snapshot).unwrap();
+              assert_eq!(s.publish_content(writer_snapshot,1,None), Err(PublishError::Conflict));
+              let committed = s.publish_content(after_maint,1,None).unwrap();
+              assert_eq!(committed.maint_epoch, after_maint.maint_epoch);
+              assert_eq!(committed.maint_state, after_maint.maint_state);
+              assert_eq!(committed.content_gen, writer_snapshot.content_gen + 1);
+          }
+
+          #[test]
+          fn orphan_object_never_becomes_authority() {
+              let s = Store::fresh();
+              let before = s.select().unwrap().1;
+              s.put_obj(777_777,b"orphan");
+              assert_eq!(s.select().unwrap().1,before);
+          }
+
+          #[test]
+          fn derived_cache_loss_does_not_change_authority() {
+              let s = Store::fresh();
+              let before = s.select().unwrap().1;
+              let cache = s.dir.join("derived.idx");
+              fs::write(&cache,b"derived").unwrap();
+              fs::remove_file(cache).unwrap();
+              assert_eq!(s.select().unwrap().1,before);
+          }
+          RUSTEOF
+
+          cp "$RUST/Cargo.toml" "$RECEIPT/source/Cargo.toml"
+          cp "$RUST/src/lib.rs" "$RECEIPT/source/m0-lib.rs"
+
+          CARGO_NET_OFFLINE=true cargo test --manifest-path "$RUST/Cargo.toml" -- --nocapture \
+            >"$RECEIPT/rust/cargo-test.log" 2>&1
+
+          grep -E "states generated|distinct states|Model checking completed|Finished in" \
+            "$RECEIPT/tla/correct.log" > "$RECEIPT/tla/correct-summary.txt" || true
+          grep "test result: ok" "$RECEIPT/rust/cargo-test.log" > "$RECEIPT/rust/test-summary.txt"
+
+          (
+            cd "$RECEIPT"
+            sha256sum source/* tla/*.log rust/*.log > sha256sums.txt
+          )
+
+          python3 - <<'PYEOF'
+          import hashlib, json, pathlib, re, subprocess
+          root = pathlib.Path("target/ufmt-p0/receipt")
+          correct = (root/"tla/correct.log").read_text(errors="replace")
+          cargo = (root/"rust/cargo-test.log").read_text(errors="replace")
+          def sha(p):
+              return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+          m = re.search(r"(\d+) states generated, (\d+) distinct states found", correct)
+          t = re.search(r"test result: ok\. (\d+) passed; 0 failed", cargo)
+          receipt = {
+              "schema":"ufmt.p0.publication.execution.v1",
+              "tla_tools":{"version":"1.7.4","sha256":"936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"},
+              "exp01":{
+                  "sany":"PASS",
+                  "broken_gc":"COUNTEREXAMPLE_EXPECTED",
+                  "broken_writer":"COUNTEREXAMPLE_EXPECTED",
+                  "broken_migration":"COUNTEREXAMPLE_EXPECTED",
+                  "correct":"PASS",
+                  "states_generated": int(m.group(1)) if m else None,
+                  "distinct_states": int(m.group(2)) if m else None,
+              },
+              "m0_reference":{
+                  "compile":"PASS",
+                  "tests":"PASS",
+                  "tests_passed": int(t.group(1)) if t else None,
+                  "scope":"process-boundary/fs-API reference; not power-loss/filesystem-provider proof"
+              },
+              "source_sha256":{
+                  p.name:sha(p) for p in sorted((root/"source").iterdir())
+              }
+          }
+          (root/"p0-execution-receipt.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+          PYEOF
+
+      - name: Upload P0 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ufmt-p0-publication-evidence
+          path: target/ufmt-p0/receipt
+          if-no-files-found: error
