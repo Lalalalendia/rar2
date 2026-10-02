@@ -133,8 +133,9 @@ pub use structural_base::{
     structural_base_manifest_json,
 };
 pub use table_bridge::{
-    PubMaterializedTableCell, PubTableCellCoordinates, PubTableCellPaintSource, PubTableCellSource,
-    PubTableLayoutMetricsSource, PubTableSource, PubTableStoryOwnershipSource, PubTableTextError,
+    PubMaterializedTableCell, PubTableBorderAxis, PubTableBorderSegmentSource,
+    PubTableCellCoordinates, PubTableCellPaintSource, PubTableCellSource, PubTableLayoutMetricsSource,
+    PubTableSource, PubTableStoryOwnershipSource, PubTableTextError,
     RAW_TYPE_TABLE, materialize_bounded_simple_table_cells, materialize_bounded_table_cells,
 };
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
