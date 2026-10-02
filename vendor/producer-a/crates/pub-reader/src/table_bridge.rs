@@ -651,7 +651,11 @@ fn populate_native_autoformat_table_borders(
         });
     }
 
-    (out.len() == candidates).then_some(out).unwrap_or_default()
+    if out.len() == candidates {
+        out
+    } else {
+        Vec::new()
+    }
 }
 
 fn populate_native_autoformat_table_cell_fill(
