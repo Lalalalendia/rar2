@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   assertReaderSceneSourceNeutral,
+  imageContentRotationGeometry,
   imagePaintGeometry,
   imageResourcePaintPlan,
   presetShapePaintGeometry,
@@ -33,12 +34,60 @@ test("Viewer-materialized OLE preview PNG uses the generic image resource paint 
     href: resource.inline_data_url,
     resource_id: resource.resource_id,
     availability: "inline_data_url",
-    geometry: { x: 100, y: 200, width: 300, height: 400 }
+    geometry: { x: 100, y: 200, width: 300, height: 400 },
+    content_transform: null
   });
   assert.equal(
     imageResourcePaintPlan(node, { ...resource, inline_data_url: "data:image/svg+xml;base64,PHN2Zy8+" }),
     null
   );
+});
+
+test("cardinal picture content rotation keeps the destination frame fixed", () => {
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 100, y: 200, width: 300, height: 900 }, 270),
+    {
+      x: -200,
+      y: 500,
+      width: 900,
+      height: 300,
+      transform: "rotate(270 250 650)"
+    }
+  );
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 100, y: 200, width: 900, height: 300 }, 180),
+    {
+      x: 100,
+      y: 200,
+      width: 900,
+      height: 300,
+      transform: "rotate(180 550 350)"
+    }
+  );
+  assert.equal(
+    imageContentRotationGeometry({ x: 0, y: 0, width: 100, height: 200 }, 45),
+    null
+  );
+});
+
+test("cardinal picture content rotation is a placement transform, not a frame transform", () => {
+  const resource = {
+    resource_id: "resource:cardinal",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+  const node = {
+    node_id: "node:cardinal",
+    kind: "picture_frame",
+    bounds: { x: 100, y: 200, width: 300, height: 900 },
+    resource_id: resource.resource_id,
+    image_content_rotation_degrees: 270
+  };
+  const plan = imageResourcePaintPlan(node, resource);
+  assert.deepEqual(plan.geometry, { x: -200, y: 500, width: 900, height: 300 });
+  assert.equal(plan.content_transform, "rotate(270 250 650)");
+  assert.deepEqual(node.bounds, { x: 100, y: 200, width: 300, height: 900 });
 });
 
 test("image crop maps the normalized source window onto the destination frame", () => {
