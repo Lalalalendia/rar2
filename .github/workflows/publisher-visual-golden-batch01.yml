@@ -212,6 +212,10 @@ jobs:
           READER_REAL_MANIFEST: ${{ runner.temp }}/publisher-visual-batch01/manifest.json
           READER_REAL_OUTPUT: ${{ runner.temp }}/publisher-visual-batch01/browser
           READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "1"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
         run: node apps/cloud-reader/real-browser.test.mjs
 
       - name: Compare 55 pairs against source-free Publisher fingerprints
