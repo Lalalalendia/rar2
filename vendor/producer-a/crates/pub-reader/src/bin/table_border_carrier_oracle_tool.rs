@@ -250,9 +250,7 @@ fn subtract_exact_matches(
 }
 
 fn changed_group_is_ambiguous(before: &[FoptState], after: &[FoptState]) -> bool {
-    !before.is_empty()
-        && !after.is_empty()
-        && (before.len() != 1 || after.len() != 1)
+    !before.is_empty() && !after.is_empty() && (before.len() != 1 || after.len() != 1)
 }
 
 fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
