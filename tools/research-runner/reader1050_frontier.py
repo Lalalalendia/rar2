@@ -25,6 +25,32 @@ from cfb_physical import CFB  # noqa: E402
 SCHEMA = "chaptera.reader1050-hosted-frontier.v1"
 CASE_SCHEMA = "chaptera.reader1050-hosted-frontier-case.v1"
 
+KNOWN_OWNED_ROUTES = {
+    # QUILL-STORY-EARLY-TEXT-BOUNDARY-01 / #315/#337: valid early-mature
+    # Story-bearing sentinel family. These are format/recovery gaps, not
+    # evidence of corruption merely because normal Reader open fails.
+    "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157": {
+        "kind": "format_gap",
+        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+        "route": "existing_format_owner",
+    },
+    "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a": {
+        "kind": "format_gap",
+        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+        "route": "existing_format_owner",
+    },
+    "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569": {
+        "kind": "format_gap",
+        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+        "route": "existing_format_owner",
+    },
+    "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff": {
+        "kind": "format_gap",
+        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+        "route": "existing_format_owner",
+    },
+}
+
 KNOWN_STREAMS = {
     "contents": "Contents",
     "quill": "Quill",
@@ -121,6 +147,13 @@ def source_free_cfb_shape(data: bytes) -> dict[str, Any]:
 
 
 def suggested_discriminator(row: dict[str, Any]) -> tuple[str, str]:
+    source_sha256 = str(row.get("source_sha256") or "").lower()
+    existing_owner = KNOWN_OWNED_ROUTES.get(source_sha256)
+    if existing_owner is not None:
+        return (
+            "existing_format_owner",
+            "Hand off to the already-grounded format-research owner; do not reinterpret normal-open failure as corruption evidence.",
+        )
     if row.get("cfb_inventory_available") is False:
         return (
             "container_integrity_gap",
@@ -146,9 +179,33 @@ def priority(row: dict[str, Any]) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
 
+    source_sha256 = str(row.get("source_sha256") or "").lower()
+    existing_owner = KNOWN_OWNED_ROUTES.get(source_sha256)
+    if existing_owner is not None:
+        score -= 500
+        reasons.append(
+            f"already owned by {existing_owner['owner']} ({existing_owner['kind']})"
+        )
+
     if row.get("salvage_eligibility") == "awaiting_typed_corruption_evidence":
         score += 100
         reasons.append("awaiting typed corruption evidence")
+
+    forced_probe = row.get("forced_trigger_probe")
+    forced_graph = row.get("forced_partial_graph")
+    if isinstance(forced_probe, dict) and isinstance(forced_graph, dict):
+        if forced_probe.get("cfb_inventory_available") is False:
+            score += 260
+            reasons.append("forced trigger still cannot build Reader CFB inventory")
+        elif forced_graph.get("status") == "error":
+            score += 250
+            reasons.append("forced trigger reaches CFB but partial graph fails")
+        elif (
+            forced_graph.get("status") == "constructed"
+            and forced_probe.get("has_surviving_evidence") is True
+        ):
+            score += 240
+            reasons.append("forced trigger constructs partial salvage graph")
     if row.get("has_surviving_evidence") is True:
         score += 80
         reasons.append("surviving evidence exists")
@@ -198,6 +255,7 @@ def build_case(
     return {
         "schema": CASE_SCHEMA,
         "source_sha256": source_sha256,
+        "existing_owner": KNOWN_OWNED_ROUTES.get(source_sha256),
         "byte_len": len(data),
         "outcome": row.get("outcome"),
         "reader_route": row.get("reader_route"),
@@ -208,6 +266,8 @@ def build_case(
         "has_surviving_evidence": row.get("has_surviving_evidence"),
         "cfb_inventory_available": row.get("cfb_inventory_available"),
         "open_error_signature_sha256": row.get("open_error_signature_sha256"),
+        "forced_trigger_probe": row.get("forced_trigger_probe"),
+        "forced_partial_graph": row.get("forced_partial_graph"),
         "normal_reader_opened": (
             reader_record.get("opened") if isinstance(reader_record, dict) else None
         ),
@@ -262,6 +322,7 @@ def build_frontier(
             {
                 "source_sha256": row["source_sha256"],
                 "frontier_score": row["frontier_score"],
+                "existing_owner": row.get("existing_owner"),
                 "gap_class": row["gap_class"],
                 "contents_family": row["contents_family"],
                 "salvage_eligibility": row["salvage_eligibility"],

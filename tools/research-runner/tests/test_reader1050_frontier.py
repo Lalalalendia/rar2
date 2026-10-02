@@ -24,6 +24,26 @@ diff_spec.loader.exec_module(cfb_diff)
 
 
 class Reader1050FrontierTests(unittest.TestCase):
+    def test_known_owned_format_gap_is_deprioritized(self) -> None:
+        owned = {
+            "source_sha256": "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
+            "salvage_eligibility": "awaiting_typed_corruption_evidence",
+            "has_surviving_evidence": False,
+            "cfb_inventory_available": False,
+            "contents_family": None,
+            "open_error_signature_sha256": "a" * 64,
+        }
+        unowned = {
+            **owned,
+            "source_sha256": "f" * 64,
+        }
+        owned_score, owned_reasons = frontier.priority(owned)
+        unowned_score, _ = frontier.priority(unowned)
+        self.assertLess(owned_score, unowned_score)
+        self.assertTrue(any("already owned by" in item for item in owned_reasons))
+        gap, _ = frontier.suggested_discriminator(owned)
+        self.assertEqual(gap, "existing_format_owner")
+
     def test_selects_bounded_highest_priority_unsupported_case(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
