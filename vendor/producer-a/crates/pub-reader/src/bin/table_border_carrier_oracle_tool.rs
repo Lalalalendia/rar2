@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use pub_core::StreamPath;
-use pub_escher::{PublisherFieldRecord, SpContainerObservation, inspect_sp_containers};
+use pub_escher::{inspect_sp_containers, PublisherFieldRecord, SpContainerObservation};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -151,8 +151,13 @@ fn read_carriers(path: &PathBuf) -> Result<(String, BTreeMap<CarrierKey, FoptSta
         .context("inspect SpContainers")?;
 
     let mut carriers = BTreeMap::new();
-    for shape in inventory.shapes.iter().filter(|shape| is_border_carrier(shape)) {
-        let key = carrier_key(shape).context("border carrier has no stable ClientAnchor/FSP key")?;
+    for shape in inventory
+        .shapes
+        .iter()
+        .filter(|shape| is_border_carrier(shape))
+    {
+        let key =
+            carrier_key(shape).context("border carrier has no stable ClientAnchor/FSP key")?;
         anyhow::ensure!(
             carriers.insert(key, fopt_state(shape)).is_none(),
             "duplicate border-carrier anchor key"
@@ -242,14 +247,20 @@ fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
     }
 
     let mut removed_anchor_signature_histogram = BTreeMap::new();
-    for key in before_map.keys().filter(|key| !after_map.contains_key(*key)) {
+    for key in before_map
+        .keys()
+        .filter(|key| !after_map.contains_key(*key))
+    {
         bump(
             &mut removed_anchor_signature_histogram,
             anchor_signature_from_key(key),
         );
     }
     let mut added_anchor_signature_histogram = BTreeMap::new();
-    for key in after_map.keys().filter(|key| !before_map.contains_key(*key)) {
+    for key in after_map
+        .keys()
+        .filter(|key| !before_map.contains_key(*key))
+    {
         bump(
             &mut added_anchor_signature_histogram,
             anchor_signature_from_key(key),
