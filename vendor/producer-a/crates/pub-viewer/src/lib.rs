@@ -983,6 +983,10 @@ pub struct ViewerTypographyRun {
     pub text_size_emu: u32,
     pub font_inherited: bool,
     pub size_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    pub color_inherited: bool,
     pub source_story_text_sha256: Sha256Digest,
 }
 
@@ -2233,6 +2237,8 @@ fn open_mature_0x2c_bundle(
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
+                color_rgb: run.color_rgb,
+                color_inherited: run.color_inherited,
                 source_story_text_sha256: viewer_story_text_sha256(&story.text),
             })
         })
@@ -2252,6 +2258,8 @@ fn open_mature_0x2c_bundle(
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: run.size_inherited,
+                    color_rgb: None,
+                    color_inherited: false,
                     source_story_text_sha256: viewer_story_text_sha256(&story.text),
                 })
             }),
