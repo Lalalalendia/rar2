@@ -68,8 +68,10 @@ function compatibilityReport(classification, sha = sourceSha) {
       read_only_preview: preview[classification],
       salvage_recovery: classification === "salvage" ? "available"
         : ["supported", "partial"].includes(classification) ? "not_applicable" : "unavailable",
-      editable_idml: "not_verified",
-      editable_odg: "not_verified"
+      editable_idml: ["supported", "partial"].includes(classification)
+        ? "available_with_declared_losses" : "not_verified",
+      editable_odg: ["supported", "partial"].includes(classification)
+        ? "unavailable" : "not_verified"
     },
     recommended_next_step: next[classification]
   };
@@ -213,7 +215,9 @@ try {
     assert.equal(await page.locator("#compatibility-report").isVisible(), true);
     assert.equal(await page.locator("#compatibility-state").textContent(), "Needs review");
     assert.match(await page.locator("#compatibility-summary").textContent(), new RegExp(sourceSha));
-    assert.match(await page.locator("#compatibility-routes").textContent(), /not advertised/);
+    const routeText = await page.locator("#compatibility-routes").textContent();
+    assert.match(routeText, /Editable IDML migration is available with declared losses/);
+    assert.match(routeText, /Editable ODG migration is unavailable for this file/);
     assert.equal(await page.locator("#pages svg").count(), 2);
     assert.equal(await page.locator("#pages svg").first().getAttribute("data-page-id"), "p1");
     const guest = requests.filter((request) => request.path.startsWith("/v1/reader/guest-sessions"));
