@@ -43,6 +43,7 @@ pub struct PubTrackingWrapObservation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubObjectTrackingWrapObserver {
     pub schema: &'static str,
+    pub serialization_revision: u16,
     pub target_oh_track: u32,
     pub tracking_object_count: usize,
     pub observations: Vec<PubTrackingWrapObservation>,
@@ -110,6 +111,7 @@ pub fn observe_object_tracking_wrap_state(
 
     Ok(PubObjectTrackingWrapObserver {
         schema: PUB_OBJECT_TRACKING_WRAP_OBSERVER_SCHEMA_V1,
+        serialization_revision: header.preamble.serialization_revision,
         target_oh_track,
         tracking_object_count,
         observations,
