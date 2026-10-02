@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   assertReaderSceneSourceNeutral,
   imagePaintGeometry,
+  imageRecolorPaintPlan,
   imageResourcePaintPlan,
   presetShapePaintGeometry,
   resolvedTextLinePaintPlan,
@@ -38,6 +39,44 @@ test("Viewer-materialized OLE preview PNG uses the generic image resource paint 
   assert.equal(
     imageResourcePaintPlan(node, { ...resource, inline_data_url: "data:image/svg+xml;base64,PHN2Zy8+" }),
     null
+  );
+});
+
+test("bounded picture recolor matrix maps black to target and white to white", () => {
+  const plan = imageRecolorPaintPlan({
+    image_recolor: {
+      target_rgb: [51, 102, 153],
+      preserve_grays: false
+    }
+  });
+  assert.ok(plan);
+
+  const values = plan.values.split(/\s+/).map(Number);
+  assert.equal(values.length, 20);
+  const apply = ([r, g, b, a]) => [
+    values[0] * r + values[1] * g + values[2] * b + values[3] * a + values[4],
+    values[5] * r + values[6] * g + values[7] * b + values[8] * a + values[9],
+    values[10] * r + values[11] * g + values[12] * b + values[13] * a + values[14],
+    values[15] * r + values[16] * g + values[17] * b + values[18] * a + values[19]
+  ];
+
+  const black = apply([0, 0, 0, 1]);
+  assert.deepEqual(black.map((value) => Math.round(value * 255)), [51, 102, 153, 255]);
+
+  const white = apply([1, 1, 1, 1]);
+  assert.deepEqual(white.map((value) => Math.round(value * 255)), [255, 255, 255, 255]);
+});
+
+test("picture recolor fails closed for preserve-grays or invalid target state", () => {
+  assert.equal(imageRecolorPaintPlan({
+    image_recolor: { target_rgb: [1, 2, 3], preserve_grays: true }
+  }), null);
+  assert.equal(imageRecolorPaintPlan({}), null);
+  assert.throws(
+    () => imageRecolorPaintPlan({
+      image_recolor: { target_rgb: [1, 2, 999], preserve_grays: false }
+    }),
+    /byte values/
   );
 });
 

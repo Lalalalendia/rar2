@@ -381,6 +381,39 @@ function appendTableText(group, node) {
   }
 }
 
+export function imageRecolorPaintPlan(node) {
+  const effect = node?.image_recolor;
+  if (!effect || effect.preserve_grays !== false) return null;
+  const target = effect.target_rgb;
+  if (!Array.isArray(target) || target.length !== 3) return null;
+  const channels = target.map((value) => {
+    const channel = Number(value);
+    if (!Number.isInteger(channel) || channel < 0 || channel > 255) {
+      throw new RangeError("image_recolor.target_rgb must contain byte values");
+    }
+    return channel / 255;
+  });
+
+  // Bounded #802 A/B candidate: grayscale luminance drives a tint from the
+  // persisted recolor target at black to white at full luminance. This is
+  // renderer math only; source semantics stay the resolved target RGB +
+  // preserve_grays disposition.
+  const luminance = [0.2125, 0.7154, 0.0721];
+  const rows = channels.map((targetChannel) => [
+    luminance[0] * (1 - targetChannel),
+    luminance[1] * (1 - targetChannel),
+    luminance[2] * (1 - targetChannel),
+    0,
+    targetChannel
+  ]);
+  rows.push([0, 0, 0, 1, 0]);
+
+  return Object.freeze({
+    target_rgb: Object.freeze([...target]),
+    values: rows.flat().join(" ")
+  });
+}
+
 export function imageResourcePaintPlan(node, resource) {
   const href = imageDataUrl(resource);
   if (!href) return null;
@@ -407,6 +440,21 @@ function appendImage(group, defs, node, resource, clipId) {
   }));
   defs.appendChild(clipPath);
 
+  const recolor = imageRecolorPaintPlan(node);
+  let filterId = null;
+  if (recolor) {
+    filterId = clipId + "-recolor";
+    const filter = svgNode("filter", {
+      id: filterId,
+      "color-interpolation-filters": "sRGB"
+    });
+    filter.appendChild(svgNode("feColorMatrix", {
+      type: "matrix",
+      values: recolor.values
+    }));
+    defs.appendChild(filter);
+  }
+
   const image = svgNode("image", {
     x: plan.geometry.x,
     y: plan.geometry.y,
@@ -414,8 +462,10 @@ function appendImage(group, defs, node, resource, clipId) {
     height: plan.geometry.height,
     preserveAspectRatio: "none",
     "clip-path": "url(#" + clipId + ")",
+    filter: filterId ? "url(#" + filterId + ")" : null,
     "data-resource-id": plan.resource_id,
-    "data-resource-availability": plan.availability
+    "data-resource-availability": plan.availability,
+    "data-image-recolor-authority": recolor ? "source-picture-recolor" : null
   });
   image.setAttribute("href", plan.href);
   group.appendChild(image);

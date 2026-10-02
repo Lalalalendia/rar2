@@ -169,6 +169,7 @@ mod tests {
             image_slot: Some(1),
             legacy_ole: Some(legacy_ole.clone()),
             explicit_image_crop: Some(source_crop.clone()),
+            explicit_image_recolor: None,
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
             story_frame: None,

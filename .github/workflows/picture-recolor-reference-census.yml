@@ -1,0 +1,66 @@
+name: Picture recolor reference admission census
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-viewer/tests/picture_recolor_reference_census.rs"
+      - ".github/workflows/picture-recolor-reference-census.yml"
+      - "tools/acquire_carlton_march_pair.py"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Reacquire exact reference PUB fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/carlton-pair" "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_carlton_march_pair.py "$RUNNER_TEMP/carlton-pair"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/carlton-pair/March-2026.pub"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Census admitted recolor by reference page
+        env:
+          CHAPTERA_RECOLOR_CARLTON: ${{ runner.temp }}/carlton-pair/March-2026.pub
+          CHAPTERA_RECOLOR_DEVINETTES: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
+          CHAPTERA_RECOLOR_REMPLACANTE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_RECOLOR_CENSUS_OUT: ${{ github.workspace }}/target/picture-recolor-reference-census/receipt.json
+        run: |
+          set -euo pipefail
+          mkdir -p target/picture-recolor-reference-census
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test picture_recolor_reference_census -- --ignored --nocapture
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: picture-recolor-reference-census
+          path: target/picture-recolor-reference-census/
+          if-no-files-found: error
+          retention-days: 30
