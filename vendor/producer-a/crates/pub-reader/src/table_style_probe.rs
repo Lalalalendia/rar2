@@ -229,23 +229,22 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
             PubTableMcldOpaque1dClass::VariesByChild
         };
 
-        let opaque_1d_cross_table_class =
-            if opaque_1d_class == PubTableMcldOpaque1dClass::Uniform {
-                let payload = opaque_1d_distinct_payloads
-                    .iter()
-                    .next()
-                    .expect("uniform 0x1D class must retain one payload");
-                if let Some(class) = opaque_1d_cross_table_classes.get(payload) {
-                    Some(*class)
-                } else {
-                    let class = u32::try_from(opaque_1d_cross_table_classes.len())
-                        .context("TABLE 0x1D equality class count does not fit u32")?;
-                    opaque_1d_cross_table_classes.insert(payload.clone(), class);
-                    Some(class)
-                }
+        let opaque_1d_cross_table_class = if opaque_1d_class == PubTableMcldOpaque1dClass::Uniform {
+            let payload = opaque_1d_distinct_payloads
+                .iter()
+                .next()
+                .expect("uniform 0x1D class must retain one payload");
+            if let Some(class) = opaque_1d_cross_table_classes.get(payload) {
+                Some(*class)
             } else {
-                None
-            };
+                let class = u32::try_from(opaque_1d_cross_table_classes.len())
+                    .context("TABLE 0x1D equality class count does not fit u32")?;
+                opaque_1d_cross_table_classes.insert(payload.clone(), class);
+                Some(class)
+            }
+        } else {
+            None
+        };
 
         observations.push(PubTableMcldStyleObservation {
             contents_seq_num: seq_num,
@@ -492,7 +491,6 @@ pub fn analyze_mature_0x2c_table_default_style_fields<R: Read + Seek>(
     Ok(observations)
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PubTablePublicationDefaultObservation {
     pub contents_seq_num: u32,
@@ -597,7 +595,11 @@ pub fn analyze_mature_0x2c_table_publication_default_topology<R: Read + Seek>(
         } else if decoded_target_refs.len() == 1 {
             format!(
                 "decoded_reference:{}",
-                decoded_target_refs.iter().next().copied().unwrap_or("unknown")
+                decoded_target_refs
+                    .iter()
+                    .next()
+                    .copied()
+                    .unwrap_or("unknown")
             )
         } else if decoded_target_refs.len() > 1 {
             "decoded_reference:multiple".to_owned()
