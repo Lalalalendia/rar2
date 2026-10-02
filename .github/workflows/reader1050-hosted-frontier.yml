@@ -6,8 +6,12 @@ on:
       - ".github/workflows/reader1050-hosted-frontier.yml"
       - "tools/research-runner/reader1050_frontier.py"
       - "tools/research-runner/reader1050_offline_discriminator.py"
+      - "tools/research-runner/reader1050_knowledge.py"
+      - "tools/research-runner/reader1050_discriminator_ledger.v1.json"
+      - "vendor/producer-a/crates/pub-reader/data/reader_known_evidence_registry.v1.json"
       - "tools/research-runner/tests/test_reader1050_frontier.py"
       - "tools/research-runner/tests/test_reader1050_offline_discriminator.py"
+      - "tools/research-runner/tests/test_reader1050_knowledge.py"
       - "tools/corpus/cfb_physical.py"
       - "tools/corpus/cfb_physical_diff.py"
   workflow_run:
@@ -52,10 +56,13 @@ jobs:
           set -euo pipefail
           python -m py_compile \
             tools/research-runner/reader1050_frontier.py \
-            tools/research-runner/reader1050_offline_discriminator.py
+            tools/research-runner/reader1050_offline_discriminator.py \
+            tools/research-runner/reader1050_knowledge.py
+          python tools/research-runner/reader1050_knowledge.py
           python -m unittest \
             tools/research-runner/tests/test_reader1050_frontier.py \
-            tools/research-runner/tests/test_reader1050_offline_discriminator.py
+            tools/research-runner/tests/test_reader1050_offline_discriminator.py \
+            tools/research-runner/tests/test_reader1050_knowledge.py
 
   frontier:
     needs: validate
@@ -74,7 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: main
+          ref: ${{ env.READER_SOURCE_SHA }}
           persist-credentials: false
 
       - uses: actions/setup-python@v5
@@ -102,6 +109,33 @@ jobs:
           repository: Lalalalendia/rar2
           run-id: 36573574820
 
+      - name: Restore recent source-free discriminator execution cursor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="input/prior-discriminators"
+          mkdir -p "$root"
+
+          gh api \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/reader1050-hosted-frontier.yml/runs?branch=main&status=success&event=workflow_run&per_page=25" \
+            --jq '.workflow_runs[].id' > "$root/run-ids.txt"
+
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            dest="$root/$run_id"
+            mkdir -p "$dest"
+            if ! gh run download "$run_id" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir "$dest"
+            then
+              echo "::warning::Could not restore discriminator artifacts from prior run $run_id"
+              rm -rf "$dest"
+            fi
+          done < "$root/run-ids.txt"
+
+          count="$(find "$root" -name ledger-entry.proposed.json -type f | wc -l)"
+          echo "restored_runtime_ledger_entries=$count" >> "$GITHUB_STEP_SUMMARY"
       - name: Select one bounded unsupported frontier
         run: |
           set -euo pipefail
@@ -110,7 +144,8 @@ jobs:
             --corpus-root input/corpus \
             --out out/reader1050-frontier \
             --source-run-id "$READER_RUN_ID" \
-            --source-sha "$READER_SOURCE_SHA"
+            --source-sha "$READER_SOURCE_SHA" \
+            --runtime-ledger-root input/prior-discriminators
 
           cat out/reader1050-frontier/frontier.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -121,7 +156,8 @@ jobs:
             --reader-root input/reader \
             --frontier out/reader1050-frontier/frontier.json \
             --corpus-root input/corpus \
-            --out out/reader1050-discriminator
+            --out out/reader1050-discriminator \
+            --discriminator-run-id "$GITHUB_RUN_ID"
 
           cat out/reader1050-discriminator/decision.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -158,4 +194,4 @@ jobs:
           name: reader1050-offline-discriminator-${{ env.READER_RUN_ID }}
           path: out/reader1050-discriminator/**
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
