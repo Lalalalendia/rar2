@@ -17,6 +17,7 @@ use std::{
 
 const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
+const FILL_OPACITY: u16 = 0x0182;
 const FILL_BOOLEANS: u16 = 0x01BF;
 const FILL_USE_FILLED_BIT: u32 = 1 << 20;
 const FILL_FILLED_BIT: u32 = 1 << 4;
@@ -104,6 +105,60 @@ fn scalar_property_profile(records: &[FoptObservation], property_id: u16) -> &'s
     }
 }
 
+fn fill_opacity_profile(records: &[FoptObservation]) -> String {
+    let matches = records
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == FILL_OPACITY)
+        .collect::<Vec<_>>();
+    if matches.is_empty() {
+        return "absent".to_owned();
+    }
+    if matches
+        .iter()
+        .any(|property| property.f_bid() || property.f_complex())
+    {
+        return "malformed_or_complex".to_owned();
+    }
+    if matches.len() != 1 {
+        return "duplicate_scalar".to_owned();
+    }
+    let class = match matches[0].op {
+        0 => "transparent",
+        0x0001_0000 => "opaque",
+        1..=0x0000_FFFF => "partial",
+        _ => "invalid_out_of_range",
+    };
+    format!("single_scalar:{class}")
+}
+
+fn effective_fill_opacity_profile(
+    shape: &pub_escher::SpContainerObservation,
+    dgg: Option<&DggDefaultOptionsObservation>,
+) -> String {
+    let mut layers = vec![("shape_local", fill_opacity_profile(&shape.fopts))];
+    if let Some(dgg) = dgg {
+        layers.push((
+            "drawing_group_primary",
+            fill_opacity_profile(&dgg.primary_options),
+        ));
+        layers.push((
+            "drawing_group_tertiary",
+            fill_opacity_profile(&dgg.tertiary_options),
+        ));
+    }
+    for (authority, profile) in layers {
+        if profile == "absent" {
+            continue;
+        }
+        if let Some(class) = profile.strip_prefix("single_scalar:") {
+            return format!("{authority}:{class}");
+        }
+        return format!("{authority}:{profile}");
+    }
+    "normative_default:opaque".to_owned()
+}
+
 fn fill_boolean_profile(records: &[FoptObservation]) -> String {
     let mut total = 0usize;
     let mut malformed = 0usize;
@@ -152,6 +207,8 @@ struct PageReceipt {
     restored_color_authority_histogram: BTreeMap<String, usize>,
     restored_local_fill_type_profile_histogram: BTreeMap<String, usize>,
     restored_local_fill_color_profile_histogram: BTreeMap<String, usize>,
+    restored_local_fill_opacity_profile_histogram: BTreeMap<String, usize>,
+    restored_effective_fill_opacity_histogram: BTreeMap<String, usize>,
     restored_local_fill_boolean_profile_histogram: BTreeMap<String, usize>,
 }
 
@@ -163,9 +220,11 @@ struct Receipt {
     dgg_default_group_count: usize,
     dgg_primary_fill_type_profile: String,
     dgg_primary_fill_color_profile: String,
+    dgg_primary_fill_opacity_profile: String,
     dgg_primary_fill_boolean_profile: String,
     dgg_tertiary_fill_type_profile: String,
     dgg_tertiary_fill_color_profile: String,
+    dgg_tertiary_fill_opacity_profile: String,
     dgg_tertiary_fill_boolean_profile: String,
     pages: Vec<PageReceipt>,
     restored_visible_solid_fill_total: usize,
@@ -345,6 +404,14 @@ fn exact_virginia_restored_fill_stack_probe() {
                 scalar_property_profile(&shape.fopts, FILL_COLOR),
             );
             bump(
+                &mut page.restored_local_fill_opacity_profile_histogram,
+                fill_opacity_profile(&shape.fopts),
+            );
+            bump(
+                &mut page.restored_effective_fill_opacity_histogram,
+                effective_fill_opacity_profile(shape, dgg),
+            );
+            bump(
                 &mut page.restored_local_fill_boolean_profile_histogram,
                 fill_boolean_profile(&shape.fopts),
             );
@@ -379,6 +446,9 @@ fn exact_virginia_restored_fill_stack_probe() {
             .map(|group| scalar_property_profile(&group.primary_options, FILL_COLOR))
             .unwrap_or("absent")
             .to_owned(),
+        dgg_primary_fill_opacity_profile: dgg
+            .map(|group| fill_opacity_profile(&group.primary_options))
+            .unwrap_or_else(|| "absent".to_owned()),
         dgg_primary_fill_boolean_profile: dgg
             .map(|group| fill_boolean_profile(&group.primary_options))
             .unwrap_or_else(|| fill_boolean_profile(&[])),
@@ -390,6 +460,9 @@ fn exact_virginia_restored_fill_stack_probe() {
             .map(|group| scalar_property_profile(&group.tertiary_options, FILL_COLOR))
             .unwrap_or("absent")
             .to_owned(),
+        dgg_tertiary_fill_opacity_profile: dgg
+            .map(|group| fill_opacity_profile(&group.tertiary_options))
+            .unwrap_or_else(|| "absent".to_owned()),
         dgg_tertiary_fill_boolean_profile: dgg
             .map(|group| fill_boolean_profile(&group.tertiary_options))
             .unwrap_or_else(|| fill_boolean_profile(&[])),
@@ -404,6 +477,7 @@ fn exact_virginia_restored_fill_stack_probe() {
             "No source text, object ids, SPIDs, offsets, filenames, or raw bytes are emitted.",
             "Grouped/direct and source-order buckets come only from current persisted source provenance.",
             "Stage-B property profiles emit only presence/participation classes and effective-authority buckets, never raw property values.",
+            "Stage-C fillOpacity profiles classify only transparent/partial/opaque/invalid and never emit the persisted fixed-point scalar.",
         ],
     };
 
