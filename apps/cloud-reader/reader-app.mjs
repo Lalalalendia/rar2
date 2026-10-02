@@ -134,6 +134,11 @@ function clearCompatibilityReport() {
 
 function clearReader() {
   clearContribution();
+  const compatibilityHome = $("#compatibility-home");
+  const compatibilityReport = $("#compatibility-report");
+  if (compatibilityHome && compatibilityReport.parentElement !== compatibilityHome) {
+    compatibilityHome.append(compatibilityReport);
+  }
   clearCompatibilityReport();
   scene = null;
   pages = [];
@@ -363,6 +368,8 @@ async function render(payload, operation) {
   $("#fidelity").textContent = payload.fidelity?.state === "supported" ? "Opened" : "Partial display";
   $("#page-count").textContent = pages.length + (pages.length === 1 ? " page" : " pages");
   $("#revision").textContent = "Read-only document";
+  const compatibilitySlot = $("#compatibility-inspector-slot");
+  if (compatibilitySlot) compatibilitySlot.append($("#compatibility-report"));
   $("#reader").hidden = false;
   document.body.classList.add("reader-open");
   showDetails();
