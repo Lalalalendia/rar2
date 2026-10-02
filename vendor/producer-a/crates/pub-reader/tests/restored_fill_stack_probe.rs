@@ -317,14 +317,8 @@ fn geometry_layer_profile(records: &[FoptObservation]) -> &'static str {
         .iter()
         .any(|profile| matches!(*profile, "malformed_or_complex" | "duplicate_scalar"))
         || matches!(shape_path, LegacyScalarLayer::Unresolved)
-        || matches!(
-            vertices,
-            "malformed_or_noncomplex" | "duplicate"
-        )
-        || matches!(
-            segments,
-            "malformed_or_noncomplex" | "duplicate"
-        );
+        || matches!(vertices, "malformed_or_noncomplex" | "duplicate")
+        || matches!(segments, "malformed_or_noncomplex" | "duplicate");
     if unresolved {
         return "unresolved";
     }
@@ -1100,9 +1094,10 @@ fn exact_virginia_restored_fill_stack_probe() {
                 .all(|profile| *profile == "single_scalar")
             {
                 "complete_scalars"
-            } else if local_geo_rect_profile.iter().any(|profile| {
-                matches!(*profile, "malformed_or_complex" | "duplicate_scalar")
-            }) {
+            } else if local_geo_rect_profile
+                .iter()
+                .any(|profile| matches!(*profile, "malformed_or_complex" | "duplicate_scalar"))
+            {
                 "ambiguous"
             } else {
                 "partial_scalars"
@@ -1304,9 +1299,10 @@ fn exact_virginia_restored_fill_stack_probe() {
                     "absent"
                 } else if profiles.iter().all(|profile| *profile == "single_scalar") {
                     "complete_scalars"
-                } else if profiles.iter().any(|profile| {
-                    matches!(*profile, "malformed_or_complex" | "duplicate_scalar")
-                }) {
+                } else if profiles
+                    .iter()
+                    .any(|profile| matches!(*profile, "malformed_or_complex" | "duplicate_scalar"))
+                {
                     "ambiguous"
                 } else {
                     "partial_scalars"
@@ -1402,9 +1398,10 @@ fn exact_virginia_restored_fill_stack_probe() {
                     "absent"
                 } else if profiles.iter().all(|profile| *profile == "single_scalar") {
                     "complete_scalars"
-                } else if profiles.iter().any(|profile| {
-                    matches!(*profile, "malformed_or_complex" | "duplicate_scalar")
-                }) {
+                } else if profiles
+                    .iter()
+                    .any(|profile| matches!(*profile, "malformed_or_complex" | "duplicate_scalar"))
+                {
                     "ambiguous"
                 } else {
                     "partial_scalars"
