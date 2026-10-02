@@ -521,10 +521,7 @@ pub fn run_guest_scene_worker(
                                 &session,
                                 expected_sha256,
                             )),
-                            Err(_) => Some(unverified_routes(
-                                expected_sha256,
-                                "assessment_failed",
-                            )),
+                            Err(_) => Some(unverified_routes(expected_sha256, "assessment_failed")),
                         }
                     } else {
                         Some(profile_unavailable_routes(expected_sha256))
@@ -1157,9 +1154,7 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         );
         routes
-            .validate_for_source(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            )
+            .validate_for_source("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             .expect("profile-unavailable route state should be valid");
         assert_eq!(routes.idml.state, "unavailable");
         assert_eq!(routes.idml.reason_code, "editor_profile_unavailable");
