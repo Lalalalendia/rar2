@@ -8,6 +8,7 @@ import {
   presetShapePaintGeometry,
   resolvedTextLinePaintPlan,
   tableCellFillPaintPlan,
+  tableBorderSegmentPaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
 
@@ -357,5 +358,45 @@ test("default RoundRectangle preset uses bounded short-side radius", () => {
       paint: {}
     }),
     { tag: "rect", attrs: { x: 1, y: 2, width: 30, height: 40 } }
+  );
+});
+
+
+test("table border segment paint plan resolves semantic boundaries", () => {
+  const table = {
+    rows: 2,
+    columns: 2,
+    cells: [
+      { row: 0, column: 0, bounds: { x: 100, y: 200, width: 300, height: 400 } },
+      { row: 0, column: 1, bounds: { x: 400, y: 200, width: 500, height: 400 } },
+      { row: 1, column: 0, bounds: { x: 100, y: 600, width: 300, height: 700 } },
+      { row: 1, column: 1, bounds: { x: 400, y: 600, width: 500, height: 700 } }
+    ]
+  };
+
+  assert.deepEqual(
+    tableBorderSegmentPaintPlan(table, {
+      axis: "horizontal",
+      row_start: 1,
+      row_end: 1,
+      column_start: 0,
+      column_end: 2,
+      rgb: [10, 20, 30],
+      width_emu: 12700
+    }),
+    { x1: 100, y1: 600, x2: 900, y2: 600, stroke: "rgb(10 20 30)", width: 12700 }
+  );
+
+  assert.deepEqual(
+    tableBorderSegmentPaintPlan(table, {
+      axis: "vertical",
+      row_start: 0,
+      row_end: 2,
+      column_start: 1,
+      column_end: 1,
+      rgb: [1, 2, 3],
+      width_emu: 25400
+    }),
+    { x1: 400, y1: 200, x2: 400, y2: 1300, stroke: "rgb(1 2 3)", width: 25400 }
   );
 });
