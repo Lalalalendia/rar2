@@ -95,7 +95,8 @@ use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
     OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
     OFFICE_ART_PROPERTY_CROP_FROM_RIGHT, OFFICE_ART_PROPERTY_CROP_FROM_TOP,
-    OFFICE_ART_PROPERTY_PIB, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
+    OFFICE_ART_PROPERTY_PIB, OFFICE_ART_TERTIARY_FOPT, PUBLISHER_FIELD_SHAPE_ID,
+    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
     PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField, PublisherFieldRecord,
     SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
@@ -603,6 +604,11 @@ pub struct PubNodePayload {
     /// reinterpreted as Publisher points or normalized crop geometry here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit_image_crop: Option<PubExplicitImageCropSource>,
+    /// Bounded source-backed picture recolor state. This is placement/node state,
+    /// not image-resource state: the same embedded image can be reused with
+    /// different recolor targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explicit_image_recolor: Option<PubExplicitImageRecolorSource>,
     /// Explicit shape-local OfficeArt paint state only.
     pub explicit_paint: PubExplicitShapePaintSource,
     /// Bounded effective solid-paint resolution for admitted 2-D shapes.
@@ -628,6 +634,12 @@ pub struct PubExplicitImageCropSource {
     /// unambiguous non-complex scalar value. Presence remains explicit so
     /// callers must fail closed rather than misclassify the image as crop-free.
     pub ambiguous: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubExplicitImageRecolorSource {
+    pub target_rgb: [u8; 3],
+    pub preserve_grays: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -3008,6 +3020,15 @@ pub fn build_mature_0x2c_from_streams(
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
             .flatten();
+        let explicit_image_recolor = image_slot
+            .is_some()
+            .then(|| {
+                bounded_officeart_image_recolor(
+                    shape,
+                    color_scheme.as_ref().map(|scheme| &scheme.scheme),
+                )
+            })
+            .flatten();
         let mut story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
             build_story_frame(
                 source_hash,
@@ -3286,6 +3307,7 @@ pub fn build_mature_0x2c_from_streams(
                     image_slot,
                     legacy_ole: None,
                     explicit_image_crop,
+                    explicit_image_recolor,
                     explicit_paint,
                     effective_paint,
                     story_frame,
@@ -3982,6 +4004,12 @@ fn source_page_paint_orders_v1(
         .collect()
 }
 
+const OFFICE_ART_PICTURE_RECOLOR: u16 = 0x011A;
+const OFFICE_ART_PICTURE_RECOLOR_EXTRA_START: u16 = 0x011B;
+const OFFICE_ART_PICTURE_RECOLOR_EXTRA_END: u16 = 0x011D;
+const OFFICE_ART_BLIP_BOOLEANS: u16 = 0x013F;
+const BLIP_USE_PICTURE_PRESERVE_GRAYS_BIT: u32 = 1 << 22;
+const BLIP_PICTURE_PRESERVE_GRAYS_BIT: u32 = 1 << 6;
 const OFFICE_ART_ADJUST_VALUE: u16 = 0x0147;
 const OFFICE_ART_FILL_TYPE: u16 = 0x0180;
 const OFFICE_ART_FILL_COLOR: u16 = 0x0181;
@@ -4528,6 +4556,76 @@ fn bounded_officeart_image_crop(
         left_raw,
         right_raw,
         ambiguous: top_ambiguous || bottom_ambiguous || left_ambiguous || right_ambiguous,
+    })
+}
+
+fn bounded_officeart_image_recolor(
+    shape: &pub_escher::SpContainerObservation,
+    color_scheme: Option<&MatureColorScheme>,
+) -> Option<PubExplicitImageRecolorSource> {
+    if shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| {
+            (OFFICE_ART_PICTURE_RECOLOR_EXTRA_START..=OFFICE_ART_PICTURE_RECOLOR_EXTRA_END)
+                .contains(&property.property_id())
+        })
+    {
+        return None;
+    }
+
+    let recolor = shape
+        .fopts
+        .iter()
+        .flat_map(|record| {
+            record
+                .properties
+                .iter()
+                .filter(move |property| property.property_id() == OFFICE_ART_PICTURE_RECOLOR)
+                .map(move |property| (record.rec_type, property))
+        })
+        .collect::<Vec<_>>();
+    let [(recolor_record_type, recolor_property)] = recolor.as_slice() else {
+        return None;
+    };
+    if *recolor_record_type != OFFICE_ART_TERTIARY_FOPT
+        || recolor_property.f_bid()
+        || recolor_property.f_complex()
+    {
+        return None;
+    }
+    let target_rgb = bounded_officeart_rgb(recolor_property.op, color_scheme)?;
+
+    let booleans = shape
+        .fopts
+        .iter()
+        .flat_map(|record| {
+            record
+                .properties
+                .iter()
+                .filter(move |property| property.property_id() == OFFICE_ART_BLIP_BOOLEANS)
+                .map(move |property| (record.rec_type, property))
+        })
+        .collect::<Vec<_>>();
+    let [(boolean_record_type, boolean_property)] = booleans.as_slice() else {
+        return None;
+    };
+    if *boolean_record_type != OFFICE_ART_TERTIARY_FOPT
+        || boolean_property.f_bid()
+        || boolean_property.f_complex()
+        || boolean_property.op & BLIP_USE_PICTURE_PRESERVE_GRAYS_BIT == 0
+    {
+        return None;
+    }
+    let preserve_grays = boolean_property.op & BLIP_PICTURE_PRESERVE_GRAYS_BIT != 0;
+    if preserve_grays {
+        return None;
+    }
+
+    Some(PubExplicitImageRecolorSource {
+        target_rgb,
+        preserve_grays,
     })
 }
 
