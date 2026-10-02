@@ -100,8 +100,8 @@ use pub_escher::{
     SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
-    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu, Node,
-    NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
+    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
+    Node, NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
     SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
     derive_source_canonical_id,
 };
@@ -2000,7 +2000,6 @@ fn inspect_grouped_geometry_chain(
         current_group_seq = parent_seq;
     }
 }
-
 
 const CORDIC_Q30_ONE: i64 = 1_i64 << 30;
 const CORDIC_K_INV_Q30: i64 = 652_032_874;
@@ -5049,7 +5048,8 @@ mod tests {
         );
         // 17.71 degrees, represented at the source 16.16 precision.
         let raw_q16 = 1_160_643_i64;
-        let fractional = officeart_affine_from_components(bounds, raw_q16, false, false).unwrap();
+        let fractional =
+            officeart_affine_from_components(bounds, raw_q16, false, false).unwrap();
         let truncated =
             officeart_affine_from_components(bounds, 17_i64 * 65_536, false, false).unwrap();
 
