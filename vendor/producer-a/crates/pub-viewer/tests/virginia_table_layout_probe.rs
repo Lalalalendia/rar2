@@ -112,10 +112,15 @@ struct Receipt {
 #[test]
 #[ignore = "requires exact public Virginia Remplacante fixture and receipt path"]
 fn exact_virginia_p22_table_layout_probe() {
-    let fixture = env::var_os("CHAPTERA_VIRGINIA_TABLE_LAYOUT_FIXTURE")
+    let fixture_env = env::var_os("CHAPTERA_VIRGINIA_TABLE_LAYOUT_FIXTURE");
+    let output_env = env::var_os("CHAPTERA_VIRGINIA_TABLE_LAYOUT_OUT");
+    if fixture_env.is_none() && output_env.is_none() {
+        return;
+    }
+    let fixture = fixture_env
         .map(PathBuf::from)
         .expect("CHAPTERA_VIRGINIA_TABLE_LAYOUT_FIXTURE");
-    let output = env::var_os("CHAPTERA_VIRGINIA_TABLE_LAYOUT_OUT")
+    let output = output_env
         .map(PathBuf::from)
         .expect("CHAPTERA_VIRGINIA_TABLE_LAYOUT_OUT");
     let expected_sha = env::var("CHAPTERA_VIRGINIA_TABLE_LAYOUT_SHA256")
