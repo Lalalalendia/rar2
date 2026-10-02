@@ -32,7 +32,7 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-fn span_bytes<'a>(bytes: &'a [u8], offset: u64, len: u64) -> Result<&'a [u8]> {
+fn span_bytes(bytes: &[u8], offset: u64, len: u64) -> Result<&[u8]> {
     let start = usize::try_from(offset).context("span offset does not fit usize")?;
     let len = usize::try_from(len).context("span length does not fit usize")?;
     let end = start
