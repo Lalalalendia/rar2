@@ -31,7 +31,7 @@ SPECS = {
 
 def discover_api_context(
     session: requests.Session, response: requests.Response, raw: str
-) -> tuple[str, str]:
+) -> tuple[str | None, str]:
     script_srcs = re.findall(r'<script[^>]+src="([^"]+)"', raw, flags=re.I)
     base_match = re.search(r'<base[^>]+href="([^"]+)"', raw, flags=re.I)
     document_base = requests.compat.urljoin(
@@ -59,11 +59,11 @@ def discover_api_context(
         main_response = session.get(
             requests.compat.urljoin(document_base, main_src), timeout=30
         )
-        main_response.raise_for_status()
-        asset_refs.update(re.findall(r'from"[.]/([^"]+[.]js)"', main_response.text))
-        asset_refs.update(
-            re.findall(r'import\("[.]/([^"]+[.]js)"\)', main_response.text)
-        )
+        if main_response.ok:
+            asset_refs.update(re.findall(r'from"[.]/([^"]+[.]js)"', main_response.text))
+            asset_refs.update(
+                re.findall(r'import\("[.]/([^"]+[.]js)"\)', main_response.text)
+            )
 
     api_base_candidates = set()
     total_js_bytes = 0
@@ -86,11 +86,15 @@ def discover_api_context(
             )
         )
 
-    if len(api_base_candidates) != 1:
+    if len(api_base_candidates) > 1:
         raise RuntimeError(
-            f"public API base is not uniquely grounded: {sorted(api_base_candidates)}"
+            f"public API base is ambiguous: {sorted(api_base_candidates)}"
         )
-    api_base = next(iter(api_base_candidates)).rstrip("/")
+    api_base = (
+        next(iter(api_base_candidates)).rstrip("/")
+        if api_base_candidates
+        else None
+    )
 
     tenant_match = re.search(r'"TENANT_DOMAIN":\{"id":"([^"]+)"', raw)
     if not tenant_match:
@@ -183,7 +187,7 @@ def acquire_one(
     public_name: str,
     spec: dict,
     output_dir: Path,
-    api_base: str,
+    api_base: str | None,
     tenant_id: str,
 ) -> dict:
     resource_id, file_id, declared_size, hydrated_origin = hydration_file(
@@ -198,27 +202,30 @@ def acquire_one(
             f"{public_name}: declared size drift {declared_size} != {spec['size']}"
         )
 
-    resource_url = f"{api_base}/resources/{resource_id}"
-    api_response = session.get(
-        resource_url,
-        timeout=30,
-        headers={"Accept": "application/json", "X-Tenant": tenant_id},
-    )
+    api_status = None
     refreshed_origin = None
-    if api_response.ok:
-        try:
-            refreshed = find_exact_file(
-                api_response.json(), file_id=file_id, public_name=public_name
-            )
-        except ValueError:
-            refreshed = None
-        if refreshed is not None:
-            if refreshed.get("size") != spec["size"]:
-                raise RuntimeError(
-                    f"{public_name}: refreshed size drift "
-                    f"{refreshed.get('size')} != {spec['size']}"
+    if api_base is not None:
+        resource_url = f"{api_base}/resources/{resource_id}"
+        api_response = session.get(
+            resource_url,
+            timeout=30,
+            headers={"Accept": "application/json", "X-Tenant": tenant_id},
+        )
+        api_status = api_response.status_code
+        if api_response.ok:
+            try:
+                refreshed = find_exact_file(
+                    api_response.json(), file_id=file_id, public_name=public_name
                 )
-            refreshed_origin = refreshed["url"]["origin"]
+            except ValueError:
+                refreshed = None
+            if refreshed is not None:
+                if refreshed.get("size") != spec["size"]:
+                    raise RuntimeError(
+                        f"{public_name}: refreshed size drift "
+                        f"{refreshed.get('size')} != {spec['size']}"
+                    )
+                refreshed_origin = refreshed["url"]["origin"]
 
     candidates = []
     if refreshed_origin:
@@ -268,7 +275,7 @@ def acquire_one(
             "artifact_name": spec["artifact_name"],
             "resource_id": resource_id,
             "file_id": file_id,
-            "resource_api_status": api_response.status_code,
+            "resource_api_status": api_status,
             "resource_api_refreshed_origin": refreshed_origin is not None,
             "size": size,
             "sha256": sha256,
