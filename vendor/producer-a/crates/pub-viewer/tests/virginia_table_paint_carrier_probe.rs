@@ -1,5 +1,5 @@
 use pub_core::StreamPath;
-use pub_model::{CanonicalId, RectEmu};
+use pub_model::RectEmu;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
