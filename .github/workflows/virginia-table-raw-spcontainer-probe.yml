@@ -1,0 +1,61 @@
+name: Virginia TABLE raw SpContainer probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-viewer/Cargo.toml"
+      - "vendor/producer-a/crates/pub-viewer/tests/virginia_table_raw_spcontainer_probe.rs"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - ".github/workflows/virginia-table-raw-spcontainer-probe.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Reacquire exact Virginia pair
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Classify ungrounded raw TABLE paint carriers
+        env:
+          CHAPTERA_VIRGINIA_TABLE_RAW_SP_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_TABLE_RAW_SP_OUT: ${{ github.workspace }}/target/virginia-table-raw-sp/receipt.json
+        run: |
+          set -euo pipefail
+          mkdir -p target/virginia-table-raw-sp
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_raw_spcontainer_probe -- --ignored --nocapture
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: virginia-table-raw-spcontainer-receipt
+          path: target/virginia-table-raw-sp/
+          if-no-files-found: warn
+          retention-days: 30
