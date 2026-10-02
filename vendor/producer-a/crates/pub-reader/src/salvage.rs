@@ -55,8 +55,7 @@ fn known_registry_corruption_evidence(
     source_sha256: &str,
 ) -> Option<ReaderSalvageCorruptionEvidence> {
     const SCHEMA: &str = "chaptera.reader-known-evidence-registry.v1";
-    const REGISTRY_JSON: &str =
-        include_str!("../data/reader_known_evidence_registry.v1.json");
+    const REGISTRY_JSON: &str = include_str!("../data/reader_known_evidence_registry.v1.json");
 
     let registry: ReaderKnownEvidenceRegistry = serde_json::from_str(REGISTRY_JSON).ok()?;
     if registry.schema != SCHEMA {
@@ -675,6 +674,12 @@ mod tests {
                 "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"
             ),
             Some(ReaderSalvageCorruptionEvidence::Publisher97MalformedOrStaleMediaVariant)
+        );
+        assert_eq!(
+            known_registry_corruption_evidence(
+                "0c74bed1b862f4603a77567f817ad22bf1f7c42eb5afbee0c907732953534b5c"
+            ),
+            None
         );
         assert_eq!(
             known_registry_corruption_evidence(
