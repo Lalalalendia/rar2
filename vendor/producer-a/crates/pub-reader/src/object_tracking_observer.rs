@@ -13,6 +13,7 @@ use super::CONTENTS_STREAM_PATH;
 pub const PUB_OBJECT_TRACKING_WRAP_OBSERVER_SCHEMA_V1: &str =
     "pub-object-tracking-wrap-observer/v1";
 const RAW_TYPE_OBJECT_TRACKING: u16 = 0x005A;
+const BLOCK_TYPE_CONTAINER_88: u8 = 0x88;
 const BLOCK_TYPE_TYPED_CONTAINER_98: u8 = 0x98;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +364,20 @@ fn explicit_container_children(
     }
 }
 
+fn explicit_container_88_children(
+    contents: &[u8],
+    node: &FieldNode,
+    semantic_path: &str,
+) -> Result<Vec<FieldNode>> {
+    if node.field.block_type != BLOCK_TYPE_CONTAINER_88 {
+        bail!(
+            "{semantic_path} must use Publisher11 nested wire 0x88; got 0x{:02X}",
+            node.field.block_type
+        );
+    }
+    explicit_container_children(contents, node, semantic_path)
+}
+
 fn explicit_typed_98_children(
     contents: &[u8],
     node: &FieldNode,
@@ -392,11 +407,11 @@ fn observe_target_entry(
     let last_fmt = unique_child(&entry.children, 0x12)
         .context("target OplOt lacks unique OplLastFmt field0x12")?;
     let last_fmt_children =
-        explicit_container_children(contents, last_fmt, "OplOt.OplLastFmt")?;
+        explicit_container_88_children(contents, last_fmt, "OplOt.OplLastFmt")?;
     let formatting = unique_child(&last_fmt_children, 0x02)
         .context("target OplLastFmt lacks unique PoFormatting field0x02")?;
     let formatting_children =
-        explicit_typed_98_children(contents, formatting, "OplLastFmt.PoFormatting")?;
+        explicit_container_88_children(contents, formatting, "OplLastFmt.PoFormatting")?;
 
     let group_shape = unique_child(&formatting_children, 0x0E)
         .context("target PoFormatting lacks unique GroupShape field0x0E")?;
@@ -553,7 +568,7 @@ mod tests {
             0x02, 0x88, 0x46, 0x00, 0x00, 0x00,
             0x01, BLOCK_TYPE_REFERENCE_U32, 0x26, 0x01, 0x00, 0x00,
             0x12, 0x88, 0x3A, 0x00, 0x00, 0x00,
-            0x02, BLOCK_TYPE_TYPED_CONTAINER_98, 0x34, 0x00, 0x00, 0x00,
+            0x02, BLOCK_TYPE_CONTAINER_88, 0x34, 0x00, 0x00, 0x00,
             0x01, BLOCK_TYPE_U32, 0x01, 0x00, 0x00, 0x00,
             0x0E, BLOCK_TYPE_TYPED_CONTAINER_98, 0x1C, 0x00, 0x00, 0x00,
             0x05, BLOCK_TYPE_U32, 0x6F, 0x00, 0x00, 0x00,
