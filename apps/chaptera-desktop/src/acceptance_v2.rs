@@ -24,11 +24,7 @@ fn select_resize(
     visual: &pub_viewer::ViewerGeometryDocument,
     excluded: &[NodeId],
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, ResizeTransaction)> {
-    const DELTAS: &[(i64, i64)] = &[
-        (127_000, 127_000),
-        (254_000, 127_000),
-        (127_000, 254_000),
-    ];
+    const DELTAS: &[(i64, i64)] = &[(127_000, 127_000), (254_000, 127_000), (127_000, 254_000)];
 
     for page in &visual.document.pages {
         let page_origin = page.id.into_canonical();
@@ -118,10 +114,7 @@ fn select_replace_image(
     None
 }
 
-fn projected_mutation_is_denied(
-    direct: &SceneInstanceV1,
-    mutation: ObjectMutationKindV1,
-) -> bool {
+fn projected_mutation_is_denied(direct: &SceneInstanceV1, mutation: ObjectMutationKindV1) -> bool {
     let projected = SceneInstanceV1 {
         schema_version: direct.schema_version.clone(),
         instance_id: direct.instance_id.clone(),
@@ -187,7 +180,10 @@ pub fn run(
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err("CHAPTERA_REPLACEMENT_BINDING_ID must be continuity-v2- + 32 lowercase hex chars".to_owned());
+        return Err(
+            "CHAPTERA_REPLACEMENT_BINDING_ID must be continuity-v2- + 32 lowercase hex chars"
+                .to_owned(),
+        );
     }
 
     let source_before =
@@ -321,7 +317,9 @@ pub fn run(
     if project.operations.len() != 4
         || (story_count, move_count, resize_count, image_count) != (1, 1, 1, 1)
     {
-        return Err("V2 project must contain exactly Story + Move + Resize + ReplaceImage".to_owned());
+        return Err(
+            "V2 project must contain exactly Story + Move + Resize + ReplaceImage".to_owned(),
+        );
     }
     let project_bytes = serde_json::to_vec_pretty(&project)
         .map_err(|error| format!("serialize EditorProject: {error}"))?;
@@ -386,16 +384,10 @@ pub fn run(
         return Err("source PUB changed during V2 desktop acceptance".to_owned());
     }
 
-    let projected_denied = projected_mutation_is_denied(
-        &move_instance,
-        ObjectMutationKindV1::MoveNode,
-    ) && projected_mutation_is_denied(
-        &resize_instance,
-        ObjectMutationKindV1::ResizeNode,
-    ) && projected_mutation_is_denied(
-        &replace_instance,
-        ObjectMutationKindV1::ReplaceImage,
-    );
+    let projected_denied =
+        projected_mutation_is_denied(&move_instance, ObjectMutationKindV1::MoveNode)
+            && projected_mutation_is_denied(&resize_instance, ObjectMutationKindV1::ResizeNode)
+            && projected_mutation_is_denied(&replace_instance, ObjectMutationKindV1::ReplaceImage);
     if !projected_denied {
         return Err("projected SceneInstance unexpectedly admits a V2 object mutation".to_owned());
     }
