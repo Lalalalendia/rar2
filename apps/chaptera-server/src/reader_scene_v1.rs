@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
     RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
-    effective_source_font_family_v1,
+    effective_source_font_family_v1, uniform_text_color_rgb_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
@@ -163,6 +163,8 @@ pub struct ReaderTextLayoutV1 {
     pub font_fingerprint_sha256: String,
     pub font_size_emu: i64,
     pub line_height_emu: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
     #[serde(skip_serializing_if = "is_zero_i64")]
     pub vertical_offset_emu: i64,
     pub lines: Vec<ReaderTextLineV1>,
@@ -323,6 +325,7 @@ fn reader_text_layout_from_render_text(
         font_fingerprint_sha256: font_fingerprint_sha256.clone(),
         font_size_emu: *font_size_emu,
         line_height_emu: *line_height_emu,
+        color_rgb: uniform_text_color_rgb_v1(text),
         vertical_offset_emu: layout.vertical_offset_emu,
         lines: layout
             .lines
@@ -1944,6 +1947,16 @@ mod tests {
                 projected_configured_layouts >= 3,
                 "the three exact Carlton source-typography-complete carriers must consume the configured resource"
             );
+            let projected_direct_yellow_layouts = configured_scene
+                .nodes
+                .iter()
+                .filter_map(|node| node.text_layout.as_ref())
+                .filter(|layout| layout.color_rgb == Some([255, 255, 0]))
+                .count();
+            assert!(
+                projected_direct_yellow_layouts >= 1,
+                "exact Carlton direct Quill text color #FFFF00 must survive through the shared Reader Scene layout contract"
+            );
             let scene_font = configured_scene
                 .fonts
                 .iter()
@@ -1961,8 +1974,11 @@ mod tests {
                 "browser font bytes must use the same configured resource"
             );
             println!(
-                "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} resource_id={} sha256={}",
-                projected_configured_layouts, configured_resource_id, scene_font.expected_sha256
+                "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} direct_yellow_layouts={} resource_id={} sha256={}",
+                projected_configured_layouts,
+                projected_direct_yellow_layouts,
+                configured_resource_id,
+                scene_font.expected_sha256
             );
         }
 
