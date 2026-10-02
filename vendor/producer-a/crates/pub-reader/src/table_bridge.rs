@@ -566,7 +566,11 @@ fn populate_native_autoformat_table_borders(
             TABLE_AUTOFORMAT_ROW_END_ID,
             TABLE_AUTOFORMAT_COLUMN_END_ID,
         ];
-        if anchor.fields.iter().any(|field| !allowed.contains(&field.id)) {
+        if anchor
+            .fields
+            .iter()
+            .any(|field| !allowed.contains(&field.id))
+        {
             return Vec::new();
         }
 
@@ -584,11 +588,11 @@ fn populate_native_autoformat_table_borders(
         else {
             return Vec::new();
         };
-        let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_END_ID) else {
+        let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_END_ID)
+        else {
             return Vec::new();
         };
-        let Some(column_end) =
-            unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_END_ID)
+        let Some(column_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_END_ID)
         else {
             return Vec::new();
         };
@@ -599,9 +603,7 @@ fn populate_native_autoformat_table_borders(
             1 if row_start == row_end && column_start < column_end => {
                 PubTableBorderAxis::Horizontal
             }
-            2 if column_start == column_end && row_start < row_end => {
-                PubTableBorderAxis::Vertical
-            }
+            2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
             _ => return Vec::new(),
         };
         by_key
