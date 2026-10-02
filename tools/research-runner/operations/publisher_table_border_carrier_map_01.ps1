@@ -9,8 +9,6 @@ $ErrorActionPreference = "Stop"
 $ExpectedExperiment = "VIEWER-TABLE-AUTOFORMAT-BORDER-CARRIERS-01"
 $PbFilePublication = 1
 $PbTableAutoFormatCheckbookRegister = 0
-$TagName = "PUB_ORACLE_ID"
-$TagValue = "TABLE_BORDER_CARRIER_MAP_01"
 $MutationRgb = 255
 
 $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
@@ -26,6 +24,21 @@ $logDir = Join-Path $OutputRoot "logs"
 $privateDir = Join-Path $OutputRoot "private/table-border-carrier-map-01"
 New-Item -ItemType Directory -Force -Path $analysisDir,$logDir,$privateDir | Out-Null
 
+$progressPath = Join-Path $analysisDir "table-border-carrier-map-01-progress.jsonl"
+function Write-Progress {
+    param(
+        [Parameter(Mandatory = $true)][string]$Stage,
+        [string]$Side = ""
+    )
+    $record = [ordered]@{
+        timestamp_utc = [DateTime]::UtcNow.ToString("o")
+        stage = $Stage
+        side = $Side
+    }
+    ($record | ConvertTo-Json -Compress) | Add-Content -LiteralPath $progressPath -Encoding UTF8
+}
+Write-Progress -Stage "operation-started"
+
 function Release-Com($Value) {
     if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
         try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value) } catch {}
@@ -39,7 +52,7 @@ function Close-Document($Document) {
     Release-Com $Document
 }
 
-function Find-TaggedTableShape {
+function Find-UniqueTableShape {
     param([Parameter(Mandatory = $true)]$Document)
     $matches = @()
     for ($pageIndex = 1; $pageIndex -le [int]$Document.Pages.Count; $pageIndex++) {
@@ -50,18 +63,11 @@ function Find-TaggedTableShape {
                 $shape = $null
                 try {
                     $shape = $page.Shapes.Item($shapeIndex)
-                    for ($tagIndex = 1; $tagIndex -le [int]$shape.Tags.Count; $tagIndex++) {
-                        $tag = $null
-                        try {
-                            $tag = $shape.Tags.Item($tagIndex)
-                            if ([string]$tag.Name -eq $TagName -and [string]$tag.Value -eq $TagValue) {
-                                $matches += [pscustomobject]@{
-                                    page_index = $pageIndex
-                                    shape_index = $shapeIndex
-                                }
-                            }
+                    if ([int]$shape.HasTable -eq -1) {
+                        $matches += [pscustomobject]@{
+                            page_index = $pageIndex
+                            shape_index = $shapeIndex
                         }
-                        finally { Release-Com $tag }
                     }
                 }
                 finally { Release-Com $shape }
@@ -70,7 +76,7 @@ function Find-TaggedTableShape {
         finally { Release-Com $page }
     }
     if ($matches.Count -ne 1) {
-        throw "Expected exactly one tagged table shape; found $($matches.Count)."
+        throw "Expected exactly one table shape in generated fixture; found $($matches.Count)."
     }
     return $matches[0]
 }
@@ -122,7 +128,6 @@ function New-AllEnabledFixture {
         $doc = $app.Documents.Add()
         $page = $doc.Pages.Item(1)
         $shape = $page.Shapes.AddTable(4, 4, 72, 144, 432, 144)
-        $shape.Tags.Add($TagName, $TagValue) | Out-Null
         $table = $shape.Table
 
         for ($rowIndex = 1; $rowIndex -le 4; $rowIndex++) {
@@ -247,6 +252,7 @@ function Invoke-SideArm {
         [Parameter(Mandatory = $true)][string]$Tool
     )
 
+    Write-Progress -Stage "side-arm-start" -Side $Side
     $armDir = Join-Path $privateDir $Side
     New-Item -ItemType Directory -Force -Path $armDir | Out-Null
     $working = Join-Path $armDir "working.pub"
@@ -261,9 +267,12 @@ function Invoke-SideArm {
     $targetBefore = 0L
     $neighborBefore = 0L
     try {
+        Write-Progress -Stage "side-open-before" -Side $Side
         $app = New-PubPublisherApplication
         $doc = $app.Open($working, $false, $false)
-        $location = Find-TaggedTableShape -Document $doc
+        Write-Progress -Stage "side-open-after" -Side $Side
+        $location = Find-UniqueTableShape -Document $doc
+        Write-Progress -Stage "side-table-found" -Side $Side
         $page = $doc.Pages.Item([int]$location.page_index)
         $shape = $page.Shapes.Item([int]$location.shape_index)
         $table = $shape.Table
@@ -271,8 +280,11 @@ function Invoke-SideArm {
         $neighbor = Get-OppositeNeighbor -Side $Side
         $targetBefore = Get-BorderRgb -Table $table -RowIndex 2 -ColumnIndex 2 -Side $Side
         $neighborBefore = Get-BorderRgb -Table $table -RowIndex $neighbor.row -ColumnIndex $neighbor.col -Side $neighbor.side
+        Write-Progress -Stage "side-border-read-before" -Side $Side
         Set-BorderRgb -Table $table -Side $Side -Rgb $MutationRgb
+        Write-Progress -Stage "side-border-mutated" -Side $Side
         $doc.SaveAs($output, $PbFilePublication, $false)
+        Write-Progress -Stage "side-save-complete" -Side $Side
     }
     finally {
         Release-Com $table
@@ -290,15 +302,19 @@ function Invoke-SideArm {
     $targetAfter = 0L
     $neighborAfter = 0L
     try {
+        Write-Progress -Stage "side-reopen-before" -Side $Side
         $app2 = New-PubPublisherApplication
         $doc2 = $app2.Open($output, $true, $false)
-        $location2 = Find-TaggedTableShape -Document $doc2
+        Write-Progress -Stage "side-reopen-after" -Side $Side
+        $location2 = Find-UniqueTableShape -Document $doc2
+        Write-Progress -Stage "side-reopen-table-found" -Side $Side
         $page2 = $doc2.Pages.Item([int]$location2.page_index)
         $shape2 = $page2.Shapes.Item([int]$location2.shape_index)
         $table2 = $shape2.Table
         $neighbor2 = Get-OppositeNeighbor -Side $Side
         $targetAfter = Get-BorderRgb -Table $table2 -RowIndex 2 -ColumnIndex 2 -Side $Side
         $neighborAfter = Get-BorderRgb -Table $table2 -RowIndex $neighbor2.row -ColumnIndex $neighbor2.col -Side $neighbor2.side
+        Write-Progress -Stage "side-border-read-after" -Side $Side
     }
     finally {
         Release-Com $table2
@@ -309,11 +325,13 @@ function Invoke-SideArm {
     }
 
     $diffPath = Join-Path $armDir "raw-diff.json"
+    Write-Progress -Stage "side-raw-diff-before" -Side $Side
     & $Tool diff $AllEnabledPath $output $diffPath
     if ($LASTEXITCODE -ne 0) {
         throw "raw carrier diff failed for $Side"
     }
     $rawDiff = Get-Content -LiteralPath $diffPath -Raw | ConvertFrom-Json
+    Write-Progress -Stage "side-raw-diff-after" -Side $Side
 
     return [ordered]@{
         side = $Side
@@ -334,15 +352,20 @@ function Invoke-SideArm {
 }
 
 $tool = Build-OracleTool
+Write-Progress -Stage "oracle-tool-ready"
 $allEnabled = Join-Path $privateDir "all-enabled.pub"
+Write-Progress -Stage "fixture-create-before"
 New-AllEnabledFixture -Path $allEnabled
+Write-Progress -Stage "fixture-create-after"
 
 $profilePath = Join-Path $privateDir "all-enabled-profile.json"
+Write-Progress -Stage "profile-before"
 & $tool profile $allEnabled $profilePath
 if ($LASTEXITCODE -ne 0) {
     throw "all-enabled raw profile failed"
 }
 $profile = Get-Content -LiteralPath $profilePath -Raw | ConvertFrom-Json
+Write-Progress -Stage "profile-after"
 
 $arms = @()
 foreach ($side in @("top", "right", "bottom", "left")) {
