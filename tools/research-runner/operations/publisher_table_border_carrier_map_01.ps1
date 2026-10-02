@@ -95,7 +95,7 @@ function Build-OracleTool {
 
     Push-Location $repoRoot
     try {
-        & cargo build --locked --release --manifest-path "vendor/producer-a/Cargo.toml" -p pub-reader --bin table_border_carrier_oracle_tool
+        & cargo build --release --manifest-path "vendor/producer-a/Cargo.toml" -p pub-reader --bin table_border_carrier_oracle_tool
         if ($LASTEXITCODE -ne 0) {
             throw "table_border_carrier_oracle_tool build failed with exit code $LASTEXITCODE"
         }
