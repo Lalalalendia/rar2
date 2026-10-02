@@ -259,11 +259,10 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             jobs.clone(),
                             blob_store.service().clone(),
                         );
-                        let migration_route_producer =
-                            IsolatedMigrationEditableRouteProducer::new(
-                                source_ingress_http::baseline_config(source_config),
-                                blob_store.service().clone(),
-                            )?;
+                        let migration_route_producer = IsolatedMigrationEditableRouteProducer::new(
+                            source_ingress_http::baseline_config(source_config),
+                            blob_store.service().clone(),
+                        )?;
                         let migration_route_state = MigrationEditableRouteHttpState::new(
                             auth_http.clone(),
                             source_authority,
