@@ -40,9 +40,9 @@ class Reader1050FrontierTests(unittest.TestCase):
         owned_score, owned_reasons, owned_suppressed, _ = frontier.priority(owned)
         unowned_score, _, unowned_suppressed, _ = frontier.priority(unowned)
         self.assertLess(owned_score, unowned_score)
-        self.assertFalse(owned_suppressed)
+        self.assertTrue(owned_suppressed)
         self.assertFalse(unowned_suppressed)
-        self.assertTrue(any("already owned by" in item for item in owned_reasons))
+        self.assertTrue(any("reviewed registry owner" in item for item in owned_reasons))
         gap, _ = frontier.suggested_discriminator(owned)
         self.assertEqual(gap, "existing_format_owner")
 
@@ -87,6 +87,45 @@ class Reader1050FrontierTests(unittest.TestCase):
         self.assertTrue(suppressed)
         self.assertIn("ledger status executed", suppression_reason)
         self.assertTrue(any("discriminator run 999" in item for item in reasons))
+
+    def test_runtime_cursor_suppresses_executed_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            (runtime / "ledger-entry.proposed.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "chaptera.reader1050-discriminator-ledger-entry.v1",
+                        "source_sha256": "f" * 64,
+                        "source_reader_run_id": "123",
+                        "discriminator_run_id": "456",
+                        "source_main_sha": "deadbeef",
+                        "discriminator_kind": "same_witness_forced_trigger",
+                        "verdict": "x",
+                        "decision": "continue_offline",
+                        "status": "executed",
+                        "next_discriminator": "typed_corruption_evidence_discovery",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runtime_rows = frontier.load_runtime_discriminator_cursor(runtime)
+            row = {
+                "source_sha256": "f" * 64,
+                "salvage_eligibility": "awaiting_typed_corruption_evidence",
+                "has_surviving_evidence": True,
+                "cfb_inventory_available": True,
+                "contents_family": "0x2c",
+                "open_error_signature_sha256": "a" * 64,
+            }
+            _, _, suppressed, reason = frontier.priority(
+                row,
+                registry={},
+                ledger_entries=runtime_rows,
+            )
+            self.assertTrue(suppressed)
+            self.assertIn("discriminator run 456", reason)
 
     def test_selects_bounded_highest_priority_unsupported_case(self) -> None:
         with tempfile.TemporaryDirectory() as td:
