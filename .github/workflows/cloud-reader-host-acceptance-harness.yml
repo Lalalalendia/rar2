@@ -1,0 +1,44 @@
+name: Cloud Reader physical host harness contract
+
+on:
+  pull_request:
+    paths:
+      - "tools/run_cloud_reader_host_acceptance.py"
+      - ".github/workflows/cloud-reader-host-acceptance-harness.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  harness-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile host harness
+        run: python -m py_compile tools/run_cloud_reader_host_acceptance.py
+
+      - name: Run source-safe harness self-test
+        run: python tools/run_cloud_reader_host_acceptance.py --self-test
+
+      - name: Guard physical-only operations behind explicit flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F -- '--exercise-restart' tools/run_cloud_reader_host_acceptance.py
+          grep -F -- '--exercise-rollback' tools/run_cloud_reader_host_acceptance.py
+          grep -F 'previous_binary_schema_incompatible' tools/run_cloud_reader_host_acceptance.py
+          grep -F '"guest_credentials_emitted": False' tools/run_cloud_reader_host_acceptance.py
+          grep -F '"schema_migration_run_by_harness": False' tools/run_cloud_reader_host_acceptance.py
