@@ -25,7 +25,7 @@ jobs:
       - name: Build oracle helper
         shell: pwsh
         run: |
-          cargo build --locked --release --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin dgg_textbox_oracle_tool
+          cargo build --release --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin dgg_textbox_oracle_tool
           $exe = "vendor/producer-a/target/release/dgg_textbox_oracle_tool.exe"
           if (-not (Test-Path -LiteralPath $exe)) { throw "oracle helper exe missing" }
           Get-FileHash -Algorithm SHA256 -LiteralPath $exe | Format-List
