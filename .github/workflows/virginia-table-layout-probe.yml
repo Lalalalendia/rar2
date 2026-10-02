@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-viewer/tests/virginia_table_layout_probe.rs"
+      - "vendor/producer-a/crates/pub-viewer/tests/virginia_table_mcld_style_probe.rs"
       - "apps/chaptera-server/tests/virginia_table_layout_probe.rs"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - ".github/workflows/virginia-table-layout-probe.yml"
@@ -59,6 +60,15 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+
+      - name: Classify Virginia TABLE MCLD style carrier
+        env:
+          CHAPTERA_VIRGINIA_TABLE_STYLE_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_TABLE_STYLE_SHA256: 88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506
+          CHAPTERA_VIRGINIA_TABLE_STYLE_OUT: ${{ github.workspace }}/target/virginia-table-layout/mcld-style-receipt.json
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_mcld_style_probe -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
