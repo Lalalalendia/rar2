@@ -1,0 +1,29 @@
+name: Build ScriptFonts effective probe Linux
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-viewer/src/bin/scriptfont-effective-probe.rs"
+      - ".github/workflows/build-scriptfont-effective-probe-linux.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin scriptfont-effective-probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scriptfont-effective-probe-linux
+          path: vendor/producer-a/target/debug/scriptfont-effective-probe
+          if-no-files-found: error
+          retention-days: 1
