@@ -223,6 +223,34 @@ jobs:
             tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
             target/publisher-visual-batch01/summary.json
 
+      - name: Compare with previous successful main baseline
+        id: baseline-delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/publisher-visual-baseline"
+          baseline_run="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/publisher-visual-golden-batch01.yml/runs?branch=main&status=success&per_page=20" \
+              --jq '.workflow_runs | map(select(.id != ('"${GITHUB_RUN_ID}"' | tonumber))) | .[0].id // empty'
+          )"
+          if [ -z "$baseline_run" ]; then
+            echo "No previous successful main Batch 01 run; current receipt becomes the first baseline."
+            echo "baseline_found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Downloading baseline run $baseline_run"
+          gh run download "$baseline_run" \
+            -n publisher-visual-golden-batch01-receipt \
+            -D "$RUNNER_TEMP/publisher-visual-baseline"
+          test -f "$RUNNER_TEMP/publisher-visual-baseline/summary.json"
+          python tools/cloud_reader_visual_fingerprint_v1.py delta \
+            target/publisher-visual-batch01/summary.json \
+            "$RUNNER_TEMP/publisher-visual-baseline/summary.json" \
+            target/publisher-visual-batch01/delta.json
+          echo "baseline_found=true" >> "$GITHUB_OUTPUT"
+          echo "baseline_run_id=$baseline_run" >> "$GITHUB_OUTPUT"
+
       - name: Print top residuals
         run: |
           python - <<'PY'
@@ -238,6 +266,19 @@ jobs:
               "corpus_mean_changed_cell_fraction": data["corpus_mean_changed_cell_fraction"],
               "worst_pages": data["worst_pages"][:10],
           }, indent=2, sort_keys=True))
+          delta_path = Path("target/publisher-visual-batch01/delta.json")
+          if delta_path.is_file():
+              delta = json.loads(delta_path.read_text())
+              print("DELTA")
+              print(json.dumps({
+                  "baseline_repository_commit_sha": delta["baseline_repository_commit_sha"],
+                  "improved_page_count": delta["improved_page_count"],
+                  "regressed_page_count": delta["regressed_page_count"],
+                  "unchanged_page_count": delta["unchanged_page_count"],
+                  "mean_delta": delta["corpus_mean_changed_cell_fraction"]["delta"],
+                  "largest_regressions": delta["largest_regressions"][:10],
+                  "largest_improvements": delta["largest_improvements"][:10],
+              }, indent=2, sort_keys=True))
           PY
 
       - name: Upload source-free Batch 01 visual receipt
@@ -245,6 +286,8 @@ jobs:
         if: always()
         with:
           name: publisher-visual-golden-batch01-receipt
-          path: target/publisher-visual-batch01/summary.json
+          path: |
+            target/publisher-visual-batch01/summary.json
+            target/publisher-visual-batch01/delta.json
           if-no-files-found: warn
           retention-days: 90
