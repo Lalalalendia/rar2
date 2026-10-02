@@ -275,6 +275,13 @@ def _summary_pair(receipt: dict) -> dict:
         "mean_significant_fraction": (
             sum(fractions) / len(fractions) if fractions else None
         ),
+        "reference_media_extent_mismatch_pages": sum(
+            not page.get(
+                "reference_media_extent_matches_candidate_page",
+                page["physical_page_size_matches_reference"],
+            )
+            for page in receipt.get("pages", [])
+        ),
         "fidelity_reasons": receipt.get("fidelity_reasons", []),
         "diagnostic_codes": receipt.get("diagnostic_codes", []),
     }
@@ -296,7 +303,7 @@ def compare_bundle(
     output_dir.mkdir(parents=True, exist_ok=True)
     pair_summaries = []
     ranked_pages = []
-    physical_size_mismatch_pages = 0
+    reference_media_extent_mismatch_pages = 0
     page_count_mismatch_pairs = 0
     unsupported_pairs = []
 
@@ -329,8 +336,11 @@ def compare_bundle(
             )
             continue
         for page in receipt["pages"]:
-            if not page["physical_page_size_matches_reference"]:
-                physical_size_mismatch_pages += 1
+            if not page.get(
+                "reference_media_extent_matches_candidate_page",
+                page["physical_page_size_matches_reference"],
+            ):
+                reference_media_extent_mismatch_pages += 1
             diff = page["diff"]
             ranked_pages.append(
                 {
@@ -341,6 +351,18 @@ def compare_bundle(
                     "max_channel_delta": diff["max_channel_delta"],
                     "significant_bbox": diff["significant_bbox"],
                     "largest_regions": diff.get("regions", [])[:5],
+                    "reference_media_extent_matches_candidate_page": page.get(
+                        "reference_media_extent_matches_candidate_page",
+                        page["physical_page_size_matches_reference"],
+                    ),
+                    "comparison_scope": page.get(
+                        "comparison_scope",
+                        (
+                            "publication_page_raster"
+                            if page["physical_page_size_matches_reference"]
+                            else "reference_media_extent_differs_from_candidate_page"
+                        ),
+                    ),
                     "physical_page_size_matches_reference": page[
                         "physical_page_size_matches_reference"
                     ],
@@ -373,7 +395,10 @@ def compare_bundle(
         ),
         "unsupported_pair_count": len(unsupported_pairs),
         "page_count_mismatch_pair_count": page_count_mismatch_pairs,
-        "physical_size_mismatch_page_count": physical_size_mismatch_pages,
+        "reference_media_extent_mismatch_page_count": reference_media_extent_mismatch_pages,
+        # Backward-compatible count only. It does not assert that the source
+        # publication Page.size is wrong; PDF media can be printer/sheet state.
+        "physical_size_mismatch_page_count": reference_media_extent_mismatch_pages,
         "corpus_mean_significant_fraction": (
             sum(compared_fractions) / len(compared_fractions)
             if compared_fractions
@@ -387,6 +412,8 @@ def compare_bundle(
             "exact_external_pair_identity_checked": True,
             "publisher_visual_parity": False,
             "pdf_used_as_visual_authority_only": True,
+            "reference_pdf_media_extent_used_as_page_size_authority": False,
+            "source_page_size_inferred_from_reference_pdf": False,
             "raw_pub_bytes_emitted": False,
             "raw_story_text_emitted": False,
         },

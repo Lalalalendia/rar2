@@ -171,6 +171,8 @@ def compare_cloud_rasters(
         "claims": {
             "author_supplied_reference_pdf": True,
             "publisher_visual_parity": False,
+            "reference_pdf_media_extent_used_as_page_size_authority": False,
+            "source_page_size_inferred_from_reference_pdf": False,
             "raw_pub_bytes_emitted": False,
             "raw_story_text_emitted": False,
         },
@@ -226,6 +228,23 @@ def compare_cloud_rasters(
                     "width_pt": round(page_geometry["width_emu"] / EMU_PER_POINT, 6),
                     "height_pt": round(page_geometry["height_emu"] / EMU_PER_POINT, 6),
                 },
+                "reference_media_extent_matches_candidate_page": physical[
+                    "matches_within_tolerance"
+                ],
+                "reference_media_extent_delta": {
+                    "width_pt": physical["width_delta_pt"],
+                    "height_pt": physical["height_delta_pt"],
+                    "width_px": physical["width_delta_px"],
+                    "height_px": physical["height_delta_px"],
+                },
+                "comparison_scope": (
+                    "publication_page_raster"
+                    if physical["matches_within_tolerance"]
+                    else "reference_media_extent_differs_from_candidate_page"
+                ),
+                # Backward-compatible measurement aliases. These fields compare
+                # candidate publication geometry to the PDF media box; they do
+                # not make the PDF media box a source Page.size authority.
                 "physical_page_size_matches_reference": physical[
                     "matches_within_tolerance"
                 ],
@@ -244,6 +263,7 @@ def compare_cloud_rasters(
     base["pages"] = compared
     base["limitations"] = [
         "Cloud Reader SVG page rasters are compared with the author-supplied PDF at the same nominal DPI; this localizes visible disagreement but does not prove authoring-semantic equivalence.",
+        "The PDF media box can represent printer/output-sheet geometry rather than the authored publication Page.size; a media-extent mismatch is output evidence only and never parser/layout authority.",
         "Current Reader fallback-font execution is measured as rendered; Publisher-exact font/reflow behavior is not assumed.",
         "Below-threshold raster noise is reported separately from significant differences.",
         "PDF object semantics and PDF/X conformance are outside this receipt.",

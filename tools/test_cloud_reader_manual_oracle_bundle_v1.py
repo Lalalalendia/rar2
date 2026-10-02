@@ -223,6 +223,94 @@ class ManualOracleBundleTests(unittest.TestCase):
             )
             self.assertEqual(summary["ranked_pages"][0]["significant_fraction"], 0.0)
 
+    def test_compare_treats_pdf_media_extent_as_output_evidence_not_page_authority(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "pair"
+            root.mkdir()
+            self.make_pair(root)
+            registry_path = Path(temporary) / "registry.json"
+            prepare_bundle(
+                root,
+                Path(temporary) / "prepare",
+                Path(temporary) / "reader.json",
+                registry_path,
+            )
+
+            cloud_dir = Path(temporary) / "cloud"
+            cloud_dir.mkdir()
+            candidate = cloud_dir / "Fixture-page-1.png"
+            document = fitz.open()
+            page = document.new_page(width=595.275591, height=841.889764)
+            page.insert_text((72, 72), "A4 publication page")
+            pixmap = page.get_pixmap(dpi=144, colorspace=fitz.csRGB, alpha=False)
+            pixmap.save(candidate)
+            document.close()
+
+            receipt = {
+                "protocol": "chaptera.cloud-reader-real-scene-browser.v1",
+                "repository_commit_sha": "b" * 40,
+                "browser": "test-browser",
+                "results": [
+                    {
+                        "fixture": "Fixture",
+                        "source_sha256": sha256(root / "Fixture.pub"),
+                        "source_byte_len": (root / "Fixture.pub").stat().st_size,
+                        "classification": "supported",
+                        "rendered": True,
+                        "fidelity": {"level": "full", "reasons": []},
+                        "stacking_fidelity": "source_back_to_front",
+                        "fidelity_reasons": [],
+                        "diagnostic_codes": [],
+                        "browser_preserved_scene_node_order": True,
+                        "pages": 1,
+                        "reference_raster_dpi": 144,
+                        "page_geometry": [
+                            {
+                                "page_id": "page:1",
+                                "order": 0,
+                                "width_emu": 7_560_000,
+                                "height_emu": 10_692_000,
+                            }
+                        ],
+                        "screenshots": [
+                            {
+                                "page": 1,
+                                "filename": candidate.name,
+                                "sha256": sha256(candidate),
+                            }
+                        ],
+                    }
+                ],
+            }
+            cloud_receipt = cloud_dir / "receipt.json"
+            cloud_receipt.write_text(
+                json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = compare_bundle(
+                cloud_receipt,
+                registry_path,
+                Path(temporary) / "pairs",
+                Path(temporary) / "summary.json",
+            )
+
+            self.assertEqual(summary["reference_media_extent_mismatch_page_count"], 1)
+            self.assertEqual(summary["physical_size_mismatch_page_count"], 1)
+            self.assertFalse(
+                summary["claims"]["reference_pdf_media_extent_used_as_page_size_authority"]
+            )
+            self.assertFalse(summary["claims"]["source_page_size_inferred_from_reference_pdf"])
+            page_summary = summary["ranked_pages"][0]
+            self.assertFalse(page_summary["reference_media_extent_matches_candidate_page"])
+            self.assertEqual(
+                page_summary["comparison_scope"],
+                "reference_media_extent_differs_from_candidate_page",
+            )
+            self.assertIsNone(page_summary["significant_fraction"])
+
 
 if __name__ == "__main__":
     unittest.main()
