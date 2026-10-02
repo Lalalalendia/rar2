@@ -556,12 +556,8 @@ pub fn parse_bounded_typography(
                     font_index: *font_index,
                     font_name: font_name.clone(),
                     text_size_emu: *text_size_emu,
-                    color_rgb: resolve_effective_text_color(
-                        range,
-                        None,
-                        &text_color_references,
-                    )
-                    .map(|(rgb, _)| rgb),
+                    color_rgb: resolve_effective_text_color(range, None, &text_color_references)
+                        .map(|(rgb, _)| rgb),
                     color_inherited: false,
                     fdpc_descriptor_ordinal: range.fdpc_descriptor_ordinal,
                     fdpc_style_ordinal: range.fdpc_style_ordinal,
@@ -1015,10 +1011,8 @@ fn parse_stsh1_character_defaults(
             } else if matches!(
                     block.id,
                     COLOR_INDEX_CONTAINER_ID | COLOR_INDEX_CONTAINER_EXTENDED_ID
-                ) {
-                if let Some(value) =
-                    extract_color_index(bytes, block, unknown_block_types)?
-                {
+            ) {
+                if let Some(value) = extract_color_index(bytes, block, unknown_block_types)? {
                     color_indices.push(value);
                 }
             }
@@ -1343,8 +1337,7 @@ fn build_effective_runs(
             resolve_effective_text_color(fdpc, color_default, text_color_references)
                 .map(|(rgb, source)| (Some(rgb), Some(source)))
                 .unwrap_or((None, None));
-        let color_inherited =
-            color_source == Some(QuillTypographyValueSource::InheritedStsh1);
+        let color_inherited = color_source == Some(QuillTypographyValueSource::InheritedStsh1);
 
         let uses_inheritance = font_source == QuillTypographyValueSource::InheritedStsh1
             || text_size_source == QuillTypographyValueSource::InheritedStsh1
@@ -1774,9 +1767,7 @@ fn parse_fdpc_styles(
                     block.id,
                     COLOR_INDEX_CONTAINER_ID | COLOR_INDEX_CONTAINER_EXTENDED_ID
                 ) {
-                    if let Some(value) =
-                        extract_color_index(bytes, block, unknown_block_types)?
-                    {
+                    if let Some(value) = extract_color_index(bytes, block, unknown_block_types)? {
                         color_indices.push(value);
                     }
                 }
