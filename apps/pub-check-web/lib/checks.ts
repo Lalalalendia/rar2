@@ -35,7 +35,7 @@ export type CanonicalCompatibilityResult = {
   state: CanonicalCompatibilityState;
   engineClassification: string;
   pages?: number;
-  limitations: string[];
+  limitations: Array<{ code: string; message: string }>;
   outputRoutes: {
     readOnlyPreview: CanonicalOutputRouteState;
     salvageRecovery: CanonicalOutputRouteState;
