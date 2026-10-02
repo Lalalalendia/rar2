@@ -168,11 +168,8 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
             continue;
         };
         let seq_num = node.payload.contents_seq_num;
-        let (
-            table_field_presence,
-            table_candidate_field_presence,
-            table_unsupported_tail_present,
-        ) = table_field_profiles(seq_num, &contents_stream, &contents, &references)?;
+        let (table_field_presence, table_candidate_field_presence, table_unsupported_tail_present) =
+            table_field_profiles(seq_num, &contents_stream, &contents, &references)?;
         let layout_key = table
             .layout_metrics
             .as_ref()
@@ -317,7 +314,6 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
     Ok(observations)
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PubTableOfficeArtOwnerJoinClass {
     Missing,
@@ -426,16 +422,16 @@ fn scan_table_tail_field_presence(
                 if declared_length < 4 {
                     anyhow::bail!("invalid TABLE tail variable length {declared_length}");
                 }
-                let declared_length =
-                    usize::try_from(declared_length).context("TABLE tail length does not fit usize")?;
+                let declared_length = usize::try_from(declared_length)
+                    .context("TABLE tail length does not fit usize")?;
                 position = position
                     .checked_add(declared_length)
                     .filter(|next| *next <= end)
                     .context("TABLE tail variable field exceeds bounded tail")?;
             }
-            other => anyhow::bail!(
-                "unsupported TABLE tail wire type 0x{other:02x} for field 0x{id:03x}"
-            ),
+            other => {
+                anyhow::bail!("unsupported TABLE tail wire type 0x{other:02x} for field 0x{id:03x}")
+            }
         }
     }
 
@@ -460,7 +456,9 @@ pub fn analyze_mature_0x2c_table_default_style_fields<R: Read + Seek>(
 
     let contents =
         pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
-            .with_context(|| format!("read {CONTENTS_STREAM_PATH} for TABLE default-style observation"))?;
+            .with_context(|| {
+                format!("read {CONTENTS_STREAM_PATH} for TABLE default-style observation")
+            })?;
     let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
     let header = parse_0x2c_header(contents_stream.clone(), &contents)
         .context("parse Contents header for TABLE default-style observation")?;
@@ -468,9 +466,10 @@ pub fn analyze_mature_0x2c_table_default_style_fields<R: Read + Seek>(
         .context("parse Contents trailer for TABLE default-style observation")?;
     let references = build_reference_index(&contents, &trailer.directory)?;
 
-    let escher =
-        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), ESCHER_STREAM_PATH)
-            .with_context(|| format!("read {ESCHER_STREAM_PATH} for TABLE default-style observation"))?;
+    let escher = pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), ESCHER_STREAM_PATH)
+        .with_context(|| {
+            format!("read {ESCHER_STREAM_PATH} for TABLE default-style observation")
+        })?;
     let inventory = inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher)
         .context("inspect OfficeArt owners for TABLE default-style observation")?;
     let escher_by_seq = index_escher_by_contents_seq(&inventory);
@@ -498,7 +497,10 @@ pub fn analyze_mature_0x2c_table_default_style_fields<R: Read + Seek>(
             .collect::<BTreeSet<_>>();
         let table_tail_field_presence = scan_table_tail_field_presence(&contents, &chunk)?;
 
-        let owner_matches = escher_by_seq.get(&seq_num).map(Vec::as_slice).unwrap_or(&[]);
+        let owner_matches = escher_by_seq
+            .get(&seq_num)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let officeart_owner_join_class = match owner_matches {
             [] => PubTableOfficeArtOwnerJoinClass::Missing,
             [_] => PubTableOfficeArtOwnerJoinClass::Unique,
