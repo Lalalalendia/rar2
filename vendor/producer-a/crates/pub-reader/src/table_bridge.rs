@@ -646,13 +646,15 @@ fn populate_native_autoformat_table_border_segments(
                 .fields
                 .iter()
                 .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
-            || anchor.fields.iter().any(|field| !allowed.contains(&field.id))
+            || anchor
+                .fields
+                .iter()
+                .any(|field| !allowed.contains(&field.id))
         {
             continue;
         }
 
-        let Some(orientation) =
-            unique_anchor_scalar(anchor, TABLE_BORDER_SEGMENT_ORIENTATION_ID)
+        let Some(orientation) = unique_anchor_scalar(anchor, TABLE_BORDER_SEGMENT_ORIENTATION_ID)
         else {
             continue;
         };
@@ -660,16 +662,14 @@ fn populate_native_autoformat_table_border_segments(
         else {
             continue;
         };
-        let Some(column_start) =
-            unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_START_ID)
+        let Some(column_start) = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_START_ID)
         else {
             continue;
         };
         let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_ROW_END_ID) else {
             continue;
         };
-        let Some(column_end) =
-            unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_END_ID)
+        let Some(column_end) = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_END_ID)
         else {
             continue;
         };
@@ -681,9 +681,7 @@ fn populate_native_autoformat_table_border_segments(
             1 if row_start == row_end && column_start < column_end => {
                 PubTableBorderAxis::Horizontal
             }
-            2 if column_start == column_end && row_start < row_end => {
-                PubTableBorderAxis::Vertical
-            }
+            2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
             _ => continue,
         };
 
@@ -692,10 +690,9 @@ fn populate_native_autoformat_table_border_segments(
         else {
             continue;
         };
-        let Some(width_emu) =
-            unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
-                .filter(|value| *value > 0 && *value <= 0x0132_F540)
-                .map(i64::from)
+        let Some(width_emu) = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
+            .filter(|value| *value > 0 && *value <= 0x0132_F540)
+            .map(i64::from)
         else {
             continue;
         };
@@ -1193,12 +1190,7 @@ pub(crate) fn build_table_source(
             populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
     }
     let border_segments = if simple_table.is_some() {
-        populate_native_autoformat_table_border_segments(
-            context,
-            table_seq_num,
-            rows,
-            columns,
-        )
+        populate_native_autoformat_table_border_segments(context, table_seq_num, rows, columns)
     } else {
         Vec::new()
     };
