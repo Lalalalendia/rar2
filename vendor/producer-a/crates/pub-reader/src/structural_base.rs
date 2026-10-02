@@ -3,9 +3,15 @@ use super::{
     build_mature_0x2c_source_graph, build_reference_index, chunk_for_reference, seq_u32,
 };
 use anyhow::{Context, Result, bail};
-use pub_contents::{Contents0x2cChunk, parse_0x2c_header, parse_confirmed_0x2c_trailer_root};
+use pub_contents::{
+    BLOCK_TYPE_U32, Contents0x2cChunk, RawContentsBlockBody, parse_0x2c_header,
+    parse_confirmed_0x2c_trailer_root,
+};
 use pub_core::StreamPath;
-use pub_escher::{PUBLISHER_FIELD_SHAPE_ID, SpContainerObservation, inspect_sp_containers};
+use pub_escher::{
+    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
+    PublisherFieldRecord, SpContainerObservation, inspect_sp_containers,
+};
 use pub_model::{NodeId, NodeKind, PageId, RectEmu, Sha256Digest};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -102,19 +108,12 @@ pub fn build_mature_0x2c_structural_base_manifest(
             }
 
             let payload: &PubNodePayload = &node.payload;
-            if payload.story_frame.is_some()
-                || payload.table.is_some()
+            if payload.table.is_some()
                 || payload.table_story.is_some()
                 || payload.image_slot.is_some()
             {
                 continue;
             }
-
-            let (Some(officeart_spid), Some(officeart_shape_type)) =
-                (payload.officeart_spid, payload.officeart_shape_type)
-            else {
-                continue;
-            };
 
             let seq_num = payload.contents_seq_num;
             let Some(reference) = references.get(&seq_num) else {
@@ -126,25 +125,42 @@ pub fn build_mature_0x2c_structural_base_manifest(
             let contents_chunk = chunk_for_reference(contents_stream.clone(), &contents, reference)
                 .with_context(|| format!("parse Contents chunk seq {seq_num}"))?;
 
-            let mut escher_matches = escher_inventory.shapes.iter().filter(|shape| {
-                shape.fsp.as_ref().is_some_and(|fsp| {
-                    fsp.spid == officeart_spid && fsp.shape_type == officeart_shape_type
-                }) && escher_contents_identity_matches(shape, seq_num)
-            });
+            let (Some(contents_width), Some(contents_height)) = (
+                unique_contents_dimension(&contents_chunk, 0x00AA),
+                unique_contents_dimension(&contents_chunk, 0x00AB),
+            ) else {
+                continue;
+            };
+            if contents_width <= 0 || contents_height <= 0 {
+                continue;
+            }
+
+            // The evidence-only Contents↔Escher crosswalk is geometry-first.
+            // Do not gate candidate discovery on ClientData identity, FSP SPID, or
+            // SourceGraph's already-resolved OfficeArt binding. Those are useful
+            // corroborating observations, but would make the crosswalk circular
+            // and exclude otherwise valid ordinary text shapes.
+            let mut escher_matches = escher_inventory
+                .shapes
+                .iter()
+                .filter(|shape| exact_anchor_extent_matches(shape, contents_width, contents_height));
             let Some(escher_shape) = escher_matches.next() else {
                 continue;
             };
             if escher_matches.next().is_some() {
                 continue;
             }
+            let Some(fsp) = escher_shape.fsp.as_ref() else {
+                continue;
+            };
 
             candidates.push(PubStructuralBaseCandidate {
                 page_id: *page_id,
                 node_id: *node_id,
                 contents_seq_num: seq_num,
                 bounds_emu: node.header.bounds,
-                officeart_spid,
-                officeart_shape_type,
+                officeart_spid: fsp.spid,
+                officeart_shape_type: fsp.shape_type,
                 contents_chunk,
                 escher_shape: escher_shape.clone(),
             });
@@ -168,14 +184,55 @@ pub fn structural_base_manifest_json(
     serde_json::to_string_pretty(manifest)
 }
 
-fn escher_contents_identity_matches(shape: &SpContainerObservation, seq_num: u32) -> bool {
-    let Some(client_data) = shape.client_data.as_ref() else {
+fn unique_contents_dimension(chunk: &Contents0x2cChunk, id: u16) -> Option<i64> {
+    let matches = chunk
+        .fields
+        .iter()
+        .filter(|field| field.id == id)
+        .collect::<Vec<_>>();
+    let [field] = matches.as_slice() else {
+        return None;
+    };
+    if field.block_type != BLOCK_TYPE_U32 {
+        return None;
+    }
+    match &field.body {
+        RawContentsBlockBody::U32 { value, .. } => Some(i64::from(*value)),
+        _ => None,
+    }
+}
+
+fn unique_signed_anchor_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
+    let values = record.values(id).collect::<Vec<_>>();
+    match values.as_slice() {
+        [value] => Some(i64::from(i32::from_le_bytes(value.to_le_bytes()))),
+        _ => None,
+    }
+}
+
+fn exact_anchor_extent_matches(
+    shape: &SpContainerObservation,
+    contents_width: i64,
+    contents_height: i64,
+) -> bool {
+    let Some(anchor) = shape.client_anchor.as_ref() else {
         return false;
     };
-    let values = client_data
-        .values(PUBLISHER_FIELD_SHAPE_ID)
-        .collect::<Vec<_>>();
-    values.as_slice() == [seq_num]
+    let (Some(xs), Some(ys), Some(xe), Some(ye)) = (
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_XS),
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_YS),
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_XE),
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_YE),
+    ) else {
+        return false;
+    };
+    let Some(width) = xe.checked_sub(xs) else {
+        return false;
+    };
+    let Some(height) = ye.checked_sub(ys) else {
+        return false;
+    };
+    width == contents_width && height == contents_height
 }
 
 fn sha256_digest(bytes: &[u8]) -> Sha256Digest {
@@ -225,6 +282,10 @@ mod tests {
                 .any(|stream| stream.path == ESCHER_STREAM_PATH)
         );
 
+        assert!(
+            !manifest.candidates.is_empty(),
+            "Sample3 must expose at least one unique geometry-first structural-base candidate"
+        );
         for candidate in &manifest.candidates {
             assert_eq!(
                 candidate.escher_shape.fsp.as_ref().map(|fsp| fsp.spid),
@@ -238,6 +299,16 @@ mod tests {
                     .map(|fsp| fsp.shape_type),
                 Some(candidate.officeart_shape_type)
             );
+
+            let width = unique_contents_dimension(&candidate.contents_chunk, 0x00AA)
+                .expect("candidate width");
+            let height = unique_contents_dimension(&candidate.contents_chunk, 0x00AB)
+                .expect("candidate height");
+            assert!(exact_anchor_extent_matches(
+                &candidate.escher_shape,
+                width,
+                height
+            ));
         }
 
         let json = structural_base_manifest_json(&manifest).expect("manifest JSON");
