@@ -5,7 +5,8 @@ on:
   pull_request:
     paths:
       - "apps/cloud-reader/**"
-      - "apps/chaptera-server/src/reader_scene_v1.rs"\n      - "apps/chaptera-server/tests/virginia_p22_residual_probe.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/tests/virginia_p22_residual_probe.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "crates/chaptera-viewer-render-plan/**"
       - "vendor/producer-a/crates/pub-viewer/**"
@@ -24,7 +25,8 @@ on:
     branches: [main]
     paths:
       - "apps/cloud-reader/**"
-      - "apps/chaptera-server/src/reader_scene_v1.rs"\n      - "apps/chaptera-server/tests/virginia_p22_residual_probe.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/tests/virginia_p22_residual_probe.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "crates/chaptera-viewer-render-plan/**"
       - "vendor/producer-a/crates/pub-viewer/**"
