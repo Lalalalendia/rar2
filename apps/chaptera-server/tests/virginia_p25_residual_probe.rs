@@ -1,6 +1,10 @@
 use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
 use chaptera_server::reader_scene_v1::{ReaderSceneV1, from_viewer_geometry};
+use chaptera_viewer_render_plan::{
+    ExplicitRenderTextFontResourceV1, RenderTextLayoutDispositionV1,
+    build_page_render_plan_with_text_layout_v1,
+};
 use pub_viewer::{ViewerOpenBundle, open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -162,6 +166,65 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
     })
 }
 
+fn text_layout_reason_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
+    let font = ExplicitRenderTextFontResourceV1 {
+        resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
+        expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+        face_index: 0,
+        default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
+        default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
+        bytes: chaptera_desktop_fallback_font_resource::bytes(),
+    };
+    let plan = build_page_render_plan_with_text_layout_v1(
+        &bundle.geometry,
+        usize::try_from(one_based_page - 1).expect("Viewer page index fits usize"),
+        &font,
+    )
+    .expect("p25 fallback census render plan must build");
+
+    let mut text_nodes = 0_usize;
+    let mut shared_frames = 0_usize;
+    let mut shared_lines = 0_usize;
+    let mut shared_nonempty_lines = 0_usize;
+    let mut layout_none = 0_usize;
+    let mut backend_fallbacks = BTreeMap::<String, usize>::new();
+
+    for node in plan.nodes {
+        let Some(text) = node.text else {
+            continue;
+        };
+        text_nodes += 1;
+        let Some(layout) = text.layout else {
+            layout_none += 1;
+            continue;
+        };
+        match layout.disposition {
+            RenderTextLayoutDispositionV1::SharedResolved { .. } => {
+                shared_frames += 1;
+                shared_lines += layout.lines.len();
+                shared_nonempty_lines += layout
+                    .lines
+                    .iter()
+                    .filter(|line| !line.text.trim().is_empty())
+                    .count();
+            }
+            RenderTextLayoutDispositionV1::BackendFallback { reason } => {
+                bump(&mut backend_fallbacks, reason.code());
+            }
+        }
+    }
+
+    json!({
+        "viewer_page": one_based_page,
+        "text_nodes": text_nodes,
+        "shared_frames": shared_frames,
+        "shared_lines": shared_lines,
+        "shared_nonempty_lines": shared_nonempty_lines,
+        "layout_none": layout_none,
+        "backend_fallbacks": backend_fallbacks,
+    })
+}
+
 fn scene_page_census(scene: &ReaderSceneV1, one_based_page: u32) -> Value {
     let order = one_based_page - 1;
     let page = scene
@@ -319,6 +382,7 @@ fn exact_virginia_p25_product_boundary_census() {
                 "viewer_page": page,
                 "source": source_page_census(&bundle, *page),
                 "scene": scene_page_census(&scene, *page),
+                "text_layout_reason": text_layout_reason_census(&bundle, *page),
             })
         })
         .collect::<Vec<_>>();
