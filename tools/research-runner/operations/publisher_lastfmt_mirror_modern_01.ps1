@@ -11,6 +11,7 @@ $ExpectedSourceSha256 = "1e7f38b3ce1d0d956815992b15d361c405fc4bbdced5cdabb3c4581
 $TargetShapeId = 356
 $TargetSpid = 1062
 $ExpectedWrapEmu = 36576
+$ExpectedRecolor = 134217731
 $WrapPropertyIds = @(900, 901, 902, 903)
 
 $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
@@ -189,6 +190,12 @@ function Test-ExactWrapFopts {
     return $true
 }
 
+function Test-ExactRecolorFopt {
+    param([Parameter(Mandatory = $true)]$Target)
+    $matches = @($Target.recolor_properties)
+    return ($matches.Count -eq 1 -and [int]$matches[0].property_id -eq 0x011A -and [long]$matches[0].op -eq $ExpectedRecolor)
+}
+
 function Get-WrapFoptSummary {
     param($Target)
     if ($null -eq $Target) { return $null }
@@ -207,7 +214,15 @@ function Get-WrapFoptSummary {
         officeart_spid = $Target.officeart_spid
         officeart_shape_type = $Target.officeart_shape_type
         properties = $summary
+        recolor = @($Target.recolor_properties | ForEach-Object {
+            [ordered]@{
+                property_id = [int]$_.property_id
+                opid = [int]$_.opid
+                op = [long]$_.op
+            }
+        })
         exact_expected_wrap = [bool](Test-ExactWrapFopts -Target $Target)
+        exact_expected_recolor = [bool](Test-ExactRecolorFopt -Target $Target)
     }
 }
 
@@ -223,6 +238,7 @@ function Get-TrackingSummary {
         dy_wrap_dist_top = if ($null -ne $entry -and $null -ne $entry.dy_wrap_dist_top) { [long]$entry.dy_wrap_dist_top.value } else { $null }
         dx_wrap_dist_right = if ($null -ne $entry -and $null -ne $entry.dx_wrap_dist_right) { [long]$entry.dx_wrap_dist_right.value } else { $null }
         dy_wrap_dist_bottom = if ($null -ne $entry -and $null -ne $entry.dy_wrap_dist_bottom) { [long]$entry.dy_wrap_dist_bottom.value } else { $null }
+        ecp_recolor_scalars = if ($null -ne $entry) { @($entry.ecp_recolor_scalars) } else { @() }
     }
 }
 
@@ -235,6 +251,13 @@ function Test-ExactTrackingWrap {
         $null -ne $Summary.dx_wrap_dist_right -and [long]$Summary.dx_wrap_dist_right -eq $ExpectedWrapEmu -and
         $null -ne $Summary.dy_wrap_dist_bottom -and [long]$Summary.dy_wrap_dist_bottom -eq $ExpectedWrapEmu
     )
+}
+
+function Test-ExactTrackingMirror {
+    param([Parameter(Mandatory = $true)]$Summary)
+    if (-not (Test-ExactTrackingWrap -Summary $Summary)) { return $false }
+    $values = @($Summary.ecp_recolor_scalars)
+    return ($values.Count -eq 1 -and [long]$values[0].value -eq $ExpectedRecolor)
 }
 
 function Get-ComInventory {
@@ -274,8 +297,8 @@ $sourceTrackingPath = Join-Path $privateDir "source-tracking.json"
 $sourceEscherPath = Join-Path $privateDir "source-escher.json"
 $sourceTracking = Invoke-Tracking -Tool $tools.tracking -Source $source.path -TargetSeq $TargetShapeId -Output $sourceTrackingPath
 $sourceTrackingSummary = Get-TrackingSummary -Receipt $sourceTracking
-if (-not (Test-ExactTrackingWrap -Summary $sourceTrackingSummary)) {
-    throw "Pinned help.pub did not reproduce the exact source OplLastFmt GroupShape oracle for OhTrack=$TargetShapeId."
+if (-not (Test-ExactTrackingMirror -Summary $sourceTrackingSummary)) {
+    throw "Pinned help.pub did not reproduce the exact source OplLastFmt GroupShape + EcpRecolor oracle for OhTrack=$TargetShapeId."
 }
 
 $sourceEscher = Invoke-Escher -Tool $tools.escher -Source $source.path -Output $sourceEscherPath
@@ -288,6 +311,9 @@ if ([long]$sourceTarget.officeart_spid -ne $TargetSpid) {
 }
 if (-not (Test-ExactWrapFopts -Target $sourceTarget)) {
     throw "Pinned help.pub did not reproduce exact FOPT900..903=$ExpectedWrapEmu source oracle."
+}
+if (-not (Test-ExactRecolorFopt -Target $sourceTarget)) {
+    throw "Pinned help.pub did not reproduce exact active Escher FOPT0x011A=$ExpectedRecolor recolor oracle."
 }
 $sourceFoptSummary = Get-WrapFoptSummary -Target $sourceTarget
 
@@ -342,7 +368,11 @@ if ($null -eq $afterTarget) {
 }
 
 $afterFoptSummary = Get-WrapFoptSummary -Target $afterTarget
-$activeEscherPreserved = ($null -ne $afterTarget -and (Test-ExactWrapFopts -Target $afterTarget))
+$activeEscherPreserved = (
+    $null -ne $afterTarget -and
+    (Test-ExactWrapFopts -Target $afterTarget) -and
+    (Test-ExactRecolorFopt -Target $afterTarget)
+)
 
 $afterTracking = $null
 $afterTrackingSummary = $null
@@ -382,6 +412,7 @@ $result = [ordered]@{
         target_oh_track = $TargetShapeId
         target_spid = $TargetSpid
         expected_wrap_emu = $ExpectedWrapEmu
+        expected_recolor = $ExpectedRecolor
         tracking = $sourceTrackingSummary
         escher = $sourceFoptSummary
     }
@@ -420,7 +451,7 @@ $result = [ordered]@{
         after_fresh_reopen = $reopenInventory
     }
     verdict = $verdict
-    authority_boundary = "This receipt classifies one exact Publisher11 help.pub -> Publisher16/build12527 one-Document.Save lineage. It compares the already-proven OhTrack/Publisher-Shape.ID 356 OplLastFmt.GroupShape wrap mirror against active Escher FOPT900..903 and follows the same Publisher identity or, if needed, the same SPID. mirror-retired means the serialized legacy mirror is absent for the rejoined target while the tested active Escher semantics remain exact; it does not claim deletion of in-memory runtime state or universal retirement across all PUB families."
+    authority_boundary = "This receipt classifies one exact Publisher11 help.pub -> Publisher16/build12527 one-Document.Save lineage. It compares the already-proven OhTrack/Publisher-Shape.ID 356 OplLastFmt GroupShape wrap mirror and EcpRecolor payload against active Escher FOPT900..903 plus FOPT0x011A, following the same Publisher identity or, if needed, the same SPID. mirror-retired means the serialized legacy mirror is absent for the rejoined target while both tested active Escher semantics remain exact; it does not claim deletion of in-memory runtime state or universal retirement across all PUB families."
 }
 
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "lastfmt-mirror-modern-01.json")
