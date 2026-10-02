@@ -70,30 +70,70 @@ function Resolve-BaseInputs {
 
 function Build-ObserverTools {
     $targetDir = Join-Path $privateDir "cargo-target"
+    $manifestPath = Join-Path $repoRoot "vendor/producer-a/Cargo.toml"
+    $workspaceRoot = Split-Path -Parent $manifestPath
+    $lockPath = Join-Path $workspaceRoot "Cargo.lock"
     New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
-    Push-Location $repoRoot
+    $cargoVersion = (& cargo --version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo --version failed with exit code $LASTEXITCODE"
+    }
+
+    $generatedLock = -not (Test-Path -LiteralPath $lockPath -PathType Leaf)
     try {
-        & cargo build --locked --offline --release --target-dir $targetDir --manifest-path "vendor/producer-a/Cargo.toml" -p pub-reader --bin structural_base_manifest --bin object_tracking_wrap_observer
-        if ($LASTEXITCODE -ne 0) {
-            throw "MAT-01 observer tools offline build failed with exit code $LASTEXITCODE"
+        if ($generatedLock) {
+            Push-Location $repoRoot
+            try {
+                & cargo generate-lockfile --offline --manifest-path $manifestPath
+                if ($LASTEXITCODE -ne 0) {
+                    throw "MAT-01 offline Cargo.lock generation failed with exit code $LASTEXITCODE"
+                }
+            }
+            finally {
+                Pop-Location
+            }
+        }
+
+        if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+            throw "Cargo.lock missing before MAT-01 observer build"
+        }
+        $lockSha = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        Push-Location $repoRoot
+        try {
+            & cargo build --locked --offline --release --target-dir $targetDir --manifest-path $manifestPath -p pub-reader --bin structural_base_manifest --bin object_tracking_wrap_observer
+            if ($LASTEXITCODE -ne 0) {
+                throw "MAT-01 observer tools offline build failed with exit code $LASTEXITCODE"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        $structural = Join-Path $targetDir "release/structural_base_manifest.exe"
+        $tracking = Join-Path $targetDir "release/object_tracking_wrap_observer.exe"
+        if (-not (Test-Path -LiteralPath $structural -PathType Leaf)) {
+            throw "structural_base_manifest.exe missing after offline build"
+        }
+        if (-not (Test-Path -LiteralPath $tracking -PathType Leaf)) {
+            throw "object_tracking_wrap_observer.exe missing after offline build"
+        }
+
+        return [pscustomobject]@{
+            structural = $structural
+            structural_sha256 = (Get-FileHash -LiteralPath $structural -Algorithm SHA256).Hash.ToLowerInvariant()
+            tracking = $tracking
+            tracking_sha256 = (Get-FileHash -LiteralPath $tracking -Algorithm SHA256).Hash.ToLowerInvariant()
+            cargo_version = $cargoVersion
+            cargo_lock_sha256 = $lockSha
+            cargo_lock_origin = $(if ($generatedLock) { "generated-offline-for-run" } else { "preexisting" })
         }
     }
     finally {
-        Pop-Location
-    }
-
-    $structural = Join-Path $targetDir "release/structural_base_manifest.exe"
-    $tracking = Join-Path $targetDir "release/object_tracking_wrap_observer.exe"
-    if (-not (Test-Path -LiteralPath $structural -PathType Leaf)) {
-        throw "structural_base_manifest.exe missing after offline build"
-    }
-    if (-not (Test-Path -LiteralPath $tracking -PathType Leaf)) {
-        throw "object_tracking_wrap_observer.exe missing after offline build"
-    }
-    return [pscustomobject]@{
-        structural = $structural
-        tracking = $tracking
+        if ($generatedLock -and (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $lockPath -Force
+        }
     }
 }
 
@@ -493,6 +533,13 @@ $result = [ordered]@{
         t370_receipt_schema = [string]$base.receipt.schema
         t370_post_save_sha256 = [string]$base.receipt.native_lineage.post_save_sha256
     }
+    tooling = [ordered]@{
+        structural_base_helper_sha256 = [string]$tools.structural_sha256
+        object_tracking_helper_sha256 = [string]$tools.tracking_sha256
+        cargo_version = [string]$tools.cargo_version
+        cargo_lock_sha256 = [string]$tools.cargo_lock_sha256
+        cargo_lock_origin = [string]$tools.cargo_lock_origin
+    }
     target = [ordered]@{
         contents_seq_num = [long]$target.contents_seq_num
         page_index = [int]$target.page_index
@@ -513,6 +560,10 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "mat-01-default-mater
     "experiment=$ExpectedExperiment",
     "base_sha256=$($base.sha256)",
     "target_contents_seq=$($target.contents_seq_num)",
+    "structural_base_helper_sha256=$($tools.structural_sha256)",
+    "object_tracking_helper_sha256=$($tools.tracking_sha256)",
+    "cargo_lock_sha256=$($tools.cargo_lock_sha256)",
+    "cargo_lock_origin=$($tools.cargo_lock_origin)",
     "left_pass=$($leftVerdict.pass)",
     "top_pass=$($topVerdict.pass)",
     "verdict=$overall"
