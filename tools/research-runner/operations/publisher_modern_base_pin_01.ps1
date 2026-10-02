@@ -216,7 +216,8 @@ function Invoke-StructuralBase {
     return Get-Content -LiteralPath $Output -Raw | ConvertFrom-Json
 }
 
-$toolInfo = Build-StructuralBaseTool`r`n$fixturePath = Resolve-ExactFixture
+$toolInfo = Build-StructuralBaseTool
+$fixturePath = Resolve-ExactFixture
 $seed = Get-PubFileRecord -Path $fixturePath
 if ([string]$seed.sha256 -ne $ExpectedFixtureSha256) {
     throw "Pinned Sample.pub source identity mismatch."
@@ -272,9 +273,8 @@ if (-not $beforeAfterEqual -or -not $beforeReopenEqual) {
     throw "No-semantic-edit one-save changed the bounded COM page/shape identity inventory."
 }
 
-$tool = Build-StructuralBaseTool
 $privateReceipt = Join-Path $privateDir "structural-base.json"
-$structural = Invoke-StructuralBase -Tool $tool -Source $working -Output $privateReceipt
+$structural = Invoke-StructuralBase -Tool $toolInfo.path -Source $working -Output $privateReceipt
 
 if ([string]$structural.schema -ne "chaptera.modern-structural-base/v1") {
     throw "Unexpected structural-base receipt schema."
