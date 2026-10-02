@@ -1,11 +1,15 @@
 use std::{env, fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
+use pub_contents::{
+    Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32,
+};
+use pub_core::RawSpan;
 use pub_escher::{
     PublisherFieldRecord, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
     PUBLISHER_FIELD_YS,
 };
-use pub_model::{NodeId, PageId, RectEmu, Sha256Digest};
+use pub_model::{NodeId, PageId, Sha256Digest};
 use pub_reader::{
     build_mature_0x2c_structural_base_manifest, PubStructuralBaseManifest,
     PUB_STRUCTURAL_BASE_SCHEMA_V1,
@@ -13,13 +17,27 @@ use pub_reader::{
 use serde::Serialize;
 
 const RECEIPT_SCHEMA: &str = "chaptera.modern-structural-base/v1";
+const CONTENTS_SHAPE_WIDTH_ID: u16 = 0x00AA;
+const CONTENTS_SHAPE_HEIGHT_ID: u16 = 0x00AB;
+
+#[derive(Debug, Clone)]
+struct ContentsDimension {
+    value_emu: i64,
+    source: RawSpan,
+    wire_type: u8,
+}
 
 #[derive(Debug, Serialize)]
 struct SelectedTarget {
     page_id: PageId,
     node_id: NodeId,
     contents_seq_num: u32,
-    bounds_emu: RectEmu,
+    contents_width_emu: i64,
+    contents_height_emu: i64,
+    contents_width_source: RawSpan,
+    contents_height_source: RawSpan,
+    contents_width_wire_type: u8,
+    contents_height_wire_type: u8,
     officeart_spid: u32,
     officeart_shape_type: u16,
     anchor_xs: i64,
@@ -28,7 +46,7 @@ struct SelectedTarget {
     anchor_ye: i64,
     anchor_width_emu: i64,
     anchor_height_emu: i64,
-    bounds_anchor_exact: bool,
+    contents_anchor_extent_exact: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,34 +60,72 @@ struct Receipt {
     manifest: PubStructuralBaseManifest,
 }
 
-fn unique_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
+fn unique_signed_anchor_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
     let values = record.values(id).collect::<Vec<_>>();
     match values.as_slice() {
-        [value] => Some(i64::from(*value)),
+        [value] => Some(i64::from(i32::from_le_bytes(value.to_le_bytes()))),
+        _ => None,
+    }
+}
+
+fn unique_contents_dimension(chunk: &Contents0x2cChunk, id: u16) -> Option<ContentsDimension> {
+    let matches = chunk
+        .fields
+        .iter()
+        .filter(|field| field.id == id)
+        .collect::<Vec<_>>();
+    let [field] = matches.as_slice() else {
+        return None;
+    };
+    if field.block_type != BLOCK_TYPE_U32 {
+        return None;
+    }
+
+    match &field.body {
+        RawContentsBlockBody::U32 {
+            value,
+            value_source,
+        } => Some(ContentsDimension {
+            value_emu: i64::from(*value),
+            source: value_source.clone(),
+            wire_type: field.block_type,
+        }),
         _ => None,
     }
 }
 
 fn select_target(manifest: &PubStructuralBaseManifest) -> Result<SelectedTarget> {
     for candidate in &manifest.candidates {
+        let (Some(contents_width), Some(contents_height)) = (
+            unique_contents_dimension(&candidate.contents_chunk, CONTENTS_SHAPE_WIDTH_ID),
+            unique_contents_dimension(&candidate.contents_chunk, CONTENTS_SHAPE_HEIGHT_ID),
+        ) else {
+            continue;
+        };
+        if contents_width.value_emu <= 0 || contents_height.value_emu <= 0 {
+            continue;
+        }
+
         let Some(anchor) = candidate.escher_shape.client_anchor.as_ref() else {
             continue;
         };
         let (Some(xs), Some(ys), Some(xe), Some(ye)) = (
-            unique_field(anchor, PUBLISHER_FIELD_XS),
-            unique_field(anchor, PUBLISHER_FIELD_YS),
-            unique_field(anchor, PUBLISHER_FIELD_XE),
-            unique_field(anchor, PUBLISHER_FIELD_YE),
+            unique_signed_anchor_field(anchor, PUBLISHER_FIELD_XS),
+            unique_signed_anchor_field(anchor, PUBLISHER_FIELD_YS),
+            unique_signed_anchor_field(anchor, PUBLISHER_FIELD_XE),
+            unique_signed_anchor_field(anchor, PUBLISHER_FIELD_YE),
         ) else {
             continue;
         };
 
-        let anchor_width = xe - xs;
-        let anchor_height = ye - ys;
-        let exact = candidate.bounds_emu.x.get() == xs
-            && candidate.bounds_emu.y.get() == ys
-            && candidate.bounds_emu.width.get() == anchor_width
-            && candidate.bounds_emu.height.get() == anchor_height;
+        let anchor_width = xe.checked_sub(xs).context("Escher anchor width overflow")?;
+        let anchor_height = ye.checked_sub(ys).context("Escher anchor height overflow")?;
+        if anchor_width <= 0 || anchor_height <= 0 {
+            continue;
+        }
+
+        let exact = contents_width.value_emu == anchor_width
+            && contents_height.value_emu == anchor_height;
         if !exact {
             continue;
         }
@@ -78,7 +134,12 @@ fn select_target(manifest: &PubStructuralBaseManifest) -> Result<SelectedTarget>
             page_id: candidate.page_id,
             node_id: candidate.node_id,
             contents_seq_num: candidate.contents_seq_num,
-            bounds_emu: candidate.bounds_emu,
+            contents_width_emu: contents_width.value_emu,
+            contents_height_emu: contents_height.value_emu,
+            contents_width_source: contents_width.source,
+            contents_height_source: contents_height.source,
+            contents_width_wire_type: contents_width.wire_type,
+            contents_height_wire_type: contents_height.wire_type,
             officeart_spid: candidate.officeart_spid,
             officeart_shape_type: candidate.officeart_shape_type,
             anchor_xs: xs,
@@ -87,12 +148,12 @@ fn select_target(manifest: &PubStructuralBaseManifest) -> Result<SelectedTarget>
             anchor_ye: ye,
             anchor_width_emu: anchor_width,
             anchor_height_emu: anchor_height,
-            bounds_anchor_exact: true,
+            contents_anchor_extent_exact: true,
         });
     }
 
     bail!(
-        "no bounded ordinary shape candidate has an exact four-field ClientAnchor/bounds crosswalk"
+        "no bounded ordinary shape candidate has exact Contents 0xAA/0xAB dimensions matching a unique signed Escher ClientAnchor extent"
     )
 }
 
