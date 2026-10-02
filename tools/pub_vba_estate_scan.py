@@ -166,11 +166,15 @@ def _project_children(cfb: CfbFile, storage: DirEntry) -> dict[str, DirEntry]:
 def inspect_vba_project(cfb: CfbFile, storage: DirEntry) -> dict:
     children = _project_children(cfb, storage)
     dir_entry = children.get("dir")
-    project_entry = children.get("_vba_project")
+    vba_project_entry = children.get("_vba_project")
+    project_root = storage.path[:-1]
+    project_entry = cfb.entry(project_root + ("PROJECT",))
+    structural_valid = bool(dir_entry and vba_project_entry and project_entry)
     result = {
-        "structural_valid": bool(dir_entry and project_entry),
+        "structural_valid": structural_valid,
         "dir_status": "missing" if dir_entry is None else "present",
         "project_stream_status": "missing" if project_entry is None else "present",
+        "vba_project_stream_status": "missing" if vba_project_entry is None else "present",
         "dir_metadata_status": "not_attempted",
         "module_count_declared": None,
         "module_streams_found": 0,
@@ -180,7 +184,7 @@ def inspect_vba_project(cfb: CfbFile, storage: DirEntry) -> dict:
         "call_families": {},
         "symbols": {},
     }
-    if not (dir_entry and project_entry):
+    if not structural_valid:
         return result
     try:
         raw_dir = cfb.read_stream(dir_entry)
