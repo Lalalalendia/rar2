@@ -8,6 +8,9 @@ $ErrorActionPreference = "Stop"
 
 $ExpectedExperiment = "VIEWER-PUBLISHER-DGG-TEXTBOX-APPLICABILITY-01"
 $ExpectedFixtureSha256 = "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506"
+$ExpectedArchiveName = "french_teacher_pub_pdf_corpus_2026-09-20.zip"
+$ExpectedArchiveSha256 = "306fa66cf3238ceab0d91e7de79bb95d138331bdcbcf6c22aaa1b9b5510976f1"
+$ExpectedFixtureName = "virginia-remplacante-modifiable.pub"
 $PbFilePublication = 1
 $TagName = "PUB_ORACLE_ID"
 $TagValue = "DGG_TEXTBOX_APPLICABILITY_01"
@@ -16,17 +19,67 @@ $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
 if ([string]$packet.id -ne $ExpectedExperiment) {
     throw "Unexpected experiment id: $($packet.id)"
 }
-if ([string]::IsNullOrWhiteSpace([string]$env:PUB_RESEARCH_FIXTURE)) {
-    throw "PUB_RESEARCH_FIXTURE must point to the exact local Virginia Remplacante PUB."
-}
-if (-not (Test-Path -LiteralPath $env:PUB_RESEARCH_FIXTURE -PathType Leaf)) {
-    throw "PUB_RESEARCH_FIXTURE does not exist."
+function Resolve-ExactFixture {
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:PUB_RESEARCH_FIXTURE)) {
+        if (-not (Test-Path -LiteralPath $env:PUB_RESEARCH_FIXTURE -PathType Leaf)) {
+            throw "Configured PUB_RESEARCH_FIXTURE does not exist."
+        }
+        $hash = (Get-FileHash -LiteralPath $env:PUB_RESEARCH_FIXTURE -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($hash -ne $ExpectedFixtureSha256) {
+            throw "Configured PUB_RESEARCH_FIXTURE has the wrong SHA-256."
+        }
+        return (Resolve-Path -LiteralPath $env:PUB_RESEARCH_FIXTURE).Path
+    }
+
+    $root = [string]$env:PUB_RESEARCH_FIXTURE_ROOT
+    if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw "Set PUB_RESEARCH_FIXTURE to the exact PUB or PUB_RESEARCH_FIXTURE_ROOT to the local research corpus root."
+    }
+
+    $pubMatches = @(
+        Get-ChildItem -LiteralPath $root -Recurse -File -Filter $ExpectedFixtureName -ErrorAction SilentlyContinue |
+            Where-Object {
+                (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $ExpectedFixtureSha256
+            }
+    )
+    if ($pubMatches.Count -eq 1) {
+        return $pubMatches[0].FullName
+    }
+    if ($pubMatches.Count -gt 1) {
+        throw "Multiple byte-identical Virginia PUB copies found; set PUB_RESEARCH_FIXTURE explicitly."
+    }
+
+    $archives = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter $ExpectedArchiveName -ErrorAction SilentlyContinue)
+    $validArchives = @(
+        $archives | Where-Object {
+            (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $ExpectedArchiveSha256
+        }
+    )
+    if ($validArchives.Count -ne 1) {
+        throw "Exact Virginia PUB not found and expected pinned French corpus archive is not uniquely available."
+    }
+
+    $extractRoot = Join-Path $OutputRoot "private/fixture-extract"
+    if (Test-Path -LiteralPath $extractRoot) {
+        Remove-Item -LiteralPath $extractRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+    Expand-Archive -LiteralPath $validArchives[0].FullName -DestinationPath $extractRoot -Force
+
+    $extracted = @(
+        Get-ChildItem -LiteralPath $extractRoot -Recurse -File -Filter $ExpectedFixtureName |
+            Where-Object {
+                (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -eq $ExpectedFixtureSha256
+            }
+    )
+    if ($extracted.Count -ne 1) {
+        throw "Pinned French corpus archive did not yield exactly one exact Virginia PUB."
+    }
+    return $extracted[0].FullName
 }
 
+$fixturePath = Resolve-ExactFixture
 $fixtureHash = (Get-FileHash -LiteralPath $env:PUB_RESEARCH_FIXTURE -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($fixtureHash -ne $ExpectedFixtureSha256) {
-    throw "Exact Virginia fixture mismatch: $fixtureHash"
-}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../../..")).Path
 Import-Module (Join-Path $repoRoot "tools/windows/pub-runtime/PubRuntime.psm1") -Force
@@ -335,7 +388,7 @@ function Invoke-Arm {
 
 $tool = Build-OracleTool
 $sourceProfilePath = Join-Path $privateDir "source-profile.json"
-$sourceProfile = Invoke-Profile -Tool $tool -Source $env:PUB_RESEARCH_FIXTURE -Output $sourceProfilePath
+$sourceProfile = Invoke-Profile -Tool $tool -Source $fixturePath -Output $sourceProfilePath
 if ([string]$sourceProfile.source_sha256 -ne $ExpectedFixtureSha256) {
     throw "Profile source identity mismatch."
 }
@@ -347,11 +400,11 @@ if (@($sourceProfile.sparse_textbox_candidates).Count -eq 0) {
 }
 
 $controlInput = Join-Path $privateDir "control-input.pub"
-Copy-Item -LiteralPath $env:PUB_RESEARCH_FIXTURE -Destination $controlInput -Force
+Copy-Item -LiteralPath $fixturePath -Destination $controlInput -Force
 
 $treatmentInput = Join-Path $privateDir "treatment-input.pub"
 $patchReceiptPath = Join-Path $privateDir "dgg-patch.json"
-& $tool patch-dgg-fill-color $env:PUB_RESEARCH_FIXTURE $treatmentInput $patchReceiptPath
+& $tool patch-dgg-fill-color $fixturePath $treatmentInput $patchReceiptPath
 if ($LASTEXITCODE -ne 0) {
     throw "DGG fillColor patch failed with exit code $LASTEXITCODE"
 }
