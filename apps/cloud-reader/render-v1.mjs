@@ -115,6 +115,38 @@ function imageDataUrl(resource) {
   return value;
 }
 
+export function imageContentRotationGeometry(bounds, degrees = null) {
+  const x = safeInteger(bounds.x, "image.rotation.bounds.x");
+  const y = safeInteger(bounds.y, "image.rotation.bounds.y");
+  const width = safeInteger(bounds.width, "image.rotation.bounds.width");
+  const height = safeInteger(bounds.height, "image.rotation.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  if (degrees === null || degrees === undefined || degrees === 0) {
+    return Object.freeze({ x, y, width, height, transform: null });
+  }
+  if (![90, 180, 270].includes(degrees)) return null;
+
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+  if (degrees === 180) {
+    return Object.freeze({
+      x,
+      y,
+      width,
+      height,
+      transform: "rotate(180 " + centerX + " " + centerY + ")"
+    });
+  }
+
+  return Object.freeze({
+    x: centerX - height / 2,
+    y: centerY - width / 2,
+    width: height,
+    height: width,
+    transform: "rotate(" + degrees + " " + centerX + " " + centerY + ")"
+  });
+}
+
 export function imagePaintGeometry(bounds, sourceWindow = null) {
   const x = safeInteger(bounds.x, "bounds.x");
   const y = safeInteger(bounds.y, "bounds.y");
@@ -384,13 +416,26 @@ function appendTableText(group, node) {
 export function imageResourcePaintPlan(node, resource) {
   const href = imageDataUrl(resource);
   if (!href) return null;
-  const geometry = imagePaintGeometry(node?.bounds, node?.image_source_window ?? null);
+  const sourceWindow = node?.image_source_window ?? null;
+  const geometry = imagePaintGeometry(node?.bounds, sourceWindow);
   if (!geometry) return null;
+
+  const rotation = node?.image_content_rotation_degrees ?? null;
+  if (rotation !== null && sourceWindow !== null) return null;
+  const contentGeometry = imageContentRotationGeometry(geometry, rotation);
+  if (!contentGeometry) return null;
+
   return Object.freeze({
     href,
     resource_id: resource.resource_id,
     availability: resource.availability,
-    geometry
+    geometry: Object.freeze({
+      x: contentGeometry.x,
+      y: contentGeometry.y,
+      width: contentGeometry.width,
+      height: contentGeometry.height
+    }),
+    content_transform: contentGeometry.transform
   });
 }
 
@@ -415,7 +460,8 @@ function appendImage(group, defs, node, resource, clipId) {
     preserveAspectRatio: "none",
     "clip-path": "url(#" + clipId + ")",
     "data-resource-id": plan.resource_id,
-    "data-resource-availability": plan.availability
+    "data-resource-availability": plan.availability,
+    transform: plan.content_transform
   });
   image.setAttribute("href", plan.href);
   group.appendChild(image);
