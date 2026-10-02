@@ -1,6 +1,4 @@
-use pub_editor::{
-    EditorEditableTarget, EditorSession, Sha256Digest, open_mature_0x2c_editor,
-};
+use pub_editor::{EditorEditableTarget, EditorSession, Sha256Digest, open_mature_0x2c_editor};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
