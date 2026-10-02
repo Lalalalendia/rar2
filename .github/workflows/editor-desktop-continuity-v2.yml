@@ -30,3 +30,8 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/validate_editor_desktop_continuity_v2_receipt.py
           python tools/validate_editor_desktop_continuity_v2_receipt.py --self-test
+
+      - name: Check current desktop V2 producer
+        run: |
+          set -euo pipefail
+          cargo check --locked -p chaptera-desktop
