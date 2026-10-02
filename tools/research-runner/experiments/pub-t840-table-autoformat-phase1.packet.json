@@ -1,0 +1,22 @@
+{
+  "schema": "pub-research-experiment.v1",
+  "id": "PUB-T-840-TABLE-AUTOFORMAT-PHASE1",
+  "publisher_environment": "publisher-2019",
+  "requires_publisher": true,
+  "publisher": {
+    "version_prefix": "16.0.12527.",
+    "exe_sha256": "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
+  },
+  "operation": {
+    "shell": "pwsh",
+    "script": "tools/research-runner/operations/publisher_table_autoformat_phase1.ps1",
+    "args": []
+  },
+  "evidence": {
+    "required": [
+      "environment.json",
+      "analysis/table-autoformat-phase1.json",
+      "logs/table-autoformat-phase1.txt"
+    ]
+  }
+}
