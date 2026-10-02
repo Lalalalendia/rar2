@@ -1,0 +1,42 @@
+{
+  "schema": "pub-research-experiment.v1",
+  "id": "PUB-TLB-SHAPE-EFFECTS-BATCH01",
+  "publisher_environment": "publisher-2019",
+  "requires_publisher": true,
+  "publisher": {
+    "version_prefix": "16.0.12527.",
+    "exe_sha256": "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
+  },
+  "factory": {
+    "task_id": "PUB-T-891",
+    "batch_id": "TLB-BATCH-01-SHAPE-EFFECTS",
+    "source_inventory_schema": "mspub-tlb-inventory/v1",
+    "source_inventory_sha256": "a13d86edc1622b7f3cba6524cba7a4553e120864889e59038712061a05003b5c",
+    "source_tlb_sha256": "7a831d3eabf88bc7c11fd4fd6eff4b75638d8bb5097eb3c5279332260153a3c9",
+    "generated_property_put_count": 467,
+    "admitted_candidate_count": 262,
+    "candidates": [
+      {"id": "GlowFormat.Radius", "dispid": 1, "value_type": "VT_R4"},
+      {"id": "GlowFormat.Transparency", "dispid": 3, "value_type": "VT_R4"},
+      {"id": "GlowFormat.Visible", "dispid": 4, "value_type": "VT_USERDEFINED:MSOTRISTATE:TKIND_ENUM"},
+      {"id": "ReflectionFormat.Type", "dispid": 1, "value_type": "VT_USERDEFINED:MSOREFLECTIONTYPE:TKIND_ENUM"},
+      {"id": "ReflectionFormat.Transparency", "dispid": 2, "value_type": "VT_R4"},
+      {"id": "ReflectionFormat.Size", "dispid": 3, "value_type": "VT_R4"},
+      {"id": "ReflectionFormat.Offset", "dispid": 4, "value_type": "VT_R4"},
+      {"id": "ReflectionFormat.Blur", "dispid": 5, "value_type": "VT_R4"},
+      {"id": "ReflectionFormat.Visible", "dispid": 6, "value_type": "VT_USERDEFINED:MSOTRISTATE:TKIND_ENUM"}
+    ]
+  },
+  "operation": {
+    "shell": "pwsh",
+    "script": "tools/research-runner/operations/publisher_tlb_shape_effects_batch01.ps1",
+    "args": []
+  },
+  "evidence": {
+    "required": [
+      "environment.json",
+      "analysis/tlb-shape-effects-batch01.json",
+      "logs/tlb-shape-effects-batch01.txt"
+    ]
+  }
+}
