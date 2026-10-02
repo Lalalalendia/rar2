@@ -118,6 +118,18 @@ pub struct ReaderTableV1 {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ReaderTableCellV1>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub borders: Vec<ReaderTableBorderSegmentV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTableBorderSegmentV1 {
+    pub x1_emu: i64,
+    pub y1_emu: i64,
+    pub x2_emu: i64,
+    pub y2_emu: i64,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
 }
 
 #[derive(Debug, Serialize)]
