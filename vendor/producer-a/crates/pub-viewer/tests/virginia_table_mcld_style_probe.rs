@@ -216,35 +216,6 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                     .or_default() += count;
             }
 
-            for (key, count) in &observation.table_field_presence {
-                *receipt
-                    .table_field_presence_histogram
-                    .entry(key.clone())
-                    .or_default() += count;
-            }
-            for (key, count) in &observation.table_candidate_field_presence {
-                *receipt
-                    .table_candidate_field_presence_histogram
-                    .entry(key.clone())
-                    .or_default() += count;
-            }
-            let candidate_signature = if observation.table_candidate_field_presence.is_empty() {
-                "none".to_owned()
-            } else {
-                observation
-                    .table_candidate_field_presence
-                    .iter()
-                    .map(|(key, count)| format!("{key}x{count}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            };
-            bump(
-                &mut receipt.table_candidate_signature_histogram,
-                candidate_signature,
-            );
-            receipt.table_unsupported_tail_count +=
-                usize::from(observation.table_unsupported_tail_present);
-
             let default_style = default_style_by_seq
                 .get(&node.payload.contents_seq_num)
                 .expect("selected TABLE must have a TABLE-level/default-style observation");
@@ -335,7 +306,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     );
 
     let receipt = Receipt {
-        schema: "chaptera.virginia-table-mcld-style-carrier-probe.v4",
+        schema: "chaptera.virginia-table-default-style-carrier-probe.v4",
         source_sha256: actual_sha,
         pages,
         guardrails: vec![
@@ -343,7 +314,6 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
             "The open 0x1D..0x2C range is reported only as field-id/wire-type presence and uniformity; no Publisher border/fill semantics are assigned.",
             "For 0x1D/wire0x8A opaque nested state, only equality class, distinct-count, and byte-length histograms are emitted; no payload bytes or hashes leave the probe.",
             "Confirmed 0x04..0x09 fields are retained only as join controls.",
-            "TABLE-level Contents state is emitted only as field-id/block-type presence; known identity/topology/geometry fields are separated from the open candidate signature and no values are emitted.",
             "TABLE owner OfficeArt state is emitted only as property-id presence and paint-family membership; no property values or color interpretation are emitted.",
             "No field values, RGB colors, widths, style ordinals, cell coordinates, text, object ids, offsets, filenames, or raw bytes are emitted.",
             "TABLE/default-style census emits only field-id/wire-type and OfficeArt FOPT property-id presence signatures; no property values or selector ordinals are emitted.",
