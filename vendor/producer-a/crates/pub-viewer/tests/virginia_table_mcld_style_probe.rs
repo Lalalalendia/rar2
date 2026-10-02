@@ -1,12 +1,12 @@
-use pub_core::StreamPath;
 use pub_model::Sha256Digest;
-use pub_quill::{parse_bounded_mcld, parse_confirmed_story_catalog};
-use pub_reader::{PubBridgeDiagnostic, build_mature_0x2c_source_graph};
+use pub_reader::{
+    PubTableMcldStyleSignatureClass, analyze_mature_0x2c_table_mcld_style_fields,
+};
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     env, fs,
     io::Cursor,
     path::PathBuf,
@@ -23,8 +23,17 @@ fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
 }
 
-fn field_key(id: u8, wire_type: u8) -> String {
-    format!("0x{id:02x}/wire_0x{wire_type:02x}")
+fn signature_class(value: PubTableMcldStyleSignatureClass) -> &'static str {
+    match value {
+        PubTableMcldStyleSignatureClass::LayoutKeyMissing => "layout_key_missing",
+        PubTableMcldStyleSignatureClass::McldUnavailable => "mcld_unavailable",
+        PubTableMcldStyleSignatureClass::RecordMissing => "mcld_record_missing",
+        PubTableMcldStyleSignatureClass::StyleRangeAbsent => "style_range_absent",
+        PubTableMcldStyleSignatureClass::StyleRangeUniform => "style_range_uniform",
+        PubTableMcldStyleSignatureClass::StyleRangeVariesByChild => {
+            "style_range_varies_by_child"
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -48,7 +57,6 @@ struct PageReceipt {
 struct Receipt {
     schema: &'static str,
     source_sha256: String,
-    mcld_available: bool,
     pages: Vec<PageReceipt>,
     guardrails: Vec<&'static str>,
 }
@@ -77,8 +85,16 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         .collect::<String>();
     assert_eq!(actual_sha, expected_sha, "exact Virginia source identity");
 
-    let source = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash(&bytes))
-        .expect("build exact Virginia mature source graph");
+    let observations = analyze_mature_0x2c_table_mcld_style_fields(
+        Cursor::new(bytes.as_slice()),
+        source_hash(&bytes),
+    )
+    .expect("observe exact Virginia TABLE MCLD style field presence");
+    let observation_by_seq = observations
+        .into_iter()
+        .map(|observation| (observation.contents_seq_num, observation))
+        .collect::<BTreeMap<_, _>>();
+
     let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
         .expect("open exact Virginia through Viewer bundle");
     assert_eq!(
@@ -86,28 +102,6 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         25,
         "bounded Virginia family profile must expose 25 customer pages"
     );
-
-    let quill = pub_cfb::read_stream_reader(
-        Cursor::new(bytes.as_slice()),
-        pub_reader::QUILL_STREAM_PATH,
-    )
-    .expect("read exact Virginia Quill stream");
-    let quill_stream = StreamPath(pub_reader::QUILL_STREAM_PATH.into());
-    let catalog = parse_confirmed_story_catalog(quill_stream.clone(), &quill)
-        .expect("parse exact Virginia Quill story catalog");
-    let mcld = parse_bounded_mcld(quill_stream, &quill, &catalog.descriptor_nodes).ok();
-
-    let mut layout_key_by_seq = BTreeMap::<u32, Option<u32>>::new();
-    for diagnostic in &source.diagnostics {
-        if let PubBridgeDiagnostic::TableLayoutMetricsUnavailable {
-            seq_num,
-            layout_key,
-            ..
-        } = diagnostic
-        {
-            layout_key_by_seq.insert(*seq_num, *layout_key);
-        }
-    }
 
     let mut pages = Vec::new();
     for viewer_page_index in [21_u32, 22_u32, 23_u32] {
@@ -135,95 +129,39 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
             receipt.table_count += 1;
             receipt.total_table_cells += table.cells.len();
 
-            let layout_key = table
-                .layout_metrics
-                .as_ref()
-                .map(|metrics| metrics.story_layout_key)
-                .or_else(|| {
-                    layout_key_by_seq
-                        .get(&node.payload.contents_seq_num)
-                        .copied()
-                        .flatten()
-                });
-
-            let Some(layout_key) = layout_key else {
-                receipt.layout_key_missing_table_count += 1;
-                bump(
-                    &mut receipt.style_signature_class_histogram,
-                    "layout_key_missing",
-                );
-                continue;
-            };
-            receipt.layout_key_present_table_count += 1;
-
-            let Some(mcld) = mcld.as_ref() else {
-                receipt.mcld_record_missing_table_count += 1;
-                bump(
-                    &mut receipt.style_signature_class_histogram,
-                    "mcld_unavailable",
-                );
-                continue;
-            };
-            let Some(record) = mcld
-                .records
-                .iter()
-                .find(|record| record.record_id == layout_key)
-            else {
-                receipt.mcld_record_missing_table_count += 1;
-                bump(
-                    &mut receipt.style_signature_class_histogram,
-                    "mcld_record_missing",
-                );
-                continue;
-            };
-            receipt.mcld_record_present_table_count += 1;
-            receipt.joined_mcld_child_count += record.children.len();
-            if record.children.len() == table.cells.len() {
-                receipt.child_count_matches_cell_count += 1;
-            } else {
-                receipt.child_count_mismatches_cell_count += 1;
-            }
-
-            let mut child_signatures = BTreeSet::<Vec<String>>::new();
-            let mut any_style_field = false;
-            for child in &record.children {
-                let style_signature = child
-                    .fields
-                    .iter()
-                    .filter(|field| (0x1d..=0x2c).contains(&field.id))
-                    .map(|field| field_key(field.id, field.wire_type))
-                    .collect::<BTreeSet<_>>();
-                any_style_field |= !style_signature.is_empty();
-                for key in &style_signature {
-                    bump(
-                        &mut receipt.style_field_child_presence_histogram,
-                        key.clone(),
-                    );
-                }
-                child_signatures.insert(style_signature.into_iter().collect());
-
-                let control_signature = child
-                    .fields
-                    .iter()
-                    .filter(|field| (0x04..=0x09).contains(&field.id))
-                    .map(|field| field_key(field.id, field.wire_type))
-                    .collect::<BTreeSet<_>>();
-                for key in control_signature {
-                    bump(&mut receipt.control_field_child_presence_histogram, key);
-                }
-            }
-
-            let signature_class = if !any_style_field {
-                "style_range_absent"
-            } else if child_signatures.len() == 1 {
-                "style_range_uniform"
-            } else {
-                "style_range_varies_by_child"
-            };
+            let observation = observation_by_seq
+                .get(&node.payload.contents_seq_num)
+                .expect("selected TABLE must have a source MCLD observation");
+            receipt.layout_key_present_table_count +=
+                usize::from(observation.layout_key_present);
+            receipt.layout_key_missing_table_count +=
+                usize::from(!observation.layout_key_present);
+            receipt.mcld_record_present_table_count +=
+                usize::from(observation.mcld_record_present);
+            receipt.mcld_record_missing_table_count +=
+                usize::from(observation.layout_key_present && !observation.mcld_record_present);
+            receipt.child_count_matches_cell_count +=
+                usize::from(observation.child_count_matches_cell_count);
+            receipt.child_count_mismatches_cell_count += usize::from(
+                observation.mcld_record_present && !observation.child_count_matches_cell_count,
+            );
+            receipt.joined_mcld_child_count += observation.mcld_child_count;
             bump(
                 &mut receipt.style_signature_class_histogram,
-                signature_class,
+                signature_class(observation.signature_class),
             );
+            for (key, count) in &observation.style_field_child_presence {
+                *receipt
+                    .style_field_child_presence_histogram
+                    .entry(key.clone())
+                    .or_default() += count;
+            }
+            for (key, count) in &observation.control_field_child_presence {
+                *receipt
+                    .control_field_child_presence_histogram
+                    .entry(key.clone())
+                    .or_default() += count;
+            }
         }
 
         pages.push(receipt);
@@ -238,7 +176,6 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     let receipt = Receipt {
         schema: "chaptera.virginia-table-mcld-style-carrier-probe.v1",
         source_sha256: actual_sha,
-        mcld_available: mcld.is_some(),
         pages,
         guardrails: vec![
             "MCLD joins use the existing TABLE story-layout key authority; no byte-pattern scan is used.",
