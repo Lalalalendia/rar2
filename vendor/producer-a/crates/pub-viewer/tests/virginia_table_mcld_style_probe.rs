@@ -79,6 +79,7 @@ struct PageReceipt {
     opaque_1d_single_child_count: usize,
     opaque_1d_distinct_payload_count_histogram: BTreeMap<String, usize>,
     opaque_1d_payload_length_histogram: BTreeMap<String, usize>,
+    opaque_1d_cross_table_class_histogram: BTreeMap<String, usize>,
     table_field_presence_histogram: BTreeMap<String, usize>,
     table_candidate_field_presence_histogram: BTreeMap<String, usize>,
     table_candidate_signature_histogram: BTreeMap<String, usize>,
@@ -228,6 +229,12 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                     .entry(format!("bytes={length}"))
                     .or_default() += count;
             }
+            if let Some(class) = observation.opaque_1d_cross_table_class {
+                bump(
+                    &mut receipt.opaque_1d_cross_table_class_histogram,
+                    format!("class={class}"),
+                );
+            }
 
             let default_style = default_style_by_seq
                 .get(&node.payload.contents_seq_num)
@@ -287,7 +294,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         guardrails: vec![
             "MCLD joins use the existing TABLE story-layout key authority; no byte-pattern scan is used.",
             "The open 0x1D..0x2C range is reported only as field-id/wire-type presence and uniformity; no Publisher border/fill semantics are assigned.",
-            "For 0x1D/wire0x8A opaque nested state, only equality class, distinct-count, and byte-length histograms are emitted; no payload bytes or hashes leave the probe.",
+            "For 0x1D/wire0x8A opaque nested state, only equality class, cross-table equality partition, distinct-count, and byte-length histograms are emitted; no payload bytes or hashes leave the probe.",
             "Confirmed 0x04..0x09 fields are retained only as join controls.",
             "TABLE owner OfficeArt state is emitted only as property-id presence and paint-family membership; no property values or color interpretation are emitted.",
             "No field values, RGB colors, widths, style ordinals, cell coordinates, text, object ids, offsets, filenames, or raw bytes are emitted.",
@@ -307,7 +314,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
     .expect("write MCLD style receipt");
 
     println!(
-        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?} p22_table_candidates={:?} p22_table_signatures={:?} p22_unsupported_tail={} p22_default_fields={:?} p22_default_tail={:?} p22_owner_join={:?} p22_owner_fopt={:?} p22_owner_paint_family={:?} p22_joint={:?}",
+        "VIRGINIA_TABLE_MCLD_STYLE p21_tables={} p22_tables={} p23_tables={} p22_layout_keys={} p22_mcld_records={} p22_child_match={} p22_style_classes={:?} p22_opaque_classes={:?} p22_distinct={:?} p22_lengths={:?} p21_cross_table={:?} p22_cross_table={:?} p23_cross_table={:?} p22_table_candidates={:?} p22_table_signatures={:?} p22_unsupported_tail={} p22_default_fields={:?} p22_default_tail={:?} p22_owner_join={:?} p22_owner_fopt={:?} p22_owner_paint_family={:?} p22_joint={:?}",
         receipt.pages[0].table_count,
         receipt.pages[1].table_count,
         receipt.pages[2].table_count,
@@ -318,6 +325,9 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         receipt.pages[1].opaque_1d_class_histogram,
         receipt.pages[1].opaque_1d_distinct_payload_count_histogram,
         receipt.pages[1].opaque_1d_payload_length_histogram,
+        receipt.pages[0].opaque_1d_cross_table_class_histogram,
+        receipt.pages[1].opaque_1d_cross_table_class_histogram,
+        receipt.pages[2].opaque_1d_cross_table_class_histogram,
         receipt.pages[1].table_candidate_field_presence_histogram,
         receipt.pages[1].table_candidate_signature_histogram,
         receipt.pages[1].table_unsupported_tail_count,
