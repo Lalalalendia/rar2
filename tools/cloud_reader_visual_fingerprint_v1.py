@@ -212,6 +212,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
         "page_count_mismatch_pair_count": page_count_mismatch,
         "corpus_mean_changed_cell_fraction": sum(fractions) / len(fractions) if fractions else None,
         "worst_pages": page_rows[:25],
+        "pages": page_rows,
         "pairs": pair_rows,
         "unsupported_pairs": unsupported,
         "comparator": {
@@ -236,6 +237,87 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
     return summary
 
 
+
+def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) -> dict:
+    current = json.loads(current_path.read_text(encoding="utf-8"))
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if current.get("schema") != SUMMARY_SCHEMA or baseline.get("schema") != SUMMARY_SCHEMA:
+        raise ValueError("unsupported visual summary schema for baseline comparison")
+    if current.get("batch_id") != baseline.get("batch_id"):
+        raise ValueError("visual baseline batch identity mismatch")
+
+    def pages_by_key(payload: dict) -> dict[tuple[str, int], dict]:
+        return {
+            (row["fixture"], int(row["page"])): row
+            for row in payload.get("pages", [])
+        }
+
+    current_pages = pages_by_key(current)
+    baseline_pages = pages_by_key(baseline)
+    keys = sorted(set(current_pages) & set(baseline_pages))
+    epsilon = 1e-9
+    improved = []
+    regressed = []
+    unchanged = []
+    for key in keys:
+        now = current_pages[key]["changed_cell_fraction"]
+        before = baseline_pages[key]["changed_cell_fraction"]
+        delta = now - before
+        row = {
+            "fixture": key[0],
+            "page": key[1],
+            "baseline_changed_cell_fraction": before,
+            "current_changed_cell_fraction": now,
+            "delta": delta,
+        }
+        if delta < -epsilon:
+            improved.append(row)
+        elif delta > epsilon:
+            regressed.append(row)
+        else:
+            unchanged.append(row)
+
+    improved.sort(key=lambda row: row["delta"])
+    regressed.sort(key=lambda row: -row["delta"])
+    mean_before = baseline.get("corpus_mean_changed_cell_fraction")
+    mean_now = current.get("corpus_mean_changed_cell_fraction")
+    payload = {
+        "schema": "chaptera.publisher-visual-fingerprint-delta.v1",
+        "batch_id": current["batch_id"],
+        "baseline_repository_commit_sha": baseline.get("repository_commit_sha"),
+        "current_repository_commit_sha": current.get("repository_commit_sha"),
+        "matched_page_count": len(keys),
+        "improved_page_count": len(improved),
+        "regressed_page_count": len(regressed),
+        "unchanged_page_count": len(unchanged),
+        "corpus_mean_changed_cell_fraction": {
+            "baseline": mean_before,
+            "current": mean_now,
+            "delta": (
+                mean_now - mean_before
+                if mean_now is not None and mean_before is not None
+                else None
+            ),
+        },
+        "unsupported_pair_count": {
+            "baseline": baseline.get("unsupported_pair_count"),
+            "current": current.get("unsupported_pair_count"),
+        },
+        "page_count_mismatch_pair_count": {
+            "baseline": baseline.get("page_count_mismatch_pair_count"),
+            "current": current.get("page_count_mismatch_pair_count"),
+        },
+        "largest_improvements": improved[:25],
+        "largest_regressions": regressed[:25],
+        "claims": {
+            "measurement_only": True,
+            "hard_regression_threshold_applied": False,
+        },
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return payload
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -252,11 +334,16 @@ def main() -> None:
     comp.add_argument("reference", type=Path)
     comp.add_argument("out", type=Path)
 
+    delta = sub.add_parser("delta")
+    delta.add_argument("current", type=Path)
+    delta.add_argument("baseline", type=Path)
+    delta.add_argument("out", type=Path)
+
     args = parser.parse_args()
     if args.command == "prepare":
         payload = prepare_manifest(args.pairs_csv, args.natural_root, args.historical_root, args.out_dir, args.manifest)
         print(f"BATCH01 VISUAL MANIFEST fixtures={len(payload['fixtures'])}")
-    else:
+    elif args.command == "compare":
         summary = compare(args.browser_receipt, args.reference, args.out)
         worst = summary["worst_pages"][0] if summary["worst_pages"] else None
         print(json.dumps({
@@ -265,6 +352,15 @@ def main() -> None:
             "page_count_mismatch_pairs": summary["page_count_mismatch_pair_count"],
             "mean_changed_cell_fraction": summary["corpus_mean_changed_cell_fraction"],
             "worst_page": worst,
+        }, indent=2, sort_keys=True))
+    else:
+        delta = compare_baseline(args.current, args.baseline, args.out)
+        print(json.dumps({
+            "matched_pages": delta["matched_page_count"],
+            "improved_pages": delta["improved_page_count"],
+            "regressed_pages": delta["regressed_page_count"],
+            "unchanged_pages": delta["unchanged_page_count"],
+            "mean_delta": delta["corpus_mean_changed_cell_fraction"]["delta"],
         }, indent=2, sort_keys=True))
 
 
