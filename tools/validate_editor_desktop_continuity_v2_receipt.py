@@ -63,11 +63,10 @@ def validate_semantics(receipt):
     ):
         raise AssertionError("ResizeNode must change width or height")
 
-    if (
-        image.get("before_asset_sha256") is not None
-        and image["before_asset_sha256"] == image["after_asset_sha256"]
-    ):
-        raise AssertionError("ReplaceImage must change asset identity when prior replacement is known")
+    if image["replacement_binding_content_derived"]:
+        raise AssertionError("replacement binding must be opaque, not content-derived")
+    if not image["asset_sha_redacted"]:
+        raise AssertionError("replacement asset SHA must stay redacted")
     if image["frame_before"] != image["frame_after"]:
         raise AssertionError("V2 ReplaceImage must preserve frame geometry")
 
@@ -92,8 +91,8 @@ def validate_semantics(receipt):
         raise AssertionError("fresh reopen must preserve moved geometry")
     if reopen["resized_rect"] != resize["after"]:
         raise AssertionError("fresh reopen must preserve resized geometry")
-    if reopen["replacement_asset_sha256"] != image["after_asset_sha256"]:
-        raise AssertionError("fresh reopen must preserve replacement asset identity")
+    if not reopen["replacement_binding_preserved"]:
+        raise AssertionError("fresh reopen must preserve replacement binding")
 
     expected_operation_count = (
         project["story_operation_count"]
@@ -114,7 +113,7 @@ def validate_semantics(receipt):
         "moved_node_id": move["origin_node_id"],
         "resized_node_id": resize["origin_node_id"],
         "replaced_image_node_id": image["origin_node_id"],
-        "replacement_asset_sha256": image["after_asset_sha256"],
+        "replacement_binding_id": image["replacement_binding_id"],
         "project_sha256": project["sha256"],
         "export_format": receipt["export"]["format"],
         "export_sha256": receipt["export"]["sha256"],
@@ -171,8 +170,9 @@ def sample_receipt():
             "projection_kind": "direct_page_local",
             "origin_node_id": "44444444-4444-4444-4444-444444444444",
             "capability_admitted": True,
-            "before_asset_sha256": None,
-            "after_asset_sha256": h("8"),
+            "replacement_binding_id": "continuity-v2-" + "8" * 32,
+            "replacement_binding_content_derived": False,
+            "asset_sha_redacted": True,
             "after_asset_mime": "image/png",
             "after_asset_byte_len": 2048,
             "frame_before": {"x": 70, "y": 80, "width": 500, "height": 320},
@@ -194,7 +194,7 @@ def sample_receipt():
             "story_state_id": hid("3"),
             "moved_rect": {"x": 30, "y": 40, "width": 300, "height": 200},
             "resized_rect": {"x": 50, "y": 60, "width": 460, "height": 280},
-            "replacement_asset_sha256": h("8"),
+            "replacement_binding_preserved": True,
         },
         "project": {
             "schema_version": "pub-editor-v0.11",
@@ -237,6 +237,7 @@ def sample_receipt():
             "projected_object_mutation_fails_closed": True,
             "reopen_used_fresh_session": True,
             "export_from_current_editor_state": True,
+            "replacement_asset_sha_emitted": False,
         },
     }
 
@@ -265,13 +266,13 @@ def self_test():
         raise AssertionError("self-test expected ReplaceImage frame-preservation rejection")
 
     bad = copy.deepcopy(receipt)
-    bad["reopen"]["replacement_asset_sha256"] = "0" * 64
+    bad["reopen"]["replacement_binding_preserved"] = False
     try:
-        validate_semantics(bad)
+        validate_schema(bad)
     except AssertionError:
         pass
     else:
-        raise AssertionError("self-test expected reopen asset mismatch rejection")
+        raise AssertionError("self-test expected reopen binding rejection")
 
     return {
         "self_test": "pass",
