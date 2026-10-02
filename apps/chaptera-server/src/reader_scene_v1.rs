@@ -1928,6 +1928,16 @@ mod tests {
                 projected_configured_layouts >= 3,
                 "the three exact Carlton source-typography-complete carriers must consume the configured resource"
             );
+            let projected_direct_yellow_layouts = configured_scene
+                .nodes
+                .iter()
+                .filter_map(|node| node.text_layout.as_ref())
+                .filter(|layout| layout.color_rgb == Some([255, 255, 0]))
+                .count();
+            assert!(
+                projected_direct_yellow_layouts >= 1,
+                "exact Carlton direct Quill text color #FFFF00 must survive through the shared Reader Scene layout contract"
+            );
             let scene_font = configured_scene
                 .fonts
                 .iter()
@@ -1945,8 +1955,11 @@ mod tests {
                 "browser font bytes must use the same configured resource"
             );
             println!(
-                "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} resource_id={} sha256={}",
-                projected_configured_layouts, configured_resource_id, scene_font.expected_sha256
+                "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} direct_yellow_layouts={} resource_id={} sha256={}",
+                projected_configured_layouts,
+                projected_direct_yellow_layouts,
+                configured_resource_id,
+                scene_font.expected_sha256
             );
         }
 
