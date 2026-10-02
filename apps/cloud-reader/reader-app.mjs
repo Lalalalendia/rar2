@@ -210,6 +210,25 @@ const nextStepLabels = {
   unsupported_or_manual_review: "Next step: manual review is required; automatic migration is not claimed."
 };
 
+const editableRouteLabels = {
+  available_with_declared_losses: {
+    idml: "Editable IDML migration is available with declared losses",
+    odg: "Editable ODG migration is available with declared losses"
+  },
+  unavailable: {
+    idml: "Editable IDML migration is unavailable for this file",
+    odg: "Editable ODG migration is unavailable for this file"
+  },
+  not_verified: {
+    idml: "Editable IDML migration is not verified for this file",
+    odg: "Editable ODG migration is not verified for this file"
+  }
+};
+
+function editableRouteLabel(target, state) {
+  return editableRouteLabels[state]?.[target] ?? ("Editable " + target.toUpperCase() + " migration status unavailable");
+}
+
 function showCompatibilityReport(report) {
   $("#compatibility-state").textContent = compatibilityStateLabels[report.state] ?? report.state;
 
@@ -248,9 +267,11 @@ function showCompatibilityReport(report) {
     list.appendChild(item);
   }
 
-  $("#compatibility-routes").textContent =
-    (previewRouteLabels[report.output_routes.read_only_preview] ?? "Read-only preview status unavailable")
-    + ". Editable IDML/ODG migration is not advertised until separately verified on the current product path.";
+  $("#compatibility-routes").textContent = [
+    previewRouteLabels[report.output_routes.read_only_preview] ?? "Read-only preview status unavailable",
+    editableRouteLabel("idml", report.output_routes.editable_idml),
+    editableRouteLabel("odg", report.output_routes.editable_odg)
+  ].join(". ") + ".";
   $("#compatibility-next").textContent =
     nextStepLabels[report.recommended_next_step] ?? "Next step: review this file manually.";
   $("#compatibility-report").hidden = false;
