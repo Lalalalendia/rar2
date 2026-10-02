@@ -101,9 +101,9 @@ use pub_escher::{
 };
 use pub_model::{
     Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
-    Node, NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
-    SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
-    derive_source_canonical_id,
+    Node, NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest,
+    Size2D, SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story,
+    StoryId, derive_source_canonical_id,
 };
 use pub_quill::{
     QuillGroundedStoryIdentity, QuillMcldReadError, QuillMcldVerticalAlignment,
@@ -5048,8 +5048,7 @@ mod tests {
         );
         // 17.71 degrees, represented at the source 16.16 precision.
         let raw_q16 = 1_160_643_i64;
-        let fractional =
-            officeart_affine_from_components(bounds, raw_q16, false, false).unwrap();
+        let fractional = officeart_affine_from_components(bounds, raw_q16, false, false).unwrap();
         let truncated =
             officeart_affine_from_components(bounds, 17_i64 * 65_536, false, false).unwrap();
 
