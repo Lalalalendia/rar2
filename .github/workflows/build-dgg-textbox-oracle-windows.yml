@@ -139,3 +139,5 @@ jobs:
           path: ${{ runner.temp }}/dgg-textbox-native-bundle/
           if-no-files-found: error
           retention-days: 7
+
+# Rebuild portable bundle after main tooling fix 5f8b84958535ae1a33ce68b2ea8c03844a7820d3
