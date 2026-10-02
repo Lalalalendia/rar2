@@ -14,7 +14,43 @@ export type Compatibility =
   | 'invalid'
   | 'failed';
 
-export type CheckResult = {
+export type CanonicalCompatibilityState =
+  | 'opens_normally'
+  | 'needs_review'
+  | 'opens_with_salvage'
+  | 'unsupported';
+
+export type CanonicalOutputRouteState =
+  | 'available'
+  | 'available_with_limitations'
+  | 'available_with_declared_losses'
+  | 'unavailable'
+  | 'not_verified'
+  | 'not_applicable';
+
+export type CanonicalCompatibilityResult = {
+  kind: 'canonical';
+  protocolVersion: 'chaptera.reader-compatibility-report.v1';
+  sourceSha256: string;
+  state: CanonicalCompatibilityState;
+  engineClassification: string;
+  pages?: number;
+  limitations: string[];
+  outputRoutes: {
+    readOnlyPreview: CanonicalOutputRouteState;
+    salvageRecovery: CanonicalOutputRouteState;
+    editableIdml: CanonicalOutputRouteState;
+    editableOdg: CanonicalOutputRouteState;
+  };
+  recommendedNextStep:
+    | 'migration_pilot_preview'
+    | 'review_preview_before_migration'
+    | 'rescue_review'
+    | 'unsupported_or_manual_review';
+};
+
+export type LegacyCheckResult = {
+  kind?: 'legacy';
   compatibility: Compatibility;
   summary: string;
   publisherFamily?: string;
@@ -23,6 +59,14 @@ export type CheckResult = {
   limitations?: string[];
   checkerVersion?: string;
 };
+
+export type CheckResult = CanonicalCompatibilityResult | LegacyCheckResult;
+
+export function isCanonicalCheckResult(
+  result: CheckResult,
+): result is CanonicalCompatibilityResult {
+  return result.kind === 'canonical';
+}
 
 export type CheckRecord = {
   schema: 'chaptera.pub-check.v1';
