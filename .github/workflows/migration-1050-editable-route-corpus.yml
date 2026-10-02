@@ -1,0 +1,231 @@
+name: Migration 1050 editable-route corpus
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/chaptera-server/src/migration_editable_route.rs"
+      - "apps/chaptera-server/src/export_executor.rs"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "tools/run_migration_editable_route_corpus_v1.py"
+      - "tools/ci/scribus_idml_consumer.py"
+      - ".github/workflows/migration-1050-editable-route-corpus.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/chaptera-server/src/migration_editable_route.rs"
+      - "apps/chaptera-server/src/export_executor.rs"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "tools/run_migration_editable_route_corpus_v1.py"
+      - "tools/ci/scribus_idml_consumer.py"
+      - ".github/workflows/migration-1050-editable-route-corpus.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_TARGET_DIR: target/migration-1050-rust
+      EVIDENCE_DIR: target/migration-1050-editable-route
+      MATERIALIZE_DIR: target/migration-1050-materialized
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Check edited Rust formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Adopt and verify immutable exact 1050 corpus
+        run: |
+          set -euo pipefail
+          rm -rf out/materialized
+          cp -a out/pinned1050/materialized out/materialized
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          expected_count = 1050
+          expected_digest = "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          files = sorted(Path("out/materialized/native").glob("*.pub"))
+          assert len(files) == expected_count, len(files)
+          shas = []
+          for path in files:
+              sha = hashlib.sha256(path.read_bytes()).hexdigest()
+              assert path.stem.casefold() == sha, (path.name, sha)
+              shas.append(sha)
+          digest = hashlib.sha256(
+              "".join(item + "\n" for item in sorted(shas)).encode("ascii")
+          ).hexdigest()
+          assert digest == expected_digest, (digest, expected_digest)
+          print({
+              "source_count": len(files),
+              "sha_list_digest": "sha256:" + digest,
+          })
+          PY
+
+      - name: Build exact-source migration and Reader classification probes
+        run: |
+          set -euo pipefail
+          cargo build             --manifest-path vendor/producer-a/Cargo.toml             --release             -p pub-editor             --bin editable_route_probe
+          cargo build             --manifest-path vendor/producer-a/Cargo.toml             --release             -p pub-viewer             --bin corpus-reader-salvage-acceptance
+
+      - name: Classify current Reader outcome for all exact 1050 sources
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          "$CARGO_TARGET_DIR/release/corpus-reader-salvage-acceptance"             out/materialized/native             "$EVIDENCE_DIR/reader-acceptance.json"
+
+      - name: Census all 1050 exact-source routes and materialize deterministic 128-source sample
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR/routes" "$MATERIALIZE_DIR"
+          python tools/run_migration_editable_route_corpus_v1.py             --corpus-dir out/materialized/native             --reader-acceptance "$EVIDENCE_DIR/reader-acceptance.json"             --probe-exe "$CARGO_TARGET_DIR/release/editable_route_probe"             --output "$EVIDENCE_DIR/summary.json"             --per-file-dir "$EVIDENCE_DIR/routes"             --materialize-dir "$MATERIALIZE_DIR"             --materialize-count 128             --workers 8             --timeout-seconds 45
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 600s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
+
+      - name: Validate every sampled IDML through Scribus
+        shell: bash
+        run: |
+          set -euo pipefail
+          export REPO_ROOT="$GITHUB_WORKSPACE"
+          find "$MATERIALIZE_DIR" -mindepth 2 -maxdepth 2 -type f -name 'output.idml' -print0             | xargs -0 -r -n1 -P4 bash -c '
+                set -euo pipefail
+                idml="$1"
+                dir="$(dirname "$idml")"
+                mkdir -p "$dir/scribus-home"
+                rm -f "$dir/consumer.sla" "$dir/idml.consumer.ok"
+                HOME="$dir/scribus-home"                 CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla"                   timeout 120s xvfb-run -a scribus -g -ns                     -py "$REPO_ROOT/tools/ci/scribus_idml_consumer.py" -- "$idml"
+                test -s "$dir/consumer.sla"
+                touch "$dir/idml.consumer.ok"
+              ' _
+
+      - name: Validate every sampled ODG through LibreOffice Draw
+        shell: bash
+        run: |
+          set -euo pipefail
+          find "$MATERIALIZE_DIR" -mindepth 2 -maxdepth 2 -type f -name 'output.odg' -print0             | xargs -0 -r -n1 -P4 bash -c '
+                set -euo pipefail
+                odg="$1"
+                dir="$(dirname "$odg")"
+                out="$dir/libreoffice"
+                profile="$dir/libreoffice-profile"
+                rm -rf "$out" "$profile"
+                mkdir -p "$out" "$profile"
+                timeout 120s libreoffice                   "-env:UserInstallation=file://$profile"                   --headless                   --convert-to fodg                   --outdir "$out"                   "$odg"
+                test -s "$out/output.fodg"
+                touch "$dir/odg.consumer.ok"
+              ' _
+
+      - name: Finalize source-safe migration corpus receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = Path(os.environ["EVIDENCE_DIR"])
+          materialized = Path(os.environ["MATERIALIZE_DIR"])
+          summary_path = evidence / "summary.json"
+          summary = json.loads(summary_path.read_text())
+
+          selected = summary["consumer_sample"]["source_sha256"]
+          idml_materialized = 0
+          idml_passed = 0
+          odg_materialized = 0
+          odg_passed = 0
+          failures = []
+
+          for sha in selected:
+              root = materialized / sha
+              idml = root / "output.idml"
+              odg = root / "output.odg"
+              if idml.is_file():
+                  idml_materialized += 1
+                  if (root / "idml.consumer.ok").is_file():
+                      idml_passed += 1
+                  else:
+                      failures.append({"source_sha256": sha, "target": "idml"})
+              if odg.is_file():
+                  odg_materialized += 1
+                  if (root / "odg.consumer.ok").is_file():
+                      odg_passed += 1
+                  else:
+                      failures.append({"source_sha256": sha, "target": "odg"})
+
+          summary["repository_commit_sha"] = os.environ.get("GITHUB_SHA")
+          hard_violations = summary.get("hard_violations") or []
+          summary["consumer_sample"].update({
+              "idml_materialized": idml_materialized,
+              "idml_consumer_opened": idml_passed,
+              "odg_materialized": odg_materialized,
+              "odg_consumer_opened": odg_passed,
+              "consumer_validation_complete": not failures,
+              "consumer_failures": failures,
+          })
+          summary["final_verdict"] = (
+              "pass" if not failures and not hard_violations else "fail"
+          )
+          summary_path.write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+
+          if failures or hard_violations:
+              raise SystemExit(1)
+          PY
+
+      - name: Remove materialized customer-like bytes before evidence upload
+        if: always()
+        run: rm -rf "$MATERIALIZE_DIR"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: migration-1050-editable-route-${{ github.run_id }}
+          path: target/migration-1050-editable-route/
+          if-no-files-found: error
+          retention-days: 90

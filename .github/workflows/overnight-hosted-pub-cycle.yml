@@ -106,6 +106,7 @@ jobs:
             gh workflow run "$workflow" --ref main
           }
           dispatch_once "reader-1050-corpus-baseline.yml"
+          dispatch_once "migration-1050-editable-route-corpus.yml"
           dispatch_once "legacy22-full-corpus-replay.yml"
           dispatch_once "corpus-structural-novelty.yml"
 
