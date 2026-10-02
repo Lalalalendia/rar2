@@ -1,6 +1,13 @@
 name: Reader 1050 hosted frontier
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/reader1050-hosted-frontier.yml"
+      - "tools/research-runner/reader1050_frontier.py"
+      - "tools/research-runner/tests/test_reader1050_frontier.py"
+      - "tools/corpus/cfb_physical.py"
+      - "tools/corpus/cfb_physical_diff.py"
   workflow_run:
     workflows:
       - Reader 1050 corpus baseline
@@ -18,14 +25,35 @@ permissions:
   actions: read
 
 concurrency:
-  group: reader-1050-hosted-frontier-${{ github.event.workflow_run.id || inputs.reader_run_id || github.run_id }}
-  cancel-in-progress: false
+  group: reader-1050-hosted-frontier-${{ github.event.pull_request.number || github.event.workflow_run.id || inputs.reader_run_id || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate bounded frontier selector
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/research-runner/reader1050_frontier.py
+          python -m unittest tools/research-runner/tests/test_reader1050_frontier.py
+
   frontier:
+    needs: validate
     if: >-
       (github.event_name == 'workflow_dispatch') ||
       (
+        github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.head_branch == 'main'
       )
@@ -43,12 +71,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Validate frontier tooling
-        run: |
-          set -euo pipefail
-          python -m py_compile tools/research-runner/reader1050_frontier.py
-          python -m unittest tools/research-runner/tests/test_reader1050_frontier.py
 
       - name: Download exact Reader-1050 receipt
         uses: actions/download-artifact@v4
@@ -85,15 +107,20 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          forbidden = (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",)
+
+          cfb_signature = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
           for path in Path("out/reader1050-frontier").rglob("*"):
               if not path.is_file():
                   continue
               data = path.read_bytes()
-              if any(sig in data for sig in forbidden):
-                  raise SystemExit(f"raw CFB signature leaked into source-free frontier artifact: {path}")
+              if cfb_signature in data:
+                  raise SystemExit(
+                      f"raw CFB signature leaked into source-free frontier artifact: {path}"
+                  )
               if path.suffix.lower() == ".pub":
-                  raise SystemExit(f"PUB bytes leaked into source-free frontier artifact: {path}")
+                  raise SystemExit(
+                      f"PUB bytes leaked into source-free frontier artifact: {path}"
+                  )
           PY
 
       - uses: actions/upload-artifact@v4
