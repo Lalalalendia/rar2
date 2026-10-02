@@ -359,13 +359,35 @@ fn paint_bounded_table_text(
     }
 }
 
-fn shared_resolved_line_job(text: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
-    egui::text::LayoutJob::simple(
-        text.to_owned(),
-        font_id,
-        egui::Color32::BLACK,
-        f32::INFINITY,
-    )
+fn color32(rgb: [u8; 3]) -> egui::Color32 {
+    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
+
+fn source_text_color_for_range(
+    fragment: &RenderTextFragmentV1,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> egui::Color32 {
+    let mut matches = fragment.text_colors.iter().filter(|run| {
+        run.scalar_start <= scalar_start
+            && run.scalar_end >= scalar_end
+            && scalar_start < scalar_end
+    });
+    let Some(run) = matches.next() else {
+        return egui::Color32::BLACK;
+    };
+    if matches.next().is_some() {
+        return egui::Color32::BLACK;
+    }
+    color32(run.rgb)
+}
+
+fn shared_resolved_line_job(
+    text: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+) -> egui::text::LayoutJob {
+    egui::text::LayoutJob::simple(text.to_owned(), font_id, color, f32::INFINITY)
 }
 
 struct SharedResolvedPaintParams<'a> {
@@ -416,12 +438,13 @@ fn paint_shared_resolved_text(
             return None;
         }
 
-        let job = shared_resolved_line_job(&line.text, font_id.clone());
+        let color = source_text_color_for_range(fragment, line.scalar_start, line.scalar_end);
+        let job = shared_resolved_line_job(&line.text, font_id.clone(), color);
         let galley = painter.layout_job(job);
         max_width_px = max_width_px.max(galley.size().x);
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
         let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
-        painter.galley(egui::pos2(x, y), galley, egui::Color32::BLACK);
+        painter.galley(egui::pos2(x, y), galley, color);
     }
 
     let resolved_height_px = lines.len() as f32 * line_height_px;
@@ -474,11 +497,12 @@ fn layout_document_text(
         })
         .unwrap_or_else(|| crate::fallback_font::font_id_for_scene_scale(scene_scale));
     let fallback_job = || {
+        let color = source_text_color_for_range(fragment, fragment.scalar_start, fragment.scalar_end);
         (
             egui::text::LayoutJob::simple(
                 fragment.text.clone(),
                 fallback.clone(),
-                egui::Color32::BLACK,
+                color,
                 wrap_width_px.max(1.0),
             ),
             TextLayoutUsage {
@@ -509,6 +533,7 @@ fn layout_document_text(
                 start - fragment.scalar_start,
                 end - fragment.scalar_start,
                 size,
+                source_text_color_for_range(fragment, start, end),
             ))
         })
         .collect::<Vec<_>>();
@@ -516,7 +541,9 @@ fn layout_document_text(
     if source_sections.is_empty() {
         return fallback_job();
     }
-    source_sections.sort_by_key(|(start, end, size)| (*start, *end, size.to_bits()));
+    source_sections.sort_by_key(|(start, end, size, color)| {
+        (*start, *end, size.to_bits(), color.to_array())
+    });
     if source_sections.windows(2).any(|pair| pair[1].0 < pair[0].1) {
         return fallback_job();
     }
@@ -526,12 +553,17 @@ fn layout_document_text(
     job.wrap.max_width = wrap_width_px.max(1.0);
     let mut cursor = 0_u32;
 
-    for (start, end, size) in source_sections {
+    for (start, end, size, color) in source_sections {
         if cursor < start {
             let Some(text) = scalar_slice(&fragment.text, cursor, start) else {
                 return fallback_job();
             };
-            append_text_section(&mut job, text, fallback.clone());
+            let gap_color = source_text_color_for_range(
+                fragment,
+                fragment.scalar_start + cursor,
+                fragment.scalar_start + start,
+            );
+            append_text_section(&mut job, text, fallback.clone(), gap_color);
         }
         let Some(text) = scalar_slice(&fragment.text, start, end) else {
             return fallback_job();
@@ -540,7 +572,7 @@ fn layout_document_text(
             .filter(|resource_id| !resource_id.is_empty())
             .map(|resource_id| egui::FontFamily::Name(resource_id.into()))
             .unwrap_or_else(crate::fallback_font::family);
-        append_text_section(&mut job, text, egui::FontId::new(size, family));
+        append_text_section(&mut job, text, egui::FontId::new(size, family), color);
         cursor = end;
     }
 
@@ -548,7 +580,12 @@ fn layout_document_text(
         let Some(text) = scalar_slice(&fragment.text, cursor, fragment_scalar_len) else {
             return fallback_job();
         };
-        append_text_section(&mut job, text, fallback.clone());
+        let tail_color = source_text_color_for_range(
+            fragment,
+            fragment.scalar_start + cursor,
+            fragment.scalar_end,
+        );
+        append_text_section(&mut job, text, fallback.clone(), tail_color);
     }
 
     if job.text != fragment.text {
@@ -568,12 +605,13 @@ fn layout_document_text(
     )
 }
 
-fn append_text_section(job: &mut egui::text::LayoutJob, text: &str, font_id: egui::FontId) {
-    job.append(
-        text,
-        0.0,
-        egui::TextFormat::simple(font_id, egui::Color32::BLACK),
-    );
+fn append_text_section(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+) {
+    job.append(text, 0.0, egui::TextFormat::simple(font_id, color));
 }
 
 fn source_text_size_px(text_size_emu: u32, scene_scale: f32) -> Option<f32> {
