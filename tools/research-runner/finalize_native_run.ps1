@@ -11,6 +11,18 @@ function Get-Sha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-RelativePathCompat([string]$Root, [string]$Path) {
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd(
+        [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    )
+    $pathFull = [IO.Path]::GetFullPath($Path)
+    $prefix = $rootFull + [IO.Path]::DirectorySeparatorChar
+    if (-not $pathFull.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Evidence path escaped OutputRoot: $pathFull"
+    }
+    return $pathFull.Substring($prefix.Length).Replace("\", "/")
+}
+
 $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
 $root = (Resolve-Path -LiteralPath $OutputRoot).Path
 
@@ -74,7 +86,7 @@ foreach ($file in $uploadSafeFiles) {
     }
     $text = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop
     foreach ($value in $sensitiveValues) {
-        if ($text.Contains([string]$value, [StringComparison]::OrdinalIgnoreCase)) {
+        if ($text.IndexOf([string]$value, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             throw "Upload-safe evidence contains a local runner/workspace identifier: $($file.Name)"
         }
     }
@@ -82,7 +94,7 @@ foreach ($file in $uploadSafeFiles) {
 
 $records = @()
 foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse | Sort-Object FullName) {
-    $relative = [IO.Path]::GetRelativePath($root, $file.FullName).Replace("\", "/")
+    $relative = Get-RelativePathCompat -Root $root -Path $file.FullName
     if ($relative -eq "evidence-manifest.json") { continue }
     $visibility = if (
         $relative.StartsWith("logs/") -or
