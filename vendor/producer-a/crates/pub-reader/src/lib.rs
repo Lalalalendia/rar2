@@ -4645,10 +4645,7 @@ fn bounded_officeart_image_crop(
     })
 }
 
-fn bounded_quill_text_rgb(
-    value: u32,
-    color_scheme: Option<&MatureColorScheme>,
-) -> Option<[u8; 3]> {
+fn bounded_quill_text_rgb(value: u32, color_scheme: Option<&MatureColorScheme>) -> Option<[u8; 3]> {
     match (value >> 24) as u8 {
         0x00 => {
             let bytes = value.to_le_bytes();
