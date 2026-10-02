@@ -1,0 +1,58 @@
+{
+  "schema": "chaptera.reader-known-evidence-registry.v1",
+  "entries": [
+    {
+      "source_sha256": "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
+      "kind": "format_owner",
+      "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+      "route": "existing_format_owner"
+    },
+    {
+      "source_sha256": "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a",
+      "kind": "format_owner",
+      "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+      "route": "existing_format_owner"
+    },
+    {
+      "source_sha256": "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569",
+      "kind": "format_owner",
+      "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+      "route": "existing_format_owner"
+    },
+    {
+      "source_sha256": "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff",
+      "kind": "format_owner",
+      "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+      "route": "existing_format_owner"
+    },
+    {
+      "source_sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+      "kind": "typed_corruption_evidence",
+      "owner": "CORPUS-LINEAGE-OPNHOUS-GRAPH-01",
+      "route": "existing_typed_corruption_evidence",
+      "corruption_evidence": "publisher97_malformed_or_stale_media_variant",
+      "authority": {
+        "classification": "malformed-or-stale-publisher97-media-variant",
+        "task_ids": [
+          "PUB-T-649",
+          "PUB-T-650"
+        ],
+        "control_sha256": "0c74bed1b862f4603a77567f817ad22bf1f7c42eb5afbee0c907732953534b5c",
+        "github_run_ids": [
+          36071370441,
+          36072949588
+        ],
+        "artifact_ids": [
+          10838512144,
+          10838639727
+        ],
+        "artifact_digests": [
+          "sha256:c34e7c607ff287d5c057332a76d756a676d427d60c5c17b127cae305ac7ce7e8",
+          "sha256:b814c65752ecdbfcbafcfb16b869f000313fdb7327a4a6a6ad9865fb294a4aed"
+        ],
+        "independent_parser": "libmspub-tools 0.1.4-3build7",
+        "evidence_boundary": "source-free"
+      }
+    }
+  ]
+}
