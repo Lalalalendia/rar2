@@ -1959,6 +1959,28 @@ mod tests {
                 "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} resource_id={} sha256={}",
                 projected_configured_layouts, configured_resource_id, scene_font.expected_sha256
             );
+
+            let mut text_color_histogram = BTreeMap::<[u8; 3], usize>::new();
+            for rgb in configured_scene
+                .nodes
+                .iter()
+                .filter_map(|node| node.text_color_rgb)
+            {
+                *text_color_histogram.entry(rgb).or_default() += 1;
+            }
+            assert!(
+                !text_color_histogram.is_empty(),
+                "exact Carlton must expose at least one source-backed uniform text color"
+            );
+            assert!(
+                text_color_histogram.keys().any(|rgb| *rgb != [0, 0, 0]),
+                "exact Carlton must expose at least one non-black source-backed text color"
+            );
+            println!(
+                "CLOUD_READER_TEXT_COLOR_PROBE colored_nodes={} colors={:?}",
+                text_color_histogram.values().sum::<usize>(),
+                text_color_histogram
+            );
         }
 
         let font = shared_text_font_resource();
