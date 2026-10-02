@@ -26,6 +26,7 @@ use crate::{
 pub const EXPORT_CREATE_V1: &str = "chaptera.export-create.v1";
 pub const EXPORT_JOB_HTTP_V1: &str = "chaptera.export-job-http.v1";
 pub const EXPORT_DOWNLOAD_V1: &str = "chaptera.export-download.v1";
+pub const EXPORT_LOSS_DOWNLOAD_V1: &str = "chaptera.export-loss-download.v1";
 const DOWNLOAD_GRANT_TTL_MS: u64 = 5 * 60 * 1000;
 
 #[derive(Clone)]
@@ -61,6 +62,10 @@ pub fn router(state: ProductExportHttpState) -> Router {
         .route("/v1/exports/{job_id}", get(export_status))
         .route("/v1/exports/{job_id}/cancel", post(cancel_export))
         .route("/v1/exports/{job_id}/download", post(authorize_download))
+        .route(
+            "/v1/exports/{job_id}/loss-report/download",
+            post(authorize_loss_report_download),
+        )
         .with_state(state)
 }
 
@@ -79,6 +84,12 @@ struct CreateExportHttpV1 {
 #[serde(deny_unknown_fields)]
 struct DownloadRequestV1 {
     artifact_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LossReportDownloadRequestV1 {
+    loss_report_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -101,6 +112,15 @@ struct ExportDownloadResponseV1 {
     protocol_version: &'static str,
     job_id: String,
     artifact_id: String,
+    download_handle: String,
+    expires_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportLossDownloadResponseV1 {
+    protocol_version: &'static str,
+    job_id: String,
+    loss_report_id: String,
     download_handle: String,
     expires_at_ms: u64,
 }
@@ -259,6 +279,63 @@ async fn authorize_download(
         protocol_version: EXPORT_DOWNLOAD_V1,
         job_id,
         artifact_id: publication.artifact_binding_id,
+        download_handle: grant.opaque_url,
+        expires_at_ms: grant.expires_at_ms,
+    }))
+}
+
+
+async fn authorize_loss_report_download(
+    State(state): State<ProductExportHttpState>,
+    Path(job_id): Path<String>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(request): Json<LossReportDownloadRequestV1>,
+) -> Result<Json<ExportLossDownloadResponseV1>, ProductExportHttpError> {
+    require_ident(&job_id, "job_id")?;
+    require_ident(&request.loss_report_id, "loss_report_id")?;
+    let principal = state
+        .auth
+        .authenticate_mutation_request(&headers, &jar)
+        .await
+        .map_err(ProductExportHttpError::Auth)?;
+    let now = now_ms()?;
+    let publication = state
+        .jobs
+        .authorize_download_by_job_id(
+            &principal.principal_id,
+            &job_id,
+            "export:loss-report-download",
+            now,
+        )
+        .await
+        .map_err(ProductExportHttpError::Jobs)?;
+    if request.loss_report_id != publication.loss_binding_id {
+        return Err(ProductExportHttpError::conflict(
+            "loss_report_identity_mismatch",
+            "requested loss_report_id differs from the visible authorized export publication",
+        ));
+    }
+    let now_u64 = u64::try_from(now)
+        .map_err(|_| ProductExportHttpError::internal("clock_out_of_range", "negative clock"))?;
+    let expires_at_ms = now_u64.checked_add(DOWNLOAD_GRANT_TTL_MS).ok_or_else(|| {
+        ProductExportHttpError::internal("clock_out_of_range", "grant expiry overflow")
+    })?;
+    let grant = state
+        .blobs
+        .issue_download_grant(
+            &publication.tenant_id,
+            &publication.loss_binding_id,
+            now_u64,
+            expires_at_ms,
+        )
+        .await
+        .map_err(ProductExportHttpError::Blob)?;
+
+    Ok(Json(ExportLossDownloadResponseV1 {
+        protocol_version: EXPORT_LOSS_DOWNLOAD_V1,
+        job_id,
+        loss_report_id: publication.loss_binding_id,
         download_handle: grant.opaque_url,
         expires_at_ms: grant.expires_at_ms,
     }))
@@ -446,6 +523,15 @@ impl IntoResponse for ProductExportHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loss_report_download_request_rejects_artifact_authority() {
+        let value = json!({
+            "loss_report_id": "binding:loss",
+            "artifact_id": "binding:artifact"
+        });
+        assert!(serde_json::from_value::<LossReportDownloadRequestV1>(value).is_err());
+    }
 
     #[test]
     fn create_shape_rejects_browser_tenant_and_canonical_revision_authority() {
