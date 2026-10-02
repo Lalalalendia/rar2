@@ -45,7 +45,7 @@ jobs:
             setup_version = (Get-Item out\odt\setup.exe).VersionInfo.FileVersion
           } | ConvertTo-Json | Set-Content -Encoding UTF8 out\odt-receipt.json
 
-      - name: Write exact x64 configuration
+      - name: Write exact x64 Publisher plus Word configuration
         shell: pwsh
         run: |
           $source = "$pwd\out\office"
@@ -64,7 +64,6 @@ jobs:
                 <ExcludeApp ID="Outlook" />
                 <ExcludeApp ID="PowerPoint" />
                 <ExcludeApp ID="Teams" />
-                <ExcludeApp ID="Word" />
               </Product>
             </Add>
             <Updates Enabled="FALSE" />
@@ -73,7 +72,7 @@ jobs:
           </Configuration>
           "@ | Set-Content -Encoding UTF8 out\publisher.xml
 
-      - name: Download exact Publisher-bearing payload
+      - name: Download exact Publisher-bearing payload with Word control
         shell: pwsh
         timeout-minutes: 20
         run: |
@@ -85,7 +84,7 @@ jobs:
             requested_version = $env:PUB_OFFICE_VERSION
             architecture = $env:PUB_OFFICE_ARCH
             channel = "Current"
-            product = "O365ProPlusRetail-minus-non-Publisher-apps"
+            product = "O365ProPlusRetail-Publisher-plus-Word"
             exit_code = $p.ExitCode
             elapsed_seconds = [int]((Get-Date)-$started).TotalSeconds
             file_count = $files.Count
@@ -109,12 +108,12 @@ jobs:
           } | ConvertTo-Json | Set-Content -Encoding UTF8 out\install-receipt.json
           if ($p.ExitCode -ne 0) { throw "ODT configure failed: $($p.ExitCode)" }
 
-      - name: Collect exact Publisher modules
+      - name: Collect Publisher modules and Office controls
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path out\modules | Out-Null
-          $targets = @("MSPUB.EXE","MORPH9.DLL","PTXT9.DLL","PUBCONV.DLL")
+          $targets = @("MSPUB.EXE","MORPH9.DLL","PTXT9.DLL","PUBCONV.DLL","WINWORD.EXE","WWLIB.DLL")
           $roots = @("C:\Program Files\Microsoft Office","C:\Program Files (x86)\Microsoft Office")
           $rows = @()
           foreach ($target in $targets) {
@@ -141,8 +140,10 @@ jobs:
             }
           }
           $rows | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 out\module-receipt.json
-          if (-not ($rows | Where-Object { $_.module -eq "MSPUB.EXE" -and $_.found })) {
-            throw "MSPUB.EXE not found after install"
+          foreach ($required in @("MSPUB.EXE","WINWORD.EXE")) {
+            if (-not ($rows | Where-Object { $_.module -eq $required -and $_.found })) {
+              throw "$required not found after install"
+            }
           }
 
       - name: Probe exact CodeView identities against Microsoft public symbols
@@ -175,7 +176,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: c2r-publisher-symbol-census-x64-${{ matrix.version }}-${{ github.run_id }}
+          name: c2r-publisher-symbol-census-x64-control-${{ matrix.version }}-${{ github.run_id }}
           path: |
             out/odt-receipt.json
             out/download-receipt.json
