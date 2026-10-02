@@ -101,6 +101,72 @@ class Reader1050OfflineDiscriminatorTests(unittest.TestCase):
         )
         return reader, frontier
 
+    def test_forced_trigger_same_witness_wins_before_control_search(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            selected_sha = "0" * 64
+            control_sha = "f" * 64
+            reader, frontier = self.make_inputs(root, selected_sha, control_sha)
+
+            (reader / "fingerprints.json").write_text(
+                json.dumps([fp(selected_sha, "a")]),
+                encoding="utf-8",
+            )
+            (reader / "salvage-acceptance.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "chaptera.reader-salvage-1050-acceptance.v1",
+                        "rows": [
+                            {
+                                "source_sha256": selected_sha,
+                                "outcome": "unsupported",
+                                "reader_route": "mature_0x2c",
+                                "pub_profile": "mature_0x2c_complete",
+                                "salvage_eligibility": "awaiting_typed_corruption_evidence",
+                                "forced_trigger_probe": {
+                                    "eligibility": "eligible_known_publisher_corruption",
+                                    "cfb_inventory_available": True,
+                                    "contents_family": "0x2c",
+                                    "has_surviving_evidence": True,
+                                    "subsystems": {
+                                        "contents": "readable",
+                                        "quill": "readable",
+                                        "escher": "readable",
+                                        "escher_delay": "absent",
+                                    },
+                                    "source_modified": False,
+                                },
+                                "forced_partial_graph": {
+                                    "status": "constructed",
+                                    "fact_counts": {"text_range": 2},
+                                    "gap_count": 2,
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = discriminator.build_discriminator(
+                reader,
+                frontier,
+                root / "out",
+                None,
+            )
+            self.assertEqual(
+                payload["verdict"],
+                "salvage_path_reachable_if_typed_corruption_were_proven",
+            )
+            self.assertEqual(payload["control_relation"], "same_witness_forced_trigger")
+            self.assertIsNone(payload["control_sha256"])
+            self.assertEqual(
+                payload["next_discriminator"]["kind"],
+                "typed_corruption_evidence_discovery",
+            )
+            self.assertIn("pub_cfb_inventory_failure", payload["closed_hypotheses"])
+            self.assertIn("partial_source_graph_unbuildable", payload["closed_hypotheses"])
+
     def test_identical_logical_streams_runs_physical_pair_discriminator(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
