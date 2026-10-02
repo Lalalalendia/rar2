@@ -196,6 +196,7 @@ jobs:
                       failures.append({"source_sha256": sha, "target": "odg"})
 
           summary["repository_commit_sha"] = os.environ.get("GITHUB_SHA")
+          hard_violations = summary.get("hard_violations") or []
           summary["consumer_sample"].update({
               "idml_materialized": idml_materialized,
               "idml_consumer_opened": idml_passed,
@@ -204,13 +205,16 @@ jobs:
               "consumer_validation_complete": not failures,
               "consumer_failures": failures,
           })
+          summary["final_verdict"] = (
+              "pass" if not failures and not hard_violations else "fail"
+          )
           summary_path.write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
           print(json.dumps(summary, indent=2, sort_keys=True))
 
-          if failures:
+          if failures or hard_violations:
               raise SystemExit(1)
           PY
 
