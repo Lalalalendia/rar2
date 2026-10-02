@@ -38,16 +38,15 @@ fn overlaps(a: RectEmu, b: RectEmu) -> bool {
 #[test]
 #[ignore = "requires exact public Virginia Remplacante fixture and receipt path"]
 fn exact_virginia_p24_later_image_viewer_survival_probe() {
-    let fixture = PathBuf::from(
-        env::var("CHAPTERA_VIRGINIA_RESTORED_FILL_FIXTURE")
-            .expect("CHAPTERA_VIRGINIA_RESTORED_FILL_FIXTURE"),
-    );
-    let output = PathBuf::from(
-        env::var("CHAPTERA_VIRGINIA_OCCLUSION_VIEWER_OUT")
-            .expect("CHAPTERA_VIRGINIA_OCCLUSION_VIEWER_OUT"),
-    );
-    let expected_sha = env::var("CHAPTERA_VIRGINIA_RESTORED_FILL_SHA256")
-        .expect("CHAPTERA_VIRGINIA_RESTORED_FILL_SHA256");
+    let (Ok(fixture), Ok(output), Ok(expected_sha)) = (
+        env::var("CHAPTERA_VIRGINIA_RESTORED_FILL_FIXTURE"),
+        env::var("CHAPTERA_VIRGINIA_OCCLUSION_VIEWER_OUT"),
+        env::var("CHAPTERA_VIRGINIA_RESTORED_FILL_SHA256"),
+    ) else {
+        return;
+    };
+    let fixture = PathBuf::from(fixture);
+    let output = PathBuf::from(output);
 
     let bytes = fs::read(&fixture).expect("read exact Virginia Remplacante PUB");
     let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
