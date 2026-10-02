@@ -1,14 +1,14 @@
 use std::{env, fs, path::PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_escher::{
-    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
-    PublisherFieldRecord,
+    PublisherFieldRecord, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
+    PUBLISHER_FIELD_YS,
 };
 use pub_model::{NodeId, PageId, RectEmu, Sha256Digest};
 use pub_reader::{
-    PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseManifest,
-    build_mature_0x2c_structural_base_manifest,
+    build_mature_0x2c_structural_base_manifest, PubStructuralBaseManifest,
+    PUB_STRUCTURAL_BASE_SCHEMA_V1,
 };
 use serde::Serialize;
 
@@ -98,8 +98,14 @@ fn select_target(manifest: &PubStructuralBaseManifest) -> Result<SelectedTarget>
 
 fn main() -> Result<()> {
     let mut args = env::args_os().skip(1);
-    let input = PathBuf::from(args.next().context("usage: structural_base_manifest <input.pub> <output.json>")?);
-    let output = PathBuf::from(args.next().context("usage: structural_base_manifest <input.pub> <output.json>")?);
+    let input = PathBuf::from(
+        args.next()
+            .context("usage: structural_base_manifest <input.pub> <output.json>")?,
+    );
+    let output = PathBuf::from(
+        args.next()
+            .context("usage: structural_base_manifest <input.pub> <output.json>")?,
+    );
     if args.next().is_some() {
         bail!("usage: structural_base_manifest <input.pub> <output.json>");
     }
