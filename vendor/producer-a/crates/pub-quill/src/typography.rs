@@ -48,6 +48,8 @@ pub struct QuillTypographyCatalog {
     pub text_color_references: Vec<QuillTextColorReference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_color_runs: Vec<QuillTextColorRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_color_unavailable_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_block_types_assumed_zero_length: Vec<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -419,7 +421,11 @@ pub fn parse_bounded_typography(
         .collect::<Vec<_>>();
 
     let font_names = parse_font_catalog(bytes, &descriptors)?;
-    let text_color_references = parse_text_color_catalog(bytes, story_catalog, &descriptors)?;
+    let (text_color_references, text_color_unavailable_reason) =
+        match parse_text_color_catalog(bytes, story_catalog, &descriptors) {
+            Ok(references) => (references, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
     let mut unknown_block_types = BTreeSet::new();
     let styles = parse_fdpc_styles(
         bytes,
@@ -661,6 +667,7 @@ pub fn parse_bounded_typography(
         paragraph_alignments,
         text_color_references,
         text_color_runs,
+        text_color_unavailable_reason,
         unknown_block_types_assumed_zero_length: unknown_block_types.into_iter().collect(),
         inheritance_unknown_block_types_assumed_zero_length: inheritance_unknown_block_types
             .into_iter()
