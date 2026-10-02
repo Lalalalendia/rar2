@@ -611,7 +611,6 @@ fn populate_native_autoformat_table_cell_fill(
     admitted
 }
 
-
 fn unique_anchor_scalar_or_zero(
     anchor: &pub_escher::PublisherFieldRecord,
     field_id: u16,
@@ -700,8 +699,8 @@ fn decode_native_table_border_segment(
     // carrier's fillColor 0x0181, and Border.Weight mutates lineWidth 0x01CB.
     // Keep the product surface bounded to unique, scalar, direct RGB + positive
     // EMU width. Scheme/system colors and ambiguous properties fail closed.
-    let color_rgb =
-        unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR).and_then(direct_officeart_rgb)?;
+    let color_rgb = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
+        .and_then(direct_officeart_rgb)?;
     let width_emu = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)?;
     if width_emu == 0 {
         return None;
