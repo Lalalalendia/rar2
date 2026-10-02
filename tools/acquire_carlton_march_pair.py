@@ -107,7 +107,7 @@ def discover_api_context(
 
 def hydration_file(
     raw: str, public_name: str
-) -> tuple[str, str, int, str | None]:
+) -> tuple[str, str, int, list[str]]:
     needle = '"name":"' + public_name + '"'
     index = raw.find(needle)
     if index < 0:
@@ -133,19 +133,34 @@ def hydration_file(
         raise RuntimeError(f"{public_name}: declared size missing")
     declared_size = int(size_match.group(1))
 
-    origin_match = re.search(
-        r'"url":\{"origin":"((?:\\.|[^"\\])*)"',
-        window,
-        flags=re.S,
-    )
-    hydrated_origin = (
-        json.loads('"' + origin_match.group(1) + '"') if origin_match else None
-    )
-    return resource_id, file_id, declared_size, hydrated_origin
+    hydration_urls = []
+    for match in re.finditer(r'"((?:https://)(?:\\.|[^"\\])*)"', window):
+        try:
+            candidate = json.loads('"' + match.group(1) + '"')
+        except json.JSONDecodeError:
+            continue
+        parsed = requests.utils.urlparse(candidate)
+        host = (parsed.hostname or "").lower()
+        if not host:
+            continue
+        if file_id not in candidate and public_name not in candidate and requests.utils.quote(public_name) not in candidate:
+            continue
+        if not (
+            host.endswith(".schooljotter3.com")
+            or host == "schooljotter3.com"
+            or host.endswith(".amazonaws.com")
+            or host == "amazonaws.com"
+            or host.endswith(".cloudfront.net")
+            or host == "cloudfront.net"
+        ):
+            continue
+        hydration_urls.append(candidate)
+
+    return resource_id, file_id, declared_size, list(dict.fromkeys(hydration_urls))
 
 
 def stable_candidates(
-    public_name: str, file_id: str, hydrated_origin: str | None
+    public_name: str, file_id: str, hydration_urls: list[str]
 ) -> list[str]:
     suffix = Path(public_name).suffix
     values = [
@@ -155,19 +170,13 @@ def stable_candidates(
         f"https://docs-cdn.schooljotter3.com/{TENANT_ID}/{file_id}/"
         + requests.utils.quote(public_name),
     ]
-    if hydrated_origin:
-        values.append(hydrated_origin)
-    return values
+    values = hydration_urls + values
+    return list(dict.fromkeys(values))
 
 
 def find_exact_file(node, file_id: str, public_name: str):
     if isinstance(node, dict):
-        if (
-            node.get("id") == file_id
-            and node.get("name") == public_name
-            and isinstance(node.get("url"), dict)
-            and isinstance(node["url"].get("origin"), str)
-        ):
+        if node.get("id") == file_id and node.get("name") == public_name:
             return node
         for value in node.values():
             found = find_exact_file(value, file_id, public_name)
@@ -181,6 +190,39 @@ def find_exact_file(node, file_id: str, public_name: str):
     return None
 
 
+
+def exact_file_urls(node, file_id: str, public_name: str) -> list[str]:
+    urls = []
+
+    def visit(value):
+        if isinstance(value, str):
+            if not value.startswith("https://"):
+                return
+            parsed = requests.utils.urlparse(value)
+            host = (parsed.hostname or "").lower()
+            if file_id not in value and public_name not in value and requests.utils.quote(public_name) not in value:
+                return
+            if (
+                host.endswith(".schooljotter3.com")
+                or host == "schooljotter3.com"
+                or host.endswith(".amazonaws.com")
+                or host == "amazonaws.com"
+                or host.endswith(".cloudfront.net")
+                or host == "cloudfront.net"
+            ):
+                urls.append(value)
+            return
+        if isinstance(value, dict):
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(node)
+    return list(dict.fromkeys(urls))
+
+
 def acquire_one(
     session: requests.Session,
     raw: str,
@@ -190,7 +232,7 @@ def acquire_one(
     api_base: str | None,
     tenant_id: str,
 ) -> dict:
-    resource_id, file_id, declared_size, hydrated_origin = hydration_file(
+    resource_id, file_id, declared_size, hydration_urls = hydration_file(
         raw, public_name
     )
     if file_id != spec["file_id"]:
@@ -203,7 +245,7 @@ def acquire_one(
         )
 
     api_status = None
-    refreshed_origin = None
+    refreshed_urls = []
     if api_base is not None:
         resource_url = f"{api_base}/resources/{resource_id}"
         api_response = session.get(
@@ -225,12 +267,13 @@ def acquire_one(
                         f"{public_name}: refreshed size drift "
                         f"{refreshed.get('size')} != {spec['size']}"
                     )
-                refreshed_origin = refreshed["url"]["origin"]
+                refreshed_urls = exact_file_urls(
+                    refreshed, file_id=file_id, public_name=public_name
+                )
 
-    candidates = []
-    if refreshed_origin:
-        candidates.append(refreshed_origin)
-    candidates.extend(stable_candidates(public_name, file_id, hydrated_origin))
+    candidates = list(refreshed_urls)
+    candidates.extend(stable_candidates(public_name, file_id, hydration_urls))
+    candidates = list(dict.fromkeys(candidates))
 
     target = output_dir / spec["artifact_name"]
     for candidate in candidates:
@@ -244,6 +287,12 @@ def acquire_one(
                 stream=True,
                 allow_redirects=True,
             ) as download:
+                source_host = requests.utils.urlparse(candidate).hostname
+                final_host = requests.utils.urlparse(download.url).hostname
+                print(
+                    f"CANDIDATE {public_name}: host={source_host} "
+                    f"status={download.status_code} final_host={final_host}"
+                )
                 if download.status_code != 200:
                     continue
                 with target.open("wb") as out:
@@ -257,11 +306,21 @@ def acquire_one(
                             )
                         digest.update(chunk)
                         out.write(chunk)
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            host = requests.utils.urlparse(candidate).hostname
+            print(
+                f"CANDIDATE {public_name}: host={host} "
+                f"error={type(exc).__name__}"
+            )
             target.unlink(missing_ok=True)
             continue
 
         if size != spec["size"]:
+            print(
+                f"CANDIDATE {public_name}: host="
+                f"{requests.utils.urlparse(candidate).hostname} "
+                f"size_mismatch={size}"
+            )
             target.unlink(missing_ok=True)
             continue
         sha256 = digest.hexdigest()
@@ -276,7 +335,7 @@ def acquire_one(
             "resource_id": resource_id,
             "file_id": file_id,
             "resource_api_status": api_status,
-            "resource_api_refreshed_origin": refreshed_origin is not None,
+            "resource_api_refreshed_origin": bool(refreshed_urls),
             "size": size,
             "sha256": sha256,
             "source_host": requests.utils.urlparse(candidate).hostname,
