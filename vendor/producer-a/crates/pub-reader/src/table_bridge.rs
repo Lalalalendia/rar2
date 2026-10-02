@@ -1009,8 +1009,11 @@ pub(crate) fn build_table_source(
     let simple_table = build_simple_table(rows, columns, &joined_cells);
     if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
-        let _ =
-            populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
+        let _ = populate_native_autoformat_table_cell_fill(
+            context,
+            table_seq_num,
+            &mut joined_cells,
+        );
     }
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
