@@ -381,10 +381,7 @@
       ],
       "properties": {
         "format": {
-          "enum": [
-            "idml",
-            "odg"
-          ]
+          "const": "odg"
         },
         "sha256": {
           "$ref": "#/$defs/sha256"
