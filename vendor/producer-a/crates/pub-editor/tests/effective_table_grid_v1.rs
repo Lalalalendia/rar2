@@ -68,7 +68,7 @@ fn graph() -> PubResolvedGraph {
                 utf16_start: 0,
                 utf16_end: 1,
                 bounds: None,
-                source_refs: Vec::new(),
+
             },
             PubTableCellSource {
                 id: cell1,
@@ -82,7 +82,7 @@ fn graph() -> PubResolvedGraph {
                 utf16_start: 1,
                 utf16_end: 4,
                 bounds: None,
-                source_refs: Vec::new(),
+
             },
         ],
         simple_table: Some(simple),
@@ -92,6 +92,7 @@ fn graph() -> PubResolvedGraph {
             row_pitch: LengthEmu::new(500),
             source_refs: Vec::new(),
         }),
+        border_segments: Vec::new(),
         source_refs: Vec::new(),
     };
 
@@ -149,6 +150,7 @@ fn graph() -> PubResolvedGraph {
                     image_slot: None,
                     legacy_ole: None,
                     explicit_image_crop: None,
+                    explicit_image_recolor: None,
                     explicit_paint: PubExplicitShapePaintSource::default(),
                     effective_paint: None,
                     story_frame: None,
