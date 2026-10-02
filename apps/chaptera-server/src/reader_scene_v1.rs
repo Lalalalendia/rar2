@@ -71,6 +71,8 @@ pub struct ReaderNodeV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_source_window: Option<ReaderImageSourceWindowV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_recolor: Option<ReaderImageRecolorV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<ReaderTableV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -203,6 +205,12 @@ pub struct ReaderImageSourceWindowV1 {
     pub top_q16: i64,
     pub right_q16: i64,
     pub bottom_q16: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReaderImageRecolorV1 {
+    pub target_rgb: [u8; 3],
+    pub preserve_grays: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -489,6 +497,7 @@ pub fn from_viewer_geometry_with_fonts(
 
     let mut resource_by_node = HashMap::new();
     let mut source_window_by_node = HashMap::new();
+    let mut recolor_by_node = HashMap::new();
     let mut resources = Vec::with_capacity(geometry.images.len());
     let mut resource_ids = HashSet::new();
     for image in &geometry.images {
@@ -508,20 +517,28 @@ pub fn from_viewer_geometry_with_fonts(
             if !node_ids.contains(&node_id) {
                 return Err(format!("image placement references unknown node {node_id}"));
             }
-            let Some(window) = placement.source_window.as_ref() else {
-                continue;
-            };
-            let mapped = ReaderImageSourceWindowV1 {
-                left_q16: window.left_q16,
-                top_q16: window.top_q16,
-                right_q16: window.right_q16,
-                bottom_q16: window.bottom_q16,
-            };
-            if source_window_by_node
-                .insert(node_id.clone(), mapped)
-                .is_some()
-            {
-                return Err(format!("duplicate image placement for node {node_id}"));
+            if let Some(window) = placement.source_window.as_ref() {
+                let mapped = ReaderImageSourceWindowV1 {
+                    left_q16: window.left_q16,
+                    top_q16: window.top_q16,
+                    right_q16: window.right_q16,
+                    bottom_q16: window.bottom_q16,
+                };
+                if source_window_by_node
+                    .insert(node_id.clone(), mapped)
+                    .is_some()
+                {
+                    return Err(format!("duplicate image source window for node {node_id}"));
+                }
+            }
+            if let Some(recolor) = placement.recolor.as_ref() {
+                let mapped = ReaderImageRecolorV1 {
+                    target_rgb: recolor.target_rgb,
+                    preserve_grays: recolor.preserve_grays,
+                };
+                if recolor_by_node.insert(node_id.clone(), mapped).is_some() {
+                    return Err(format!("duplicate image recolor for node {node_id}"));
+                }
             }
         }
 
@@ -824,6 +841,7 @@ pub fn from_viewer_geometry_with_fonts(
                         paint,
                         resource_id,
                         image_source_window,
+                        image_recolor: None,
                         table: None,
                         text: node.text.as_ref().map(|text| text.text.clone()),
                         text_layout: mapped_layout,
@@ -891,6 +909,7 @@ pub fn from_viewer_geometry_with_fonts(
             paint: paint_by_node.remove(&node_id),
             resource_id: resource_by_node.remove(&node_id),
             image_source_window: source_window_by_node.remove(&node_id),
+            image_recolor: recolor_by_node.remove(&node_id),
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
             text_layout: text_layout_by_node.remove(&node_id),
@@ -2194,6 +2213,7 @@ mod tests {
             paint: None,
             resource_id: None,
             image_source_window: None,
+            image_recolor: None,
             table: None,
             text: None,
             text_layout: None,
