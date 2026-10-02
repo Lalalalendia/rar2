@@ -79,7 +79,7 @@ function Resolve-ExactFixture {
 }
 
 $fixturePath = Resolve-ExactFixture
-$fixtureHash = (Get-FileHash -LiteralPath $env:PUB_RESEARCH_FIXTURE -Algorithm SHA256).Hash.ToLowerInvariant()
+$fixtureHash = (Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../../..")).Path
 Import-Module (Join-Path $repoRoot "tools/windows/pub-runtime/PubRuntime.psm1") -Force
