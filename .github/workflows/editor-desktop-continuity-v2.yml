@@ -6,6 +6,10 @@ on:
       - ".github/workflows/editor-desktop-continuity-v2.yml"
       - "packages/product/editor-desktop-continuity/v2/**"
       - "tools/validate_editor_desktop_continuity_v2_receipt.py"
+      - "tools/run_editor_desktop_continuity_v2.py"
+      - "apps/chaptera-desktop/src/acceptance.rs"
+      - "apps/chaptera-desktop/src/acceptance_v2.rs"
+      - "apps/chaptera-desktop/src/main.rs"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +32,9 @@ jobs:
       - name: Compile and self-test V2 receipt validator
         run: |
           set -euo pipefail
-          python -m py_compile tools/validate_editor_desktop_continuity_v2_receipt.py
+          python -m py_compile \
+            tools/validate_editor_desktop_continuity_v2_receipt.py \
+            tools/run_editor_desktop_continuity_v2.py
           python tools/validate_editor_desktop_continuity_v2_receipt.py --self-test
 
       - name: Check current desktop V2 producer
