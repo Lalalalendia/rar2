@@ -299,7 +299,7 @@ def main():
         "open_state_counts": {
             "admitted": len(admitted),
             "not_admitted": len(not_admitted),
-            "other": len(rows) - len(admitted) - len(not_admitted) - len(hard),
+            "other": len(rows) - len(admitted) - len(not_admitted),
         },
         "idml_state_counts": state_counts(rows, "idml"),
         "odg_state_counts": state_counts(rows, "odg"),
