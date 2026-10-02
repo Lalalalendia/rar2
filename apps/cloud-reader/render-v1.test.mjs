@@ -259,6 +259,39 @@ test("shared resolved text paint plan preserves server line breaks", () => {
   );
 });
 
+test("shared resolved text paint plan carries source line and span colors", () => {
+  const plan = resolvedTextLinePaintPlan({
+    bounds: { x: 0, y: 0, width: 1000, height: 600 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 120,
+      line_height_emu: 150,
+      lines: [{
+        line_index: 0,
+        scalar_start: 0,
+        scalar_end: 6,
+        text: "yellow",
+        rgb: [255, 204, 0],
+        measured_width_emu: 300,
+        line_height_emu: 150,
+        spans: [{
+          scalar_start: 0,
+          scalar_end: 6,
+          text: "yellow",
+          x_offset_emu: 0,
+          measured_width_emu: 300,
+          font_size_emu: 120,
+          rgb: [255, 204, 0]
+        }]
+      }]
+    }
+  });
+
+  assert.equal(plan.lines[0].fill, "rgb(255 204 0)");
+  assert.equal(plan.lines[0].spans[0].fill, "rgb(255 204 0)");
+});
+
 test("shared resolved text paint plan applies server vertical block offset", () => {
   const plan = resolvedTextLinePaintPlan({
     bounds: { x: 100, y: 200, width: 1000, height: 600 },
