@@ -1770,9 +1770,7 @@ fn session_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<GuestReaderSession,
         )?,
         classification: row.try_get("classification").map_err(sqlite_error)?,
         scene_json: row.try_get("scene_json").map_err(sqlite_error)?,
-        editable_routes_json: row
-            .try_get("editable_routes_json")
-            .map_err(sqlite_error)?,
+        editable_routes_json: row.try_get("editable_routes_json").map_err(sqlite_error)?,
         terminal_code: row.try_get("terminal_code").map_err(sqlite_error)?,
         failure_classification_json: row
             .try_get("failure_classification_json")
@@ -1834,9 +1832,10 @@ fn stored_editable_routes(
     match session.classification.as_deref() {
         Some("supported") | Some("partial") => {
             if let Some(routes) = routes.as_ref() {
-                let source_sha256 = session.source_sha256.as_deref().ok_or_else(|| {
-                    GuestReaderError::internal("guest_source_identity_missing")
-                })?;
+                let source_sha256 = session
+                    .source_sha256
+                    .as_deref()
+                    .ok_or_else(|| GuestReaderError::internal("guest_source_identity_missing"))?;
                 routes
                     .validate_for_source(source_sha256)
                     .map_err(|_| GuestReaderError::internal("guest_editable_routes_invalid"))?;
@@ -2328,8 +2327,7 @@ mod tests {
         let scene_json = serde_json::to_vec(&scene).unwrap();
         let routes = ReaderEditableRoutesAssessmentV1 {
             protocol_version:
-                crate::reader_compatibility_report::READER_EDITABLE_ROUTES_ASSESSMENT_V1
-                    .to_owned(),
+                crate::reader_compatibility_report::READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
             source_sha256: "a".repeat(64),
             idml: crate::reader_compatibility_report::ReaderEditableTargetAssessmentV1 {
                 state: "available_with_declared_losses".to_owned(),
