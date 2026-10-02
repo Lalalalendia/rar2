@@ -186,7 +186,7 @@ fn exact_virginia_direct_image_rotation_applicability_probe() {
     }
 
     let mut pages = Vec::new();
-    for (page_index, page_id) in build.graph.document.pages.iter().copied().enumerate() {
+    for (page_index, page_id) in build.effective_pages.page_ids.iter().copied().enumerate() {
         let page_canonical = page_id.into_canonical();
         let mut receipt = PageReceipt {
             viewer_page: page_index + 1,
