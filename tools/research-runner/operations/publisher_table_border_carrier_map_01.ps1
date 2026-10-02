@@ -256,7 +256,7 @@ function Invoke-SideArm {
     $armDir = Join-Path $privateDir $Side
     New-Item -ItemType Directory -Force -Path $armDir | Out-Null
     $working = Join-Path $armDir "working.pub"
-    $output = Join-Path $armDir "output.pub"
+    $output = $working
     Copy-Item -LiteralPath $AllEnabledPath -Destination $working -Force
 
     $app = $null
@@ -283,7 +283,7 @@ function Invoke-SideArm {
         Write-Progress -Stage "side-border-read-before" -Side $Side
         Set-BorderRgb -Table $table -Side $Side -Rgb $MutationRgb
         Write-Progress -Stage "side-border-mutated" -Side $Side
-        $doc.SaveAs($output, $PbFilePublication, $false)
+        $doc.Save()
         Write-Progress -Stage "side-save-complete" -Side $Side
     }
     finally {
