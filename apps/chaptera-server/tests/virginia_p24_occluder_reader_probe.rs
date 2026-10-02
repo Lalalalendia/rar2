@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
-use chaptera_server::reader_scene_v1::from_viewer_geometry;
 use chaptera_cdm_model::RectEmu;
+use chaptera_server::reader_scene_v1::from_viewer_geometry;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
