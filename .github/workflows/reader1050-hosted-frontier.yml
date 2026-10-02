@@ -11,6 +11,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/data/reader_known_evidence_registry.v1.json"
       - "tools/research-runner/tests/test_reader1050_frontier.py"
       - "tools/research-runner/tests/test_reader1050_offline_discriminator.py"
+      - "tools/research-runner/tests/test_reader1050_knowledge.py"
       - "tools/corpus/cfb_physical.py"
       - "tools/corpus/cfb_physical_diff.py"
   workflow_run:
@@ -60,7 +61,8 @@ jobs:
           python tools/research-runner/reader1050_knowledge.py
           python -m unittest \
             tools/research-runner/tests/test_reader1050_frontier.py \
-            tools/research-runner/tests/test_reader1050_offline_discriminator.py
+            tools/research-runner/tests/test_reader1050_offline_discriminator.py \
+            tools/research-runner/tests/test_reader1050_knowledge.py
 
   frontier:
     needs: validate
