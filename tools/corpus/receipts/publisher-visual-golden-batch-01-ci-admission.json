@@ -1,0 +1,22 @@
+{
+  "schema": "chaptera.publisher-visual-golden-ci-admission.v1",
+  "batch_id": "publisher-pdf-golden-batch-01",
+  "selected_pair_count": 55,
+  "admitted_pair_count": 53,
+  "admitted_reference_page_count": 150,
+  "excluded": [
+    {
+      "oracle_id": "batch01-024",
+      "reason": "publisher-export-external-dependency-warning"
+    },
+    {
+      "oracle_id": "batch01-025",
+      "reason": "publisher-export-external-dependency-warning"
+    }
+  ],
+  "claims": {
+    "exclusion_is_reference_admission_only": true,
+    "source_pub_not_declared_invalid": true,
+    "pdf_not_semantic_authority": true
+  }
+}
