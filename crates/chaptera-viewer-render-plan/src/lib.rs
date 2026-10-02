@@ -2414,6 +2414,69 @@ mod tests {
     }
 
     #[test]
+    fn mixed_family_admission_binds_exact_resource_per_typography_run() {
+        let story_id = fixture().document.stories[0].id;
+        let fragment = render_fragment(
+            story_id,
+            "ABCD",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Elephant".to_owned(),
+                    text_size_emu: 304_800,
+                    font_inherited: false,
+                    size_inherited: false,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Times New Roman".to_owned(),
+                    text_size_emu: 228_600,
+                    font_inherited: false,
+                    size_inherited: false,
+                },
+            ],
+        );
+        let elephant_bytes: &[u8] = b"source-free-elephant-test-font";
+        let times_bytes: &[u8] = b"source-free-times-test-font";
+        let elephant_sha = font_fingerprint_sha256(elephant_bytes);
+        let times_sha = font_fingerprint_sha256(times_bytes);
+
+        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| {
+            match run.source_font_name.as_str() {
+                "Elephant" => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "font-elephant",
+                    expected_sha256: &elephant_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: elephant_bytes,
+                }),
+                "Times New Roman" => Some(ExplicitRenderTextFontResourceV1 {
+                    resource_id: "font-times",
+                    expected_sha256: &times_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 190_500,
+                    bytes: times_bytes,
+                }),
+                _ => None,
+            }
+        };
+
+        let runs = admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver)
+            .expect("complete mixed-family runs must be admitted");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].scalar_start..runs[0].scalar_end, 0..2);
+        assert_eq!(runs[0].font.resource_id, "font-elephant");
+        assert_eq!(runs[0].font_fingerprint_sha256, elephant_sha);
+        assert_eq!(runs[1].scalar_start..runs[1].scalar_end, 2..4);
+        assert_eq!(runs[1].font.resource_id, "font-times");
+        assert_eq!(runs[1].font_fingerprint_sha256, times_sha);
+    }
+
+    #[test]
     fn plan_collects_document_paint_facts_without_backend_state() {
         let visual = fixture();
         let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
