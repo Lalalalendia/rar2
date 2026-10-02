@@ -316,3 +316,221 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
     observations.sort_by_key(|observation| observation.contents_seq_num);
     Ok(observations)
 }
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PubTableOfficeArtOwnerJoinClass {
+    Missing,
+    Unique,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PubTableDefaultStyleObservation {
+    pub contents_seq_num: u32,
+    pub table_field_presence: BTreeSet<String>,
+    pub table_tail_field_presence: BTreeSet<String>,
+    pub officeart_owner_join_class: PubTableOfficeArtOwnerJoinClass,
+    pub owner_fopt_property_presence: BTreeSet<String>,
+    pub owner_paint_family_property_presence: BTreeSet<String>,
+}
+
+fn contents_presence_key(id: u16, wire_type: u8) -> String {
+    format!("0x{id:03x}/wire_0x{wire_type:02x}")
+}
+
+fn table_default_style_known_field(id: u16) -> bool {
+    matches!(
+        id,
+        FIELD_STORY_ID
+            | table_bridge::TABLE_NUM_ROWS_ID
+            | table_bridge::TABLE_NUM_COLUMNS_ID
+            | table_bridge::TABLE_WIDTH_ID
+            | table_bridge::TABLE_HEIGHT_ID
+            | table_bridge::TABLE_CELLS_SEQ_NUM_ID
+            | table_bridge::TABLE_ROWCOL_ARRAY_ID
+    )
+}
+
+fn scan_table_tail_field_presence(
+    contents: &[u8],
+    chunk: &Contents0x2cChunk,
+) -> Result<BTreeSet<String>> {
+    let Some(tail) = chunk.unsupported_tail.as_ref() else {
+        return Ok(BTreeSet::new());
+    };
+
+    let start = usize::try_from(tail.offset).context("TABLE tail offset does not fit usize")?;
+    let len = usize::try_from(tail.len).context("TABLE tail length does not fit usize")?;
+    let end = start
+        .checked_add(len)
+        .filter(|end| *end <= contents.len())
+        .context("TABLE tail is outside Contents stream")?;
+
+    let mut position = start;
+    let mut presence = BTreeSet::new();
+    while position < end {
+        if end - position < 2 {
+            anyhow::bail!("truncated TABLE tail field tag at {position}");
+        }
+        let raw_tag = [contents[position], contents[position + 1]];
+        let (id, wire_type) = pub_contents::decode_packed_field_tag(raw_tag);
+        position += 2;
+
+        if !table_default_style_known_field(id) {
+            presence.insert(contents_presence_key(id, wire_type));
+        }
+
+        match wire_type {
+            0x00 | 0x08 | 0x78 => {}
+            0x10 | 0x18 => {
+                position = position
+                    .checked_add(2)
+                    .filter(|next| *next <= end)
+                    .context("TABLE tail u16 exceeds bounded tail")?;
+            }
+            0x20 | 0x58 | 0x68 | 0x70 | 0xB8 => {
+                position = position
+                    .checked_add(4)
+                    .filter(|next| *next <= end)
+                    .context("TABLE tail u32 exceeds bounded tail")?;
+            }
+            0x28 => {
+                position = position
+                    .checked_add(8)
+                    .filter(|next| *next <= end)
+                    .context("TABLE tail fixed8 exceeds bounded tail")?;
+            }
+            0x38 => {
+                position = position
+                    .checked_add(16)
+                    .filter(|next| *next <= end)
+                    .context("TABLE tail fixed16 exceeds bounded tail")?;
+            }
+            0x48 => {
+                position = position
+                    .checked_add(24)
+                    .filter(|next| *next <= end)
+                    .context("TABLE tail fixed24 exceeds bounded tail")?;
+            }
+            0x80 | 0x88 | 0x90 | 0x98 | 0xA0 | 0xC0 => {
+                if end - position < 4 {
+                    anyhow::bail!("truncated TABLE tail variable length at {position}");
+                }
+                let declared_length = u32::from_le_bytes([
+                    contents[position],
+                    contents[position + 1],
+                    contents[position + 2],
+                    contents[position + 3],
+                ]);
+                if declared_length < 4 {
+                    anyhow::bail!("invalid TABLE tail variable length {declared_length}");
+                }
+                let declared_length =
+                    usize::try_from(declared_length).context("TABLE tail length does not fit usize")?;
+                position = position
+                    .checked_add(declared_length)
+                    .filter(|next| *next <= end)
+                    .context("TABLE tail variable field exceeds bounded tail")?;
+            }
+            other => anyhow::bail!(
+                "unsupported TABLE tail wire type 0x{other:02x} for field 0x{id:03x}"
+            ),
+        }
+    }
+
+    Ok(presence)
+}
+
+/// Research-only TABLE-level/default-style presence census.
+///
+/// This reports only field/property identifiers and wire types. It deliberately
+/// emits no scalar/reference values and does not assign table-style, grid,
+/// border, fill, color, or width semantics.
+pub fn analyze_mature_0x2c_table_default_style_fields<R: Read + Seek>(
+    mut reader: R,
+    source_hash: Sha256Digest,
+) -> Result<Vec<PubTableDefaultStyleObservation>> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut pub_bytes = Vec::new();
+    reader.read_to_end(&mut pub_bytes)?;
+
+    let build = build_mature_0x2c_source_graph(Cursor::new(pub_bytes.as_slice()), source_hash)
+        .context("build mature source graph for TABLE default-style observation")?;
+
+    let contents =
+        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
+            .with_context(|| format!("read {CONTENTS_STREAM_PATH} for TABLE default-style observation"))?;
+    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
+    let header = parse_0x2c_header(contents_stream.clone(), &contents)
+        .context("parse Contents header for TABLE default-style observation")?;
+    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
+        .context("parse Contents trailer for TABLE default-style observation")?;
+    let references = build_reference_index(&contents, &trailer.directory)?;
+
+    let escher =
+        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), ESCHER_STREAM_PATH)
+            .with_context(|| format!("read {ESCHER_STREAM_PATH} for TABLE default-style observation"))?;
+    let inventory = inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher)
+        .context("inspect OfficeArt owners for TABLE default-style observation")?;
+    let escher_by_seq = index_escher_by_contents_seq(&inventory);
+
+    let mut observations = Vec::new();
+    for node in build.graph.nodes.values() {
+        if node.payload.table.is_none() {
+            continue;
+        }
+
+        let seq_num = node.payload.contents_seq_num;
+        let reference = references
+            .get(&seq_num)
+            .with_context(|| format!("TABLE Contents reference missing for seq {seq_num}"))?;
+        if single_raw_type(reference) != Some(table_bridge::RAW_TYPE_TABLE) {
+            continue;
+        }
+        let chunk = chunk_for_reference(contents_stream.clone(), &contents, reference)?;
+
+        let table_field_presence = chunk
+            .fields
+            .iter()
+            .filter(|field| !table_default_style_known_field(field.id))
+            .map(|field| contents_presence_key(field.id, field.block_type))
+            .collect::<BTreeSet<_>>();
+        let table_tail_field_presence = scan_table_tail_field_presence(&contents, &chunk)?;
+
+        let owner_matches = escher_by_seq.get(&seq_num).map(Vec::as_slice).unwrap_or(&[]);
+        let officeart_owner_join_class = match owner_matches {
+            [] => PubTableOfficeArtOwnerJoinClass::Missing,
+            [_] => PubTableOfficeArtOwnerJoinClass::Unique,
+            _ => PubTableOfficeArtOwnerJoinClass::Ambiguous,
+        };
+        let mut owner_fopt_property_presence = BTreeSet::new();
+        let mut owner_paint_family_property_presence = BTreeSet::new();
+        if let [owner_index] = owner_matches {
+            let owner = &inventory.shapes[*owner_index];
+            for property in owner
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+            {
+                let property_id = property.property_id();
+                owner_fopt_property_presence.insert(format!("0x{property_id:04x}"));
+                if (0x0180..=0x01ff).contains(&property_id) {
+                    owner_paint_family_property_presence.insert(format!("0x{property_id:04x}"));
+                }
+            }
+        }
+
+        observations.push(PubTableDefaultStyleObservation {
+            contents_seq_num: seq_num,
+            table_field_presence,
+            table_tail_field_presence,
+            officeart_owner_join_class,
+            owner_fopt_property_presence,
+            owner_paint_family_property_presence,
+        });
+    }
+
+    observations.sort_by_key(|observation| observation.contents_seq_num);
+    Ok(observations)
+}
