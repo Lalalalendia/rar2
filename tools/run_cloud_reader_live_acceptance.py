@@ -1004,8 +1004,37 @@ def main() -> int:
         routes = compatibility.get("output_routes")
         if not isinstance(routes, dict):
             raise AssertionError("compatibility report output routes are missing")
-        if routes.get("editable_idml") != "not_verified" or routes.get("editable_odg") != "not_verified":
-            raise AssertionError("compatibility report advertised unverified editable migration")
+
+        with sqlite3.connect(sqlite_path) as connection:
+            route_row = connection.execute(
+                "SELECT editable_routes_json FROM reader_guest_sessions WHERE session_id=?",
+                (session_id.encode("utf-8"),),
+            ).fetchone()
+        if route_row is None or route_row[0] is None:
+            raise AssertionError("supported/partial session did not persist editable route assessment")
+        encoded_routes = route_row[0]
+        if isinstance(encoded_routes, bytes):
+            encoded_routes = encoded_routes.decode("utf-8")
+        persisted_routes = json.loads(encoded_routes)
+        if persisted_routes.get("protocol_version") != "chaptera.reader-editable-routes.v1":
+            raise AssertionError("persisted editable route protocol mismatch")
+        if persisted_routes.get("source_sha256") != fixture_sha256:
+            raise AssertionError("persisted editable routes are not bound to exact source identity")
+        for target, public_key in (("idml", "editable_idml"), ("odg", "editable_odg")):
+            assessment = persisted_routes.get(target)
+            if not isinstance(assessment, dict):
+                raise AssertionError(f"persisted {target} editable route assessment is missing")
+            state = assessment.get("state")
+            if state not in {
+                "available_with_declared_losses",
+                "unavailable",
+                "not_verified",
+            }:
+                raise AssertionError(f"persisted {target} editable route state is invalid")
+            if routes.get(public_key) != state:
+                raise AssertionError(
+                    f"compatibility report {target} route differs from persisted worker assessment"
+                )
 
         scene_status, scene_raw = curl_request(
             https_port=caddy_https_port,
