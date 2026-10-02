@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pub_contents::{
     BlockReadError, ContentsCursor, RawContentsBlock, RawContentsBlockBody,
     decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
@@ -143,7 +143,10 @@ fn nested_children(contents: &[u8], field: &RawContentsBlock) -> Result<Vec<Fiel
 }
 
 fn is_recursive_observer_wire(block_type: u8) -> bool {
-    matches!(block_type, 0x88 | 0x90 | BLOCK_TYPE_TYPED_CONTAINER_98 | 0xA0)
+    matches!(
+        block_type,
+        0x88 | 0x90 | BLOCK_TYPE_TYPED_CONTAINER_98 | 0xA0
+    )
 }
 
 fn parse_container_children(contents: &[u8], source: &RawSpan) -> Result<Vec<FieldNode>> {
@@ -207,8 +210,8 @@ fn parse_bounded_variable_block(
             "invalid variable Contents length at {start}: wire=0x{block_type:02X}, declared={declared_length}"
         );
     }
-    let content_len =
-        usize::try_from(declared_length - 4).context("variable Contents length does not fit usize")?;
+    let content_len = usize::try_from(declared_length - 4)
+        .context("variable Contents length does not fit usize")?;
     let (_, content_source) = cursor.take(content_len)?;
     let end = cursor.position();
 
@@ -378,8 +381,22 @@ mod tests {
     #[test]
     fn observer_skips_opaque_c0_with_proven_variable_framing() {
         let bytes = [
-            0x0E, 0xC0, 0x08, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00,
-            0x01, BLOCK_TYPE_U32, 0x7B, 0x00, 0x00, 0x00,
+            0x0E,
+            0xC0,
+            0x08,
+            0x00,
+            0x00,
+            0x00,
+            0x41,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            BLOCK_TYPE_U32,
+            0x7B,
+            0x00,
+            0x00,
+            0x00,
         ];
         let source = RawSpan {
             stream: StreamPath("/Contents".into()),
@@ -387,20 +404,34 @@ mod tests {
             len: bytes.len() as u64,
         };
 
-        let fields = parse_container_children(&bytes, &source).expect("observer framing must parse");
+        let fields =
+            parse_container_children(&bytes, &source).expect("observer framing must parse");
 
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].field.block_type, 0xC0);
         assert!(fields[0].children.is_empty());
         assert_eq!(fields[1].field.id, 0x01);
-        assert_eq!(direct_scalar(&fields, 0x01).map(|value| value.value), Some(123));
+        assert_eq!(
+            direct_scalar(&fields, 0x01).map(|value| value.value),
+            Some(123)
+        );
     }
 
     #[test]
     fn observer_recurses_into_typed_98_payload() {
         let bytes = [
-            0x22, BLOCK_TYPE_TYPED_CONTAINER_98, 0x0A, 0x00, 0x00, 0x00,
-            0x01, BLOCK_TYPE_U32, 0x03, 0x00, 0x00, 0x08,
+            0x22,
+            BLOCK_TYPE_TYPED_CONTAINER_98,
+            0x0A,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            BLOCK_TYPE_U32,
+            0x03,
+            0x00,
+            0x00,
+            0x08,
         ];
         let source = RawSpan {
             stream: StreamPath("/Contents".into()),
