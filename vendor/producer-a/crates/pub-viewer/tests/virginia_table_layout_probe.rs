@@ -1,4 +1,4 @@
-use pub_model::{CanonicalId, Sha256Digest};
+use pub_model::Sha256Digest;
 use pub_reader::{
     PubBridgeDiagnostic, PubTableTextError, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, materialize_bounded_table_cells,
