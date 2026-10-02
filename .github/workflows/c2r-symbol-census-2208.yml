@@ -1,4 +1,4 @@
-name: C2R Publisher Symbol Same-Build Control
+name: C2R Publisher Symbol Cross-Build Census
 
 on:
   workflow_dispatch:
@@ -10,8 +10,15 @@ jobs:
   census:
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - "16.0.16731.20170"
+          - "16.0.17928.20156"
+          - "16.0.19127.20154"
     env:
-      PUB_OFFICE_VERSION: "16.0.15601.20088"
+      PUB_OFFICE_VERSION: ${{ matrix.version }}
       PUB_OFFICE_ARCH: x86
     steps:
       - uses: actions/checkout@v5
@@ -34,7 +41,7 @@ jobs:
             setup_version = (Get-Item out\odt\setup.exe).VersionInfo.FileVersion
           } | ConvertTo-Json | Set-Content -Encoding UTF8 out\odt-receipt.json
 
-      - name: Write same-build Publisher plus Word configuration
+      - name: Write exact-version Publisher plus Word configuration
         shell: pwsh
         run: |
           $source = "$pwd\out\office"
@@ -144,7 +151,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          "## $env:PUB_OFFICE_VERSION / $env:PUB_OFFICE_ARCH same-build control" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "## $env:PUB_OFFICE_VERSION / $env:PUB_OFFICE_ARCH cross-build census" | Add-Content $env:GITHUB_STEP_SUMMARY
           foreach ($f in @("odt-receipt.json","download-receipt.json","install-receipt.json","module-receipt.json","symbol-census.json")) {
             $p = Join-Path out $f
             if (Test-Path $p) {
@@ -165,7 +172,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: c2r-publisher-symbol-same-build-control-${{ github.run_id }}
+          name: c2r-publisher-symbol-cross-build-${{ matrix.version }}-${{ github.run_id }}
           path: |
             out/odt-receipt.json
             out/download-receipt.json
