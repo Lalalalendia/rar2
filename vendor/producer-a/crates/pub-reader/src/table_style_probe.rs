@@ -49,12 +49,18 @@ fn contents_field_key(id: u16, block_type: u8) -> String {
     format!("0x{id:02x}/block_0x{block_type:02x}")
 }
 
+type TableFieldProfiles = (
+    BTreeMap<String, usize>,
+    BTreeMap<String, usize>,
+    bool,
+);
+
 fn table_field_profiles(
     seq_num: u32,
     contents_stream: &StreamPath,
     contents: &[u8],
     references: &BTreeMap<u32, Contents0x2cChunkReference>,
-) -> Result<(BTreeMap<String, usize>, BTreeMap<String, usize>, bool)> {
+) -> Result<TableFieldProfiles> {
     let reference = references
         .get(&seq_num)
         .with_context(|| format!("TABLE seq {seq_num} is absent from Contents directory"))?;
