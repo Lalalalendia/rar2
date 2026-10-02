@@ -180,24 +180,32 @@ fn boolean_use_class(
     use_bit: u32,
     value_bit: u32,
 ) -> String {
-    let matches = shape
+    let mut used_value = None;
+    let mut saw_property = false;
+
+    for property in shape
         .fopts
         .iter()
         .flat_map(|record| record.properties.iter())
         .filter(|property| property.property_id() == property_id)
-        .collect::<Vec<_>>();
+    {
+        saw_property = true;
+        if property.f_bid() || property.f_complex() {
+            return "unsupported".to_owned();
+        }
+        if property.op & use_bit == 0 {
+            continue;
+        }
+        if used_value.replace(property.op).is_some() {
+            return "conflicting_use".to_owned();
+        }
+    }
 
-    match matches.as_slice() {
-        [] => "missing".to_owned(),
-        [property] if property.f_bid() || property.f_complex() => "unsupported".to_owned(),
-        [property] if property.op & use_bit == 0 => {
-            format!("no_use:0x{:08X}", property.op)
-        }
-        [property] if property.op & value_bit != 0 => {
-            format!("visible:0x{:08X}", property.op)
-        }
-        [property] => format!("hidden:0x{:08X}", property.op),
-        _ => "ambiguous".to_owned(),
+    match used_value {
+        Some(value) if value & value_bit != 0 => format!("visible:0x{value:08X}"),
+        Some(value) => format!("hidden:0x{value:08X}"),
+        None if saw_property => "no_use".to_owned(),
+        None => "missing".to_owned(),
     }
 }
 
