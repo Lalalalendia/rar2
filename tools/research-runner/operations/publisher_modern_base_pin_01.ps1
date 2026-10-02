@@ -128,28 +128,79 @@ function Build-StructuralBaseTool {
         if ($actual -ne $expected.ToLowerInvariant()) {
             throw "Prebuilt structural-base helper SHA-256 mismatch."
         }
-        return $resolved
+        return [pscustomobject]@{
+            path = $resolved
+            sha256 = $actual
+            source = "prebuilt"
+            cargo_version = $null
+            cargo_lock_sha256 = $null
+            cargo_lock_origin = $null
+        }
     }
 
+    $manifestPath = Join-Path $repoRoot "vendor/producer-a/Cargo.toml"
+    $workspaceRoot = Split-Path -Parent $manifestPath
+    $lockPath = Join-Path $workspaceRoot "Cargo.lock"
     $targetDir = Join-Path $privateDir "cargo-target"
     New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
-    Push-Location $repoRoot
+    $cargoVersion = (& cargo --version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo --version failed with exit code $LASTEXITCODE"
+    }
+
+    $lockExisted = Test-Path -LiteralPath $lockPath -PathType Leaf
+    $generatedLock = $false
     try {
-        & cargo build --locked --offline --release --target-dir $targetDir --manifest-path "vendor/producer-a/Cargo.toml" -p pub-reader --bin structural_base_manifest
-        if ($LASTEXITCODE -ne 0) {
-            throw "structural_base_manifest offline build failed with exit code $LASTEXITCODE"
+        if (-not $lockExisted) {
+            Push-Location $repoRoot
+            try {
+                & cargo generate-lockfile --offline --manifest-path $manifestPath
+                if ($LASTEXITCODE -ne 0) {
+                    throw "offline Cargo.lock generation failed with exit code $LASTEXITCODE"
+                }
+            }
+            finally {
+                Pop-Location
+            }
+            if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+                throw "Cargo.lock missing after offline generation"
+            }
+            $generatedLock = $true
+        }
+
+        $lockSha = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        Push-Location $repoRoot
+        try {
+            & cargo build --locked --offline --release --target-dir $targetDir --manifest-path $manifestPath -p pub-reader --bin structural_base_manifest
+            if ($LASTEXITCODE -ne 0) {
+                throw "structural_base_manifest offline build failed with exit code $LASTEXITCODE"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        $exe = Join-Path $targetDir "release/structural_base_manifest.exe"
+        if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "structural_base_manifest.exe missing after offline private-target build"
+        }
+        $helperSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+        return [pscustomobject]@{
+            path = $exe
+            sha256 = $helperSha
+            source = "offline-cargo-build"
+            cargo_version = $cargoVersion
+            cargo_lock_sha256 = $lockSha
+            cargo_lock_origin = $(if ($generatedLock) { "generated-offline-for-run" } else { "preexisting" })
         }
     }
     finally {
-        Pop-Location
+        if ($generatedLock -and (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $lockPath -Force
+        }
     }
-
-    $exe = Join-Path $targetDir "release/structural_base_manifest.exe"
-    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
-        throw "structural_base_manifest.exe missing after offline private-target build"
-    }
-    return $exe
 }
 
 function Invoke-StructuralBase {
@@ -165,7 +216,7 @@ function Invoke-StructuralBase {
     return Get-Content -LiteralPath $Output -Raw | ConvertFrom-Json
 }
 
-$fixturePath = Resolve-ExactFixture
+$toolInfo = Build-StructuralBaseTool`r`n$fixturePath = Resolve-ExactFixture
 $seed = Get-PubFileRecord -Path $fixturePath
 if ([string]$seed.sha256 -ne $ExpectedFixtureSha256) {
     throw "Pinned Sample.pub source identity mismatch."
@@ -266,6 +317,13 @@ $result = [ordered]@{
         bounded_inventory_equal_after_save = [bool]$beforeAfterEqual
         bounded_inventory_equal_after_reopen = [bool]$beforeReopenEqual
     }
+    tooling = [ordered]@{
+        structural_base_helper_source = [string]$toolInfo.source
+        structural_base_helper_sha256 = [string]$toolInfo.sha256
+        cargo_version = $toolInfo.cargo_version
+        cargo_lock_sha256 = $toolInfo.cargo_lock_sha256
+        cargo_lock_origin = $toolInfo.cargo_lock_origin
+    }
     structural_base = [ordered]@{
         schema = [string]$structural.structural_schema
         source_sha256 = [string]$structural.source_sha256
@@ -283,6 +341,11 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "modern-base-pin-01.j
     "seed_sha256=$($result.seed.sha256)",
     "post_save_sha256=$($result.native_lineage.post_save_sha256)",
     "post_save_size=$($result.native_lineage.post_save_size)",
+    "helper_source=$($result.tooling.structural_base_helper_source)",
+    "helper_sha256=$($result.tooling.structural_base_helper_sha256)",
+    "cargo_version=$($result.tooling.cargo_version)",
+    "cargo_lock_sha256=$($result.tooling.cargo_lock_sha256)",
+    "cargo_lock_origin=$($result.tooling.cargo_lock_origin)",
     "stream_count=$($result.structural_base.stream_count)",
     "candidate_count=$($result.structural_base.candidate_count)",
     "selected_contents_seq=$($result.structural_base.selected_target.contents_seq_num)",
