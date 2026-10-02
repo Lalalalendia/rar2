@@ -3022,7 +3022,6 @@ fn bounded_authoring_slice_from_resolved_pages(
     })
 }
 
-
 fn viewer_table_border_segments(
     source: &pub_reader::PubTableSource,
     cells: &[ViewerTableCell],
@@ -3082,7 +3081,9 @@ fn viewer_table_border_segments(
         }
     }
 
-    if x_boundaries.iter().any(Option::is_none) || y_boundaries.iter().any(Option::is_none) {
+    if x_boundaries.iter().any(Option::is_none)
+        || y_boundaries.iter().any(Option::is_none)
+    {
         return Vec::new();
     }
 
