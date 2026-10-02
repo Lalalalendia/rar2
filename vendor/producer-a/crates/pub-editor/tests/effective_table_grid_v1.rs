@@ -68,7 +68,8 @@ fn graph() -> PubResolvedGraph {
                 utf16_start: 0,
                 utf16_end: 1,
                 bounds: None,
-
+                paint: None,
+                source_refs: Vec::new(),
             },
             PubTableCellSource {
                 id: cell1,
@@ -82,7 +83,8 @@ fn graph() -> PubResolvedGraph {
                 utf16_start: 1,
                 utf16_end: 4,
                 bounds: None,
-
+                paint: None,
+                source_refs: Vec::new(),
             },
         ],
         simple_table: Some(simple),
