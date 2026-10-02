@@ -110,7 +110,7 @@ fn exact_virginia_native_autoformat_product_acceptance() {
     let receipt = Receipt {
         schema: "chaptera.virginia-table-native-autoformat-product-acceptance.v1",
         source_sha256: actual_sha,
-        pages,
+        pages: pages.clone(),
     };
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent).expect("create receipt directory");
