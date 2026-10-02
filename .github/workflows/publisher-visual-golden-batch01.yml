@@ -117,7 +117,7 @@ jobs:
           python -m pip install --disable-pip-version-check olefile==0.47
 
       - name: Rehydrate exact historical 425-SHA tranche on cache miss
-        if: steps.historical-425-cache.outputs.cache-hit != 'true'
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p out/container/pub
