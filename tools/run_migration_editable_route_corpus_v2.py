@@ -113,14 +113,32 @@ def run_one(probe, path, output_root, materialize, timeout_seconds):
     receipt["requested_materialization"] = materialize
 
     if materialize and receipt.get("open_state") == "admitted":
+        failures = []
         for target in ("idml", "odg"):
             target_row = receipt["targets"][target]
-            if target_row.get("state") == "available_with_declared_losses":
-                artifact = item_dir / f"output.{target}"
-                if not artifact.is_file() or artifact.stat().st_size == 0:
-                    receipt["hard_violation"] = True
-                    receipt["failure"] = f"{target}_materialization_missing"
-                    break
+            if target_row.get("state") != "available_with_declared_losses":
+                continue
+            artifact = item_dir / f"output.{target}"
+            materialization_state = target_row.get("materialization_state")
+            if materialization_state != "succeeded":
+                failures.append({
+                    "target": target,
+                    "failure": "preview_materialization_disagreement",
+                    "materialization_state": materialization_state,
+                    "error_class": target_row.get("materialization_error_class"),
+                })
+                continue
+            if not artifact.is_file() or artifact.stat().st_size == 0:
+                failures.append({
+                    "target": target,
+                    "failure": "materialization_artifact_missing",
+                    "materialization_state": materialization_state,
+                    "error_class": None,
+                })
+        if failures:
+            receipt["hard_violation"] = True
+            receipt["failure"] = "preview_materialization_disagreement"
+            receipt["materialization_failures"] = failures
 
     (item_dir / "route.json").write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n",
@@ -156,6 +174,8 @@ def run_many(probe, paths, output_root, materialize, workers, timeout_seconds):
                         "idml": (row.get("targets") or {}).get("idml", {}).get("state"),
                         "odg": (row.get("targets") or {}).get("odg", {}).get("state"),
                         "hard_violation": row.get("hard_violation"),
+                        "failure": row.get("failure"),
+                        "materialization_failures": row.get("materialization_failures"),
                     },
                     sort_keys=True,
                 ),
@@ -289,6 +309,8 @@ def main():
                 "source_sha256": row.get("source_sha256"),
                 "source_path": row.get("source_path"),
                 "failure": row.get("failure"),
+                "stderr_tail": row.get("stderr_tail"),
+                "materialization_failures": row.get("materialization_failures"),
             }
             for row in hard
         ],
