@@ -1618,10 +1618,9 @@ fn viewer_mature_officeart_wmf_preview_images(
                 }
                 None => None,
             };
-            let recolor = graph
-                .nodes
-                .get(node_id)
-                .and_then(|node| viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref()));
+            let recolor = graph.nodes.get(node_id).and_then(|node| {
+                viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
+            });
             if source_window.is_some() || recolor.is_some() {
                 placements.push(ViewerImagePlacementV1 {
                     node_id: *node_id,
@@ -1805,7 +1804,6 @@ fn viewer_image_recolor_v1(
         preserve_grays: recolor.preserve_grays,
     })
 }
-
 
 pub fn open_mature_0x2c(bytes: &[u8]) -> Result<ViewerDocument> {
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
@@ -2429,14 +2427,17 @@ fn open_mature_0x2c_bundle(
                         }
                         None => None,
                     };
-                    let recolor = pipeline
-                        .resolved
-                        .graph
-                        .nodes
-                        .get(&usage.node_id)
-                        .and_then(|node| {
-                            viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
-                        });
+                    let recolor =
+                        pipeline
+                            .resolved
+                            .graph
+                            .nodes
+                            .get(&usage.node_id)
+                            .and_then(|node| {
+                                viewer_image_recolor_v1(
+                                    node.payload.explicit_image_recolor.as_ref(),
+                                )
+                            });
                     if source_window.is_some() || recolor.is_some() {
                         placements.push(ViewerImagePlacementV1 {
                             node_id: usage.node_id,
