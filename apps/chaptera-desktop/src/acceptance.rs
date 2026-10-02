@@ -14,9 +14,9 @@ use std::fs;
 use std::path::Path;
 
 const PROTOCOL_VERSION: &str = "chaptera.editor-desktop-vertical-observation.v1";
-const REPLACEMENT_WITNESS: &str = "ChapteraV0";
+pub(crate) const REPLACEMENT_WITNESS: &str = "ChapteraV0";
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(64);
     for byte in digest {
@@ -26,13 +26,13 @@ fn sha256_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn state_id(editor: &EditorSession) -> Result<String, String> {
+pub(crate) fn state_id(editor: &EditorSession) -> Result<String, String> {
     let bytes = serde_json::to_vec(&editor.project())
         .map_err(|error| format!("serialize effective editor state: {error}"))?;
     Ok(format!("sha256:{}", sha256_hex(&bytes)))
 }
 
-fn rect_json(rect: RectEmu) -> Value {
+pub(crate) fn rect_json(rect: RectEmu) -> Value {
     json!({
         "x": rect.x.get(),
         "y": rect.y.get(),
@@ -41,7 +41,7 @@ fn rect_json(rect: RectEmu) -> Value {
     })
 }
 
-fn direct_instance(
+pub(crate) fn direct_instance(
     editor: &EditorSession,
     target_page_id: &str,
     node_id: NodeId,
@@ -53,7 +53,7 @@ fn direct_instance(
     direct_page_local_instance_v1(&node_id.as_canonical().to_string(), target_page_id).ok()
 }
 
-fn select_story_edit(editor: &EditorSession) -> Option<(StoryId, u32, String)> {
+pub(crate) fn select_story_edit(editor: &EditorSession) -> Option<(StoryId, u32, String)> {
     for (story_id, story) in &editor.graph().stories {
         if editor.can_replace_story_text(*story_id).is_err() {
             continue;
@@ -69,7 +69,7 @@ fn select_story_edit(editor: &EditorSession) -> Option<(StoryId, u32, String)> {
     None
 }
 
-fn select_move(
+pub(crate) fn select_move(
     editor: &EditorSession,
     visual: &pub_viewer::ViewerGeometryDocument,
 ) -> Option<(SceneInstanceV1, NodeId, RectEmu, MoveTransaction)> {
@@ -131,7 +131,7 @@ fn select_move(
     None
 }
 
-fn story_state(editor: &EditorSession, story_id: StoryId) -> Result<String, String> {
+pub(crate) fn story_state(editor: &EditorSession, story_id: StoryId) -> Result<String, String> {
     let story = editor
         .graph()
         .stories
@@ -140,7 +140,7 @@ fn story_state(editor: &EditorSession, story_id: StoryId) -> Result<String, Stri
     Ok(story_state_id_v1(story_id, &story.text))
 }
 
-fn explicit_loss_flags(report: &pub_export::ExportReport) -> Result<(u64, bool, bool), String> {
+pub(crate) fn explicit_loss_flags(report: &pub_export::ExportReport) -> Result<(u64, bool, bool), String> {
     let value = serde_json::to_value(report)
         .map_err(|error| format!("serialize export report for acceptance: {error}"))?;
     let counts = value
@@ -182,7 +182,7 @@ fn explicit_loss_flags(report: &pub_export::ExportReport) -> Result<(u64, bool, 
     ))
 }
 
-fn export_target(path: &Path) -> Result<EditorEditableTarget, String> {
+pub(crate) fn export_target(path: &Path) -> Result<EditorEditableTarget, String> {
     match path
         .extension()
         .and_then(|value| value.to_str())
@@ -195,7 +195,7 @@ fn export_target(path: &Path) -> Result<EditorEditableTarget, String> {
     }
 }
 
-fn projected_move_is_denied(direct: &SceneInstanceV1) -> bool {
+pub(crate) fn projected_move_is_denied(direct: &SceneInstanceV1) -> bool {
     let projected = SceneInstanceV1 {
         schema_version: direct.schema_version.clone(),
         instance_id: direct.instance_id.clone(),
