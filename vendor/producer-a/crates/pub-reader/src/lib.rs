@@ -3163,17 +3163,17 @@ pub fn build_mature_0x2c_from_streams(
             && exact_story_identity.is_none()
             && image_slot.is_some()
             && grouped_sources.is_empty();
-        let direct_image_rotation_properties = direct_image_candidate
-            .then(|| {
-                shape
-                    .fopts
-                    .iter()
-                    .flat_map(|record| record.properties.iter())
-                    .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
-                    .map(|property| (property.op, property.f_bid(), property.f_complex()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let direct_image_rotation_properties = if direct_image_candidate {
+            shape
+                .fopts
+                .iter()
+                .flat_map(|record| record.properties.iter())
+                .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
+                .map(|property| (property.op, property.f_bid(), property.f_complex()))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let direct_image_fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
         let direct_image_transform = if direct_image_candidate {
             bounded_direct_image_transform(
