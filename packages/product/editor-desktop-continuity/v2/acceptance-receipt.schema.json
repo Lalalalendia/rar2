@@ -1,0 +1,544 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chaptera.dev/schema/product/editor-desktop-continuity/v2/acceptance-receipt.json",
+  "title": "Chaptera Desktop imported-PUB continuity acceptance receipt V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "receipt_version",
+    "receipt_kind",
+    "producer",
+    "source",
+    "story_edit",
+    "object_move",
+    "object_resize",
+    "image_replace",
+    "history",
+    "reopen",
+    "project",
+    "capability_loss",
+    "export",
+    "environment",
+    "invariants"
+  ],
+  "properties": {
+    "receipt_version": {
+      "const": "chaptera.editor-desktop-continuity-acceptance.v2"
+    },
+    "receipt_kind": {
+      "enum": [
+        "real_hosted",
+        "real_local"
+      ]
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "byte_len",
+        "immutable"
+      ],
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byte_len": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "immutable": {
+          "const": true
+        }
+      }
+    },
+    "story_edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "story_id",
+        "operation_kind",
+        "capability_admitted",
+        "before_state_id",
+        "after_state_id"
+      ],
+      "properties": {
+        "story_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_kind": {
+          "const": "replace_story_range"
+        },
+        "capability_admitted": {
+          "const": true
+        },
+        "before_state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "after_state_id": {
+          "$ref": "#/$defs/hashId"
+        }
+      }
+    },
+    "object_move": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "projection_kind",
+        "origin_node_id",
+        "capability_admitted",
+        "geometry_sync_policy",
+        "before",
+        "after",
+        "durable_move_count",
+        "transient_geometry_operation_count"
+      ],
+      "properties": {
+        "instance_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "projection_kind": {
+          "const": "direct_page_local"
+        },
+        "origin_node_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "capability_admitted": {
+          "const": true
+        },
+        "geometry_sync_policy": {
+          "const": "apply_authored_origin_geometry"
+        },
+        "before": {
+          "$ref": "#/$defs/rect"
+        },
+        "after": {
+          "$ref": "#/$defs/rect"
+        },
+        "durable_move_count": {
+          "const": 1
+        },
+        "transient_geometry_operation_count": {
+          "const": 0
+        }
+      }
+    },
+    "object_resize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "projection_kind",
+        "origin_node_id",
+        "capability_admitted",
+        "geometry_sync_policy",
+        "before",
+        "after",
+        "durable_resize_count",
+        "transient_geometry_operation_count"
+      ],
+      "properties": {
+        "instance_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "projection_kind": {
+          "const": "direct_page_local"
+        },
+        "origin_node_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "capability_admitted": {
+          "const": true
+        },
+        "geometry_sync_policy": {
+          "const": "apply_authored_origin_geometry"
+        },
+        "before": {
+          "$ref": "#/$defs/rect"
+        },
+        "after": {
+          "$ref": "#/$defs/rect"
+        },
+        "durable_resize_count": {
+          "const": 1
+        },
+        "transient_geometry_operation_count": {
+          "const": 0
+        }
+      }
+    },
+    "image_replace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "projection_kind",
+        "origin_node_id",
+        "capability_admitted",
+        "before_asset_sha256",
+        "after_asset_sha256",
+        "after_asset_mime",
+        "after_asset_byte_len",
+        "frame_before",
+        "frame_after",
+        "explicit_crop_present",
+        "durable_replace_count"
+      ],
+      "properties": {
+        "instance_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "projection_kind": {
+          "const": "direct_page_local"
+        },
+        "origin_node_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "capability_admitted": {
+          "const": true
+        },
+        "before_asset_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "after_asset_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "after_asset_mime": {
+          "enum": [
+            "image/png",
+            "image/jpeg"
+          ]
+        },
+        "after_asset_byte_len": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "frame_before": {
+          "$ref": "#/$defs/rect"
+        },
+        "frame_after": {
+          "$ref": "#/$defs/rect"
+        },
+        "explicit_crop_present": {
+          "const": false
+        },
+        "durable_replace_count": {
+          "const": 1
+        }
+      }
+    },
+    "history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "after_story_state_id",
+        "after_move_state_id",
+        "after_resize_state_id",
+        "after_replace_state_id",
+        "undo_replace_state_id",
+        "redo_replace_state_id"
+      ],
+      "properties": {
+        "after_story_state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "after_move_state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "after_resize_state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "after_replace_state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "undo_replace_state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "redo_replace_state_id": {
+          "$ref": "#/$defs/hashId"
+        }
+      }
+    },
+    "reopen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fresh_session",
+        "state_id",
+        "story_state_id",
+        "moved_rect",
+        "resized_rect",
+        "replacement_asset_sha256"
+      ],
+      "properties": {
+        "fresh_session": {
+          "const": true
+        },
+        "state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "story_state_id": {
+          "$ref": "#/$defs/hashId"
+        },
+        "moved_rect": {
+          "$ref": "#/$defs/rect"
+        },
+        "resized_rect": {
+          "$ref": "#/$defs/rect"
+        },
+        "replacement_asset_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "sha256",
+        "byte_len",
+        "operation_count",
+        "story_operation_count",
+        "move_operation_count",
+        "resize_operation_count",
+        "replace_image_operation_count"
+      ],
+      "properties": {
+        "schema_version": {
+          "pattern": "^pub-editor-v0\\.(?:[2-9]|1[0-2])$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byte_len": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "operation_count": {
+          "const": 4
+        },
+        "story_operation_count": {
+          "const": 1
+        },
+        "move_operation_count": {
+          "const": 1
+        },
+        "resize_operation_count": {
+          "const": 1
+        },
+        "replace_image_operation_count": {
+          "const": 1
+        }
+      }
+    },
+    "capability_loss": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observed_before_export",
+        "blocking_loss_count",
+        "approximations_explicit",
+        "unsupported_partial_semantics_explicit"
+      ],
+      "properties": {
+        "observed_before_export": {
+          "const": true
+        },
+        "blocking_loss_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "approximations_explicit": {
+          "const": true
+        },
+        "unsupported_partial_semantics_explicit": {
+          "const": true
+        }
+      }
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "sha256",
+        "byte_len",
+        "package_valid",
+        "edited_story_present",
+        "moved_geometry_present",
+        "resized_geometry_present",
+        "replacement_image_present"
+      ],
+      "properties": {
+        "format": {
+          "enum": [
+            "idml",
+            "odg"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "byte_len": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "package_valid": {
+          "const": true
+        },
+        "edited_story_present": {
+          "const": true
+        },
+        "moved_geometry_present": {
+          "const": true
+        },
+        "resized_geometry_present": {
+          "const": true
+        },
+        "replacement_image_present": {
+          "const": true
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rar_commit",
+        "os",
+        "arch"
+      ],
+      "properties": {
+        "rar_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "os": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "arch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_pub_immutable",
+        "native_pub_write_used",
+        "no_hidden_network_upload",
+        "raw_document_text_emitted",
+        "raw_source_bytes_emitted",
+        "direct_page_local_gate_used",
+        "projected_object_mutation_fails_closed",
+        "reopen_used_fresh_session",
+        "export_from_current_editor_state"
+      ],
+      "properties": {
+        "source_pub_immutable": {
+          "const": true
+        },
+        "native_pub_write_used": {
+          "const": false
+        },
+        "no_hidden_network_upload": {
+          "const": true
+        },
+        "raw_document_text_emitted": {
+          "const": false
+        },
+        "raw_source_bytes_emitted": {
+          "const": false
+        },
+        "direct_page_local_gate_used": {
+          "const": true
+        },
+        "projected_object_mutation_fails_closed": {
+          "const": true
+        },
+        "reopen_used_fresh_session": {
+          "const": true
+        },
+        "export_from_current_editor_state": {
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "implementation",
+        "commit_or_build",
+        "core_integration"
+      ],
+      "properties": {
+        "implementation": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "commit_or_build": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "core_integration": {
+          "const": true
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "hashId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
