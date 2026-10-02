@@ -1,0 +1,60 @@
+name: Virginia TABLE native AutoFormat product acceptance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-viewer/tests/virginia_table_native_autoformat_product_acceptance.rs"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - ".github/workflows/virginia-table-native-autoformat-product-acceptance.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Reacquire exact Virginia fixture
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Assert exact post-bridge TABLE paint and census p6/p7
+        env:
+          CHAPTERA_VIRGINIA_TABLE_NATIVE_PAINT_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_TABLE_NATIVE_PAINT_RECEIPT: ${{ github.workspace }}/target/virginia-table-native-autoformat-product/receipt.json
+        run: |
+          set -euo pipefail
+          mkdir -p target/virginia-table-native-autoformat-product
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_native_autoformat_product_acceptance -- --ignored --nocapture
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: virginia-table-native-autoformat-product-receipt
+          path: target/virginia-table-native-autoformat-product/
+          if-no-files-found: warn
+          retention-days: 30
