@@ -1,11 +1,18 @@
 use super::{
-    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, PubBridgeDiagnostic, PubNodePayload,
+    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, PubBridgeDiagnostic, RAW_TYPE_SHAPE,
     build_mature_0x2c_source_graph, build_reference_index, chunk_for_reference, seq_u32,
+    single_raw_type,
 };
 use anyhow::{Context, Result, bail};
-use pub_contents::{Contents0x2cChunk, parse_0x2c_header, parse_confirmed_0x2c_trailer_root};
+use pub_contents::{
+    BLOCK_TYPE_U32, Contents0x2cChunk, RawContentsBlockBody, parse_0x2c_header,
+    parse_confirmed_0x2c_trailer_root,
+};
 use pub_core::StreamPath;
-use pub_escher::{PUBLISHER_FIELD_SHAPE_ID, SpContainerObservation, inspect_sp_containers};
+use pub_escher::{
+    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
+    PublisherFieldRecord, SpContainerObservation, inspect_sp_containers,
+};
 use pub_model::{NodeId, NodeKind, PageId, RectEmu, Sha256Digest};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -92,63 +99,83 @@ pub fn build_mature_0x2c_structural_base_manifest(
         .context("inspect Escher SpContainers")?;
 
     let mut candidates = Vec::new();
-    for (page_id, page) in &build.graph.pages {
-        for node_id in &page.children {
-            let Some(node) = build.graph.nodes.get(node_id) else {
-                continue;
-            };
-            if node.kind != NodeKind::Shape {
-                continue;
-            }
+    for reference in references
+        .values()
+        .filter(|reference| single_raw_type(reference) == Some(RAW_TYPE_SHAPE))
+    {
+        let seq_num = seq_u32(reference.seq_num)?;
+        let contents_chunk = chunk_for_reference(contents_stream.clone(), &contents, reference)
+            .with_context(|| format!("parse Contents chunk seq {seq_num}"))?;
 
-            let payload: &PubNodePayload = &node.payload;
-            if payload.story_frame.is_some()
-                || payload.table.is_some()
-                || payload.table_story.is_some()
-                || payload.image_slot.is_some()
-            {
-                continue;
-            }
-
-            let (Some(officeart_spid), Some(officeart_shape_type)) =
-                (payload.officeart_spid, payload.officeart_shape_type)
-            else {
-                continue;
-            };
-
-            let seq_num = payload.contents_seq_num;
-            let Some(reference) = references.get(&seq_num) else {
-                continue;
-            };
-            if seq_u32(reference.seq_num)? != seq_num {
-                bail!("Contents reference key/seq mismatch for seq {seq_num}");
-            }
-            let contents_chunk = chunk_for_reference(contents_stream.clone(), &contents, reference)
-                .with_context(|| format!("parse Contents chunk seq {seq_num}"))?;
-
-            let mut escher_matches = escher_inventory.shapes.iter().filter(|shape| {
-                shape.fsp.as_ref().is_some_and(|fsp| {
-                    fsp.spid == officeart_spid && fsp.shape_type == officeart_shape_type
-                }) && escher_contents_identity_matches(shape, seq_num)
-            });
-            let Some(escher_shape) = escher_matches.next() else {
-                continue;
-            };
-            if escher_matches.next().is_some() {
-                continue;
-            }
-
-            candidates.push(PubStructuralBaseCandidate {
-                page_id: *page_id,
-                node_id: *node_id,
-                contents_seq_num: seq_num,
-                bounds_emu: node.header.bounds,
-                officeart_spid,
-                officeart_shape_type,
-                contents_chunk,
-                escher_shape: escher_shape.clone(),
-            });
+        let (Some(contents_width), Some(contents_height)) = (
+            unique_contents_dimension(&contents_chunk, 0x00AA),
+            unique_contents_dimension(&contents_chunk, 0x00AB),
+        ) else {
+            continue;
+        };
+        if contents_width <= 0 || contents_height <= 0 {
+            continue;
         }
+
+        // Discovery is deliberately independent of SourceGraph and Publisher
+        // identity carriers. This is the PUB-RS-XWALK-01 evidence boundary:
+        // raw OplPo AA/AB geometry first, unique ClientAnchor extent second.
+        let mut escher_matches = escher_inventory
+            .shapes
+            .iter()
+            .filter(|shape| exact_anchor_extent_matches(shape, contents_width, contents_height));
+        let Some(escher_shape) = escher_matches.next() else {
+            continue;
+        };
+        if escher_matches.next().is_some() {
+            continue;
+        }
+        let Some(fsp) = escher_shape.fsp.as_ref() else {
+            continue;
+        };
+
+        // Bind the independently discovered raw crosswalk back to exactly one
+        // current SourceGraph node only after the geometry match. Page.children
+        // is intentionally empty because membership lives in NodeHeader.parent_id;
+        // therefore it must never be used as a discovery index here.
+        let mut graph_matches = build.graph.nodes.iter().filter_map(|(node_id, node)| {
+            (node.kind == NodeKind::Shape
+                && node.payload.contents_seq_num == seq_num
+                && node.payload.table.is_none()
+                && node.payload.table_story.is_none()
+                && node.payload.image_slot.is_none())
+            .then_some((*node_id, node))
+        });
+        let Some((node_id, node)) = graph_matches.next() else {
+            continue;
+        };
+        if graph_matches.next().is_some() {
+            continue;
+        }
+
+        let mut page_matches = build
+            .graph
+            .pages
+            .keys()
+            .filter(|page_id| page_id.into_canonical() == node.header.parent_id);
+        let Some(page_id) = page_matches.next().copied() else {
+            continue;
+        };
+        if page_matches.next().is_some() {
+            continue;
+        }
+        let bounds_emu = node.header.bounds;
+
+        candidates.push(PubStructuralBaseCandidate {
+            page_id,
+            node_id,
+            contents_seq_num: seq_num,
+            bounds_emu,
+            officeart_spid: fsp.spid,
+            officeart_shape_type: fsp.shape_type,
+            contents_chunk,
+            escher_shape: escher_shape.clone(),
+        });
     }
 
     candidates.sort_by_key(|candidate| candidate.contents_seq_num);
@@ -168,14 +195,55 @@ pub fn structural_base_manifest_json(
     serde_json::to_string_pretty(manifest)
 }
 
-fn escher_contents_identity_matches(shape: &SpContainerObservation, seq_num: u32) -> bool {
-    let Some(client_data) = shape.client_data.as_ref() else {
+fn unique_contents_dimension(chunk: &Contents0x2cChunk, id: u16) -> Option<i64> {
+    let matches = chunk
+        .fields
+        .iter()
+        .filter(|field| field.id == id)
+        .collect::<Vec<_>>();
+    let [field] = matches.as_slice() else {
+        return None;
+    };
+    if field.block_type != BLOCK_TYPE_U32 {
+        return None;
+    }
+    match &field.body {
+        RawContentsBlockBody::U32 { value, .. } => Some(i64::from(*value)),
+        _ => None,
+    }
+}
+
+fn unique_signed_anchor_field(record: &PublisherFieldRecord, id: u16) -> Option<i64> {
+    let values = record.values(id).collect::<Vec<_>>();
+    match values.as_slice() {
+        [value] => Some(i64::from(i32::from_le_bytes(value.to_le_bytes()))),
+        _ => None,
+    }
+}
+
+fn exact_anchor_extent_matches(
+    shape: &SpContainerObservation,
+    contents_width: i64,
+    contents_height: i64,
+) -> bool {
+    let Some(anchor) = shape.client_anchor.as_ref() else {
         return false;
     };
-    let values = client_data
-        .values(PUBLISHER_FIELD_SHAPE_ID)
-        .collect::<Vec<_>>();
-    values.as_slice() == [seq_num]
+    let (Some(xs), Some(ys), Some(xe), Some(ye)) = (
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_XS),
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_YS),
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_XE),
+        unique_signed_anchor_field(anchor, PUBLISHER_FIELD_YE),
+    ) else {
+        return false;
+    };
+    let Some(width) = xe.checked_sub(xs) else {
+        return false;
+    };
+    let Some(height) = ye.checked_sub(ys) else {
+        return false;
+    };
+    width == contents_width && height == contents_height
 }
 
 fn sha256_digest(bytes: &[u8]) -> Sha256Digest {
@@ -202,6 +270,54 @@ mod tests {
         let manifest =
             build_mature_0x2c_structural_base_manifest(&source).expect("structural base manifest");
 
+        let contents = pub_cfb::read_stream_reader(Cursor::new(&source), CONTENTS_STREAM_PATH)
+            .expect("Sample3 Contents");
+        let header = parse_0x2c_header(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
+            .expect("Sample3 Contents header");
+        let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
+            .expect("Sample3 Contents trailer");
+        let references =
+            build_reference_index(&contents, &trailer.directory).expect("Sample3 references");
+        let reference_293 = references.get(&293).expect("Sample3 seq293 reference");
+        assert_eq!(single_raw_type(reference_293), Some(RAW_TYPE_SHAPE));
+        let chunk_293 = chunk_for_reference(
+            StreamPath(CONTENTS_STREAM_PATH.into()),
+            &contents,
+            reference_293,
+        )
+        .expect("Sample3 seq293 chunk");
+        assert_eq!(
+            unique_contents_dimension(&chunk_293, 0x00AA),
+            Some(5_076_000),
+            "Sample3 seq293 AA must survive the current bounded Contents decode; fields={:?}, tail={:?}",
+            chunk_293
+                .fields
+                .iter()
+                .map(|field| (field.id, field.block_type, field.raw_tag))
+                .collect::<Vec<_>>(),
+            chunk_293.unsupported_tail
+        );
+        assert_eq!(
+            unique_contents_dimension(&chunk_293, 0x00AB),
+            Some(972_000),
+            "Sample3 seq293 AB must survive the current bounded Contents decode"
+        );
+
+        let escher = pub_cfb::read_stream_reader(Cursor::new(&source), ESCHER_STREAM_PATH)
+            .expect("Sample3 Escher");
+        let escher_inventory =
+            inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher)
+                .expect("Sample3 Escher inventory");
+        let seq293_geometry_matches = escher_inventory
+            .shapes
+            .iter()
+            .filter(|shape| exact_anchor_extent_matches(shape, 5_076_000, 972_000))
+            .count();
+        assert_eq!(
+            seq293_geometry_matches, 1,
+            "Sample3 seq293 geometry must have exactly one independent ClientAnchor extent match"
+        );
+
         assert_eq!(manifest.schema, PUB_STRUCTURAL_BASE_SCHEMA_V1);
         assert_eq!(manifest.source_sha256, sha256_digest(&source));
 
@@ -225,6 +341,19 @@ mod tests {
                 .any(|stream| stream.path == ESCHER_STREAM_PATH)
         );
 
+        let candidate_seq_nums = manifest
+            .candidates
+            .iter()
+            .map(|candidate| candidate.contents_seq_num)
+            .collect::<Vec<_>>();
+        assert!(
+            candidate_seq_nums.contains(&293),
+            "Sample3 geometry-first manifest must retain the known seq293 witness; got {candidate_seq_nums:?}"
+        );
+        assert!(
+            !manifest.candidates.is_empty(),
+            "Sample3 must expose at least one unique geometry-first structural-base candidate"
+        );
         for candidate in &manifest.candidates {
             assert_eq!(
                 candidate.escher_shape.fsp.as_ref().map(|fsp| fsp.spid),
@@ -238,6 +367,16 @@ mod tests {
                     .map(|fsp| fsp.shape_type),
                 Some(candidate.officeart_shape_type)
             );
+
+            let width = unique_contents_dimension(&candidate.contents_chunk, 0x00AA)
+                .expect("candidate width");
+            let height = unique_contents_dimension(&candidate.contents_chunk, 0x00AB)
+                .expect("candidate height");
+            assert!(exact_anchor_extent_matches(
+                &candidate.escher_shape,
+                width,
+                height
+            ));
         }
 
         let json = structural_base_manifest_json(&manifest).expect("manifest JSON");
