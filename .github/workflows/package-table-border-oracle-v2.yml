@@ -1,0 +1,32 @@
+name: Package TABLE border oracle v2
+
+on:
+  push:
+    branches:
+      - "research/package-table-border-oracle-v2"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "stable"
+      - name: Build oracle helper
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin table_border_carrier_oracle_tool
+          $exe = "vendor/producer-a/target/release/table_border_carrier_oracle_tool.exe"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "oracle helper exe missing" }
+          Get-FileHash -Algorithm SHA256 -LiteralPath $exe | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: table-border-carrier-oracle-windows-x64-v2
+          path: vendor/producer-a/target/release/table_border_carrier_oracle_tool.exe
+          if-no-files-found: error
+          retention-days: 7
