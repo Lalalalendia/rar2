@@ -70,6 +70,14 @@ jobs:
           set -euo pipefail
           cargo build             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin fdpp_exact_story_receipt
 
+      - name: Run exact Carlton Quill text-color discriminator
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+          mkdir -p "$RUNNER_TEMP/carlton-pair"
+          python tools/acquire_carlton_march_pair.py "$RUNNER_TEMP/carlton-pair"
+          cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_text_color_discriminator -- "$RUNNER_TEMP/carlton-pair/March-2026.pub"
+
       - name: Run exact-gate positive and superset-negative Reader acceptance
         shell: bash
         run: |
