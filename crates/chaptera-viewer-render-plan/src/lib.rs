@@ -918,6 +918,7 @@ pub fn build_page_render_plan_v1(
     })
 }
 
+#[derive(Clone)]
 struct RenderTextLayoutTargetV1 {
     page_id: PageId,
     page_size: Size2D,
