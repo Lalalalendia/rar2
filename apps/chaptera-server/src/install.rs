@@ -19,6 +19,8 @@ const CHAPTERA_TARGET: &str = include_str!("../../../deploy/systemd/chaptera.tar
 const CHAPTERA_TMPFILES: &str = include_str!("../../../deploy/tmpfiles/chaptera.conf");
 const CHAPTERA_SYSUSERS: &str = include_str!("../../../deploy/sysusers/chaptera.conf");
 const ISOLATION_HARNESS: &[u8] = include_bytes!("../../../tools/migration_pdf_worker_isolation.py");
+const HOST_ACCEPTANCE_HARNESS: &[u8] =
+    include_bytes!("../../../tools/run_cloud_reader_host_acceptance.py");
 
 const CANONICAL_CONFIG: &str = "/etc/chaptera/chaptera.toml";
 
@@ -127,6 +129,11 @@ fn install_from(
     atomic_write(
         &release_dir.join("tools/migration_pdf_worker_isolation.py"),
         ISOLATION_HARNESS,
+        0o755,
+    )?;
+    atomic_write(
+        &release_dir.join("tools/run_cloud_reader_host_acceptance.py"),
+        HOST_ACCEPTANCE_HARNESS,
         0o755,
     )?;
 
@@ -496,6 +503,11 @@ mod tests {
             fs::read(root.join("opt/chaptera/current/tools/migration_pdf_worker_isolation.py"))
                 .unwrap(),
             ISOLATION_HARNESS
+        );
+        assert_eq!(
+            fs::read(root.join("opt/chaptera/current/tools/run_cloud_reader_host_acceptance.py"))
+                .unwrap(),
+            HOST_ACCEPTANCE_HARNESS
         );
         assert_eq!(
             fs::read(root.join("etc/systemd/system/chaptera.target")).unwrap(),
