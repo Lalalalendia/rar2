@@ -350,6 +350,23 @@ fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn main() -> Result<()> {
+    let args = env::args().collect::<Vec<_>>();
+    match args.as_slice() {
+        [_, command, input, output] if command == "profile" => {
+            profile(PathBuf::from(input), PathBuf::from(output))
+        }
+        [_, command, before, after, output] if command == "diff" => diff(
+            PathBuf::from(before),
+            PathBuf::from(after),
+            PathBuf::from(output),
+        ),
+        _ => anyhow::bail!(
+            "usage: table_border_carrier_oracle_tool profile INPUT.pub OUT.json | diff BEFORE.pub AFTER.pub OUT.json"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,22 +401,5 @@ mod tests {
         assert!(changed_group_is_ambiguous(&two, &one));
         assert!(!changed_group_is_ambiguous(&one, &[]));
         assert!(!changed_group_is_ambiguous(&[], &two));
-    }
-}
-
-fn main() -> Result<()> {
-    let args = env::args().collect::<Vec<_>>();
-    match args.as_slice() {
-        [_, command, input, output] if command == "profile" => {
-            profile(PathBuf::from(input), PathBuf::from(output))
-        }
-        [_, command, before, after, output] if command == "diff" => diff(
-            PathBuf::from(before),
-            PathBuf::from(after),
-            PathBuf::from(output),
-        ),
-        _ => anyhow::bail!(
-            "usage: table_border_carrier_oracle_tool profile INPUT.pub OUT.json | diff BEFORE.pub AFTER.pub OUT.json"
-        ),
     }
 }
