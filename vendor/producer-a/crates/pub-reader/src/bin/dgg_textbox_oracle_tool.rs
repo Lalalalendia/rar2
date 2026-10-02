@@ -3,9 +3,7 @@ use std::{collections::BTreeSet, env, fs, io::Cursor, path::PathBuf};
 use anyhow::{Context, Result};
 use pub_cfb::{read_stream_reader, replace_stream_reader};
 use pub_core::StreamPath;
-use pub_escher::{
-    inspect_dgg_default_options, inspect_sp_containers, PUBLISHER_FIELD_SHAPE_ID,
-};
+use pub_escher::{inspect_dgg_default_options, inspect_sp_containers, PUBLISHER_FIELD_SHAPE_ID};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -128,8 +126,7 @@ fn profile(input: &PathBuf, output: &PathBuf) -> Result<()> {
                 participating_false += 1;
             }
         }
-        let filled_true =
-            participating_true == 1 && participating_false == 0 && malformed == 0;
+        let filled_true = participating_true == 1 && participating_false == 0 && malformed == 0;
         if !filled_true {
             continue;
         }
@@ -137,7 +134,11 @@ fn profile(input: &PathBuf, output: &PathBuf) -> Result<()> {
         let shape_ids = shape
             .client_data
             .as_ref()
-            .map(|record| record.values(PUBLISHER_FIELD_SHAPE_ID).collect::<BTreeSet<_>>())
+            .map(|record| {
+                record
+                    .values(PUBLISHER_FIELD_SHAPE_ID)
+                    .collect::<BTreeSet<_>>()
+            })
             .unwrap_or_default();
         if shape_ids.len() != 1 {
             continue;
@@ -157,13 +158,13 @@ fn profile(input: &PathBuf, output: &PathBuf) -> Result<()> {
         source_sha256: sha256_hex(&bytes),
         dgg_primary_fill_color_count: fill_color_all.len(),
         dgg_primary_scalar_fill_color_count: fill_color_scalar.len(),
-        dgg_primary_fill_color_op: (fill_color_scalar.len() == 1).then_some(fill_color_scalar[0].op),
+        dgg_primary_fill_color_op: (fill_color_scalar.len() == 1)
+            .then_some(fill_color_scalar[0].op),
         sparse_textbox_candidates: candidates,
     };
 
     if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     fs::write(output, serde_json::to_vec_pretty(&receipt)?)
         .with_context(|| format!("write {}", output.display()))?;
@@ -232,8 +233,7 @@ fn patch_dgg_fill_color(input: &PathBuf, output: &PathBuf, receipt_path: &PathBu
     .context("replace EscherStm in bounded CFB copy")?;
 
     if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     fs::write(output, &output_bytes).with_context(|| format!("write {}", output.display()))?;
 
@@ -248,8 +248,7 @@ fn patch_dgg_fill_color(input: &PathBuf, output: &PathBuf, receipt_path: &PathBu
         new_op,
     };
     if let Some(parent) = receipt_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     fs::write(receipt_path, serde_json::to_vec_pretty(&receipt)?)
         .with_context(|| format!("write {}", receipt_path.display()))?;
