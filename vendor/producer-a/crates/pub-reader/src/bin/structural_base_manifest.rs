@@ -4,8 +4,8 @@ use anyhow::{bail, Context, Result};
 use pub_contents::{Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32};
 use pub_core::RawSpan;
 use pub_escher::{
-    PublisherFieldRecord, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
-    PUBLISHER_FIELD_YS,
+    PublisherFieldRecord, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
+    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
 };
 use pub_model::{NodeId, PageId, Sha256Digest};
 use pub_reader::{
@@ -38,6 +38,8 @@ struct SelectedTarget {
     contents_height_wire_type: u8,
     officeart_spid: u32,
     officeart_shape_type: u16,
+    publisher_shape_id: u32,
+    publisher_shape_id_source: RawSpan,
     anchor_xs: i64,
     anchor_ys: i64,
     anchor_xe: i64,
@@ -64,6 +66,18 @@ fn unique_signed_anchor_field(record: &PublisherFieldRecord, id: u16) -> Option<
         [value] => Some(i64::from(i32::from_le_bytes(value.to_le_bytes()))),
         _ => None,
     }
+}
+
+fn unique_publisher_field(record: &PublisherFieldRecord, id: u16) -> Option<(u32, RawSpan)> {
+    let matches = record
+        .fields
+        .iter()
+        .filter(|field| field.id == id)
+        .collect::<Vec<_>>();
+    let [field] = matches.as_slice() else {
+        return None;
+    };
+    Some((field.value, field.source.clone()))
 }
 
 fn unique_contents_dimension(chunk: &Contents0x2cChunk, id: u16) -> Option<ContentsDimension> {
@@ -107,6 +121,18 @@ fn select_target(manifest: &PubStructuralBaseManifest) -> Result<SelectedTarget>
         let Some(anchor) = candidate.escher_shape.client_anchor.as_ref() else {
             continue;
         };
+        let Some(client_data) = candidate.escher_shape.client_data.as_ref() else {
+            continue;
+        };
+        let Some((publisher_shape_id, publisher_shape_id_source)) =
+            unique_publisher_field(client_data, PUBLISHER_FIELD_SHAPE_ID)
+        else {
+            continue;
+        };
+        if publisher_shape_id != candidate.contents_seq_num {
+            continue;
+        }
+
         let (Some(xs), Some(ys), Some(xe), Some(ye)) = (
             unique_signed_anchor_field(anchor, PUBLISHER_FIELD_XS),
             unique_signed_anchor_field(anchor, PUBLISHER_FIELD_YS),
@@ -142,6 +168,8 @@ fn select_target(manifest: &PubStructuralBaseManifest) -> Result<SelectedTarget>
             contents_height_wire_type: contents_height.wire_type,
             officeart_spid: candidate.officeart_spid,
             officeart_shape_type: candidate.officeart_shape_type,
+            publisher_shape_id,
+            publisher_shape_id_source,
             anchor_xs: xs,
             anchor_ys: ys,
             anchor_xe: xe,
