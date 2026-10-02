@@ -63,7 +63,34 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Download pinned exact 1050 materialization
+        id: pinned-1050
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        if: steps.pinned-1050.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
       - name: Checkout pinned natural corpus donor
+        if: steps.pinned-1050.outcome != 'success'
         uses: actions/checkout@v4
         with:
           repository: Lalalalendia/lalamu
@@ -74,6 +101,7 @@ jobs:
           sparse-checkout-cone-mode: true
 
       - name: Restore exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success'
         id: historical-425-cache
         uses: actions/cache/restore@v4
         with:
@@ -81,7 +109,7 @@ jobs:
           key: reader-historical-425-b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef-v1
 
       - name: Install historical reconstruction tools on cache miss
-        if: steps.historical-425-cache.outputs.cache-hit != 'true'
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -107,6 +135,7 @@ jobs:
             --command-timeout 90
 
       - name: Verify exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success'
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -124,7 +153,7 @@ jobs:
           PY
 
       - name: Save exact historical 425-SHA tranche
-        if: steps.historical-425-cache.outputs.cache-hit != 'true'
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: out/container
@@ -148,10 +177,17 @@ jobs:
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/publisher-visual-batch01"
           mkdir -p "$RUNNER_TEMP/publisher-visual-batch01"
+          if [ "${{ steps.pinned-1050.outcome }}" = "success" ]; then
+            natural_root="out/pinned1050/materialized/native"
+            historical_root="$RUNNER_TEMP/no-second-source-root"
+          else
+            natural_root="corpus-donor/pub-corpus/corpus"
+            historical_root="out/container/pub"
+          fi
           python tools/cloud_reader_visual_fingerprint_v1.py prepare \
             tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv \
-            corpus-donor/pub-corpus/corpus \
-            out/container/pub \
+            "$natural_root" \
+            "$historical_root" \
             "$RUNNER_TEMP/publisher-visual-batch01/fixtures" \
             "$RUNNER_TEMP/publisher-visual-batch01/manifest.json"
 
