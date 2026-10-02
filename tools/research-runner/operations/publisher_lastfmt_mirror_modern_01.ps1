@@ -230,6 +230,10 @@ function Get-TrackingSummary {
     param([Parameter(Mandatory = $true)]$Receipt)
     $obs = @($Receipt.observer.observations)
     $entry = if ($obs.Count -eq 1) { $obs[0] } else { $null }
+    $ecpRecolorScalars = @()
+    if ($null -ne $entry -and $null -ne $entry.PSObject.Properties["ecp_recolor_scalars"]) {
+        $ecpRecolorScalars = @($entry.ecp_recolor_scalars)
+    }
     return [ordered]@{
         tracking_object_count = [int]$Receipt.observer.tracking_object_count
         target_observation_count = $obs.Count
@@ -238,7 +242,7 @@ function Get-TrackingSummary {
         dy_wrap_dist_top = if ($null -ne $entry -and $null -ne $entry.dy_wrap_dist_top) { [long]$entry.dy_wrap_dist_top.value } else { $null }
         dx_wrap_dist_right = if ($null -ne $entry -and $null -ne $entry.dx_wrap_dist_right) { [long]$entry.dx_wrap_dist_right.value } else { $null }
         dy_wrap_dist_bottom = if ($null -ne $entry -and $null -ne $entry.dy_wrap_dist_bottom) { [long]$entry.dy_wrap_dist_bottom.value } else { $null }
-        ecp_recolor_scalars = if ($null -ne $entry) { @($entry.ecp_recolor_scalars) } else { @() }
+        ecp_recolor_scalars = $ecpRecolorScalars
     }
 }
 
@@ -275,7 +279,6 @@ function Get-ComInventory {
                         page_index = $pageIndex
                         shape_index = $shapeIndex
                         shape_id = [long]$shape.ID
-                        shape_type = [long]$shape.Type
                     }
                 }
                 finally {
@@ -389,7 +392,7 @@ if ($activeEscherPreserved) {
     if ($null -eq $afterTrackingSummary -or [int]$afterTrackingSummary.target_observation_count -eq 0) {
         $verdict = "mirror-retired"
     }
-    elseif (Test-ExactTrackingWrap -Summary $afterTrackingSummary) {
+    elseif (Test-ExactTrackingMirror -Summary $afterTrackingSummary) {
         if ($identityRoute -eq "same-publisher-shape-id") {
             $verdict = "mirror-preserved"
         }
