@@ -1,12 +1,13 @@
 name: Build TABLE border oracle Windows artifact v3
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - "research/package-table-border-oracle-windows-03"
   pull_request:
     paths:
-      - ".github/workflows/build-table-border-oracle-windows.yml"
+      - ".github/workflows/build-table-border-oracle-windows-v3.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
