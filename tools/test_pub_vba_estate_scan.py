@@ -70,7 +70,7 @@ def directory_entry(name: str, object_type: int, *, left=FREE, right=FREE, child
     return bytes(row)
 
 
-def minimal_cfb(with_vba: bool) -> bytes:
+def minimal_cfb(with_vba: bool, *, complete_vba: bool = True) -> bytes:
     sector_size = 512
     header = bytearray(sector_size)
     header[:8] = module.CFB_MAGIC
@@ -90,12 +90,17 @@ def minimal_cfb(with_vba: bool) -> bytes:
     for i in range(109):
         struct.pack_into("<I", header, 76 + i * 4, 1 if i == 0 else FREE)
 
-    if with_vba:
+    if with_vba and complete_vba:
         entries = [
             directory_entry("Root Entry", 5, child=1),
             directory_entry("VBA", 1, child=2),
             directory_entry("dir", 2, right=3),
             directory_entry("_VBA_PROJECT", 2),
+        ]
+    elif with_vba:
+        entries = [
+            directory_entry("Root Entry", 5, child=1),
+            directory_entry("VBA", 1),
         ]
     else:
         entries = [directory_entry("Root Entry", 5)]
@@ -219,6 +224,11 @@ def main() -> int:
     plain = module.inspect_pub_bytes(minimal_cfb(False))
     assert plain["cfb_status"] == "ok"
     assert plain["vba_state"] == "absent"
+
+    name_collision = module.inspect_pub_bytes(minimal_cfb(True, complete_vba=False))
+    assert name_collision["cfb_status"] == "ok"
+    assert name_collision["vba_state"] == "non_project_vba_storage"
+    assert name_collision["vba_project_count"] == 0
 
     bad = module.inspect_pub_bytes(b"not a cfb")
     assert bad["cfb_status"] == "parse_failed"
