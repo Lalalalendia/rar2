@@ -529,6 +529,18 @@ pub struct ViewerTable {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ViewerTableCell>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub borders: Vec<ViewerTableBorderSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTableBorderSegment {
+    pub x1_emu: i64,
+    pub y1_emu: i64,
+    pub x2_emu: i64,
+    pub y2_emu: i64,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3010,6 +3022,116 @@ fn bounded_authoring_slice_from_resolved_pages(
     })
 }
 
+
+fn viewer_table_border_segments(
+    source: &pub_reader::PubTableSource,
+    cells: &[ViewerTableCell],
+) -> Vec<ViewerTableBorderSegment> {
+    if source.border_segments.is_empty() {
+        return Vec::new();
+    }
+
+    let column_count = match usize::try_from(source.columns) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let row_count = match usize::try_from(source.rows) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+    let mut x_boundaries = vec![None::<i64>; column_count.saturating_add(1)];
+    let mut y_boundaries = vec![None::<i64>; row_count.saturating_add(1)];
+
+    fn set_boundary(slot: &mut Option<i64>, value: i64) -> bool {
+        match slot {
+            Some(existing) => *existing == value,
+            None => {
+                *slot = Some(value);
+                true
+            }
+        }
+    }
+
+    for cell in cells {
+        if cell.row_span != 1 || cell.column_span != 1 {
+            return Vec::new();
+        }
+        let Some(bounds) = cell.bounds else {
+            return Vec::new();
+        };
+        let row = match usize::try_from(cell.address.row) {
+            Ok(value) if value < row_count => value,
+            _ => return Vec::new(),
+        };
+        let column = match usize::try_from(cell.address.column) {
+            Ok(value) if value < column_count => value,
+            _ => return Vec::new(),
+        };
+        let Some(right) = bounds.x.get().checked_add(bounds.width.get()) else {
+            return Vec::new();
+        };
+        let Some(bottom) = bounds.y.get().checked_add(bounds.height.get()) else {
+            return Vec::new();
+        };
+        if !set_boundary(&mut x_boundaries[column], bounds.x.get())
+            || !set_boundary(&mut x_boundaries[column + 1], right)
+            || !set_boundary(&mut y_boundaries[row], bounds.y.get())
+            || !set_boundary(&mut y_boundaries[row + 1], bottom)
+        {
+            return Vec::new();
+        }
+    }
+
+    if x_boundaries.iter().any(Option::is_none) || y_boundaries.iter().any(Option::is_none) {
+        return Vec::new();
+    }
+
+    source
+        .border_segments
+        .iter()
+        .filter_map(|segment| {
+            let row_start = usize::try_from(segment.row_start).ok()?;
+            let row_end = usize::try_from(segment.row_end).ok()?;
+            let column_start = usize::try_from(segment.column_start).ok()?;
+            let column_end = usize::try_from(segment.column_end).ok()?;
+            if row_start > row_count
+                || row_end > row_count
+                || column_start > column_count
+                || column_end > column_count
+            {
+                return None;
+            }
+
+            let (x1_emu, y1_emu, x2_emu, y2_emu) = match segment.axis {
+                pub_reader::PubTableBorderAxis::Horizontal => (
+                    x_boundaries[column_start]?,
+                    y_boundaries[row_start]?,
+                    x_boundaries[column_end]?,
+                    y_boundaries[row_end]?,
+                ),
+                pub_reader::PubTableBorderAxis::Vertical => (
+                    x_boundaries[column_start]?,
+                    y_boundaries[row_start]?,
+                    x_boundaries[column_end]?,
+                    y_boundaries[row_end]?,
+                ),
+            };
+            if x1_emu == x2_emu && y1_emu == y2_emu {
+                return None;
+            }
+
+            Some(ViewerTableBorderSegment {
+                x1_emu,
+                y1_emu,
+                x2_emu,
+                y2_emu,
+                rgb: segment.color_rgb,
+                width_emu: i64::from(segment.width_emu),
+            })
+        })
+        .collect()
+}
+
 fn viewer_tables_from_resolved(
     graph: &PubResolvedGraph,
     projection: &BoundedLayoutProjection,
@@ -3113,7 +3235,8 @@ fn viewer_tables_from_resolved(
                 fill_rgb: cell.fill_rgb,
                 fill_visible: cell.fill_visible,
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let borders = viewer_table_border_segments(source, &cells);
 
         tables.push(ViewerTable {
             node_id,
@@ -3121,6 +3244,7 @@ fn viewer_tables_from_resolved(
             rows: source.rows,
             columns: source.columns,
             cells,
+            borders,
         });
     }
 
