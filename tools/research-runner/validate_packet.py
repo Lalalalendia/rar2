@@ -97,8 +97,9 @@ def main() -> int:
     operation = packet.get("operation")
     if not isinstance(operation, dict):
         fail("operation must be an object")
-    if operation.get("shell") != "pwsh":
-        fail("operation.shell must be 'pwsh' in v1")
+    operation_shell = operation.get("shell")
+    if operation_shell not in {"pwsh", "powershell"}:
+        fail("operation.shell must be 'pwsh' or 'powershell' in v1")
     script = operation.get("script")
     if not isinstance(script, str) or not script.endswith(".ps1"):
         fail("operation.script must be a repository-relative .ps1 path")
@@ -188,6 +189,7 @@ def main() -> int:
                 "id": experiment_id,
                 "publisher_environment": environment,
                 "requires_publisher": requires_publisher,
+                "operation_shell": operation_shell,
                 "operation_script": script,
                 "reset_required": reset_required,
                 "reset_baseline_id": reset_baseline_id,
