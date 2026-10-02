@@ -1078,7 +1078,7 @@ fn resolved_line_x_offset_emu_v1(
             scalar_start,
             scalar_end,
             content_leading_x_emu: 0,
-            content_width_emu: target.bounds.width.get(),
+            content_width_emu: bounds.width.get(),
             measured_width_emu,
         }],
     };
@@ -1212,7 +1212,7 @@ fn resolve_text_layout_v1(
         Err(reason) => return fallback_layout(reason),
     };
 
-    if target.bounds.width.get() <= 0 || target.bounds.height.get() <= 0 {
+    if bounds.width.get() <= 0 || bounds.height.get() <= 0 {
         return fallback_layout(RenderTextLayoutFallbackReasonV1::FrameGeometryInvalid);
     }
     if font.resource_id.is_empty()
@@ -1354,8 +1354,8 @@ fn resolve_text_layout_v1(
             line_height_emu,
         },
         vertical_offset_emu: resolved_vertical_offset_emu_v1(
-            target.vertical_alignment,
-            target.bounds.height.get(),
+            vertical_alignment,
+            bounds.height.get(),
             laid_out_height_emu,
         ),
         lines,
@@ -1599,10 +1599,10 @@ fn resolve_mixed_size_text_layout_v1(
                 Ok(evaluated) => evaluated,
                 Err(reason) => return fallback_layout(reason),
             };
-            let fits_width = evaluated.measured_width_emu <= target.bounds.width.get();
+            let fits_width = evaluated.measured_width_emu <= bounds.width.get();
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
-                .is_some_and(|height| height <= target.bounds.height.get());
+                .is_some_and(|height| height <= bounds.height.get());
             if fits_width && fits_height {
                 chosen = Some(evaluated);
             }
@@ -1620,8 +1620,8 @@ fn resolve_mixed_size_text_layout_v1(
         };
         let x_offset_emu = resolved_line_x_offset_emu_v1(
             fragment,
-            target.node_id,
-            &target.bounds,
+            node_id,
+            bounds,
             line_index,
             cursor..chosen.scalar_end,
             chosen.measured_width_emu,
@@ -1669,7 +1669,7 @@ fn resolve_mixed_size_text_layout_v1(
         },
         vertical_offset_emu: resolved_vertical_offset_emu_v1(
             vertical_alignment,
-            target.bounds.height.get(),
+            bounds.height.get(),
             used_height_emu,
         ),
         lines,
@@ -1859,8 +1859,8 @@ where
     ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
 {
     if target.projected_target_frame_node_id.is_some()
-        || target.target.bounds.width.get() <= 0
-        || target.target.bounds.height.get() <= 0
+        || target.bounds.width.get() <= 0
+        || target.bounds.height.get() <= 0
     {
         return None;
     }
@@ -1943,8 +1943,8 @@ where
         used_height_emu = used_height_emu.checked_add(chosen.line_height_emu)?;
         let x_offset_emu = resolved_line_x_offset_emu_v1(
             fragment,
-            node_id,
-            bounds,
+            target.node_id,
+            &target.bounds,
             line_index,
             cursor..chosen.scalar_end,
             chosen.measured_width_emu,
@@ -1989,7 +1989,7 @@ where
             line_height_emu: max_line_height_emu,
         },
         vertical_offset_emu: resolved_vertical_offset_emu_v1(
-            vertical_alignment,
+            target.vertical_alignment,
             target.bounds.height.get(),
             used_height_emu,
         ),
