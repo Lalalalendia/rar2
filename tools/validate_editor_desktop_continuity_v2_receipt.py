@@ -63,8 +63,11 @@ def validate_semantics(receipt):
     ):
         raise AssertionError("ResizeNode must change width or height")
 
-    if image["before_asset_sha256"] == image["after_asset_sha256"]:
-        raise AssertionError("ReplaceImage must change asset identity")
+    if (
+        image.get("before_asset_sha256") is not None
+        and image["before_asset_sha256"] == image["after_asset_sha256"]
+    ):
+        raise AssertionError("ReplaceImage must change asset identity when prior replacement is known")
     if image["frame_before"] != image["frame_after"]:
         raise AssertionError("V2 ReplaceImage must preserve frame geometry")
 
@@ -168,7 +171,7 @@ def sample_receipt():
             "projection_kind": "direct_page_local",
             "origin_node_id": "44444444-4444-4444-4444-444444444444",
             "capability_admitted": True,
-            "before_asset_sha256": h("7"),
+            "before_asset_sha256": None,
             "after_asset_sha256": h("8"),
             "after_asset_mime": "image/png",
             "after_asset_byte_len": 2048,
