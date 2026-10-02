@@ -409,7 +409,6 @@ fn populate_bounded_table_cell_fill(
     Ok(admitted)
 }
 
-
 const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
 const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
 const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
@@ -470,8 +469,7 @@ fn populate_native_autoformat_table_cell_fill(
     table_seq_num: u32,
     cells: &mut [PubTableCellSource],
 ) -> usize {
-    let mut by_ordinal =
-        BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
+    let mut by_ordinal = BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
 
     for shape in &context.officeart_inventory.shapes {
         let Some(ordinal) = native_autoformat_cell_ordinal(shape, table_seq_num) else {
