@@ -246,6 +246,7 @@ def main():
             if hard:
                 hard_violations.append(
                     {
+                        "stage": "census",
                         "source_sha256": sha,
                         "violations": sorted(set(hard)),
                     }
@@ -294,6 +295,11 @@ def main():
             args.timeout_seconds,
             materialize_dir=out,
         )
+        if result.get("stderr"):
+            (args.per_file_dir / f"{sha}.materialize.stderr.txt").write_text(
+                result["stderr"],
+                encoding="utf-8",
+            )
         row, hard = validate_route_result(
             result,
             source,
@@ -334,6 +340,7 @@ def main():
             if hard:
                 hard_violations.append(
                     {
+                        "stage": "materialization",
                         "source_sha256": sha,
                         "violations": sorted(set(hard)),
                     }
@@ -374,7 +381,11 @@ def main():
         },
         "hard_violations": sorted(
             hard_violations,
-            key=lambda item: (item["source_sha256"], item["violations"]),
+            key=lambda item: (
+                item.get("stage", ""),
+                item["source_sha256"],
+                item["violations"],
+            ),
         ),
         "claims": {
             "universal_pub_editable_export": False,
@@ -393,7 +404,17 @@ def main():
     print(json.dumps(summary, indent=2, sort_keys=True))
 
     if hard_violations:
-        raise SystemExit(1)
+        print(
+            json.dumps(
+                {
+                    "deferred_hard_violation_count": len(hard_violations),
+                    "verdict": "deferred_to_consumer_finalize",
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
