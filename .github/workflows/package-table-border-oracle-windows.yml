@@ -7,6 +7,10 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/bin/table_border_carrier_oracle_tool.rs"
       - ".github/workflows/package-table-border-oracle-windows.yml"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
