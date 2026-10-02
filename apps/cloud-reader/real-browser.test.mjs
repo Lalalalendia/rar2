@@ -68,6 +68,11 @@ assert.ok(
   referenceRasterDpi === 0 || (Number.isInteger(referenceRasterDpi) && referenceRasterDpi >= 72 && referenceRasterDpi <= 300),
   "reference raster DPI must be 0 or an integer in 72..300"
 );
+const workerCpuSeconds = Number(process.env.READER_WORKER_CPU_SECONDS ?? "30");
+assert.ok(
+  Number.isInteger(workerCpuSeconds) && workerCpuSeconds >= 30 && workerCpuSeconds <= 60,
+  "worker CPU seconds must be an integer in 30..60"
+);
 const temporary = await mkdtemp(join(tmpdir(), "chaptera-real-scene-"));
 const results = [];
 const errors = [];
@@ -144,7 +149,7 @@ try {
     const workerOutput = join(temporary, fixture.name + "-worker");
     const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
       "--output-dir", workerOutput, "--input", source, "--timeout", "60", "--address-space-mb", "512",
-      "--cpu-seconds", "30", "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
+      "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
       worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
       "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)], { cwd: repo, timeout: 70000, maxBuffer: 1024 * 1024 });
     const isolation = JSON.parse(stdout);
