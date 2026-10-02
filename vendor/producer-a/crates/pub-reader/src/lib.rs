@@ -3103,6 +3103,12 @@ pub fn build_mature_0x2c_from_streams(
                     table_bounds: &bounds,
                     officeart_owner_shape: shape,
                     officeart_inventory: &escher_inventory,
+                    color_scheme: color_scheme.as_ref().map(|value| &value.scheme),
+                    dgg_defaults: if dgg_defaults_unambiguous {
+                        dgg_defaults
+                    } else {
+                        None
+                    },
                 };
                 (
                     table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
