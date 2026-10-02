@@ -1015,10 +1015,18 @@ pub struct ViewerImageSourceWindowV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerImageRecolorV1 {
+    pub target_rgb: [u8; 3],
+    pub preserve_grays: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerImagePlacementV1 {
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_window: Option<ViewerImageSourceWindowV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recolor: Option<ViewerImageRecolorV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1610,10 +1618,15 @@ fn viewer_mature_officeart_wmf_preview_images(
                 }
                 None => None,
             };
-            if let Some(source_window) = source_window {
+            let recolor = graph
+                .nodes
+                .get(node_id)
+                .and_then(|node| viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref()));
+            if source_window.is_some() || recolor.is_some() {
                 placements.push(ViewerImagePlacementV1 {
                     node_id: *node_id,
-                    source_window: Some(source_window),
+                    source_window,
+                    recolor,
                 });
             }
         }
@@ -1783,6 +1796,16 @@ fn viewer_image_source_window_v1(
         bottom_q16,
     }))
 }
+
+fn viewer_image_recolor_v1(
+    recolor: Option<&pub_reader::PubExplicitImageRecolorSource>,
+) -> Option<ViewerImageRecolorV1> {
+    recolor.map(|recolor| ViewerImageRecolorV1 {
+        target_rgb: recolor.target_rgb,
+        preserve_grays: recolor.preserve_grays,
+    })
+}
+
 
 pub fn open_mature_0x2c(bytes: &[u8]) -> Result<ViewerDocument> {
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
@@ -2406,10 +2429,19 @@ fn open_mature_0x2c_bundle(
                         }
                         None => None,
                     };
-                    if let Some(source_window) = source_window {
+                    let recolor = pipeline
+                        .resolved
+                        .graph
+                        .nodes
+                        .get(&usage.node_id)
+                        .and_then(|node| {
+                            viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
+                        });
+                    if source_window.is_some() || recolor.is_some() {
                         placements.push(ViewerImagePlacementV1 {
                             node_id: usage.node_id,
-                            source_window: Some(source_window),
+                            source_window,
+                            recolor,
                         });
                     }
                 }
