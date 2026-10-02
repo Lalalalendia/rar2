@@ -490,4 +490,3 @@ pub fn analyze_mature_0x2c_table_default_style_fields<R: Read + Seek>(
     observations.sort_by_key(|observation| observation.contents_seq_num);
     Ok(observations)
 }
-
