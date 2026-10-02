@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 const EXPECTED_REMPLACANTE_SHA256: &str =
     "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506";
 const ROTATION: u16 = 0x0004;
+const FSP_FLIP_H: u32 = 1 << 6;
+const FSP_FLIP_V: u32 = 1 << 7;
 
 fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
@@ -67,6 +69,7 @@ struct Receipt {
     candidate_story_count: usize,
     image_shape_join_count: usize,
     image_raw_rotation_histogram: BTreeMap<String, usize>,
+    image_flip_profile_histogram: BTreeMap<String, usize>,
     image_source_transform_histogram: BTreeMap<String, usize>,
     claims: Claims,
 }
@@ -170,6 +173,7 @@ fn exact_virginia_p1_image_rotation_source_probe() {
 
     let (_page_id, nodes) = candidates.pop().expect("unique p1 candidate");
     let mut image_raw_rotation_histogram = BTreeMap::<String, usize>::new();
+    let mut image_flip_profile_histogram = BTreeMap::<String, usize>::new();
     let mut image_source_transform_histogram = BTreeMap::<String, usize>::new();
     let mut image_shape_join_count = 0_usize;
 
@@ -191,10 +195,22 @@ fn exact_virginia_p1_image_rotation_source_probe() {
             continue;
         };
         image_shape_join_count += 1;
+        let shape = &inventory.shapes[*shape_index];
         bump(
             &mut image_raw_rotation_histogram,
-            rotation_profile(&inventory.shapes[*shape_index].fopts),
+            rotation_profile(&shape.fopts),
         );
+        let flags = shape.fsp.as_ref().map_or(0, |fsp| fsp.flags);
+        let flip_profile = match (
+            flags & FSP_FLIP_H != 0,
+            flags & FSP_FLIP_V != 0,
+        ) {
+            (false, false) => "none",
+            (true, false) => "h_only",
+            (false, true) => "v_only",
+            (true, true) => "hv",
+        };
+        bump(&mut image_flip_profile_histogram, flip_profile);
     }
 
     let receipt = Receipt {
@@ -212,6 +228,7 @@ fn exact_virginia_p1_image_rotation_source_probe() {
             .count(),
         image_shape_join_count,
         image_raw_rotation_histogram,
+        image_flip_profile_histogram,
         image_source_transform_histogram,
         claims: Claims {
             raw_rotation_values_emitted: false,
