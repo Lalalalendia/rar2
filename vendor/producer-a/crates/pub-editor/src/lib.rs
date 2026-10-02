@@ -71,6 +71,7 @@ pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
 pub const PUB_MATURE_0X2C_SCHEMA_FENCE: &str = "pub-family-0x2c";
+const XML_10_TEXT_SERIALIZATION_FEATURE: &str = "story.text.xml_1_0";
 
 /// Canonical Story-state identity shared with services/editor-api/story_range_v1.py.
 pub fn story_state_id_v1(story_id: StoryId, text: &str) -> String {
@@ -3795,13 +3796,26 @@ fn editable_export_plan(
         }
     }
 
-    for story_id in graph.stories.keys() {
+    for (story_id, story) in &graph.stories {
         requests.push(SemanticFeatureRequest {
             feature: "story.text".into(),
             origin: Some(story_id.into_canonical()),
             property_path: Some("story.text".into()),
             require_preserved: true,
         });
+        if story
+            .text
+            .chars()
+            .map(u32::from)
+            .any(|scalar| !is_xml_10_scalar(scalar))
+        {
+            requests.push(SemanticFeatureRequest {
+                feature: XML_10_TEXT_SERIALIZATION_FEATURE.into(),
+                origin: Some(story_id.into_canonical()),
+                property_path: Some("story.text".into()),
+                require_preserved: true,
+            });
+        }
     }
 
     let page_ids = graph
@@ -3869,6 +3883,13 @@ fn editable_export_plan(
     }
 
     plan_export(&manifest, requests)
+}
+
+fn is_xml_10_scalar(value: u32) -> bool {
+    matches!(
+        value,
+        0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
+    )
 }
 
 fn replacement_asset_resource_id(sha256: Sha256Digest) -> ResourceId {
