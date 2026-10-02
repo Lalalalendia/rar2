@@ -61,7 +61,7 @@ fn project_rect(child: [i128; 4], group: [i128; 4], target: [i128; 4]) -> Option
 fn properties<'a>(
     shape: &'a pub_escher::SpContainerObservation,
     property_id: u16,
-) -> Vec<&'a pub_escher::FoptPropertyObservation> {
+) -> Vec<&'a pub_escher::Fopte> {
     shape
         .fopts
         .iter()
