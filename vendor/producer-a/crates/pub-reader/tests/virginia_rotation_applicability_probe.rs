@@ -199,6 +199,11 @@ fn exact_virginia_direct_image_rotation_applicability_probe() {
         25,
         "exact Virginia Remplacante selected customer page count drift"
     );
+    let viewer_page_ids = page_selection
+        .customer_page_seq_nums
+        .iter()
+        .map(|seq_num| derive_pub_page_id(&source_hash, *seq_num).expect("derive Viewer PageId"))
+        .collect::<Vec<_>>();
 
     let escher =
         read_stream_path(&fixture, "/Escher/EscherStm").expect("read exact Virginia Escher stream");
