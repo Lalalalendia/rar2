@@ -132,7 +132,6 @@ fn parse_container_prefix(contents: &[u8], source: &RawSpan) -> Result<Vec<Field
         .context("bound nested Contents container")?;
     let mut fields = Vec::new();
     while cursor.remaining() > 0 {
-        let offset = cursor.position();
         match parse_observer_block(&mut cursor) {
             Ok(field) => fields.push(FieldNode {
                 field,
@@ -143,7 +142,6 @@ fn parse_container_prefix(contents: &[u8], source: &RawSpan) -> Result<Vec<Field
                 // looking like a field sequence, keep the already-framed prefix
                 // and leave the remainder opaque. Target admission below requires
                 // all named fields it needs to occur inside this framed prefix.
-                let _ = offset;
                 break;
             }
         }
@@ -498,7 +496,7 @@ mod tests {
         };
 
         let fields =
-            parse_container_children(&bytes, &source).expect("observer framing must parse");
+            parse_container_prefix(&bytes, &source).expect("observer framing must parse");
 
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].field.block_type, 0xC0);
@@ -532,7 +530,7 @@ mod tests {
             len: bytes.len() as u64,
         };
 
-        let fields = parse_container_children(&bytes, &source).expect("typed payload must frame");
+        let fields = parse_container_prefix(&bytes, &source).expect("typed payload must frame");
 
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].field.block_type, BLOCK_TYPE_TYPED_CONTAINER_98);
