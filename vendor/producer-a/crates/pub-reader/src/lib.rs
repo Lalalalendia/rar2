@@ -199,12 +199,17 @@ fn officeart_rotation_sin_cos_scaled(rotation_op: u32) -> (i128, i128) {
         angle += FULL_TURN_UNITS;
     }
 
-    match angle {
-        0 => return (0, AFFINE_DECIMAL_SCALE),
-        QUARTER_TURN_UNITS => return (AFFINE_DECIMAL_SCALE, 0),
-        -QUARTER_TURN_UNITS => return (-AFFINE_DECIMAL_SCALE, 0),
-        HALF_TURN_UNITS | -HALF_TURN_UNITS => return (0, -AFFINE_DECIMAL_SCALE),
-        _ => {}
+    if angle == 0 {
+        return (0, AFFINE_DECIMAL_SCALE);
+    }
+    if angle == QUARTER_TURN_UNITS {
+        return (AFFINE_DECIMAL_SCALE, 0);
+    }
+    if angle == -QUARTER_TURN_UNITS {
+        return (-AFFINE_DECIMAL_SCALE, 0);
+    }
+    if angle == HALF_TURN_UNITS || angle == -HALF_TURN_UNITS {
+        return (0, -AFFINE_DECIMAL_SCALE);
     }
 
     let mut cosine_sign = 1i128;
