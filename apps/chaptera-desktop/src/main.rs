@@ -975,19 +975,27 @@ fn main() -> eframe::Result<()> {
 
     if first_arg.as_deref() == Some(std::ffi::OsStr::new("--desktop-acceptance-v2")) {
         let Some(fixture) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
             std::process::exit(2);
         };
         let Some(replacement) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
             std::process::exit(2);
         };
         let Some(project) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
             std::process::exit(2);
         };
         let Some(export) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
             std::process::exit(2);
         };
         if args.next().is_some() {
