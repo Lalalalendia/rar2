@@ -98,8 +98,8 @@ fn exact_virginia_p24_later_image_product_boundary_probe() {
     let output = env::var_os("CHAPTERA_VIRGINIA_OCCLUSION_OUT")
         .map(PathBuf::from)
         .expect("CHAPTERA_VIRGINIA_OCCLUSION_OUT");
-    let expected_sha = env::var("CHAPTERA_VIRGINIA_OCCLUSION_SHA256")
-        .expect("CHAPTERA_VIRGINIA_OCCLUSION_SHA256");
+    let expected_sha =
+        env::var("CHAPTERA_VIRGINIA_OCCLUSION_SHA256").expect("CHAPTERA_VIRGINIA_OCCLUSION_SHA256");
 
     let bytes = fs::read(&fixture).expect("read exact Virginia PUB");
     let actual_sha = Sha256::digest(&bytes)
@@ -200,7 +200,11 @@ fn exact_virginia_p24_later_image_product_boundary_probe() {
         .iter()
         .map(|(_, later_id)| *later_id)
         .collect::<BTreeSet<_>>();
-    assert_eq!(later_images.len(), 1, "Stage-L p24 later image occluder cohort");
+    assert_eq!(
+        later_images.len(),
+        1,
+        "Stage-L p24 later image occluder cohort"
+    );
 
     let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
         .expect("open exact Virginia through Viewer product boundary");
@@ -237,9 +241,11 @@ fn exact_virginia_p24_later_image_product_boundary_probe() {
     let viewer_image_nonempty_bytes_count = later_images
         .iter()
         .filter(|node_id| {
-            bundle.geometry.images.iter().any(|image| {
-                image.node_ids.contains(node_id) && !image.bytes.is_empty()
-            })
+            bundle
+                .geometry
+                .images
+                .iter()
+                .any(|image| image.node_ids.contains(node_id) && !image.bytes.is_empty())
         })
         .count();
     let viewer_scene_source_order_preserved_count = later_pairs
