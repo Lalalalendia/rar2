@@ -51,6 +51,59 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def proposed_ledger_entry(
+    payload: dict[str, Any],
+    discriminator_run_id: str | None,
+) -> dict[str, Any] | None:
+    selected_sha = payload.get("selected_sha256")
+    if not selected_sha:
+        return None
+
+    decision = str(payload.get("decision") or "")
+    if decision == "handoff_existing_owner":
+        status = "handoff"
+    elif decision == "stop":
+        status = "closed"
+    else:
+        status = "executed"
+
+    return {
+        "schema": "chaptera.reader1050-discriminator-ledger-entry.v1",
+        "source_sha256": selected_sha,
+        "source_reader_run_id": str(payload.get("source_reader_run_id") or ""),
+        "discriminator_run_id": str(discriminator_run_id or ""),
+        "source_main_sha": payload.get("source_main_sha"),
+        "discriminator_kind": payload.get("executed_discriminator"),
+        "verdict": payload.get("verdict"),
+        "decision": decision,
+        "status": status,
+        "next_discriminator": (payload.get("next_discriminator") or {}).get("kind"),
+    }
+
+
+def write_outputs(
+    payload: dict[str, Any],
+    out_root: Path,
+    discriminator_run_id: str | None,
+) -> dict[str, Any]:
+    out_root.mkdir(parents=True, exist_ok=True)
+    (out_root / "decision.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (out_root / "decision.md").write_text(
+        render_markdown(payload),
+        encoding="utf-8",
+    )
+    proposed = proposed_ledger_entry(payload, discriminator_run_id)
+    if proposed is not None:
+        (out_root / "ledger-entry.proposed.json").write_text(
+            json.dumps(proposed, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return payload
+
+
 def forced_trigger_classification(
     selected_acceptance: dict[str, Any],
 ) -> tuple[str, list[str], dict[str, Any]] | None:
@@ -400,6 +453,7 @@ def build_discriminator(
     frontier_path: Path,
     out_root: Path,
     corpus_root: Path | None,
+    discriminator_run_id: str | None = None,
 ) -> dict[str, Any]:
     frontier = read_json(frontier_path)
     selected = frontier.get("selected")
@@ -410,18 +464,14 @@ def build_discriminator(
             "source_reader_run_id": frontier.get("source_reader_run_id"),
             "selected_sha256": None,
             "decision": "stop",
+            "executed_discriminator": None,
             "reason": "frontier has no selected unsupported witness",
         }
-        out_root.mkdir(parents=True, exist_ok=True)
-        (out_root / "decision.json").write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        return payload
+        return write_outputs(payload, out_root, discriminator_run_id)
 
     selected_sha = str(selected["source_sha256"]).lower()
-    existing_owner = selected.get("existing_owner")
-    if isinstance(existing_owner, dict):
+    known_evidence = selected.get("known_evidence")
+    if isinstance(known_evidence, dict) and known_evidence.get("kind") == "format_owner":
         payload = {
             "schema": SCHEMA,
             "status": "existing_owner_handoff",
@@ -435,8 +485,8 @@ def build_discriminator(
             "closed_hypotheses": ["unowned_reader_failure", "generic_corruption_route"],
             "next_discriminator": {
                 "kind": "handoff_existing_owner",
-                "owner": existing_owner.get("owner"),
-                "route": existing_owner.get("route"),
+                "owner": known_evidence.get("owner"),
+                "route": known_evidence.get("route"),
                 "reason": (
                     "this exact witness already has a grounded format-research owner; "
                     "normal Reader failure and diagnostic forced salvage reachability do not "
@@ -447,21 +497,56 @@ def build_discriminator(
             "physical_diff": None,
             "control_shortlist": [],
             "decision": "handoff_existing_owner",
+            "executed_discriminator": "existing_owner_handoff",
             "evidence_boundary": (
                 "source-free routing only; no new corruption classification is inferred "
                 "from forced-trigger diagnostics"
             ),
         }
-        out_root.mkdir(parents=True, exist_ok=True)
-        (out_root / "decision.json").write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        (out_root / "decision.md").write_text(
-            render_markdown(payload),
-            encoding="utf-8",
-        )
-        return payload
+        return write_outputs(payload, out_root, discriminator_run_id)
+
+    if (
+        isinstance(known_evidence, dict)
+        and known_evidence.get("kind") == "typed_corruption_evidence"
+    ):
+        payload = {
+            "schema": SCHEMA,
+            "status": "existing_evidence_binding",
+            "source_reader_run_id": frontier.get("source_reader_run_id"),
+            "source_main_sha": frontier.get("source_main_sha"),
+            "selected_sha256": selected_sha,
+            "control_sha256": (known_evidence.get("authority") or {}).get("control_sha256"),
+            "control_relation": "existing_independent_corruption_authority",
+            "control_distance": None,
+            "verdict": "typed_corruption_authority_available",
+            "closed_hypotheses": [
+                "corruption_evidence_missing_globally",
+                "generic_corruption_discovery_required",
+            ],
+            "next_discriminator": {
+                "kind": "validate_existing_evidence_binding",
+                "owner": known_evidence.get("owner"),
+                "route": known_evidence.get("route"),
+                "corruption_evidence": known_evidence.get("corruption_evidence"),
+                "reason": (
+                    "independent exact-SHA corruption authority already exists; bind that "
+                    "authority into Reader salvage admission and validate the normal product path "
+                    "instead of rediscovering corruption"
+                ),
+                "target_carriers": [],
+            },
+            "known_evidence": known_evidence,
+            "physical_diff": None,
+            "control_shortlist": [],
+            "decision": "bind_existing_typed_corruption_evidence",
+            "executed_discriminator": "existing_typed_corruption_evidence_binding",
+            "evidence_boundary": (
+                "source-free authority binding only; no corruption claim is inferred from the "
+                "diagnostic forced trigger itself"
+            ),
+        }
+        return write_outputs(payload, out_root, discriminator_run_id)
+
     fingerprints = index_rows(
         read_json(find_unique(reader_root, "fingerprints.json")),
         "sha256",
@@ -501,22 +586,14 @@ def build_discriminator(
             "physical_diff": None,
             "control_shortlist": [],
             "decision": "continue_offline",
+            "executed_discriminator": "same_witness_forced_trigger",
             "evidence_boundary": (
                 "source-free discriminator: the forced trigger is diagnostic only and does not alter "
                 "Reader admission policy; outputs retain no filenames, document text, raw stream bytes, "
                 "or PUB bytes"
             ),
         }
-        out_root.mkdir(parents=True, exist_ok=True)
-        (out_root / "decision.json").write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        (out_root / "decision.md").write_text(
-            render_markdown(payload),
-            encoding="utf-8",
-        )
-        return payload
+        return write_outputs(payload, out_root, discriminator_run_id)
 
     candidates = []
     for sha, control_reader in reader_rows.items():
@@ -599,22 +676,14 @@ def build_discriminator(
         "physical_diff": physical,
         "control_shortlist": candidates[:5],
         "decision": "continue_offline",
+        "executed_discriminator": "opened_control_structural_comparison",
         "evidence_boundary": (
             "source-free discriminator: outputs retain hashes/counts/classifications only; "
             "no filenames, document text, raw stream bytes, or PUB bytes"
         ),
     }
 
-    out_root.mkdir(parents=True, exist_ok=True)
-    (out_root / "decision.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    (out_root / "decision.md").write_text(
-        render_markdown(payload),
-        encoding="utf-8",
-    )
-    return payload
+    return write_outputs(payload, out_root, discriminator_run_id)
 
 
 def render_markdown(payload: dict[str, Any]) -> str:
@@ -705,6 +774,7 @@ def main() -> int:
     parser.add_argument("--frontier", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--corpus-root", type=Path)
+    parser.add_argument("--discriminator-run-id")
     args = parser.parse_args()
 
     payload = build_discriminator(
@@ -712,6 +782,7 @@ def main() -> int:
         args.frontier,
         args.out,
         args.corpus_root,
+        args.discriminator_run_id,
     )
     print(
         json.dumps(
