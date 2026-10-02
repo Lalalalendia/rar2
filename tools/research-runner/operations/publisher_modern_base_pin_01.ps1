@@ -231,8 +231,8 @@ if ([string]$structural.source_sha256 -ne [string]$postSave.sha256) {
 if ([int]$structural.candidate_count -lt 1) {
     throw "Native one-save output exposes no bounded structural-base candidate."
 }
-if (-not [bool]$structural.selected_target.bounds_anchor_exact) {
-    throw "Selected target failed Contents/Escher geometry invariant."
+if (-not [bool]$structural.selected_target.contents_anchor_extent_exact) {
+    throw "Selected target failed Contents 0xAA/0xAB versus Escher anchor extent invariant."
 }
 
 $streamReceipts = @(
@@ -271,7 +271,7 @@ $result = [ordered]@{
         candidate_count = [int]$structural.candidate_count
         selected_target = $structural.selected_target
     }
-    authority_boundary = "This receipt pins one exact Publisher2019/build12527 no-semantic-edit save lineage of the SHA-bound Apache POI Sample.pub seed. It does not claim global no-op byte determinism. The selected target is the lowest-seq bounded ordinary page child whose Contents bounds exactly match a unique four-field Escher ClientAnchor and whose Contents seqNum matches the local Escher Publisher shape-id carrier."
+    authority_boundary = "This receipt pins one exact Publisher2019/build12527 no-semantic-edit save lineage of the SHA-bound Apache POI Sample.pub seed. It does not claim global no-op byte determinism. The selected target is the lowest-seq bounded ordinary page child with unique U32 Contents SHAPE_WIDTH/SHAPE_HEIGHT fields 0xAA/0xAB whose values exactly match XE-XS / YE-YS from one unique signed Escher ClientAnchor, with the same Contents seqNum carried by local Escher Publisher shape identity."
 }
 
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "modern-base-pin-01.json")
@@ -284,7 +284,11 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "modern-base-pin-01.j
     "candidate_count=$($result.structural_base.candidate_count)",
     "selected_contents_seq=$($result.structural_base.selected_target.contents_seq_num)",
     "selected_officeart_spid=$($result.structural_base.selected_target.officeart_spid)",
-    "bounds_anchor_exact=$($result.structural_base.selected_target.bounds_anchor_exact)",
+    "contents_width_emu=$($result.structural_base.selected_target.contents_width_emu)",
+    "contents_height_emu=$($result.structural_base.selected_target.contents_height_emu)",
+    "anchor_width_emu=$($result.structural_base.selected_target.anchor_width_emu)",
+    "anchor_height_emu=$($result.structural_base.selected_target.anchor_height_emu)",
+    "contents_anchor_extent_exact=$($result.structural_base.selected_target.contents_anchor_extent_exact)",
     "inventory_equal_after_save=$beforeAfterEqual",
     "inventory_equal_after_reopen=$beforeReopenEqual"
 ) | Set-Content -LiteralPath (Join-Path $logDir "modern-base-pin-01.txt") -Encoding ASCII
