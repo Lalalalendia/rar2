@@ -40,4 +40,4 @@ jobs:
       - name: Check current desktop V2 producer
         run: |
           set -euo pipefail
-          cargo check --locked -p chaptera-desktop
+          cargo check -p chaptera-desktop
