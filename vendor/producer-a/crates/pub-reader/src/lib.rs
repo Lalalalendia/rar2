@@ -4645,7 +4645,6 @@ fn bounded_officeart_image_crop(
     })
 }
 
-
 fn bounded_quill_text_rgb(
     value: u32,
     color_scheme: Option<&MatureColorScheme>,
