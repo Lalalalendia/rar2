@@ -3184,16 +3184,15 @@ pub fn build_mature_0x2c_from_streams(
         } else {
             BoundedDirectImageTransform::Identity
         };
-        let direct_image_cardinal_rotation_degrees = if direct_image_candidate
-            && explicit_image_crop.is_none()
-        {
-            bounded_direct_image_cardinal_content_rotation_degrees(
-                &direct_image_rotation_properties,
-                direct_image_fsp_flags,
-            )
-        } else {
-            None
-        };
+        let direct_image_cardinal_rotation_degrees =
+            if direct_image_candidate && explicit_image_crop.is_none() {
+                bounded_direct_image_cardinal_content_rotation_degrees(
+                    &direct_image_rotation_properties,
+                    direct_image_fsp_flags,
+                )
+            } else {
+                None
+            };
         let (node_transform, direct_image_rotation_applied) = match direct_image_transform {
             BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
                 (Affine2D::identity(), false)
