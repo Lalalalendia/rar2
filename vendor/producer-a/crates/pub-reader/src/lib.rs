@@ -5157,7 +5157,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn direct_image_cardinal_rotation_is_preserved_for_picture_content_only() {
         assert_eq!(
             bounded_direct_image_cardinal_content_rotation_degrees(
@@ -5196,6 +5195,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn direct_image_rotation_keeps_exact_cardinal_angles_fail_closed() {
         for rotation_op in [
             90u32 << 16,
