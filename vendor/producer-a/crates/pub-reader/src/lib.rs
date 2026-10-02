@@ -2074,7 +2074,9 @@ fn decimal_from_pow2_ratio(numerator: i64, shift: u32) -> Result<Decimal> {
             remainder *= 10;
             let digit = remainder / denominator;
             remainder %= denominator;
-            encoded.push(char::from(b'0' + u8::try_from(digit).expect("decimal digit")));
+            encoded.push(char::from(
+                b'0' + u8::try_from(digit).expect("decimal digit"),
+            ));
         }
     }
 
@@ -2228,9 +2230,7 @@ fn direct_officeart_shape_transform(
         .collect::<Vec<_>>();
     let stored_rotation_q16 = match rotation.as_slice() {
         [] => 0_i64,
-        [property] if !property.f_complex() && !property.f_bid() => {
-            i64::from(property.op as i32)
-        }
+        [property] if !property.f_complex() && !property.f_bid() => i64::from(property.op as i32),
         [..] => return Err("rotation_property_ambiguous"),
     };
     let flip_h = shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_H);
