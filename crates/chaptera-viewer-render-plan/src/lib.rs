@@ -2140,6 +2140,7 @@ mod tests {
                 fill_rgb: Some([10, 20, 30]),
                 fill_visible: Some(true),
             }],
+            borders: Vec::new(),
         });
 
         let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
