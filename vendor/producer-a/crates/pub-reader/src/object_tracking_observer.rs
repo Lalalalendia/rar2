@@ -103,11 +103,12 @@ pub fn observe_object_tracking_wrap_state(
 
         let roots = parse_field_nodes(&contents, &chunk.fields)?;
         collect_matching_entries(
+            &contents,
             u32::try_from(seq_num).context("ObjectTracking seq does not fit u32")?,
             target_oh_track,
             &roots,
             &mut observations,
-        );
+        )?;
     }
 
     Ok(PubObjectTrackingWrapObserver {
@@ -143,10 +144,7 @@ fn nested_children(contents: &[u8], field: &RawContentsBlock) -> Result<Vec<Fiel
 }
 
 fn is_recursive_observer_wire(block_type: u8) -> bool {
-    matches!(
-        block_type,
-        0x88 | 0x90 | BLOCK_TYPE_TYPED_CONTAINER_98 | 0xA0
-    )
+    matches!(block_type, 0x88 | 0x90 | 0xA0)
 }
 
 fn parse_container_children(contents: &[u8], source: &RawSpan) -> Result<Vec<FieldNode>> {
@@ -233,40 +231,67 @@ fn parse_bounded_variable_block(
     })
 }
 
+fn explicit_payload_children(contents: &[u8], node: &FieldNode) -> Result<Vec<FieldNode>> {
+    match &node.field.body {
+        RawContentsBlockBody::Container { content_source, .. } => {
+            parse_container_children(contents, content_source)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
 fn collect_matching_entries(
+    contents: &[u8],
     tracking_seq_num: u32,
     target_oh_track: u32,
     nodes: &[FieldNode],
     output: &mut Vec<PubTrackingWrapObservation>,
-) {
+) -> Result<()> {
     for node in nodes {
         if direct_scalar(&node.children, 0x01).is_some_and(|value| value.value == target_oh_track) {
             let last_fmt = unique_child(&node.children, 0x12);
             let formatting = last_fmt.and_then(|value| unique_child(&value.children, 0x02));
-            let group_shape = formatting.and_then(|value| unique_child(&value.children, 0x0E));
-            let ecp_recolor = formatting.and_then(|value| unique_child(&value.children, 0x22));
+
+            let formatting_children = match formatting {
+                Some(value) => explicit_payload_children(contents, value)
+                    .context("parse target OplLastFmt.PoFormatting payload")?,
+                None => Vec::new(),
+            };
+            let group_shape = unique_child(&formatting_children, 0x0E);
+            let ecp_recolor = unique_child(&formatting_children, 0x22);
+
+            let group_shape_children = match group_shape {
+                Some(value) => explicit_payload_children(contents, value)
+                    .context("parse target OplOdpo.GroupShape payload")?,
+                None => Vec::new(),
+            };
+            let ecp_recolor_children = match ecp_recolor {
+                Some(value) => explicit_payload_children(contents, value)
+                    .context("parse target OplOdpo.EcpRecolor payload")?,
+                None => Vec::new(),
+            };
 
             output.push(PubTrackingWrapObservation {
                 tracking_seq_num,
                 target_oh_track,
                 entry_source: node.field.source.clone(),
-                resolved_shape_type: formatting
-                    .and_then(|value| direct_scalar(&value.children, 0x01)),
-                dx_wrap_dist_left: group_shape
-                    .and_then(|value| direct_scalar(&value.children, 0x05)),
-                dy_wrap_dist_top: group_shape
-                    .and_then(|value| direct_scalar(&value.children, 0x06)),
-                dx_wrap_dist_right: group_shape
-                    .and_then(|value| direct_scalar(&value.children, 0x07)),
-                dy_wrap_dist_bottom: group_shape
-                    .and_then(|value| direct_scalar(&value.children, 0x08)),
-                ecp_recolor_scalars: ecp_recolor
-                    .map(|value| direct_scalars(&value.children))
-                    .unwrap_or_default(),
+                resolved_shape_type: direct_scalar(&formatting_children, 0x01),
+                dx_wrap_dist_left: direct_scalar(&group_shape_children, 0x05),
+                dy_wrap_dist_top: direct_scalar(&group_shape_children, 0x06),
+                dx_wrap_dist_right: direct_scalar(&group_shape_children, 0x07),
+                dy_wrap_dist_bottom: direct_scalar(&group_shape_children, 0x08),
+                ecp_recolor_scalars: direct_scalars(&ecp_recolor_children),
             });
         }
-        collect_matching_entries(tracking_seq_num, target_oh_track, &node.children, output);
+        collect_matching_entries(
+            contents,
+            tracking_seq_num,
+            target_oh_track,
+            &node.children,
+            output,
+        )?;
     }
+    Ok(())
 }
 
 fn unique_child(nodes: &[FieldNode], id: u16) -> Option<&FieldNode> {
@@ -418,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn observer_recurses_into_typed_98_payload() {
+    fn observer_opens_typed_98_only_on_explicit_schema_path() {
         let bytes = [
             0x22,
             BLOCK_TYPE_TYPED_CONTAINER_98,
@@ -439,12 +464,16 @@ mod tests {
             len: bytes.len() as u64,
         };
 
-        let fields = parse_container_children(&bytes, &source).expect("typed payload must parse");
+        let fields = parse_container_children(&bytes, &source).expect("typed payload must frame");
 
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].field.block_type, BLOCK_TYPE_TYPED_CONTAINER_98);
+        assert!(fields[0].children.is_empty());
+
+        let typed = explicit_payload_children(&bytes, &fields[0])
+            .expect("explicit typed payload path must parse");
         assert_eq!(
-            direct_scalar(&fields[0].children, 0x01).map(|value| value.value),
+            direct_scalar(&typed, 0x01).map(|value| value.value),
             Some(0x08000003)
         );
     }
