@@ -543,6 +543,8 @@ pub struct PubTypographyRun {
     pub source_font_index: u32,
     pub source_font_name: String,
     pub text_size_emu: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
     pub font_inherited: bool,
     pub size_inherited: bool,
 }
@@ -2790,6 +2792,7 @@ pub fn build_mature_0x2c_from_streams(
                     source_font_index: run.font_index,
                     source_font_name: run.font_name,
                     text_size_emu: run.text_size_emu,
+                    color_rgb: run.explicit_color_rgb,
                     font_inherited: run.font_source == QuillTypographyValueSource::InheritedStsh1,
                     size_inherited: run.text_size_source
                         == QuillTypographyValueSource::InheritedStsh1,
@@ -2832,6 +2835,7 @@ pub fn build_mature_0x2c_from_streams(
                     source_font_index: run.font_index,
                     source_font_name: run.font_name,
                     text_size_emu: run.text_size_emu,
+                    color_rgb: None,
                     font_inherited: false,
                     size_inherited: false,
                 });
