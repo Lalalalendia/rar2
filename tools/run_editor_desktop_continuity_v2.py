@@ -39,6 +39,10 @@ from validate_editor_desktop_continuity_v2_receipt import (  # noqa: E402
 )
 from verify_editable_export_geometry import (  # noqa: E402
     RectEmu,
+    attr_by_local,
+    canonical_node_hex,
+    format_emu_points,
+    local_name,
     verify_export as verify_editable_export_geometry,
 )
 
@@ -514,6 +518,59 @@ def verify_geometry(
         raise ContinuityV2Error(f"edited export {label} geometry proof is not affirmative")
 
 
+def verify_odg_replacement_image_geometry(
+    path: pathlib.Path,
+    node_id: str,
+    rect: dict[str, Any],
+) -> None:
+    """Verify the exact ODG image frame emitted by pub-odg.
+
+    Generic editable-export geometry verification targets semantic TextFrame
+    identities named Frame_<NodeId>. Replacement images are intentionally
+    materialized by pub-odg as Image_<NodeId>, so the V2 acceptance boundary
+    must verify that image-specific identity rather than looking up a text
+    frame with the same source node id.
+    """
+    frame_name = "Image_" + canonical_node_hex(node_id)
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if "content.xml" not in archive.namelist():
+                raise AssertionError("ODG package has no content.xml")
+            root = ET.fromstring(archive.read("content.xml"))
+    except (ET.ParseError, zipfile.BadZipFile) as error:
+        raise ContinuityV2Error("edited export ODG content is not parseable") from error
+
+    matches = [
+        element
+        for element in root.iter()
+        if local_name(element.tag) == "frame"
+        and attr_by_local(element, "name") == frame_name
+    ]
+    if len(matches) != 1:
+        raise ContinuityV2Error(
+            f"edited export expected exactly one replacement image frame, found {len(matches)}"
+        )
+
+    frame = matches[0]
+    observed = {
+        "x": attr_by_local(frame, "x"),
+        "y": attr_by_local(frame, "y"),
+        "width": attr_by_local(frame, "width"),
+        "height": attr_by_local(frame, "height"),
+    }
+    expected = {
+        "x": format_emu_points(rect["x"]) + "pt",
+        "y": format_emu_points(rect["y"]) + "pt",
+        "width": format_emu_points(rect["width"]) + "pt",
+        "height": format_emu_points(rect["height"]) + "pt",
+    }
+    if observed != expected:
+        raise ContinuityV2Error(
+            f"edited export replacement image geometry mismatch: "
+            f"observed={observed} expected={expected}"
+        )
+
+
 def verify_export_package(
     path: pathlib.Path,
     export_format: str,
@@ -549,13 +606,20 @@ def verify_export_package(
         observation["object_resize"]["after"],
         "ResizeNode",
     )
-    verify_geometry(
-        path,
-        export_format,
-        observation["image_replace"]["origin_node_id"],
-        observation["image_replace"]["frame_after"],
-        "ReplaceImage frame",
-    )
+    if export_format == "odg":
+        verify_odg_replacement_image_geometry(
+            path,
+            observation["image_replace"]["origin_node_id"],
+            observation["image_replace"]["frame_after"],
+        )
+    else:
+        verify_geometry(
+            path,
+            export_format,
+            observation["image_replace"]["origin_node_id"],
+            observation["image_replace"]["frame_after"],
+            "ReplaceImage frame",
+        )
     return raw
 
 
