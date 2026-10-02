@@ -140,6 +140,8 @@ pub struct RenderTextFragmentV1 {
     pub typography: Vec<RenderTypographyRunV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<RenderParagraphAlignmentRunV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_colors: Vec<RenderTextColorRunV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_font_resource_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +155,13 @@ pub enum RenderParagraphAlignmentV1 {
     Right,
     InterWord,
     Distribute,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderTextColorRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub rgb: [u8; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -547,6 +556,31 @@ fn parse_story_id(value: &str, field: &'static str) -> Result<StoryId, RenderPla
         })
 }
 
+fn render_text_color_runs_v1(
+    visual: &ViewerGeometryDocument,
+    story_id: StoryId,
+    story_text: &str,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Vec<RenderTextColorRunV1> {
+    visual
+        .text_color_runs
+        .iter()
+        .filter(|run| run.story_id == story_id)
+        .filter(|run| run.applies_to_story_text(story_text))
+        .filter_map(|run| {
+            let start = run.scalar_start.max(scalar_start);
+            let end = run.scalar_end.min(scalar_end);
+            let rgb = run.rgb?;
+            (start < end).then_some(RenderTextColorRunV1 {
+                scalar_start: start,
+                scalar_end: end,
+                rgb,
+            })
+        })
+        .collect()
+}
+
 fn render_paragraph_alignment_runs_v1(
     visual: &ViewerGeometryDocument,
     story_id: StoryId,
@@ -627,6 +661,7 @@ fn projected_text(
             0,
             scalar_end,
         ),
+        text_colors: render_text_color_runs_v1(visual, story_id, &story.text, 0, scalar_end),
         backend_font_resource_id: None,
         layout: None,
     }))
@@ -731,6 +766,21 @@ pub fn build_page_render_plan_v1(
                         .find(|story| story.id == fragment.story_id)
                         .map(|story| {
                             render_paragraph_alignment_runs_v1(
+                                visual,
+                                fragment.story_id,
+                                &story.text,
+                                fragment.scalar_start,
+                                fragment.scalar_end,
+                            )
+                        })
+                        .unwrap_or_default(),
+                    text_colors: visual
+                        .document
+                        .stories
+                        .iter()
+                        .find(|story| story.id == fragment.story_id)
+                        .map(|story| {
+                            render_text_color_runs_v1(
                                 visual,
                                 fragment.story_id,
                                 &story.text,
@@ -1795,6 +1845,7 @@ mod tests {
             line_count: 1,
             typography,
             paragraph_alignments: Vec::new(),
+            text_colors: Vec::new(),
             backend_font_resource_id: None,
             layout: None,
         }
