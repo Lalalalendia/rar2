@@ -771,6 +771,7 @@ pub fn from_viewer_geometry_with_fonts(
 
                 let paint = if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
                     Some(ReaderPaintV1 {
+                        preset_shape: None,
                         fill_rgb: node.solid_fill_rgb,
                         line: node.solid_line.as_ref().map(|line| ReaderLineV1 {
                             rgb: line.rgb,
