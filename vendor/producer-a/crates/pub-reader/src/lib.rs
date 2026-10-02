@@ -141,9 +141,7 @@ pub use table_bridge::{
 pub use table_style_probe::{
     PubTableDefaultStyleObservation, PubTableMcldOpaque1dClass, PubTableMcldStyleObservation,
     PubTableMcldStyleSignatureClass, PubTableOfficeArtOwnerJoinClass,
-    PubTablePublicationDefaultObservation, analyze_mature_0x2c_table_default_style_fields,
-    analyze_mature_0x2c_table_mcld_style_fields,
-    analyze_mature_0x2c_table_publication_default_topology,
+    analyze_mature_0x2c_table_default_style_fields, analyze_mature_0x2c_table_mcld_style_fields,
 };
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
 pub use wmf_preview::{
