@@ -3081,9 +3081,7 @@ fn viewer_table_border_segments(
         }
     }
 
-    if x_boundaries.iter().any(Option::is_none)
-        || y_boundaries.iter().any(Option::is_none)
-    {
+    if x_boundaries.iter().any(Option::is_none) || y_boundaries.iter().any(Option::is_none) {
         return Vec::new();
     }
 
