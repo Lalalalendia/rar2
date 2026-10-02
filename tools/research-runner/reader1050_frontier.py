@@ -27,6 +27,8 @@ from reader1050_knowledge import (  # noqa: E402
     ledger_for_sha,
     load_discriminator_ledger,
     load_evidence_registry,
+    load_runtime_discriminator_cursor,
+    merge_discriminator_history,
 )
 
 SCHEMA = "chaptera.reader1050-hosted-frontier.v1"
@@ -180,9 +182,12 @@ def priority(
     if known_evidence is not None:
         if known_evidence.get("kind") == "format_owner":
             score -= 500
-            reasons.append(
-                f"already owned by {known_evidence['owner']} ({known_evidence['kind']})"
+            suppressed = True
+            suppression_reason = (
+                f"reviewed registry owner {known_evidence['owner']} "
+                f"({known_evidence['kind']})"
             )
+            reasons.append(suppression_reason)
         elif known_evidence.get("kind") == "typed_corruption_evidence":
             score += 500
             reasons.append(
@@ -321,10 +326,13 @@ def build_frontier(
     out_root: Path,
     source_run_id: str,
     source_sha: str,
+    runtime_ledger_root: Path | None = None,
 ) -> dict[str, Any]:
     salvage, records = load_reader_inputs(reader_root)
     registry = load_evidence_registry()
-    ledger_entries = load_discriminator_ledger(registry=registry)
+    reviewed_ledger = load_discriminator_ledger(registry=registry)
+    runtime_cursor = load_runtime_discriminator_cursor(runtime_ledger_root)
+    ledger_entries = merge_discriminator_history(reviewed_ledger, runtime_cursor)
     unsupported = [
         row for row in salvage.get("rows", []) if row.get("outcome") == "unsupported"
     ]
@@ -498,6 +506,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--runtime-ledger-root", type=Path)
     args = parser.parse_args()
 
     payload = build_frontier(
@@ -506,6 +515,7 @@ def main() -> int:
         args.out,
         args.source_run_id,
         args.source_sha,
+        args.runtime_ledger_root,
     )
     print(
         json.dumps(
