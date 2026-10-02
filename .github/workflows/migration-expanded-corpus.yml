@@ -43,13 +43,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "MIGRATION_SAMPLE_COUNT=64" >> "$GITHUB_ENV"
-            echo "MIGRATION_MATERIALIZE_COUNT=32" >> "$GITHUB_ENV"
-          else
-            echo "MIGRATION_SAMPLE_COUNT=1050" >> "$GITHUB_ENV"
-            echo "MIGRATION_MATERIALIZE_COUNT=96" >> "$GITHUB_ENV"
-          fi
+          echo "MIGRATION_SAMPLE_COUNT=1050" >> "$GITHUB_ENV"
+          echo "MIGRATION_MATERIALIZE_COUNT=96" >> "$GITHUB_ENV"
 
       - name: Download pinned exact 1050 PUB materialization
         uses: actions/download-artifact@v4
