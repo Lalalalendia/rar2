@@ -35,8 +35,7 @@ pub const MIGRATION_EDITABLE_ROUTE_REQUEST_V1: &str =
     "chaptera.migration-editable-route-request.v1";
 pub const MIGRATION_EDITABLE_ROUTE_RESPONSE_V1: &str =
     "chaptera.migration-editable-route-response.v1";
-const MIGRATION_EDITABLE_ROUTE_RECEIPT_V1: &str =
-    "chaptera.migration-editable-route-receipt.v1";
+const MIGRATION_EDITABLE_ROUTE_RECEIPT_V1: &str = "chaptera.migration-editable-route-receipt.v1";
 const RECEIPT_MAX_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
