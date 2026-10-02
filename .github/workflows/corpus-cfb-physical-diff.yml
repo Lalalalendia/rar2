@@ -25,6 +25,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install pinned CFB logical-stream dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir olefile==0.47
       - name: Validate physical parser and retained pair receipt
         run: |
           set -euo pipefail
