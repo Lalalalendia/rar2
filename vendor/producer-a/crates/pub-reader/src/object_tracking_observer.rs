@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use pub_contents::{
     ContentsCursor, RawContentsBlock, RawContentsBlockBody, parse_0x2c_header,
-    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
-    parse_confirmed_block, parse_confirmed_chunk_reference,
+    parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root, parse_confirmed_block,
+    parse_confirmed_chunk_reference,
 };
 use pub_core::{RawSpan, StreamPath};
 use serde::{Deserialize, Serialize};
@@ -328,15 +328,24 @@ mod tests {
         collect_matching_entries(290, 294, &[entry], &mut observations);
         assert_eq!(observations.len(), 1);
         assert_eq!(
-            observations[0].dx_wrap_dist_left.as_ref().map(|value| value.value),
+            observations[0]
+                .dx_wrap_dist_left
+                .as_ref()
+                .map(|value| value.value),
             Some(111)
         );
         assert_eq!(
-            observations[0].dy_wrap_dist_top.as_ref().map(|value| value.value),
+            observations[0]
+                .dy_wrap_dist_top
+                .as_ref()
+                .map(|value| value.value),
             Some(222)
         );
         assert_eq!(
-            observations[0].resolved_shape_type.as_ref().map(|value| value.value),
+            observations[0]
+                .resolved_shape_type
+                .as_ref()
+                .map(|value| value.value),
             Some(1)
         );
     }
