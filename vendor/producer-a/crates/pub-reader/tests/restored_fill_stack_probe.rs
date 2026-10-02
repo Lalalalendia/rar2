@@ -928,54 +928,6 @@ fn page_area_bucket(bounds: RectEmu, page_width: i64, page_height: i64) -> &'sta
     }
 }
 
-fn source_node_family(node: &pub_model::SourceNode) -> &'static str {
-    if node.payload.table.is_some() {
-        "table"
-    } else if node.payload.image_slot.is_some() {
-        "image"
-    } else if node.payload.story_frame.is_some() {
-        "story"
-    } else {
-        "other_shape"
-    }
-}
-
-fn effective_paint_execution_class(node: &pub_model::SourceNode) -> &'static str {
-    let Some(paint) = node.payload.effective_paint.as_ref() else {
-        return "effective_paint_absent";
-    };
-
-    let visible_solid = paint.fill.solid.as_ref().is_some_and(|value| value.value)
-        && paint.fill.visible.as_ref().is_some_and(|value| value.value)
-        && paint.fill.color_rgb.is_some();
-    if visible_solid {
-        return "complete_visible_solid";
-    }
-
-    let visible_line = paint.line.visible.as_ref().is_some_and(|value| value.value)
-        && paint.line.color_rgb.is_some()
-        && paint
-            .line
-            .width_emu
-            .as_ref()
-            .is_some_and(|value| value.value > 0);
-    if visible_line {
-        return "complete_visible_line";
-    }
-
-    let has_any_fill = paint.fill.solid.is_some()
-        || paint.fill.visible.is_some()
-        || paint.fill.color_rgb.is_some();
-    let has_any_line = paint.line.visible.is_some()
-        || paint.line.color_rgb.is_some()
-        || paint.line.width_emu.is_some();
-    if has_any_fill || has_any_line {
-        "effective_paint_incomplete_or_hidden"
-    } else {
-        "effective_paint_empty"
-    }
-}
-
 fn rects_overlap(a: RectEmu, b: RectEmu) -> bool {
     let (Some(ar), Some(ab), Some(br), Some(bb)) = (a.right(), a.bottom(), b.right(), b.bottom())
     else {
@@ -1576,13 +1528,67 @@ fn exact_virginia_restored_fill_stack_probe() {
                         } else {
                             later += 1;
                             page.restored_later_overlap_count += 1;
+                            let other_family = if other.payload.table.is_some() {
+                                "table"
+                            } else if other.payload.image_slot.is_some() {
+                                "image"
+                            } else if other.payload.story_frame.is_some() {
+                                "story"
+                            } else {
+                                "other_shape"
+                            };
                             bump(
                                 &mut page.restored_later_overlap_family_histogram,
-                                source_node_family(other),
+                                other_family,
                             );
+
+                            let paint_class = match other.payload.effective_paint.as_ref() {
+                                None => "effective_paint_absent",
+                                Some(paint)
+                                    if paint
+                                        .fill
+                                        .solid
+                                        .as_ref()
+                                        .is_some_and(|value| value.value)
+                                        && paint
+                                            .fill
+                                            .visible
+                                            .as_ref()
+                                            .is_some_and(|value| value.value)
+                                        && paint.fill.color_rgb.is_some() =>
+                                {
+                                    "complete_visible_solid"
+                                }
+                                Some(paint)
+                                    if paint
+                                        .line
+                                        .visible
+                                        .as_ref()
+                                        .is_some_and(|value| value.value)
+                                        && paint.line.color_rgb.is_some()
+                                        && paint
+                                            .line
+                                            .width_emu
+                                            .as_ref()
+                                            .is_some_and(|value| value.value > 0) =>
+                                {
+                                    "complete_visible_line"
+                                }
+                                Some(paint)
+                                    if paint.fill.solid.is_some()
+                                        || paint.fill.visible.is_some()
+                                        || paint.fill.color_rgb.is_some()
+                                        || paint.line.visible.is_some()
+                                        || paint.line.color_rgb.is_some()
+                                        || paint.line.width_emu.is_some() =>
+                                {
+                                    "effective_paint_incomplete_or_hidden"
+                                }
+                                Some(_) => "effective_paint_empty",
+                            };
                             bump(
                                 &mut page.restored_later_overlap_paint_histogram,
-                                effective_paint_execution_class(other),
+                                paint_class,
                             );
                         }
                     }
