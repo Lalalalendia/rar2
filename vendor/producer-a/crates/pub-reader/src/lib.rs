@@ -5848,7 +5848,13 @@ mod tests {
             fill_color.authority,
             PubEffectivePaintAuthority::NormativeDefault
         );
-        assert!(paint.fill.visible.expect("explicit TextBox visibility").value);
+        assert!(
+            paint
+                .fill
+                .visible
+                .expect("explicit TextBox visibility")
+                .value
+        );
 
         shape.fsp.as_mut().expect("fsp").shape_type = 0x0001;
         let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
