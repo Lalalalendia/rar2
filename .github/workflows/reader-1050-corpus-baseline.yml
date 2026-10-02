@@ -326,6 +326,26 @@ jobs:
               "eligible_known_publisher_corruption": 2,
           }, payload["salvage_eligibility_counts"]
 
+          forced = payload["forced_trigger_summary"]
+          assert forced["attempted_count"] == 6, forced
+          assert 0 <= forced["cfb_inventory_available_count"] <= 6, forced
+          assert 0 <= forced["surviving_evidence_count"] <= 6, forced
+          assert 0 <= forced["partial_graph_constructed_count"] <= 6, forced
+
+          awaiting_rows = [
+              row for row in payload["rows"]
+              if row.get("salvage_eligibility") == "awaiting_typed_corruption_evidence"
+          ]
+          assert len(awaiting_rows) == 6, len(awaiting_rows)
+          for row in awaiting_rows:
+              forced_probe = row.get("forced_trigger_probe")
+              forced_graph = row.get("forced_partial_graph")
+              assert forced_probe is not None, row
+              assert forced_graph is not None, row
+              assert forced_probe["eligibility"] == "eligible_known_publisher_corruption", row
+              assert forced_probe["source_modified"] is False, row
+              assert forced_graph["status"] in {"constructed", "error"}, row
+
           expected_corrupt = {
               "c96df4b2d4ce3d5bb238b2b31d8021501495b9bd15ff44eb9d918495c342430b":
                   "quill_descriptor_node_truncated",
