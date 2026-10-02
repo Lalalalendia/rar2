@@ -105,6 +105,13 @@ jobs:
         env:
           REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node apps/cloud-reader/real-browser.test.mjs
+      - name: Export ephemeral chaptera binary for private witness validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: ephemeral-chaptera-823-linux
+          path: target/debug/chaptera
+          if-no-files-found: error
+          retention-days: 1
       - name: Install the pinned canonical Caddy version
         run: |
           curl --fail --location --retry 3 \
