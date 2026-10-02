@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
     RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
-    effective_source_font_family_v1,
+    effective_source_font_family_v1, uniform_text_color_rgb_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
@@ -74,6 +74,8 @@ pub struct ReaderNodeV1 {
     pub table: Option<ReaderTableV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_color_rgb: Option<[u8; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_layout: Option<ReaderTextLayoutV1>,
 }
@@ -649,6 +651,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut projected_text_layout_count = 0_usize;
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
+    let mut text_color_by_node = HashMap::<String, [u8; 3]>::new();
     for page_index in 0..geometry.document.pages.len() {
         let plan = match build_page_render_plan_with_text_layout_resolver_v1(
             geometry,
@@ -680,6 +683,7 @@ pub fn from_viewer_geometry_with_fonts(
         }
 
         for node in plan.nodes {
+            let mapped_text_color = node.text.as_ref().and_then(uniform_text_color_rgb_v1);
             let (mapped_layout, layout_partial) = match node.text.as_ref() {
                 Some(text) => reader_text_layout_from_render_text(text),
                 None => (None, false),
@@ -826,6 +830,7 @@ pub fn from_viewer_geometry_with_fonts(
                         image_source_window,
                         table: None,
                         text: node.text.as_ref().map(|text| text.text.clone()),
+                        text_color_rgb: mapped_text_color,
                         text_layout: mapped_layout,
                     });
                 continue;
@@ -837,14 +842,22 @@ pub fn from_viewer_geometry_with_fonts(
                     "direct render-plan node references unknown Viewer node {node_id}"
                 ));
             }
-            if let Some(text) = node.text.as_ref()
-                && render_text_by_node
+            if let Some(text) = node.text.as_ref() {
+                if render_text_by_node
                     .insert(node_id.clone(), text.text.clone())
                     .is_some()
-            {
-                return Err(format!(
-                    "duplicate direct render-plan text binding for node {node_id}"
-                ));
+                {
+                    return Err(format!(
+                        "duplicate direct render-plan text binding for node {node_id}"
+                    ));
+                }
+                if let Some(rgb) = mapped_text_color
+                    && text_color_by_node.insert(node_id.clone(), rgb).is_some()
+                {
+                    return Err(format!(
+                        "duplicate direct render-plan text color binding for node {node_id}"
+                    ));
+                }
             }
             if let Some(text_bounds) = node.text_bounds.as_ref() {
                 let mapped_bounds = rect_from_serialized(text_bounds)?;
@@ -893,6 +906,7 @@ pub fn from_viewer_geometry_with_fonts(
             image_source_window: source_window_by_node.remove(&node_id),
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
+            text_color_rgb: text_color_by_node.remove(&node_id),
             text_layout: text_layout_by_node.remove(&node_id),
             node_id: node_id.clone(),
             page_id,
@@ -2196,6 +2210,7 @@ mod tests {
             image_source_window: None,
             table: None,
             text: None,
+            text_color_rgb: None,
             text_layout: None,
         }
     }
