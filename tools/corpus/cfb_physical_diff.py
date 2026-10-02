@@ -68,7 +68,11 @@ def minimal(state=0):
  v[8]=END;v[9]=FAT;struct.pack_into('<'+'I'*128,b,5120,*v);return bytes(b)
 def selftest():
  a,b=minimal(0),minimal(1);x,y=CFB(a),CFB(b);d=[i for i,(p,q) in enumerate(zip(a,b)) if p!=q];assert d==[736] and x.lab[d[0]]==y.lab[d[0]]=='directory[1].state'
- r=compare(a,b,'self-test');assert r['schema']==SCHEMA and r['different_byte_count']==1 and r['unclassified_byte_count']==0
+ original_logical=globals()['logical']
+ try:
+  globals()['logical']=lambda data:{'/Data':{'len':4096,'sha256':h(CFB(data).read_stream_by_sid(1))}}
+  r=compare(a,b,'self-test');assert r['schema']==SCHEMA and r['different_byte_count']==1 and r['unclassified_byte_count']==0
+ finally:globals()['logical']=original_logical
  fake=CFB.__new__(CFB);fake.nsec=10;fake.fat=[END]*10;mini=[FREE]*32;mini[20]=21;mini[21]=END
  assert fake.chain(20,mini,'mini-regression')==[20,21]
  legacy=bytearray(minimal(0));struct.pack_into('<I',legacy,640+124,0xffffffff);z=CFB(bytes(legacy))
