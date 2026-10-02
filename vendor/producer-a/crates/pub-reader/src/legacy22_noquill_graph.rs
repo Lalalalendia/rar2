@@ -910,6 +910,7 @@ fn build_legacy_table_projection(
         cells,
         simple_table,
         layout_metrics: None,
+        border_segments: Vec::new(),
         source_refs: vec![
             source_ref(
                 &graph.source,
