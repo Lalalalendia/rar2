@@ -1450,13 +1450,7 @@ mod tests {
     fn native_autoformat_anchor_rejects_unproven_or_ambiguous_forms() {
         let base = publisher_fields(&[(TABLE_AUTOFORMAT_OWNER_REF_ID, 77)]);
         assert_eq!(
-            native_autoformat_cell_ordinal_from_parts(
-                Some(0x0002),
-                false,
-                Some(&base),
-                77,
-                4,
-            ),
+            native_autoformat_cell_ordinal_from_parts(Some(0x0002), false, Some(&base), 77, 4),
             None,
             "non-rectangle carriers stay unsupported"
         );
