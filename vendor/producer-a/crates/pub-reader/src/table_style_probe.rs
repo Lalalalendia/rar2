@@ -84,8 +84,8 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
 
     let quill = pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), QUILL_STREAM_PATH)
         .with_context(|| {
-            format!("read {QUILL_STREAM_PATH} for TABLE MCLD style observation")
-        })?;
+        format!("read {QUILL_STREAM_PATH} for TABLE MCLD style observation")
+    })?;
     let quill_stream = StreamPath(QUILL_STREAM_PATH.into());
     let catalog = parse_confirmed_story_catalog(quill_stream.clone(), &quill)
         .context("parse Quill story catalog for TABLE MCLD style observation")?;
