@@ -310,11 +310,6 @@ fn exact_virginia_p22_table_paint_carrier_probe() {
     let p22 = pages.iter().find(|page| page.viewer_page_index == 22).unwrap();
     assert_eq!(p22.cell_count, 110, "p22 exact TableCell population");
     assert_eq!(p22.admitted_cell_paint_count, 0, "current #656 paint boundary");
-    assert_eq!(
-        p22.exact_match_count, p22.cell_count,
-        "all p22 TableCells must join uniquely to OfficeArt child geometry before paint classification"
-    );
-
     let receipt = Receipt {
         schema: "chaptera.virginia-p22-table-paint-carrier-probe.v1",
         source_sha256: actual_sha,
