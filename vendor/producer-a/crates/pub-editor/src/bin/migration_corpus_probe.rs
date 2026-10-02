@@ -63,23 +63,41 @@ fn probe_target(
     if state == "available_with_declared_losses" {
         if let Some(dir) = materialize_dir {
             fs::create_dir_all(dir)?;
-            let export = session.export_editable(target, source_label.to_owned())?;
-            if export.report != preview.report {
-                return Err(format!("{name} preview/materialization report mismatch").into());
+            match session.export_editable(target, source_label.to_owned()) {
+                Ok(export) => {
+                    if export.report != preview.report {
+                        result["materialization_state"] =
+                            Value::String("preview_report_mismatch".to_owned());
+                        result["materialization_error_class"] = Value::String(format!(
+                            "{name} preview/materialization report mismatch"
+                        ));
+                        return Ok(result);
+                    }
+                    let artifact = dir.join(format!("output.{}", target.extension()));
+                    fs::write(&artifact, &export.bytes)?;
+                    fs::write(
+                        dir.join(format!("{name}.report.json")),
+                        serde_json::to_vec_pretty(&export.report)?,
+                    )?;
+                    fs::write(
+                        dir.join(format!("{name}.report.txt")),
+                        export.human_summary.as_bytes(),
+                    )?;
+                    result["materialized"] = Value::Bool(true);
+                    result["materialization_state"] = Value::String("succeeded".to_owned());
+                    result["artifact_bytes"] = json!(export.bytes.len());
+                }
+                Err(error) => {
+                    result["materialization_state"] = Value::String("failed".to_owned());
+                    result["materialization_error_class"] =
+                        Value::String(error.to_string());
+                }
             }
-            let artifact = dir.join(format!("output.{}", target.extension()));
-            fs::write(&artifact, &export.bytes)?;
-            fs::write(
-                dir.join(format!("{name}.report.json")),
-                serde_json::to_vec_pretty(&export.report)?,
-            )?;
-            fs::write(
-                dir.join(format!("{name}.report.txt")),
-                export.human_summary.as_bytes(),
-            )?;
-            result["materialized"] = Value::Bool(true);
-            result["artifact_bytes"] = json!(export.bytes.len());
+        } else {
+            result["materialization_state"] = Value::String("not_requested".to_owned());
         }
+    } else {
+        result["materialization_state"] = Value::String("not_applicable".to_owned());
     }
 
     Ok(result)
