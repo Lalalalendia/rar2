@@ -317,6 +317,18 @@ export function tableCellFillPaintPlan(cell) {
   return Object.freeze({ geometry, fill });
 }
 
+export function tableBorderPaintPlan(border) {
+  if (!border) return null;
+  const x1 = safeInteger(border.x1_emu, "table.border.x1_emu");
+  const y1 = safeInteger(border.y1_emu, "table.border.y1_emu");
+  const x2 = safeInteger(border.x2_emu, "table.border.x2_emu");
+  const y2 = safeInteger(border.y2_emu, "table.border.y2_emu");
+  const width = safeInteger(border.width_emu, "table.border.width_emu");
+  const stroke = rgb(border.rgb);
+  if (width <= 0 || !stroke || (x1 === x2 && y1 === y2)) return null;
+  return Object.freeze({ x1, y1, x2, y2, width, stroke });
+}
+
 function appendTableText(group, node) {
   const table = node.table;
   if (!table) return;
@@ -352,6 +364,22 @@ function appendTableText(group, node) {
     div.textContent = cell.text.replace(/\r/g, "\n");
     foreign.appendChild(div);
     group.appendChild(foreign);
+  }
+
+  for (const border of table.borders ?? []) {
+    const plan = tableBorderPaintPlan(border);
+    if (!plan) continue;
+    group.appendChild(svgNode("line", {
+      x1: plan.x1,
+      y1: plan.y1,
+      x2: plan.x2,
+      y2: plan.y2,
+      stroke: plan.stroke,
+      "stroke-width": plan.width,
+      "stroke-linecap": "butt",
+      fill: "none",
+      "data-table-border-authority": "source-740"
+    }));
   }
 }
 
