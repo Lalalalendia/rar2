@@ -138,12 +138,14 @@ struct Claims {
 #[ignore = "requires exact public Virginia Remplacante fixture"]
 fn exact_virginia_direct_image_rotation_applicability_probe() {
     let fixture = PathBuf::from(
-        env::var("CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_PUB")
-            .expect("CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_PUB must name the exact public fixture"),
+        env::var("CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_PUB").expect(
+            "CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_PUB must name the exact public fixture",
+        ),
     );
     let output = PathBuf::from(
-        env::var("CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_RECEIPT")
-            .expect("CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_RECEIPT must name the sanitized receipt"),
+        env::var("CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_RECEIPT").expect(
+            "CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_RECEIPT must name the sanitized receipt",
+        ),
     );
 
     let bytes = fs::read(&fixture).expect("read exact public Virginia Remplacante fixture");
@@ -258,7 +260,10 @@ fn exact_virginia_direct_image_rotation_applicability_probe() {
 
             bump(
                 &mut receipt.nonzero_rotation_aspect_histogram,
-                aspect_class(node.header.bounds.width.get(), node.header.bounds.height.get()),
+                aspect_class(
+                    node.header.bounds.width.get(),
+                    node.header.bounds.height.get(),
+                ),
             );
             bump(
                 &mut receipt.nonzero_rotation_crop_histogram,
