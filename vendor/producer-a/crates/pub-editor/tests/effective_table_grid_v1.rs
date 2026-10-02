@@ -83,6 +83,7 @@ fn graph() -> PubResolvedGraph {
                 utf16_start: 1,
                 utf16_end: 4,
                 bounds: None,
+                paint: None,
                 source_refs: Vec::new(),
             },
         ],
