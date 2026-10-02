@@ -35,7 +35,7 @@ function Get-PubFileRecord {
     $resolved = (Resolve-Path -LiteralPath $Path).Path
     $item = Get-Item -LiteralPath $resolved
     if ($item.PSIsContainer) {
-        throw "Ожидался файл, но получен каталог: $resolved"
+        throw "Expected a file but received a directory: $resolved"
     }
 
     $hash = Get-FileHash -LiteralPath $resolved -Algorithm SHA256
@@ -88,7 +88,7 @@ function New-PubPublisherApplication {
             $application.ActiveWindow.Visible = $true
         }
         catch {
-            # До открытия документа ActiveWindow может отсутствовать.
+            # ActiveWindow may be unavailable before a document is opened.
         }
     }
 
@@ -109,14 +109,14 @@ function Close-PubPublisherApplication {
         $Application.Quit()
     }
     catch {
-        Write-Warning "Publisher.Quit завершился ошибкой: $($_.Exception.Message)"
+        Write-Warning "Publisher.Quit failed: $($_.Exception.Message)"
     }
 
     try {
         [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Application)
     }
     catch {
-        # Освобождение RCW — best effort; provenance результата важнее cleanup-ошибки.
+        # Releasing the RCW is best effort; result provenance is more important than cleanup failure.
     }
 
     [GC]::Collect()
@@ -165,7 +165,7 @@ function Get-PubEnvironmentManifest {
 
     $publisher = Get-PubPublisherIdentity -Visible:$Visible
     if ($RequirePublisher -and -not $publisher.available) {
-        throw "Microsoft Publisher COM automation недоступна: $($publisher.message)"
+        throw "Microsoft Publisher COM automation is unavailable: $($publisher.message)"
     }
 
     $culture = [System.Globalization.CultureInfo]::CurrentCulture
@@ -228,7 +228,7 @@ function Copy-PubBoundFile {
 
     $after = Get-PubFileRecord $Destination
     if ($before.sha256 -ne $after.sha256 -or $before.size -ne $after.size) {
-        throw "Binding файла нарушен при копировании: $($before.path)"
+        throw "File binding changed during copy: $($before.path)"
     }
 
     return [ordered]@{
