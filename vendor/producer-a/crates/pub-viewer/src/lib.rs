@@ -529,6 +529,18 @@ pub struct ViewerTable {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ViewerTableCell>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub borders: Vec<ViewerTableBorderSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTableBorderSegment {
+    pub x1_emu: i64,
+    pub y1_emu: i64,
+    pub x2_emu: i64,
+    pub y2_emu: i64,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -552,6 +564,79 @@ pub struct ViewerTableCell {
     pub fill_rgb: Option<[u8; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill_visible: Option<bool>,
+}
+
+fn viewer_table_border_segments(
+    source: &pub_reader::PubTableSource,
+    cells: &[ViewerTableCell],
+) -> Vec<ViewerTableBorderSegment> {
+    let boundary_x = |column: u32| -> Option<i64> {
+        if column > source.columns || source.columns == 0 {
+            return None;
+        }
+        if column == source.columns {
+            let cell = cells.iter().find(|cell| {
+                cell.address.row == 0 && cell.address.column + 1 == source.columns
+            })?;
+            let bounds = cell.bounds?;
+            return bounds.x.get().checked_add(bounds.width.get());
+        }
+        cells
+            .iter()
+            .find(|cell| cell.address.row == 0 && cell.address.column == column)
+            .and_then(|cell| cell.bounds)
+            .map(|bounds| bounds.x.get())
+    };
+    let boundary_y = |row: u32| -> Option<i64> {
+        if row > source.rows || source.rows == 0 {
+            return None;
+        }
+        if row == source.rows {
+            let cell = cells.iter().find(|cell| {
+                cell.address.column == 0 && cell.address.row + 1 == source.rows
+            })?;
+            let bounds = cell.bounds?;
+            return bounds.y.get().checked_add(bounds.height.get());
+        }
+        cells
+            .iter()
+            .find(|cell| cell.address.column == 0 && cell.address.row == row)
+            .and_then(|cell| cell.bounds)
+            .map(|bounds| bounds.y.get())
+    };
+
+    source
+        .border_segments
+        .iter()
+        .filter_map(|segment| match segment.axis {
+            pub_reader::PubTableBorderAxis::Horizontal => {
+                let y = boundary_y(segment.row_start)?;
+                let x1 = boundary_x(segment.column_start)?;
+                let x2 = boundary_x(segment.column_end)?;
+                (x1 < x2).then_some(ViewerTableBorderSegment {
+                    x1_emu: x1,
+                    y1_emu: y,
+                    x2_emu: x2,
+                    y2_emu: y,
+                    rgb: segment.rgb,
+                    width_emu: segment.width_emu,
+                })
+            }
+            pub_reader::PubTableBorderAxis::Vertical => {
+                let x = boundary_x(segment.column_start)?;
+                let y1 = boundary_y(segment.row_start)?;
+                let y2 = boundary_y(segment.row_end)?;
+                (y1 < y2).then_some(ViewerTableBorderSegment {
+                    x1_emu: x,
+                    y1_emu: y1,
+                    x2_emu: x,
+                    y2_emu: y2,
+                    rgb: segment.rgb,
+                    width_emu: segment.width_emu,
+                })
+            }
+        })
+        .collect()
 }
 
 fn default_table_span() -> u32 {
@@ -3115,12 +3200,14 @@ fn viewer_tables_from_resolved(
             })
             .collect();
 
+        let borders = viewer_table_border_segments(source, &cells);
         tables.push(ViewerTable {
             node_id,
             story_id,
             rows: source.rows,
             columns: source.columns,
             cells,
+            borders,
         });
     }
 
