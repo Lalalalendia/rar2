@@ -988,6 +988,18 @@ where
             transform: node.transform.clone(),
         };
         let resolved_font = resolve_font(fragment);
+        if resolved_font.is_none()
+            && let Some(layout) = resolve_mixed_family_text_layout_v1(
+                visual,
+                target.clone(),
+                fragment,
+                &mut resolve_font,
+            )
+        {
+            fragment.backend_font_resource_id = None;
+            fragment.layout = Some(layout);
+            continue;
+        }
         fragment.backend_font_resource_id = resolved_font
             .as_ref()
             .map(|font| font.resource_id.to_owned());
