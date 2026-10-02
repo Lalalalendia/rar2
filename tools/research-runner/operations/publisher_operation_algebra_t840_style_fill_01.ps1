@@ -350,7 +350,7 @@ function Invoke-Arm {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][string]$BaselinePath,
-        [Parameter(Mandatory = $true)][string[]]$Operations
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Operations
     )
 
     $armDir = Join-Path $privateDir $Name
@@ -358,6 +358,7 @@ function Invoke-Arm {
     $working = Join-Path $armDir "working.pub"
     $output = Join-Path $armDir "output.pub"
     $pdf = Join-Path $armDir "output.pdf"
+    $semanticPath = Join-Path $armDir "semantic.json"
     $fingerprintPath = Join-Path $armDir "fingerprint.json"
     Copy-Item -LiteralPath $BaselinePath -Destination $working -Force
 
@@ -383,6 +384,7 @@ function Invoke-Arm {
         $app2 = New-PubPublisherApplication
         $doc2 = $app2.Open($output, $true, $false)
         $semantic = Get-TableSnapshot -Document $doc2
+        $semantic | ConvertTo-Json -Depth 64 | Set-Content -LiteralPath $semanticPath -Encoding UTF8
         $doc2.ExportAsFixedFormat($PbFixedFormatTypePDF, $pdf, $PbIntentStandard)
     }
     finally {
@@ -391,7 +393,7 @@ function Invoke-Arm {
     }
 
     $fingerprintTool = Join-Path $repoRoot "tools/pub_operation_algebra_fingerprint.py"
-    & python $fingerprintTool --pub $output --pdf $pdf --out $fingerprintPath
+    & python $fingerprintTool --pub $output --pdf $pdf --semantic $semanticPath --out $fingerprintPath
     if ($LASTEXITCODE -ne 0) {
         throw "Fingerprint helper failed for arm $Name with exit code $LASTEXITCODE"
     }
@@ -400,16 +402,12 @@ function Invoke-Arm {
     return [ordered]@{
         status = "ok"
         operations = @($Operations)
-        semantic_fingerprint = $semantic
+        semantic_snapshot = $semantic
+        semantic_fingerprint = $fingerprint.semantic_fingerprint
         persistence_fingerprint = $fingerprint.persistence_fingerprint
         render_fingerprint = $fingerprint.render_fingerprint
         artifacts = $fingerprint.artifacts
     }
-}
-
-function Json-Equal {
-    param($Left, $Right)
-    return (($Left | ConvertTo-Json -Compress -Depth 64) -eq ($Right | ConvertTo-Json -Compress -Depth 64))
 }
 
 $baselinePath = Join-Path $privateDir "baseline.pub"
@@ -425,9 +423,9 @@ $AOnly = Invoke-Arm -Name "A_only" -BaselinePath $baselinePath -Operations @($op
 $BOnly = Invoke-Arm -Name "B_only" -BaselinePath $baselinePath -Operations @($opB)
 $Control = Invoke-Arm -Name "control" -BaselinePath $baselinePath -Operations @()
 
-$semanticEqual = Json-Equal $AB.semantic_fingerprint $BA.semantic_fingerprint
-$persistenceEqual = Json-Equal $AB.persistence_fingerprint $BA.persistence_fingerprint
-$renderEqual = Json-Equal $AB.render_fingerprint $BA.render_fingerprint
+$semanticEqual = ([string]$AB.semantic_fingerprint.sha256 -eq [string]$BA.semantic_fingerprint.sha256)
+$persistenceEqual = ([string]$AB.persistence_fingerprint.sha256 -eq [string]$BA.persistence_fingerprint.sha256)
+$renderEqual = ([string]$AB.render_fingerprint.sha256 -eq [string]$BA.render_fingerprint.sha256)
 
 $classification = "non_commutative_semantic_or_hidden_precedence"
 if ($semanticEqual -and $persistenceEqual -and $renderEqual) {
