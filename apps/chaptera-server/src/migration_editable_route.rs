@@ -39,10 +39,8 @@ pub const MIGRATION_EDITABLE_ROUTE_REQUEST_V1: &str =
     "chaptera.migration-editable-route-request.v1";
 pub const MIGRATION_EDITABLE_ROUTE_RESPONSE_V1: &str =
     "chaptera.migration-editable-route-response.v1";
-pub const MIGRATION_EXPORT_CREATE_REQUEST_V1: &str =
-    "chaptera.migration-export-create.v1";
-pub const MIGRATION_EXPORT_CREATE_RESPONSE_V1: &str =
-    "chaptera.migration-export-job.v1";
+pub const MIGRATION_EXPORT_CREATE_REQUEST_V1: &str = "chaptera.migration-export-create.v1";
+pub const MIGRATION_EXPORT_CREATE_RESPONSE_V1: &str = "chaptera.migration-export-job.v1";
 const MIGRATION_EDITABLE_ROUTE_RECEIPT_V1: &str = "chaptera.migration-editable-route-receipt.v1";
 const MIGRATION_EXPORT_ENVIRONMENT_V1: &str = "chaptera.migration-export-environment.v1";
 const RECEIPT_MAX_BYTES: u64 = 64 * 1024;
@@ -691,7 +689,6 @@ struct MigrationEditableRouteResponseV1 {
     odg: MigrationEditableTargetAssessmentV1,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MigrationExportCreateRequestV1 {
@@ -839,14 +836,12 @@ fn validate_export_create_request(
     Ok(())
 }
 
-fn require_client_request_id(
-    value: &str,
-) -> Result<(), MigrationEditableRouteHttpError> {
+fn require_client_request_id(value: &str) -> Result<(), MigrationEditableRouteHttpError> {
     if value.is_empty()
         || value.len() > 160
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')
-        })
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
         return Err(MigrationEditableRouteHttpError::bad_request(
             "migration_export_client_request_id_invalid",
@@ -878,9 +873,7 @@ fn admitted_target<'a>(
         "odg" => &receipt.odg,
         _ => unreachable!("target_profile validated target"),
     };
-    if assessment.state != "available_with_declared_losses"
-        || assessment.blocking_loss_count != 0
-    {
+    if assessment.state != "available_with_declared_losses" || assessment.blocking_loss_count != 0 {
         return Err(MigrationEditableRouteHttpError::conflict(
             "migration_export_route_unavailable",
             format!(
@@ -1080,9 +1073,7 @@ impl IntoResponse for MigrationEditableRouteHttpError {
                     "idempotency_conflict"
                     | "job_scope_mismatch"
                     | "job_payload_scope_mismatch" => StatusCode::CONFLICT,
-                    "invalid_client_request_id" | "invalid_operation_id" => {
-                        StatusCode::BAD_REQUEST
-                    }
+                    "invalid_client_request_id" | "invalid_operation_id" => StatusCode::BAD_REQUEST,
                     _ => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 (
