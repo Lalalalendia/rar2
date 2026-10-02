@@ -596,8 +596,12 @@ fn populate_native_autoformat_table_borders(
             return Vec::new();
         }
         let axis = match orientation {
-            1 if row_start == row_end && column_start < column_end => PubTableBorderAxis::Horizontal,
-            2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
+            1 if row_start == row_end && column_start < column_end => {
+                PubTableBorderAxis::Horizontal
+            }
+            2 if column_start == column_end && row_start < row_end => {
+                PubTableBorderAxis::Vertical
+            }
             _ => return Vec::new(),
         };
         by_key
