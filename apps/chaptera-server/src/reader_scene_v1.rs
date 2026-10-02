@@ -1446,6 +1446,50 @@ mod tests {
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
 
+        if actual_sha256 == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" {
+            let targets = [
+                "Together We Take Small Steps",
+                "Reception",
+                "Year 1",
+                "Year 2",
+            ];
+            for fragment in &bundle.geometry.text_fragments {
+                let Some(target) = targets
+                    .iter()
+                    .find(|target| fragment.text.contains(**target))
+                else {
+                    continue;
+                };
+                let runs = bundle
+                    .geometry
+                    .paragraph_alignments
+                    .iter()
+                    .filter(|run| {
+                        run.story_id == fragment.story_id
+                            && run.scalar_start < fragment.scalar_end
+                            && run.scalar_end > fragment.scalar_start
+                    })
+                    .collect::<Vec<_>>();
+                println!(
+                    "CARLTON_LIBMSPUB_ALIGNMENT_DISCRIMINATOR target={target:?} frame={:?} fragment={}..{} run_count={} text={:?}",
+                    fragment.frame_id,
+                    fragment.scalar_start,
+                    fragment.scalar_end,
+                    runs.len(),
+                    fragment.text
+                );
+                for run in runs {
+                    println!(
+                        "CARLTON_LIBMSPUB_ALIGNMENT_RUN target={target:?} run={}..{} alignment={:?} source_value={}",
+                        run.scalar_start,
+                        run.scalar_end,
+                        run.alignment,
+                        run.source_value
+                    );
+                }
+            }
+        }
+
         let mut source_explicit_line_any = 0_usize;
         let mut source_explicit_line_color = 0_usize;
         let mut source_explicit_line_width = 0_usize;
