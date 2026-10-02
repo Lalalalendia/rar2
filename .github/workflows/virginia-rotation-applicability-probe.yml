@@ -48,7 +48,7 @@ jobs:
           CHAPTERA_VIRGINIA_ROTATION_APPLICABILITY_RECEIPT: ${{ github.workspace }}/target/virginia-rotation-applicability/receipt.json
         run: |
           set -euo pipefail
-          cargo test -p pub-reader --test virginia_rotation_applicability_probe -- --ignored --nocapture
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --test virginia_rotation_applicability_probe -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
