@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - "apps/chaptera-server/tests/virginia_p10_residual_probe.rs"
+      - "vendor/producer-a/crates/pub-viewer/tests/virginia_p10_table_border_carrier_probe.rs"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - ".github/workflows/virginia-p10-product-boundary.yml"
 
@@ -50,6 +51,14 @@ jobs:
           set -euo pipefail
           mkdir -p target/virginia-p10
           cargo test -p chaptera-server --test virginia_p10_residual_probe -- --ignored --nocapture
+
+      - name: Census p9 p10 p11 TABLE-linked border/decor carriers
+        env:
+          CHAPTERA_VIRGINIA_P10_BORDER_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_P10_BORDER_OUT: ${{ github.workspace }}/target/virginia-p10/table-border-carriers.json
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p10_table_border_carrier_probe -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
