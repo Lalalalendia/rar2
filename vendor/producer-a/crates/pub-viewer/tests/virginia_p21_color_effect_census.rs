@@ -172,6 +172,7 @@ struct PageReceipt {
     image_contrast_count: usize,
     recolor_storage_classes: BTreeMap<String, usize>,
     recolor_colorref_classes: BTreeMap<String, usize>,
+    image_recolor_binding_classes: BTreeMap<String, usize>,
 
     non_table_shape_count: usize,
     large_non_table_shape_count: usize,
@@ -257,6 +258,8 @@ fn exact_virginia_p21_color_effect_source_census() {
         .collect::<BTreeSet<_>>();
 
     let mut pages = Vec::new();
+    let mut image_slot_classes = BTreeMap::<u32, usize>::new();
+    let mut recolor_value_classes = BTreeMap::<u32, usize>::new();
 
     for viewer_page in [6_u32, 20, 21, 22] {
         let page = bundle
@@ -325,10 +328,36 @@ fn exact_virginia_p21_color_effect_source_census() {
                         &mut receipt.recolor_storage_classes,
                         property_storage_class(shape, PICTURE_RECOLOR),
                     );
+                    let recolor_class = colorref_class(shape, PICTURE_RECOLOR);
                     bump(
                         &mut receipt.recolor_colorref_classes,
-                        colorref_class(shape, PICTURE_RECOLOR),
+                        recolor_class.clone(),
                     );
+
+                    if let (Some(image_slot), Some(recolor_property)) = (
+                        node.payload.image_slot,
+                        scalar_property(shape, PICTURE_RECOLOR),
+                    ) {
+                        let next_image_class = image_slot_classes.len();
+                        let image_class = *image_slot_classes
+                            .entry(image_slot)
+                            .or_insert(next_image_class);
+                        let next_recolor_class = recolor_value_classes.len();
+                        let recolor_value_class = *recolor_value_classes
+                            .entry(recolor_property.op)
+                            .or_insert(next_recolor_class);
+                        bump(
+                            &mut receipt.image_recolor_binding_classes,
+                            format!(
+                                "image_eq_{image_class}:recolor_eq_{recolor_value_class}:{recolor_class}"
+                            ),
+                        );
+                    } else {
+                        bump(
+                            &mut receipt.image_recolor_binding_classes,
+                            "unresolved_binding",
+                        );
+                    }
                 }
 
                 if !properties(shape, PICTURE_BRIGHTNESS).is_empty() {
@@ -384,7 +413,7 @@ fn exact_virginia_p21_color_effect_source_census() {
         }
 
         println!(
-            "P21_COLOR_CENSUS page={} scene={} canonical={} exact_shape={} missing_shape={} ambiguous_shape={} images={} image_bound={} recolor={} recolor_bound={} brightness={} contrast={} recolor_storage={:?} recolor_colorref={:?} shapes={} large_shapes={} fill_types={:?} large_fill_types={:?} pattern={} pattern_bg_pxid={} pattern_viewer_solid={} pattern_bg_classes={:?}",
+            "P21_COLOR_CENSUS page={} scene={} canonical={} exact_shape={} missing_shape={} ambiguous_shape={} images={} image_bound={} recolor={} recolor_bound={} brightness={} contrast={} recolor_storage={:?} recolor_colorref={:?} recolor_bindings={:?} shapes={} large_shapes={} fill_types={:?} large_fill_types={:?} pattern={} pattern_bg_pxid={} pattern_viewer_solid={} pattern_bg_classes={:?}",
             receipt.viewer_page,
             receipt.scene_node_count,
             receipt.canonical_node_count,
@@ -399,6 +428,7 @@ fn exact_virginia_p21_color_effect_source_census() {
             receipt.image_contrast_count,
             receipt.recolor_storage_classes,
             receipt.recolor_colorref_classes,
+            receipt.image_recolor_binding_classes,
             receipt.non_table_shape_count,
             receipt.large_non_table_shape_count,
             receipt.fill_type_classes,
@@ -424,7 +454,7 @@ fn exact_virginia_p21_color_effect_source_census() {
             viewer_pattern_fill_surface_available: false,
             large_shape_threshold: "source-backed node area >= 1% of source-backed page area",
             recolor_authority_note:
-                "0x011A classification only; semantic authority pre-exists in Notion OBS-ECP-DUAL-PROJECTION-11-01",
+                "0x011A classification plus cross-page image/recolor equality classes only; semantic authority pre-exists in Notion OBS-ECP-DUAL-PROJECTION-11-01",
             pattern_authority_note:
                 "fillType=pattern/BG_PXID classification only; semantic chain pre-exists in Notion OBS-019",
         },
