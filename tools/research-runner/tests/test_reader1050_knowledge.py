@@ -40,6 +40,37 @@ class Reader1050KnowledgeTests(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["status"], "superseded")
 
+    def test_runtime_cursor_loads_source_free_proposed_entries(self) -> None:
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            nested = root / "run-123" / "artifact"
+            nested.mkdir(parents=True)
+            (nested / "ledger-entry.proposed.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "chaptera.reader1050-discriminator-ledger-entry.v1",
+                        "source_sha256": "f" * 64,
+                        "source_reader_run_id": "123",
+                        "discriminator_run_id": "456",
+                        "source_main_sha": "deadbeef",
+                        "discriminator_kind": "same_witness_forced_trigger",
+                        "verdict": "x",
+                        "decision": "continue_offline",
+                        "status": "executed",
+                        "next_discriminator": "typed_corruption_evidence_discovery",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rows = knowledge.load_runtime_discriminator_cursor(root)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["source_sha256"], "f" * 64)
+            self.assertEqual(rows[0]["status"], "executed")
+            self.assertEqual(rows[0]["runtime_cursor_source"], "run-123/artifact/ledger-entry.proposed.json")
+
 
 if __name__ == "__main__":
     unittest.main()
