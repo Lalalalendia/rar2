@@ -179,6 +179,16 @@ pub fn run(
         .map_err(|_| "CHAPTERA_RAR_COMMIT is required".to_owned())?;
     let expected_source_hash = env::var("CHAPTERA_SOURCE_HASH")
         .map_err(|_| "CHAPTERA_SOURCE_HASH is required".to_owned())?;
+    let replacement_binding_id = env::var("CHAPTERA_REPLACEMENT_BINDING_ID")
+        .map_err(|_| "CHAPTERA_REPLACEMENT_BINDING_ID is required".to_owned())?;
+    if !replacement_binding_id.starts_with("continuity-v2-")
+        || replacement_binding_id.len() != "continuity-v2-".len() + 32
+        || !replacement_binding_id["continuity-v2-".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("CHAPTERA_REPLACEMENT_BINDING_ID must be continuity-v2- + 32 lowercase hex chars".to_owned());
+    }
 
     let source_before =
         fs::read(fixture).map_err(|error| format!("read {}: {error}", fixture.display()))?;
@@ -428,8 +438,9 @@ pub fn run(
             "projection_kind": "direct_page_local",
             "origin_node_id": replaced_node_id.as_canonical().to_string(),
             "capability_admitted": true,
-            "before_asset_sha256": before_asset.map(|value| value.to_string()),
-            "after_asset_sha256": replacement_asset.to_string(),
+            "replacement_binding_id": replacement_binding_id,
+            "replacement_binding_content_derived": false,
+            "asset_sha_redacted": true,
             "after_asset_mime": replacement_mime,
             "after_asset_byte_len": replacement_bytes.len(),
             "frame_before": rect_json(replace_frame),
@@ -451,7 +462,7 @@ pub fn run(
             "story_state_id": story_state_reopened,
             "moved_rect": rect_json(reopened_move),
             "resized_rect": rect_json(reopened_resize),
-            "replacement_asset_sha256": reopened_asset.map(|value| value.to_string()),
+            "replacement_binding_preserved": reopened_asset == Some(replacement_asset),
         },
         "project": {
             "schema_version": persisted.schema_version,
@@ -481,6 +492,7 @@ pub fn run(
             "projected_object_mutation_fails_closed": projected_denied,
             "reopen_used_fresh_session": true,
             "export_from_current_editor_state": true,
+            "replacement_asset_sha_emitted": false,
         },
     }))
 }
