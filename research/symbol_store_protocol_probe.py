@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ROOT = "https://msdl.microsoft.com/download/symbols"
 IDENTITIES = [
@@ -17,7 +18,7 @@ def get(url):
         "Range": "bytes=0-4095",
     })
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=8) as r:
             data = r.read(4096)
             return {
                 "status": int(getattr(r, "status", 200)),
@@ -35,19 +36,27 @@ def get(url):
 def main():
     root_index2 = get(f"{ROOT}/index2.txt")
     records = []
+    jobs = []
     for pdb, index, role in IDENTITIES:
         compressed = pdb[:-1] + "_"
         one_tier = f"{ROOT}/{pdb}/{index}"
         two_tier = f"{ROOT}/{pdb[:2]}/{pdb}/{index}"
-        probes = {}
+        rec = {"pdb": pdb, "index": index, "role": role, "probes": {"one_tier": {}, "two_tier": {}}}
+        records.append(rec)
         for layout, base in (("one_tier", one_tier), ("two_tier", two_tier)):
-            probes[layout] = {
-                pdb: get(f"{base}/{pdb}"),
-                compressed: get(f"{base}/{compressed}"),
-                "file.ptr": get(f"{base}/file.ptr"),
-                "refs.ptr": get(f"{base}/refs.ptr"),
-            }
-        records.append({"pdb": pdb, "index": index, "role": role, "probes": probes})
+            for candidate in (pdb, compressed, "file.ptr", "refs.ptr"):
+                jobs.append((rec, layout, candidate, f"{base}/{candidate}"))
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {pool.submit(get, url): (rec, layout, candidate, url) for rec, layout, candidate, url in jobs}
+        for future in as_completed(futures):
+            rec, layout, candidate, url = futures[future]
+            try:
+                value = future.result()
+            except Exception as exc:
+                value = {"status": None, "error": f"{type(exc).__name__}: {exc}"}
+            value["url"] = url
+            rec["probes"][layout][candidate] = value
 
     result = {
         "schema": "symbol-store-protocol-probe.v1",
