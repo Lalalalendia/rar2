@@ -147,6 +147,16 @@ jobs:
             cargo run --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin reference_fill_state_census --               "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"               target/cloud-reader-reference-pairs/virginia-remplacante-fill-state.json
           fi
 
+      - name: Measure exact Virginia p22 TABLE layout authority
+        env:
+          CHAPTERA_VIRGINIA_TABLE_LAYOUT_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_TABLE_LAYOUT_SHA256: 88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506
+          CHAPTERA_VIRGINIA_TABLE_LAYOUT_OUT: ${{ github.workspace }}/target/cloud-reader-reference-pairs/virginia-p22-table-layout.json
+        run: |
+          set -euo pipefail
+          test -f "$CHAPTERA_VIRGINIA_TABLE_LAYOUT_FIXTURE"
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_layout_probe -- --ignored --nocapture
+
       - name: Census exact Virginia p22 TABLE layout admission
         env:
           CHAPTERA_VIRGINIA_TABLE_LAYOUT_PUB: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
