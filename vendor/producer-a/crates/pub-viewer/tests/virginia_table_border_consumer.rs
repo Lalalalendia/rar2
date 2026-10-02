@@ -2,8 +2,7 @@ use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
-const EXPECTED_SHA256: &str =
-    "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506";
+const EXPECTED_SHA256: &str = "88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506";
 const EXPECTED_PAGES: &[(u32, usize)] = &[
     (6, 288),
     (7, 177),
