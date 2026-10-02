@@ -118,6 +118,18 @@ pub struct ReaderTableV1 {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ReaderTableCellV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub borders: Vec<ReaderTableBorderSegmentV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderTableBorderSegmentV1 {
+    pub x1_emu: i64,
+    pub y1_emu: i64,
+    pub x2_emu: i64,
+    pub y2_emu: i64,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -560,11 +572,24 @@ pub fn from_viewer_geometry_with_fonts(
             });
         }
 
+        let borders = table
+            .borders
+            .iter()
+            .map(|border| ReaderTableBorderSegmentV1 {
+                x1_emu: border.x1_emu,
+                y1_emu: border.y1_emu,
+                x2_emu: border.x2_emu,
+                y2_emu: border.y2_emu,
+                rgb: border.rgb,
+                width_emu: border.width_emu,
+            })
+            .collect();
         let mapped = ReaderTableV1 {
             story_id: serialized_string(&table.story_id, "table story id")?,
             rows: table.rows,
             columns: table.columns,
             cells,
+            borders,
         };
         if table_by_node.insert(node_id.clone(), mapped).is_some() {
             return Err(format!("duplicate table binding for node {node_id}"));
