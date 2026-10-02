@@ -35,14 +35,6 @@ fn signature_class(value: PubTableMcldStyleSignatureClass) -> &'static str {
     }
 }
 
-fn officeart_owner_join_class(value: PubTableOfficeArtOwnerJoinClass) -> &'static str {
-    match value {
-        PubTableOfficeArtOwnerJoinClass::Missing => "missing",
-        PubTableOfficeArtOwnerJoinClass::Unique => "unique",
-        PubTableOfficeArtOwnerJoinClass::Ambiguous => "ambiguous",
-    }
-}
-
 fn opaque_1d_class(value: PubTableMcldOpaque1dClass) -> &'static str {
     match value {
         PubTableMcldOpaque1dClass::AbsentOrNonSingle => "absent_or_non_single",
@@ -215,37 +207,6 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
                     .entry(key.clone())
                     .or_default() += count;
             }
-
-            let default_style = default_style_by_seq
-                .get(&node.payload.contents_seq_num)
-                .expect("selected TABLE must have a TABLE-level/default-style observation");
-            let set_signature = |items: &std::collections::BTreeSet<String>| {
-                if items.is_empty() {
-                    "none".to_owned()
-                } else {
-                    items.iter().cloned().collect::<Vec<_>>().join(",")
-                }
-            };
-            bump(
-                &mut receipt.table_default_decoded_signature_histogram,
-                set_signature(&default_style.table_field_presence),
-            );
-            bump(
-                &mut receipt.table_default_tail_signature_histogram,
-                set_signature(&default_style.table_tail_field_presence),
-            );
-            bump(
-                &mut receipt.table_officeart_owner_join_histogram,
-                officeart_owner_join_class(default_style.officeart_owner_join_class),
-            );
-            bump(
-                &mut receipt.table_owner_fopt_signature_histogram,
-                set_signature(&default_style.owner_fopt_property_presence),
-            );
-            bump(
-                &mut receipt.table_owner_paint_family_signature_histogram,
-                set_signature(&default_style.owner_paint_family_property_presence),
-            );
 
             if let Some(class) = observation.opaque_1d_class {
                 bump(
