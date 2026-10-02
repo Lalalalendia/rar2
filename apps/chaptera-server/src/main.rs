@@ -267,6 +267,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn Error>> {
                             auth_http.clone(),
                             source_authority,
                             authz.clone(),
+                            revision_stream.clone(),
+                            jobs.clone(),
                             migration_route_producer,
                         );
                         Some(
