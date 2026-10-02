@@ -16,26 +16,17 @@ on:
       - "tools/ci/scribus_idml_consumer.py"
       - ".github/workflows/migration-editable-corpus-v2.yml"
   workflow_dispatch:
-    inputs:
-      profile:
-        description: Corpus profile
-        required: true
-        default: core65
-        type: choice
-        options:
-          - core65
-          - extended86
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: migration-editable-corpus-v2-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'core65' }}
-  EXPECTED_COUNT: ${{ (github.event_name == 'workflow_dispatch' && inputs.profile == 'extended86') && '86' || '65' }}
+  PROFILE: core65
+  EXPECTED_COUNT: "65"
   CARGO_TARGET_DIR: ${{ github.workspace }}/target/migration-corpus-rust
 
 jobs:
@@ -63,12 +54,10 @@ jobs:
       MATERIALIZED_DIR: ${{ runner.temp }}/migration-corpus-input
     steps:
       - uses: actions/checkout@v5
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
           components: rustfmt
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -88,31 +77,22 @@ jobs:
       - name: Materialize exact pinned corpus shard
         run: |
           set -euo pipefail
-          python tools/migration_editable_corpus_v2.py materialize             --repo-root .             --profile "$PROFILE"             --out "$MATERIALIZED_DIR"             --shard-index ${{ matrix.shard }}             --shard-count 4
+          python tools/migration_editable_corpus_v2.py materialize --repo-root . --profile "$PROFILE" --out "$MATERIALIZED_DIR" --shard-index ${{ matrix.shard }} --shard-count 4
 
       - name: Probe, serialize, and consumer-open shard
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE_DIR"
-
-          jq -r '.entries[] | [.path, .sha256, .name, .stratum] | @tsv'             "$MATERIALIZED_DIR/manifest.json" |
+          jq -r '.entries[] | [.path, .sha256, .name, .stratum] | @tsv' "$MATERIALIZED_DIR/manifest.json" |
           while IFS=$'\t' read -r pub sha label stratum; do
             out="$EVIDENCE_DIR/$sha"
             mkdir -p "$out"
-
-            "$CARGO_TARGET_DIR/debug/migration_editable_route_probe"               "$pub"               --label "$label"               --materialize-dir "$out"               > "$out/route.json"
-
-            python - "$out/route.json" "$stratum" <<'PY'
-          import json, pathlib, sys
-          path = pathlib.Path(sys.argv[1])
-          data = json.loads(path.read_text())
-          data["corpus_stratum"] = sys.argv[2]
-          path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-          PY
+            "$CARGO_TARGET_DIR/debug/migration_editable_route_probe" "$pub" --label "$label" --materialize-dir "$out" > "$out/route.json"
+            python -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d["corpus_stratum"]=sys.argv[2]; p.write_text(json.dumps(d,indent=2,sort_keys=True)+"\\n")' "$out/route.json" "$stratum"
 
             if test -s "$out/output.idml"; then
               rm -f "$out/consumer.sla"
-              CHAPTERA_SCRIBUS_SLA_OUT="$out/consumer.sla"                 xvfb-run -a scribus -g -ns                   -py tools/ci/scribus_idml_consumer.py -- "$out/output.idml"
+              CHAPTERA_SCRIBUS_SLA_OUT="$out/consumer.sla" xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- "$out/output.idml"
               test -s "$out/consumer.sla"
               touch "$out/idml.consumer.ok"
             fi
@@ -121,7 +101,7 @@ jobs:
               lo_out="$out/libreoffice"
               lo_profile="$RUNNER_TEMP/lo-$sha"
               mkdir -p "$lo_out" "$lo_profile"
-              libreoffice --headless                 "-env:UserInstallation=file://$lo_profile"                 --convert-to fodg                 --outdir "$lo_out"                 "$out/output.odg"
+              libreoffice --headless "-env:UserInstallation=file://$lo_profile" --convert-to fodg --outdir "$lo_out" "$out/output.odg"
               test -s "$lo_out/output.fodg"
               touch "$out/odg.consumer.ok"
             fi
@@ -131,13 +111,12 @@ jobs:
           done
 
       - name: Record shard acquisition receipt
-        run: |
-          cp "$MATERIALIZED_DIR/manifest.json" "$EVIDENCE_DIR/materialization-shard-${{ matrix.shard }}.json"
+        run: cp "$MATERIALIZED_DIR/manifest.json" "$EVIDENCE_DIR/materialization-shard-${{ matrix.shard }}.json"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: migration-corpus-${{ env.PROFILE }}-shard-${{ matrix.shard }}
+          name: migration-corpus-core65-shard-${{ matrix.shard }}
           path: target/migration-corpus-evidence/
           if-no-files-found: error
           retention-days: 30
@@ -152,23 +131,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - uses: actions/download-artifact@v4
         with:
-          pattern: migration-corpus-${{ env.PROFILE }}-shard-*
+          pattern: migration-corpus-core65-shard-*
           path: target/migration-corpus-shards
           merge-multiple: false
-
       - name: Build aggregate migration corpus receipt
         run: |
           set -euo pipefail
-          python tools/migration_editable_corpus_v2.py summarize             --input target/migration-corpus-shards             --output target/migration-corpus-summary.json             --expected-count "$EXPECTED_COUNT"
+          python tools/migration_editable_corpus_v2.py summarize --input target/migration-corpus-shards --output target/migration-corpus-summary.json --expected-count "$EXPECTED_COUNT"
           cat target/migration-corpus-summary.json
-
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: migration-corpus-${{ env.PROFILE }}-summary
+          name: migration-corpus-core65-summary
           path: target/migration-corpus-summary.json
           if-no-files-found: error
           retention-days: 90
