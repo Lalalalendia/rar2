@@ -24,7 +24,13 @@ const ROW_END: u16 = 0x2006;
 const COLUMN_END: u16 = 0x2007;
 const RECTANGLE: u16 = 0x0001;
 const FILL_COLOR: u16 = 0x0181;
+const FILL_BOOLEANS: u16 = 0x01BF;
 const LINE_WIDTH: u16 = 0x01CB;
+const LINE_BOOLEANS: u16 = 0x01FF;
+const FILL_USE_FILLED_BIT: u32 = 1 << 20;
+const FILL_FILLED_BIT: u32 = 1 << 4;
+const LINE_USE_LINE_BIT: u32 = 1 << 19;
+const LINE_LINE_BIT: u32 = 1 << 3;
 
 fn unique_field(record: &PublisherFieldRecord, id: u16) -> Option<u32> {
     let mut it = record.fields.iter().filter(|f| f.id == id);
@@ -168,6 +174,33 @@ fn bump(map: &mut BTreeMap<String, usize>, key: &str) {
     *map.entry(key.to_owned()).or_default() += 1;
 }
 
+fn boolean_use_class(
+    shape: &SpContainerObservation,
+    property_id: u16,
+    use_bit: u32,
+    value_bit: u32,
+) -> String {
+    let matches = shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == property_id)
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [] => "missing".to_owned(),
+        [property] if property.f_bid() || property.f_complex() => "unsupported".to_owned(),
+        [property] if property.op & use_bit == 0 => {
+            format!("no_use:0x{:08X}", property.op)
+        }
+        [property] if property.op & value_bit != 0 => {
+            format!("visible:0x{:08X}", property.op)
+        }
+        [property] => format!("hidden:0x{:08X}", property.op),
+        _ => "ambiguous".to_owned(),
+    }
+}
+
 #[derive(Default, Serialize)]
 struct PageReceipt {
     viewer_page: u32,
@@ -182,6 +215,8 @@ struct PageReceipt {
     generic_fopt_node_count: usize,
     viewer_paint_node_count: usize,
     scene_backed_paint_node_count: usize,
+    fill_boolean_classes: BTreeMap<String, usize>,
+    line_boolean_classes: BTreeMap<String, usize>,
     rejected_reasons: BTreeMap<String, usize>,
 }
 #[derive(Default, Serialize)]
@@ -264,6 +299,21 @@ fn exact_virginia_table_border_composition_probe() {
                 .filter(|s| is_candidate(s, table_seq))
             {
                 pr.carrier_count += 1;
+                let fill_boolean_class = boolean_use_class(
+                    shape,
+                    FILL_BOOLEANS,
+                    FILL_USE_FILLED_BIT,
+                    FILL_FILLED_BIT,
+                );
+                let line_boolean_class = boolean_use_class(
+                    shape,
+                    LINE_BOOLEANS,
+                    LINE_USE_LINE_BIT,
+                    LINE_LINE_BIT,
+                );
+                bump(&mut pr.fill_boolean_classes, &fill_boolean_class);
+                bump(&mut pr.line_boolean_classes, &line_boolean_class);
+
                 let segment = match decode_segment(shape, table.rows, table.columns) {
                     Ok(s) => s,
                     Err(reason) => {
@@ -333,7 +383,7 @@ fn exact_virginia_table_border_composition_probe() {
         }
 
         println!(
-            "TABLE_COMPOSITION page={} tables={} carriers={} decoded={} rejected={} generic_paint={} absent={} ambiguous={} same_span_nodes={} generic_fopt_nodes={} viewer_paints={} scene_backed_paints={}",
+            "TABLE_COMPOSITION page={} tables={} carriers={} decoded={} rejected={} generic_paint={} absent={} ambiguous={} same_span_nodes={} generic_fopt_nodes={} viewer_paints={} scene_backed_paints={} fill_bool={:?} line_bool={:?}",
             pr.viewer_page,
             pr.table_count,
             pr.carrier_count,
@@ -345,7 +395,9 @@ fn exact_virginia_table_border_composition_probe() {
             pr.same_span_node_count,
             pr.generic_fopt_node_count,
             pr.viewer_paint_node_count,
-            pr.scene_backed_paint_node_count
+            pr.scene_backed_paint_node_count,
+            pr.fill_boolean_classes,
+            pr.line_boolean_classes
         );
 
         totals.table_count += pr.table_count;
