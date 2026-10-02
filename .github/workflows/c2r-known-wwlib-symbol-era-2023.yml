@@ -1,9 +1,6 @@
 name: C2R Known WWLIB Symbol Era 2023
 
 on:
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
