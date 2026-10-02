@@ -279,6 +279,35 @@ fn affine_rotation_about_bounds(rotation_op: u32, bounds: RectEmu) -> Option<Aff
     })
 }
 
+fn bounded_direct_image_cardinal_content_rotation_degrees(
+    rotation_properties: &[(u32, bool, bool)],
+    fsp_flags: u32,
+) -> Option<i16> {
+    if fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
+        || rotation_properties.len() != 1
+        || rotation_properties
+            .iter()
+            .any(|(_, f_bid, f_complex)| *f_bid || *f_complex)
+    {
+        return None;
+    }
+
+    const FULL_TURN_UNITS: i64 = 360 * 65_536;
+    const QUARTER_TURN_UNITS: i64 = 90 * 65_536;
+    let (rotation_op, _, _) = rotation_properties[0];
+    let mut angle = i64::from(rotation_op as i32) % FULL_TURN_UNITS;
+    if angle < 0 {
+        angle += FULL_TURN_UNITS;
+    }
+
+    match angle {
+        QUARTER_TURN_UNITS => Some(90),
+        angle if angle == 2 * QUARTER_TURN_UNITS => Some(180),
+        angle if angle == 3 * QUARTER_TURN_UNITS => Some(270),
+        _ => None,
+    }
+}
+
 fn bounded_direct_image_transform(
     rotation_properties: &[(u32, bool, bool)],
     fsp_flags: u32,
@@ -603,6 +632,11 @@ pub struct PubNodePayload {
     /// reinterpreted as Publisher points or normalized crop geometry here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit_image_crop: Option<PubExplicitImageCropSource>,
+    /// Exact cardinal OfficeArt picture-content rotation admitted separately
+    /// from the outer NodeHeader transform. This keeps already-resolved frame
+    /// geometry fixed while preserving bounded image-fill orientation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explicit_image_cardinal_rotation_degrees: Option<i16>,
     /// Explicit shape-local OfficeArt paint state only.
     pub explicit_paint: PubExplicitShapePaintSource,
     /// Bounded effective solid-paint resolution for admitted 2-D shapes.
@@ -3125,23 +3159,40 @@ pub fn build_mature_0x2c_from_streams(
             (None, None)
         };
 
-        let direct_image_transform = if raw_type == Some(RAW_TYPE_SHAPE)
+        let direct_image_candidate = raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_some()
-            && grouped_sources.is_empty()
-        {
-            let rotation_properties = shape
+            && grouped_sources.is_empty();
+        let direct_image_rotation_properties = if direct_image_candidate {
+            shape
                 .fopts
                 .iter()
                 .flat_map(|record| record.properties.iter())
                 .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
                 .map(|property| (property.op, property.f_bid(), property.f_complex()))
-                .collect::<Vec<_>>();
-            let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
-            bounded_direct_image_transform(&rotation_properties, fsp_flags, bounds)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let direct_image_fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
+        let direct_image_transform = if direct_image_candidate {
+            bounded_direct_image_transform(
+                &direct_image_rotation_properties,
+                direct_image_fsp_flags,
+                bounds,
+            )
         } else {
             BoundedDirectImageTransform::Identity
         };
+        let direct_image_cardinal_rotation_degrees =
+            if direct_image_candidate && explicit_image_crop.is_none() {
+                bounded_direct_image_cardinal_content_rotation_degrees(
+                    &direct_image_rotation_properties,
+                    direct_image_fsp_flags,
+                )
+            } else {
+                None
+            };
         let (node_transform, direct_image_rotation_applied) = match direct_image_transform {
             BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
                 (Affine2D::identity(), false)
@@ -3183,7 +3234,7 @@ pub fn build_mature_0x2c_from_streams(
                 ReadConfidence::Exact,
             ));
         }
-        if direct_image_rotation_applied {
+        if direct_image_rotation_applied || direct_image_cardinal_rotation_degrees.is_some() {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -3286,6 +3337,8 @@ pub fn build_mature_0x2c_from_streams(
                     image_slot,
                     legacy_ole: None,
                     explicit_image_crop,
+                    explicit_image_cardinal_rotation_degrees:
+                        direct_image_cardinal_rotation_degrees,
                     explicit_paint,
                     effective_paint,
                     story_frame,
@@ -5003,6 +5056,45 @@ mod tests {
         assert_eq!(
             bounded_direct_image_transform(&[((360u32) << 16, false, false)], 0, test_bounds()),
             BoundedDirectImageTransform::Identity
+        );
+    }
+
+    #[test]
+    fn direct_image_cardinal_rotation_is_preserved_for_picture_content_only() {
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((90u32) << 16, false, false)],
+                0,
+            ),
+            Some(90)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((180u32) << 16, false, false)],
+                0,
+            ),
+            Some(180)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((270u32) << 16, false, false)],
+                0,
+            ),
+            Some(270)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((12u32) << 16, false, false)],
+                0,
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((90u32) << 16, false, false)],
+                FSP_FLIP_H,
+            ),
+            None
         );
     }
 
