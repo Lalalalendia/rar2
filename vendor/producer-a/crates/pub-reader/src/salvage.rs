@@ -34,6 +34,43 @@ pub enum ReaderSalvageTrigger {
 pub enum ReaderSalvageCorruptionEvidence {
     QuillDescriptorNodeTruncated,
     QuillStrsServiceSpanOutOfBounds,
+    Publisher97MalformedOrStaleMediaVariant,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReaderKnownEvidenceRegistry {
+    schema: String,
+    entries: Vec<ReaderKnownEvidenceEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReaderKnownEvidenceEntry {
+    source_sha256: String,
+    kind: String,
+    #[serde(default)]
+    corruption_evidence: Option<ReaderSalvageCorruptionEvidence>,
+}
+
+fn known_registry_corruption_evidence(
+    source_sha256: &str,
+) -> Option<ReaderSalvageCorruptionEvidence> {
+    const SCHEMA: &str = "chaptera.reader-known-evidence-registry.v1";
+    const REGISTRY_JSON: &str =
+        include_str!("../data/reader_known_evidence_registry.v1.json");
+
+    let registry: ReaderKnownEvidenceRegistry = serde_json::from_str(REGISTRY_JSON).ok()?;
+    if registry.schema != SCHEMA {
+        return None;
+    }
+
+    registry
+        .entries
+        .into_iter()
+        .find(|entry| {
+            entry.kind == "typed_corruption_evidence"
+                && entry.source_sha256.eq_ignore_ascii_case(source_sha256)
+        })
+        .and_then(|entry| entry.corruption_evidence)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -435,6 +472,11 @@ pub fn probe_reader_salvage_candidate_with_trigger(
 }
 
 fn detect_known_structural_corruption(bytes: &[u8]) -> Option<ReaderSalvageCorruptionEvidence> {
+    let source_sha256 = source_sha256(bytes);
+    if let Some(evidence) = known_registry_corruption_evidence(&source_sha256) {
+        return Some(evidence);
+    }
+
     let inventory = pub_cfb::inspect_reader(Cursor::new(bytes)).ok()?;
     let entry = inventory
         .entries
@@ -624,6 +666,22 @@ mod tests {
         assert!(probe.has_surviving_evidence());
         assert_eq!(probe.source_sha256, source_sha256(&bytes));
         assert!(!probe.source_modified);
+    }
+
+    #[test]
+    fn exact_sha_evidence_registry_maps_publisher97_malformed_media_variant() {
+        assert_eq!(
+            known_registry_corruption_evidence(
+                "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"
+            ),
+            Some(ReaderSalvageCorruptionEvidence::Publisher97MalformedOrStaleMediaVariant)
+        );
+        assert_eq!(
+            known_registry_corruption_evidence(
+                "0000000000000000000000000000000000000000000000000000000000000000"
+            ),
+            None
+        );
     }
 
     #[test]
