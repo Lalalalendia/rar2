@@ -396,6 +396,26 @@ function appendImage(group, defs, node, resource, clipId) {
   return true;
 }
 
+export function presetShapePaintGeometry(node) {
+  const bounds = node?.bounds;
+  if (!bounds) return null;
+  const x = safeInteger(bounds.x, "node.bounds.x");
+  const y = safeInteger(bounds.y, "node.bounds.y");
+  const width = safeInteger(bounds.width, "node.bounds.width");
+  const height = safeInteger(bounds.height, "node.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+
+  if (node.paint?.preset_shape !== "round_rect") {
+    return Object.freeze({ tag: "rect", attrs: Object.freeze({ x, y, width, height }) });
+  }
+
+  const radius = Math.round(Math.min(width, height) * 16667 / 100000);
+  return Object.freeze({
+    tag: "rect",
+    attrs: Object.freeze({ x, y, width, height, rx: radius, ry: radius })
+  });
+}
+
 function renderNode(svg, defs, node, resources, fonts, index) {
   const bounds = node.bounds;
   for (const [key, value] of Object.entries(bounds)) safeInteger(value, "node.bounds." + key);
@@ -408,13 +428,11 @@ function renderNode(svg, defs, node, resources, fonts, index) {
   const transform = nodeTransform(node);
   if (transform) group.setAttribute("transform", transform);
 
+  const shapeGeometry = presetShapePaintGeometry(node);
   const fill = rgb(node.paint?.fill_rgb);
-  if (fill) {
-    group.appendChild(svgNode("rect", {
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height,
+  if (fill && shapeGeometry) {
+    group.appendChild(svgNode(shapeGeometry.tag, {
+      ...shapeGeometry.attrs,
       fill,
       stroke: "none"
     }));
@@ -447,12 +465,9 @@ function renderNode(svg, defs, node, resources, fonts, index) {
 
   const line = node.paint?.line;
   const stroke = rgb(line?.rgb);
-  if (stroke && Number(line.width_emu) > 0) {
-    group.appendChild(svgNode("rect", {
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height,
+  if (stroke && Number(line.width_emu) > 0 && shapeGeometry) {
+    group.appendChild(svgNode(shapeGeometry.tag, {
+      ...shapeGeometry.attrs,
       fill: "none",
       stroke,
       "stroke-width": safeInteger(line.width_emu, "line.width_emu")
