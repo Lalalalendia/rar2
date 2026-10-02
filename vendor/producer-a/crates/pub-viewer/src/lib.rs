@@ -5969,3 +5969,5 @@ mod mature_officeart_wmf_exact_product_tests {
         );
     }
 }
+
+// #802 same-base raster control: no product semantics change.
