@@ -1,0 +1,116 @@
+name: Devinettes RoundRectangle exact visual acceptance
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/cloud-reader/render-v1.mjs"
+      - "apps/cloud-reader/render-v1.test.mjs"
+      - ".github/workflows/devinettes-roundrect-visual.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  exact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: target/devinettes-roundrect-rust
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact comparator dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            "requests==2.32.5" "PyMuPDF==1.24.14"
+
+      - name: Reacquire exact Virginia PUB-PDF pairs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/virginia-pairs"
+          python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"
+          test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes-reference.pdf"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned browser acceptance runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Build canonical guest Scene producer
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Build Devinettes-only exact manifest
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          manifest = {
+              "schema": "chaptera.cloud-reader-real-fixtures.v1",
+              "fixtures": [{
+                  "name": "VirginiaDevinettes2021",
+                  "sha256": "077612c7a228bd20bded939afde129cbdedae9b01b4f138f4619e332e5d7bd2e",
+                  "bytes": 138240,
+                  "require_render": False,
+                  "require_shared_text": False,
+                  "source_path": str(root / "virginia-pairs" / "virginia-devinettes.pub"),
+              }],
+          }
+          path = root / "devinettes-roundrect-fixtures.json"
+          path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          print(path)
+          PY
+
+      - name: Render exact Devinettes through canonical Cloud Reader
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/devinettes-roundrect-rust/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/devinettes-roundrect-fixtures.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/devinettes-roundrect-real
+          READER_REFERENCE_RASTER_DPI: "144"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Compare exact Devinettes raster with author PDF
+        run: |
+          set -euo pipefail
+          mkdir -p target/devinettes-roundrect-visual
+          python tools/cloud_reader_reference_pdf_raster_v1.py \
+            "$RUNNER_TEMP/devinettes-roundrect-real/receipt.json" \
+            VirginiaDevinettes2021 \
+            "$RUNNER_TEMP/virginia-pairs/virginia-devinettes-reference.pdf" \
+            target/devinettes-roundrect-visual/receipt.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("target/devinettes-roundrect-visual/receipt.json")
+          d = json.loads(p.read_text())
+          values = [page["diff"]["significant_fraction"] for page in d.get("pages", [])]
+          print("DEVINETTES_ROUNDRECT_EXACT " + " ".join(f"{v:.9f}" for v in values))
+          if len(values) != 6:
+              raise SystemExit(f"expected 6 Devinettes pages, got {len(values)}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: devinettes-roundrect-visual-receipt
+          path: target/devinettes-roundrect-visual/
+          if-no-files-found: warn
+          retention-days: 30
