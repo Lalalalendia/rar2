@@ -4,8 +4,7 @@ use pub_viewer::{
     probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
     viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderPartialSourceGraphError,
     ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageProbe,
-    ReaderSalvageSubsystemProbe, ReaderSalvageTrigger,
-    ViewerProductOpenOutcome,
+    ReaderSalvageSubsystemProbe, ReaderSalvageTrigger, ViewerProductOpenOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -135,7 +134,10 @@ fn partial_graph_error_name(value: ReaderPartialSourceGraphError) -> &'static st
 fn forced_trigger_diagnostic(
     bytes: &[u8],
     intake_probe: &ReaderSalvageProbe,
-) -> (Option<ForcedTriggerProbeReceipt>, Option<ForcedPartialGraphReceipt>) {
+) -> (
+    Option<ForcedTriggerProbeReceipt>,
+    Option<ForcedPartialGraphReceipt>,
+) {
     if intake_probe.eligibility != ReaderSalvageEligibility::AwaitingTypedCorruptionEvidence {
         return (None, None);
     }
