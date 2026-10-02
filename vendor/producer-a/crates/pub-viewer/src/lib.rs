@@ -1019,6 +1019,8 @@ pub struct ViewerImagePlacementV1 {
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_window: Option<ViewerImageSourceWindowV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_rotation_degrees: Option<i16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1593,7 +1595,8 @@ fn viewer_mature_officeart_wmf_preview_images(
 
         let mut placements = Vec::new();
         for node_id in &node_ids {
-            let source_window = match resolved.nodes.get(node_id).map(|node| {
+            let resolved_node = resolved.nodes.get(node_id);
+            let source_window = match resolved_node.map(|node| {
                 viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
             }) {
                 Some(Ok(source_window)) => source_window,
@@ -1610,10 +1613,13 @@ fn viewer_mature_officeart_wmf_preview_images(
                 }
                 None => None,
             };
-            if let Some(source_window) = source_window {
+            let content_rotation_degrees = resolved_node
+                .and_then(|node| node.payload.explicit_image_cardinal_rotation_degrees);
+            if source_window.is_some() || content_rotation_degrees.is_some() {
                 placements.push(ViewerImagePlacementV1 {
                     node_id: *node_id,
-                    source_window: Some(source_window),
+                    source_window,
+                    content_rotation_degrees,
                 });
             }
         }
@@ -2387,11 +2393,10 @@ fn open_mature_0x2c_bundle(
 
                 let mut placements = Vec::with_capacity(entry.uses.len());
                 for usage in &entry.uses {
-                    let source_window = match pipeline.resolved.graph.nodes.get(&usage.node_id).map(
-                        |node| {
-                            viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
-                        },
-                    ) {
+                    let resolved_node = pipeline.resolved.graph.nodes.get(&usage.node_id);
+                    let source_window = match resolved_node.map(|node| {
+                        viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
+                    }) {
                         Some(Ok(source_window)) => source_window,
                         Some(Err(reason)) => {
                             document.diagnostics.push(ViewerDiagnostic {
@@ -2406,10 +2411,13 @@ fn open_mature_0x2c_bundle(
                         }
                         None => None,
                     };
-                    if let Some(source_window) = source_window {
+                    let content_rotation_degrees = resolved_node
+                        .and_then(|node| node.payload.explicit_image_cardinal_rotation_degrees);
+                    if source_window.is_some() || content_rotation_degrees.is_some() {
                         placements.push(ViewerImagePlacementV1 {
                             node_id: usage.node_id,
-                            source_window: Some(source_window),
+                            source_window,
+                            content_rotation_degrees,
                         });
                     }
                 }
