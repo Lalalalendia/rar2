@@ -179,7 +179,6 @@
         "projection_kind",
         "origin_node_id",
         "capability_admitted",
-        "before_asset_sha256",
         "after_asset_sha256",
         "after_asset_mime",
         "after_asset_byte_len",
@@ -202,7 +201,14 @@
           "const": true
         },
         "before_asset_sha256": {
-          "$ref": "#/$defs/sha256"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "after_asset_sha256": {
           "$ref": "#/$defs/sha256"
