@@ -1,4 +1,5 @@
 name: Build TABLE border oracle Windows artifact v3
+# Rebuild from trusted main after #767
 
 on:
   workflow_dispatch:
