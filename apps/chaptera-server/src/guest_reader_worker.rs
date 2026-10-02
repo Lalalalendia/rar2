@@ -27,6 +27,10 @@ use crate::{
     blob_store::BlobStoreService,
     config::CloudReaderFontResourceConfig,
     guest_intake_classifier::guest_failure_intake_evidence,
+    reader_compatibility_report::{
+        READER_EDITABLE_ROUTES_ASSESSMENT_V1, ReaderEditableRoutesAssessmentV1,
+        ReaderEditableTargetAssessmentV1,
+    },
     reader_scene_v1::{ReaderConfiguredFontResourceV1, from_viewer_geometry_with_fonts},
     source_ingress_security::SourceSecurityScannerConfig,
 };
@@ -787,6 +791,20 @@ fn validate_receipt(
                     "worker scene uses an unsupported Reader scene protocol",
                 ));
             }
+            let editable_routes = receipt.editable_routes.as_ref().ok_or_else(|| {
+                GuestSceneWorkerError::new(
+                    "guest_scene_receipt_invalid",
+                    "supported/partial receipt is missing editable route assessment",
+                )
+            })?;
+            editable_routes
+                .validate_for_source(expected_sha256)
+                .map_err(|_| {
+                    GuestSceneWorkerError::new(
+                        "guest_scene_receipt_invalid",
+                        "supported/partial receipt carries invalid editable route assessment",
+                    )
+                })?;
             if receipt.salvage.is_some()
                 || receipt.terminal_code.is_some()
                 || receipt.failure_classification.is_some()
@@ -798,10 +816,10 @@ fn validate_receipt(
             }
         }
         "salvage" => {
-            if receipt.scene.is_some() {
+            if receipt.scene.is_some() || receipt.editable_routes.is_some() {
                 return Err(GuestSceneWorkerError::new(
                     "guest_scene_receipt_invalid",
-                    "salvage receipt cannot masquerade as Reader scene",
+                    "salvage receipt cannot carry Reader scene or editable route assessment",
                 ));
             }
             let observation = receipt.salvage.as_ref().ok_or_else(|| {
@@ -831,6 +849,7 @@ fn validate_receipt(
         "unsupported" => {
             if receipt.scene.is_some()
                 || receipt.salvage.is_some()
+                || receipt.editable_routes.is_some()
                 || !matches!(
                     receipt.terminal_code.as_deref(),
                     Some("reader_scene_open_failed" | "reader_scene_projection_failed")
@@ -1000,6 +1019,69 @@ impl Drop for GuestSceneTempDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editable_route_profile_gate_matches_proven_physical_export_family() {
+        assert!(is_mature_editable_profile(Some("0x2c")));
+        assert!(!is_mature_editable_profile(Some("0x22-quill")));
+        assert!(!is_mature_editable_profile(Some("0x22-noquill")));
+        assert!(!is_mature_editable_profile(None));
+    }
+
+    #[test]
+    fn legacy_profile_route_assessment_is_explicitly_unavailable() {
+        let routes = profile_unavailable_routes(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        routes
+            .validate_for_source(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .expect("profile-unavailable route state should be valid");
+        assert_eq!(routes.idml.state, "unavailable");
+        assert_eq!(routes.idml.reason_code, "editor_profile_unavailable");
+        assert_eq!(routes.odg.state, "unavailable");
+        assert_eq!(routes.odg.reason_code, "editor_profile_unavailable");
+    }
+
+    #[test]
+    fn worker_receipt_accepts_source_bound_editable_routes() {
+        let source_sha256 = "a".repeat(64);
+        let receipt = GuestSceneWorkerReceiptV1 {
+            protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
+            session_id: "guest:0123456789abcdef".to_owned(),
+            source_sha256: source_sha256.clone(),
+            source_byte_len: 1,
+            classification: "supported".to_owned(),
+            terminal_code: None,
+            scene: Some(serde_json::json!({
+                "protocol_version":"chaptera.reader-scene.v1",
+                "source_hash":source_sha256
+            })),
+            salvage: None,
+            editable_routes: Some(ReaderEditableRoutesAssessmentV1 {
+                protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+                source_sha256: "a".repeat(64),
+                idml: ReaderEditableTargetAssessmentV1 {
+                    state: "available_with_declared_losses".to_owned(),
+                    reason_code: "serializable".to_owned(),
+                    declared_loss_count: 1,
+                    blocking_loss_count: 0,
+                },
+                odg: ReaderEditableTargetAssessmentV1 {
+                    state: "unavailable".to_owned(),
+                    reason_code: "blocking_losses".to_owned(),
+                    declared_loss_count: 2,
+                    blocking_loss_count: 1,
+                },
+            }),
+            failure_classification: None,
+            filesystem_confinement: true,
+        };
+
+        validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1)
+            .expect("source-bound editable routes should cross worker boundary");
+    }
 
     #[test]
     fn worker_receipt_accepts_source_neutral_salvage_observation() {
