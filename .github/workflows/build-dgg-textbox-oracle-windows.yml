@@ -1,6 +1,9 @@
 name: Build DGG TextBox oracle Windows artifact
 
 on:
+  push:
+    branches:
+      - "research/package-dgg-tool-windows-01"
   pull_request:
     paths:
       - ".github/workflows/build-dgg-textbox-oracle-windows.yml"
