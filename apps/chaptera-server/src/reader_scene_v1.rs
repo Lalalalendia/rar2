@@ -312,9 +312,10 @@ fn reader_text_color_for_range(
     if scalar_start >= scalar_end {
         return None;
     }
-    let mut matches = text.text_colors.iter().filter(|run| {
-        run.scalar_start <= scalar_start && run.scalar_end >= scalar_end
-    });
+    let mut matches = text
+        .text_colors
+        .iter()
+        .filter(|run| run.scalar_start <= scalar_start && run.scalar_end >= scalar_end);
     let run = matches.next()?;
     matches.next().is_none().then_some(run.rgb)
 }
