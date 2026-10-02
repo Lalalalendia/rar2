@@ -16,13 +16,13 @@ const TABLE_OWNER_REF: u16 = 0x6802;
 const CELL_ORDINAL: u16 = 0x2003;
 const BORDER_FIELDS: [u16; 5] = [0x2001, 0x2004, 0x2005, 0x2006, 0x2007];
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct CarrierKey {
     shape_type: u16,
     anchor: Vec<(u16, u32)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 struct FoptState {
     by_property: BTreeMap<u16, Vec<(u32, bool, bool)>>,
 }
@@ -53,6 +53,21 @@ struct DiffReceipt {
     removed_anchor_signature_histogram: BTreeMap<String, usize>,
     added_anchor_signature_histogram: BTreeMap<String, usize>,
     claims: Claims,
+}
+
+#[derive(Debug, Serialize)]
+struct PrivateDeltaGroup {
+    key: CarrierKey,
+    before_states: Vec<FoptState>,
+    after_states: Vec<FoptState>,
+}
+
+#[derive(Debug, Serialize)]
+struct PrivateDiffReceipt {
+    schema: &'static str,
+    before_sha256: String,
+    after_sha256: String,
+    groups: Vec<PrivateDeltaGroup>,
 }
 
 #[derive(Debug, Serialize)]
@@ -348,6 +363,42 @@ fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
     Ok(())
 }
 
+fn diff_private(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
+    let (before_sha256, before_map) = read_carriers(&before)?;
+    let (after_sha256, after_map) = read_carriers(&after)?;
+
+    let keys = before_map
+        .keys()
+        .chain(after_map.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let mut groups = Vec::new();
+    for key in keys {
+        let before_states = before_map.get(&key).cloned().unwrap_or_default();
+        let after_states = after_map.get(&key).cloned().unwrap_or_default();
+        if before_states != after_states {
+            groups.push(PrivateDeltaGroup {
+                key,
+                before_states,
+                after_states,
+            });
+        }
+    }
+
+    let receipt = PrivateDiffReceipt {
+        schema: "chaptera.table-border-carrier-private-diff.v1",
+        before_sha256,
+        after_sha256,
+        groups,
+    };
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(output, serde_json::to_vec_pretty(&receipt)?)?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = env::args().collect::<Vec<_>>();
     match args.as_slice() {
@@ -359,8 +410,13 @@ fn main() -> Result<()> {
             PathBuf::from(after),
             PathBuf::from(output),
         ),
+        [_, command, before, after, output] if command == "diff-private" => diff_private(
+            PathBuf::from(before),
+            PathBuf::from(after),
+            PathBuf::from(output),
+        ),
         _ => anyhow::bail!(
-            "usage: table_border_carrier_oracle_tool profile INPUT.pub OUT.json | diff BEFORE.pub AFTER.pub OUT.json"
+            "usage: table_border_carrier_oracle_tool profile INPUT.pub OUT.json | diff BEFORE.pub AFTER.pub OUT.json | diff-private BEFORE.pub AFTER.pub OUT.json"
         ),
     }
 }
