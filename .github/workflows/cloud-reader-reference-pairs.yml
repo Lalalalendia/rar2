@@ -157,6 +157,14 @@ jobs:
           test -f "$CHAPTERA_VIRGINIA_TABLE_LAYOUT_FIXTURE"
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_layout_probe -- --ignored --nocapture
 
+      - name: Classify exact Virginia TABLE OfficeArt cell joins
+        env:
+          CHAPTERA_TABLE_CELL_PAINT_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+        run: |
+          set -euo pipefail
+          test -f "$CHAPTERA_TABLE_CELL_PAINT_FIXTURE"
+          cargo test --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml --test table_cell_paint_join_probe -- --nocapture
+
       - name: Census exact Virginia p22 TABLE layout admission
         env:
           CHAPTERA_VIRGINIA_TABLE_LAYOUT_PUB: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
