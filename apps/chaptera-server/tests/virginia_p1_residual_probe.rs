@@ -226,9 +226,8 @@ fn text_layout_reason_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> 
                         .iter()
                         .find(|story| story.id == text.story_id)
                         .and_then(|story| u32::try_from(story.text.chars().count()).ok());
-                    let full_story_extent = story_len.is_some_and(|len| {
-                        text.scalar_start == 0 && text.scalar_end == len
-                    });
+                    let full_story_extent = story_len
+                        .is_some_and(|len| text.scalar_start == 0 && text.scalar_end == len);
                     bump(
                         &mut incomplete_story_extent,
                         if full_story_extent {
