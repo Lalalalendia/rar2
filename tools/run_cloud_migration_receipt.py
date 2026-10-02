@@ -96,6 +96,15 @@ def main() -> int:
                     "migration chain did not materialize reader_guest_sessions.editable_routes_json"
                 )
 
+            reader_guest_columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(reader_guest_sessions)")
+            }
+            if "editable_routes_json" not in reader_guest_columns:
+                raise SystemExit(
+                    "migration chain did not materialize reader_guest_sessions.editable_routes_json"
+                )
+
             physical_blob_columns = {
                 row[1]
                 for row in connection.execute("PRAGMA table_info(physical_blobs)")
