@@ -3,7 +3,7 @@ use std::{
     fs::{self as stdfs, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
@@ -92,6 +92,8 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub salvage: Option<Value>,
     pub failure_classification: Option<FailureClassificationV1>,
     pub filesystem_confinement: bool,
+    pub structural_scan_duration_us: u64,
+    pub scene_duration_us: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -469,9 +471,21 @@ pub fn run_guest_scene_worker(
         )
     })?;
 
-    let (classification, terminal_code, scene, salvage) =
-        match open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1()) {
-            Ok(bundle) => match from_viewer_geometry_with_fonts(
+    let structural_scan_started = Instant::now();
+    let normal_open = open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1());
+
+    let (
+        classification,
+        terminal_code,
+        scene,
+        salvage,
+        structural_scan_duration_us,
+        scene_duration_us,
+    ) = match normal_open {
+        Ok(bundle) => {
+            let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
+            let scene_started = Instant::now();
+            match from_viewer_geometry_with_fonts(
                 session_id.to_owned(),
                 expected_sha256.to_owned(),
                 "guest:source".to_owned(),
@@ -491,35 +505,56 @@ pub fn run_guest_scene_worker(
                             "Reader scene serialization failed",
                         )
                     })?;
-                    (classification.to_owned(), None, Some(scene), None)
+                    (
+                        classification.to_owned(),
+                        None,
+                        Some(scene),
+                        None,
+                        structural_scan_duration_us,
+                        Some(duration_us(scene_started.elapsed())),
+                    )
                 }
                 Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_projection_failed".to_owned()),
                     None,
                     None,
+                    structural_scan_duration_us,
+                    Some(duration_us(scene_started.elapsed())),
                 ),
-            },
-            Err(_) => {
-                match open_pub_or_salvage(&source_bytes, viewer_geometry_environment_v0_1()) {
-                    Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
-                        let observation = serde_json::to_value(partial_graph).map_err(|_| {
-                            GuestSceneWorkerError::new(
-                                "guest_scene_worker_output_failed",
-                                "Reader salvage observation serialization failed",
-                            )
-                        })?;
-                        ("salvage".to_owned(), None, None, Some(observation))
-                    }
-                    Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
-                        "unsupported".to_owned(),
-                        Some("reader_scene_open_failed".to_owned()),
-                        None,
-                        None,
-                    ),
-                }
             }
-        };
+        }
+        Err(_) => {
+            let fallback = open_pub_or_salvage(&source_bytes, viewer_geometry_environment_v0_1());
+            let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
+            match fallback {
+                Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
+                    let observation = serde_json::to_value(partial_graph).map_err(|_| {
+                        GuestSceneWorkerError::new(
+                            "guest_scene_worker_output_failed",
+                            "Reader salvage observation serialization failed",
+                        )
+                    })?;
+                    (
+                        "salvage".to_owned(),
+                        None,
+                        None,
+                        Some(observation),
+                        structural_scan_duration_us,
+                        None,
+                    )
+                }
+                Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
+                    "unsupported".to_owned(),
+                    Some("reader_scene_open_failed".to_owned()),
+                    None,
+                    None,
+                    structural_scan_duration_us,
+                    None,
+                ),
+            }
+        }
+    };
 
     let failure_classification =
         guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
@@ -536,6 +571,8 @@ pub fn run_guest_scene_worker(
         salvage,
         failure_classification,
         filesystem_confinement: true,
+        structural_scan_duration_us,
+        scene_duration_us,
     };
     write_receipt(output, &receipt)
 }
@@ -725,6 +762,15 @@ fn validate_receipt(
             "isolated guest scene receipt differs from parent authority",
         ));
     }
+    let scene_timing_expected = matches!(receipt.classification.as_str(), "supported" | "partial")
+        || receipt.terminal_code.as_deref() == Some("reader_scene_projection_failed");
+    if receipt.scene_duration_us.is_some() != scene_timing_expected {
+        return Err(GuestSceneWorkerError::new(
+            "guest_scene_receipt_identity_mismatch",
+            "isolated guest scene timing differs from classification authority",
+        ));
+    }
+
     match receipt.classification.as_str() {
         "supported" | "partial" => {
             let scene = receipt.scene.as_ref().ok_or_else(|| {
@@ -817,6 +863,10 @@ fn validate_receipt(
         }
     }
     Ok(())
+}
+
+fn duration_us(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 fn write_receipt(
@@ -976,6 +1026,8 @@ mod tests {
             })),
             failure_classification: None,
             filesystem_confinement: true,
+            structural_scan_duration_us: 1,
+            scene_duration_us: None,
         };
         validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1)
             .expect("source-neutral salvage observation should cross worker boundary");
@@ -994,6 +1046,8 @@ mod tests {
             salvage: None,
             failure_classification: None,
             filesystem_confinement: true,
+            structural_scan_duration_us: 1,
+            scene_duration_us: None,
         };
         assert!(validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1,).is_err());
     }
