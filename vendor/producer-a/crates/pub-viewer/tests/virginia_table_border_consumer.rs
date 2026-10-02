@@ -19,7 +19,8 @@ const EXPECTED_PAGES: &[(u32, usize)] = &[
 fn exact_virginia_native_table_border_consumer() {
     let fixture = PathBuf::from(
         env::var_os("CHAPTERA_VIRGINIA_TABLE_BORDER_FIXTURE")
-            .expect("CHAPTERA_VIRGINIA_TABLE_BORDER_FIXTURE"),
+            .or_else(|| env::var_os("CHAPTERA_VIRGINIA_REMPLACANTE_PUB"))
+            .expect("CHAPTERA_VIRGINIA_TABLE_BORDER_FIXTURE or CHAPTERA_VIRGINIA_REMPLACANTE_PUB"),
     );
     let bytes = fs::read(&fixture).expect("read exact Virginia PUB");
     let sha = Sha256::digest(&bytes)
