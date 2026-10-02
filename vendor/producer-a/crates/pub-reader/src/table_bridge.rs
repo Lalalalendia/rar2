@@ -34,9 +34,9 @@ pub struct PubTableCellSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellPaintSource {
-    /// Literal sRGB from the exact geometry-matched child OfficeArt FOPT 0x0181.
+    /// Resolved sRGB from one bounded source-backed OfficeArt cell-paint carrier.
     pub solid_fill_rgb: [u8; 3],
-    /// Separate explicit fFilled state from the matched child FOPT 0x01BF.
+    /// Resolved effective fill visibility from that same admitted carrier.
     pub fill_visible: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
@@ -314,6 +314,8 @@ pub(crate) struct TableBridgeContext<'a> {
     pub table_bounds: &'a RectEmu,
     pub officeart_owner_shape: &'a pub_escher::SpContainerObservation,
     pub officeart_inventory: &'a SpContainerInventory,
+    pub color_scheme: Option<&'a MatureColorScheme>,
+    pub dgg_defaults: Option<&'a pub_escher::DggDefaultOptionsObservation>,
 }
 
 fn rect_edges(rect: RectEmu) -> Option<[i128; 4]> {
@@ -405,6 +407,165 @@ fn populate_bounded_table_cell_fill(
     }
 
     Ok(admitted)
+}
+
+const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
+const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
+const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
+
+fn unique_anchor_scalar(anchor: &pub_escher::PublisherFieldRecord, field_id: u16) -> Option<u32> {
+    let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
+    let first = fields.next()?.value;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn has_any_client_data_identity(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.client_data.as_ref().is_some_and(|record| {
+        record
+            .fields
+            .iter()
+            .any(|field| field.id == PUBLISHER_FIELD_SHAPE_ID)
+    })
+}
+
+fn native_autoformat_cell_ordinal_from_parts(
+    shape_type: Option<u16>,
+    has_client_data_identity: bool,
+    anchor: Option<&pub_escher::PublisherFieldRecord>,
+    table_seq_num: u32,
+    cell_count: usize,
+) -> Option<u32> {
+    if shape_type != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE) || has_client_data_identity {
+        return None;
+    }
+
+    let anchor = anchor?;
+    if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID)? != table_seq_num {
+        return None;
+    }
+
+    let ordinal = match anchor.fields.as_slice() {
+        [only] if only.id == TABLE_AUTOFORMAT_OWNER_REF_ID => 0,
+        [first, second]
+            if (first.id == TABLE_AUTOFORMAT_OWNER_REF_ID
+                && second.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+                || (first.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID
+                    && second.id == TABLE_AUTOFORMAT_OWNER_REF_ID) =>
+        {
+            unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_CELL_ORDINAL_ID)?
+        }
+        _ => return None,
+    };
+
+    let ordinal_index = usize::try_from(ordinal).ok()?;
+    (ordinal_index < cell_count).then_some(ordinal)
+}
+
+fn native_autoformat_cell_ordinal(
+    shape: &pub_escher::SpContainerObservation,
+    table_seq_num: u32,
+    cell_count: usize,
+) -> Option<u32> {
+    native_autoformat_cell_ordinal_from_parts(
+        shape.fsp.as_ref().map(|fsp| fsp.shape_type),
+        has_any_client_data_identity(shape),
+        shape.client_anchor.as_ref(),
+        table_seq_num,
+        cell_count,
+    )
+}
+
+fn populate_native_autoformat_table_cell_fill(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    cells: &mut [PubTableCellSource],
+) -> usize {
+    let mut by_ordinal = BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
+
+    for shape in &context.officeart_inventory.shapes {
+        let Some(ordinal) = native_autoformat_cell_ordinal(shape, table_seq_num, cells.len())
+        else {
+            continue;
+        };
+        by_ordinal.entry(ordinal).or_default().push(shape);
+    }
+
+    let mut admitted = 0_usize;
+    for cell in cells.iter_mut().filter(|cell| cell.paint.is_none()) {
+        let ordinal = cell.stored_record_index;
+        let Some([shape]) = by_ordinal.get(&ordinal).map(Vec::as_slice) else {
+            continue;
+        };
+
+        let Some(paint) = resolve_bounded_effective_officeart_paint(
+            shape,
+            context.dgg_defaults,
+            context.color_scheme,
+            admits_normative_2d_paint_defaults(shape),
+        ) else {
+            continue;
+        };
+        if paint.fill.solid.as_ref().map(|value| value.value) != Some(true) {
+            continue;
+        }
+        let Some(color) = paint.fill.color_rgb.as_ref().map(|value| value.value) else {
+            continue;
+        };
+        let Some(visible) = paint.fill.visible.as_ref().map(|value| value.value) else {
+            continue;
+        };
+
+        let mut source_refs = vec![source_ref(
+            context.source,
+            &shape.source,
+            Some(format!(
+                "contents/0x2c/seq/{table_seq_num}/cell/stored/{}",
+                cell.stored_record_index
+            )),
+            Some("SpContainer/FOPT/table-autoformat-cell-fill".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )];
+        if paint_context_uses_officeart_scheme_color(shape, context.dgg_defaults) {
+            if let Some(scheme) = context.color_scheme {
+                source_refs.push(source_ref(
+                    context.source,
+                    &scheme.source,
+                    None,
+                    Some("OplSccm/current-color-scheme".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+        }
+        if effective_paint_has_dgg_authority(&paint) {
+            if let Some(dgg) = context.dgg_defaults {
+                source_refs.push(source_ref(
+                    context.source,
+                    &dgg.source,
+                    Some("escher/dgg/default-options".into()),
+                    Some("DggContainer/FOPT-defaults".into()),
+                    SourceRole::Projection,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+        }
+
+        cell.paint = Some(PubTableCellPaintSource {
+            solid_fill_rgb: color,
+            fill_visible: visible,
+            source_refs,
+        });
+        admitted += 1;
+    }
+
+    admitted
 }
 
 fn populate_exact_table_cell_bounds(
@@ -857,6 +1018,8 @@ pub(crate) fn build_table_source(
     let simple_table = build_simple_table(rows, columns, &joined_cells);
     if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
+        let _ =
+            populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
     }
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
@@ -1210,6 +1373,117 @@ mod tests {
 
     fn table_cell_id(byte: u8) -> TableCellId {
         TableCellId::from_canonical(CanonicalId::from_bytes([byte; 16]))
+    }
+
+    fn test_span() -> RawSpan {
+        RawSpan {
+            stream: StreamPath("test".into()),
+            offset: 0,
+            len: 0,
+        }
+    }
+
+    fn publisher_fields(fields: &[(u16, u32)]) -> pub_escher::PublisherFieldRecord {
+        pub_escher::PublisherFieldRecord {
+            duplicated_length: 0,
+            duplicated_length_source: test_span(),
+            fields: fields
+                .iter()
+                .map(|(id, value)| pub_escher::PublisherField {
+                    id: *id,
+                    value: *value,
+                    source: test_span(),
+                })
+                .collect(),
+            trailing_source: None,
+        }
+    }
+
+    #[test]
+    fn native_autoformat_anchor_accepts_exact_base_and_ordinal_forms() {
+        let base = publisher_fields(&[(TABLE_AUTOFORMAT_OWNER_REF_ID, 77)]);
+        assert_eq!(
+            native_autoformat_cell_ordinal_from_parts(
+                Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE),
+                false,
+                Some(&base),
+                77,
+                4,
+            ),
+            Some(0)
+        );
+
+        for fields in [
+            vec![
+                (TABLE_AUTOFORMAT_OWNER_REF_ID, 77),
+                (TABLE_AUTOFORMAT_CELL_ORDINAL_ID, 3),
+            ],
+            vec![
+                (TABLE_AUTOFORMAT_CELL_ORDINAL_ID, 3),
+                (TABLE_AUTOFORMAT_OWNER_REF_ID, 77),
+            ],
+        ] {
+            let ordinal = publisher_fields(&fields);
+            assert_eq!(
+                native_autoformat_cell_ordinal_from_parts(
+                    Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE),
+                    false,
+                    Some(&ordinal),
+                    77,
+                    4,
+                ),
+                Some(3)
+            );
+        }
+    }
+
+    #[test]
+    fn native_autoformat_anchor_rejects_unproven_or_ambiguous_forms() {
+        let base = publisher_fields(&[(TABLE_AUTOFORMAT_OWNER_REF_ID, 77)]);
+        assert_eq!(
+            native_autoformat_cell_ordinal_from_parts(Some(0x0002), false, Some(&base), 77, 4,),
+            None,
+            "non-rectangle carriers stay unsupported"
+        );
+        assert_eq!(
+            native_autoformat_cell_ordinal_from_parts(
+                Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE),
+                true,
+                Some(&base),
+                77,
+                4,
+            ),
+            None,
+            "carriers with an ordinary ClientData identity stay unsupported"
+        );
+
+        for anchor in [
+            publisher_fields(&[(TABLE_AUTOFORMAT_OWNER_REF_ID, 78)]),
+            publisher_fields(&[
+                (TABLE_AUTOFORMAT_OWNER_REF_ID, 77),
+                (TABLE_AUTOFORMAT_CELL_ORDINAL_ID, 4),
+            ]),
+            publisher_fields(&[
+                (TABLE_AUTOFORMAT_OWNER_REF_ID, 77),
+                (TABLE_AUTOFORMAT_OWNER_REF_ID, 77),
+            ]),
+            publisher_fields(&[
+                (TABLE_AUTOFORMAT_OWNER_REF_ID, 77),
+                (TABLE_AUTOFORMAT_CELL_ORDINAL_ID, 1),
+                (0x1234, 9),
+            ]),
+        ] {
+            assert_eq!(
+                native_autoformat_cell_ordinal_from_parts(
+                    Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE),
+                    false,
+                    Some(&anchor),
+                    77,
+                    4,
+                ),
+                None
+            );
+        }
     }
 
     #[test]
