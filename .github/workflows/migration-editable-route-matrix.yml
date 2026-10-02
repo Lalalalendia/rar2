@@ -70,7 +70,7 @@ jobs:
             base="$(basename "$pub" .pub)"
             out="$EVIDENCE_DIR/$base"
             mkdir -p "$out"
-            target/debug/editable_route_probe               "$pub"               --label "$base.pub"               --materialize-dir "$out"               > "$out/route.json"
+            "$CARGO_TARGET_DIR/debug/editable_route_probe" "$pub" --label "$base.pub" --materialize-dir "$out" > "$out/route.json"
             cat "$out/route.json"
           done
 
@@ -80,10 +80,9 @@ jobs:
           shopt -s nullglob
           for idml in "$EVIDENCE_DIR"/*/output.idml; do
             dir="$(dirname "$idml")"
-            xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- "$idml"               </dev/null
-            # The helper requires the destination through env; rerun with it bound.
             rm -f "$dir/consumer.sla"
-            CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla"               xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- "$idml"
+            CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla" \
+              xvfb-run -a scribus -g -ns -py tools/ci/scribus_idml_consumer.py -- "$idml"
             test -s "$dir/consumer.sla"
           done
 
