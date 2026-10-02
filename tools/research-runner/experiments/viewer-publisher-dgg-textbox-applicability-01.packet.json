@@ -8,7 +8,7 @@
     "exe_sha256": "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
   },
   "operation": {
-    "shell": "pwsh",
+    "shell": "powershell",
     "script": "tools/research-runner/operations/publisher_dgg_textbox_applicability_01.ps1",
     "args": []
   },
