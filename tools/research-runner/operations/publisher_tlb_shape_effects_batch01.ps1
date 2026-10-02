@@ -45,9 +45,10 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../../..")).Path
 Import-Module (Join-Path $repoRoot "tools/windows/pub-runtime/PubRuntime.psm1") -Force
 
 $analysisDir = Join-Path $OutputRoot "analysis"
+$blastDir = Join-Path $analysisDir "blast-radius"
 $logDir = Join-Path $OutputRoot "logs"
 $privateDir = Join-Path $OutputRoot "private/tlb-shape-effects-batch01"
-New-Item -ItemType Directory -Force -Path $analysisDir,$logDir,$privateDir | Out-Null
+New-Item -ItemType Directory -Force -Path $analysisDir,$blastDir,$logDir,$privateDir | Out-Null
 
 function Release-Com($Value) {
     if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
@@ -530,6 +531,85 @@ function Invoke-Arm {
         persistence_fingerprint = $fingerprint.persistence_fingerprint
         render_fingerprint = $fingerprint.render_fingerprint
         artifacts = $fingerprint.artifacts
+        private_paths = [ordered]@{
+            pub = $output
+            pdf = $pdf
+            semantic = $semanticPath
+        }
+    }
+}
+
+function New-BlastEvidence {
+    param(
+        [Parameter(Mandatory = $true)]$Spec,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $payload = [ordered]@{
+        schema = "chaptera.pub.tlb-property-blast-evidence.v1"
+        operation = [ordered]@{
+            kind = "publisher-tlb-property-$Mode"
+            candidate_id = [string]$Spec.id
+            dispid = [int]$Spec.dispid
+            value_type = [string]$Spec.value_type
+        }
+        producer = [ordered]@{
+            experiment_id = $ExpectedExperiment
+            expected_publisher_version_prefix = [string]$packet.publisher.version_prefix
+            source_inventory_sha256 = [string]$packet.factory.source_inventory_sha256
+        }
+        requested_streams = @()
+        expected_derived_streams = @()
+        requested_records = @()
+        expected_derived_records = @()
+        requested_entities = @()
+        expected_derived_entities = @()
+        arms = [ordered]@{
+            source = [ordered]@{}
+            control = [ordered]@{}
+            mutation = [ordered]@{}
+        }
+    }
+    Write-PubJson -Value $payload -Path $Path
+}
+
+function Invoke-BlastRadius {
+    param(
+        [Parameter(Mandatory = $true)]$Spec,
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [Parameter(Mandatory = $true)][string]$BaselinePath,
+        [Parameter(Mandatory = $true)]$Control,
+        [Parameter(Mandatory = $true)]$Mutation
+    )
+
+    $slug = ([string]$Spec.id -replace '[^A-Za-z0-9]+','-').Trim('-').ToLowerInvariant()
+    $evidencePath = Join-Path $privateDir "$slug/$Mode-blast-evidence.json"
+    $receiptPath = Join-Path $blastDir "$slug-$Mode.json"
+    New-BlastEvidence -Spec $Spec -Mode $Mode -Path $evidencePath
+
+    $tool = Join-Path $repoRoot "tools/operation_blast_radius_v1.py"
+    $toolArgs = @(
+        $tool,
+        "--source", $BaselinePath,
+        "--control", [string]$Control.private_paths.pub,
+        "--mutation", [string]$Mutation.private_paths.pub,
+        "--evidence", $evidencePath,
+        "--out", $receiptPath
+    )
+    & python @toolArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "OperationBlastRadiusV1 failed for $($Spec.id) / $Mode with exit code $LASTEXITCODE"
+    }
+
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    return [ordered]@{
+        receipt_path = ("analysis/blast-radius/{0}-{1}.json" -f $slug,$Mode)
+        changed_stream_count = @($receipt.cfb.control_mutation_stream_delta).Count
+        topology_delta_count = @($receipt.cfb.control_mutation_topology_delta).Count
+        changed_range_count = @($receipt.cfb.control_mutation_byte_ranges).Count
+        changed_ranges = @($receipt.cfb.control_mutation_byte_ranges)
+        classification_counts = $receipt.classification_counts
     }
 }
 
@@ -640,6 +720,8 @@ foreach ($candidateId in $CandidateIds) {
 
     $sameComparison = Compare-Arms -Control $control -Other $same
     $changedComparison = Compare-Arms -Control $control -Other $changed
+    $sameBlast = Invoke-BlastRadius -Spec $spec -Mode "same_value" -BaselinePath $baselinePath -Control $control -Mutation $same
+    $changedBlast = Invoke-BlastRadius -Spec $spec -Mode "changed_value" -BaselinePath $baselinePath -Control $control -Mutation $changed
     $classification = Classify-Candidate -Same $same -Changed $changed -SameComparison $sameComparison -ChangedComparison $changedComparison
 
     $results += [ordered]@{
@@ -655,10 +737,14 @@ foreach ($candidateId in $CandidateIds) {
             same_vs_control = $sameComparison
             changed_vs_control = $changedComparison
         }
+        blast_radius = [ordered]@{
+            same_vs_control = $sameBlast
+            changed_vs_control = $changedBlast
+        }
         classification = $classification
     }
 
-    $logLines += "$candidateId classification=$classification same_streams=$($sameComparison.changed_streams -join ',') changed_streams=$($changedComparison.changed_streams -join ',')"
+    $logLines += "$candidateId classification=$classification same_streams=$($sameComparison.changed_streams -join ',') changed_streams=$($changedComparison.changed_streams -join ',') same_ranges=$($sameBlast.changed_range_count) changed_ranges=$($changedBlast.changed_range_count)"
 }
 
 $result = [ordered]@{
@@ -679,7 +765,7 @@ $result = [ordered]@{
         baseline_semantic_snapshot = $baselineSnapshot
     }
     candidates = $results
-    authority_boundary = "This batch is an automated semantic-differential probe of nine TLB-admitted Publisher2019 shape-effect setters. Candidate generation and even native persistence deltas are not PUB laws by themselves. Promotion requires candidate-specific persisted carrier attribution and review; no result generalizes to other setters or Publisher versions."
+    authority_boundary = "This batch is an automated semantic-differential probe of nine TLB-admitted Publisher2019 shape-effect setters. Candidate generation, logical-stream deltas, and physical byte-range receipts are evidence only, not PUB laws by themselves. Promotion requires candidate-specific carrier attribution and review; no result generalizes to other setters, shapes, defaults, precedence contexts, or Publisher versions."
 }
 
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "tlb-shape-effects-batch01.json")
