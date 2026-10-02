@@ -656,12 +656,293 @@ jobs:
               fs::remove_file(cache).unwrap();
               assert_eq!(s.select().unwrap().1,before);
           }
+
+          #[cfg(test)]
+          mod extended;
           RUSTEOF
+
+          cat > "$RUST/src/extended.rs" <<'RUSTXEOF'
+          use super::*;
+          use std::env;
+          use std::fs::{self, File, OpenOptions};
+          use std::io::{Read, Seek, SeekFrom, Write};
+          use std::path::{Path, PathBuf};
+          use std::process::{Command, Stdio};
+          use std::thread;
+          use std::time::{Duration, Instant};
+
+          const SLOT4K: usize = 4096;
+
+          fn point_name(p: CrashPoint) -> &'static str {
+              match p {
+                  CrashPoint::P0 => "P0", CrashPoint::P1 => "P1",
+                  CrashPoint::P2 => "P2", CrashPoint::P3 => "P3",
+                  CrashPoint::P4 => "P4", CrashPoint::P5 => "P5",
+                  CrashPoint::P6 => "P6", CrashPoint::P7 => "P7",
+                  CrashPoint::P8 => "P8", CrashPoint::P9 => "P9",
+                  CrashPoint::P10 => "P10",
+              }
+          }
+
+          fn obj_path(dir: &Path, id: u64) -> PathBuf {
+              dir.join("objects").join(format!("{id:016x}"))
+          }
+
+          fn oracle_read_dual_file(dir: &Path, slot: Slot) -> Option<Head> {
+              let path = dir.join(match slot { Slot::A => "root.A", Slot::B => "root.B" });
+              let bytes = fs::read(path).ok()?;
+              let h = decode(&bytes)?;
+              (obj_path(dir, h.content_commit).is_file() && obj_path(dir, h.maint_state).is_file()).then_some(h)
+          }
+
+          fn oracle_select_dual_file(dir: &Path) -> Option<Head> {
+              let a = oracle_read_dual_file(dir, Slot::A);
+              let b = oracle_read_dual_file(dir, Slot::B);
+              match (a, b) {
+                  (Some(x), Some(y)) if x.epoch == y.epoch && x != y => None,
+                  (Some(x), Some(y)) => Some(if y.epoch > x.epoch { y } else { x }),
+                  (Some(x), None) => Some(x),
+                  (None, Some(y)) => Some(y),
+                  (None, None) => None,
+              }
+          }
+
+          fn candidate_for(s: &Store, old: Head) -> Head {
+              let content = 1011;
+              let manifest = 1012;
+              let commit = 1013;
+              s.put_obj(content, b"content");
+              s.put_obj(manifest, b"manifest");
+              s.put_obj(commit, b"commit");
+              Head {
+                  epoch: old.epoch + 1,
+                  content_gen: old.content_gen + 1,
+                  content_commit: commit,
+                  maint_epoch: old.maint_epoch,
+                  maint_state: old.maint_state,
+              }
+          }
+
+          fn mix(prefix: &[u8], fallback: &[u8], cut: usize) -> Vec<u8> {
+              let cut = cut.min(prefix.len()).min(fallback.len());
+              let mut out = fallback.to_vec();
+              out[..cut].copy_from_slice(&prefix[..cut]);
+              out
+          }
+
+          #[test]
+          fn exp05_named_faultio_trace_corpus() {
+              let evidence = PathBuf::from(env::var("UFMT_EVIDENCE_DIR").expect("UFMT_EVIDENCE_DIR"));
+              fs::create_dir_all(&evidence).unwrap();
+              let points = [CrashPoint::P0,CrashPoint::P1,CrashPoint::P2,CrashPoint::P3,CrashPoint::P4,CrashPoint::P5,CrashPoint::P6,CrashPoint::P7,CrashPoint::P8,CrashPoint::P9,CrashPoint::P10];
+              let mut summary = String::from("{\"schema\":\"ufmt.exp05.fault-corpus.v1\",\"schedules\":[");
+              for (idx, p) in points.into_iter().enumerate() {
+                  let s = Store::fresh();
+                  let old = s.select().unwrap().1;
+                  let result = s.publish_content(old, 1, Some(p));
+                  assert_eq!(result, Err(PublishError::Injected(p)));
+                  let selected = oracle_select_dual_file(&s.dir).expect("oracle root");
+                  let class = if selected == old { "OLD" } else { "NEW" };
+                  assert!(selected == old || selected.epoch == old.epoch + 1);
+                  let name = point_name(p);
+                  fs::write(
+                      evidence.join(format!("fault-plan-{name}.json")),
+                      format!("{{\"schema\":\"ufmt.fault-plan.v1\",\"fault_point\":\"{name}\",\"expected\":\"OLD_OR_NEW\"}}\n")
+                  ).unwrap();
+                  fs::write(
+                      evidence.join(format!("trace-{name}.jsonl")),
+                      format!(
+                          "{{\"seq\":1,\"event_type\":\"PUBLISH_ATTEMPT\",\"expected_epoch\":{}}}\n{{\"seq\":2,\"event_type\":\"CRASH_INJECT\",\"fault_point\":\"{}\"}}\n{{\"seq\":3,\"event_type\":\"RECOVER\",\"selected_epoch\":{},\"classification\":\"{}\",\"abstract_action\":\"{}\"}}\n",
+                          old.epoch, name, selected.epoch, class,
+                          if class == "NEW" { "PublishContent" } else { "RecoverAfterCrash/Stutter" }
+                      )
+                  ).unwrap();
+                  if idx > 0 { summary.push(','); }
+                  summary.push_str(&format!("{{\"fault_point\":\"{name}\",\"classification\":\"{class}\"}}"));
+              }
+              summary.push_str("]}\n");
+              fs::write(evidence.join("summary.json"), summary).unwrap();
+          }
+
+          fn prepare_dual_file_case() -> (Store, Head, Head) {
+              let s = Store::fresh();
+              let old = s.select().unwrap().1;
+              let new = candidate_for(&s, old);
+              (s, old, new)
+          }
+
+          #[test]
+          fn b2_dual_file_systematic_cut_matrix() {
+              let cuts = [0usize,1,8,16,24,32,40,48,55,56,63,64];
+              for cut in cuts {
+                  for variant in 0..3 {
+                      let (s, old, new) = prepare_dual_file_case();
+                      let nb = encode(new).to_vec();
+                      let ob = encode(old).to_vec();
+                      let fallback = match variant {
+                          0 => vec![0u8; ROOT_LEN],
+                          1 => ob.clone(),
+                          _ => vec![0xA5u8; ROOT_LEN],
+                      };
+                      fs::write(s.root_path(Slot::B), mix(&nb, &fallback, cut)).unwrap();
+                      let selected = oracle_select_dual_file(&s.dir).expect("old root must survive");
+                      assert!(selected == old || selected == new, "cut={cut} variant={variant}");
+                  }
+              }
+          }
+
+          fn encode4k(h: Head) -> [u8; SLOT4K] {
+              let mut out = [0u8; SLOT4K];
+              out[..ROOT_LEN].copy_from_slice(&encode(h));
+              out
+          }
+
+          fn decode4k(bytes: &[u8]) -> Option<Head> {
+              if bytes.len() != SLOT4K || bytes[ROOT_LEN..].iter().any(|b| *b != 0) { return None; }
+              decode(&bytes[..ROOT_LEN])
+          }
+
+          struct DualSlotStore { dir: PathBuf }
+
+          impl DualSlotStore {
+              fn fresh() -> Self {
+                  let s = Store::fresh();
+                  let dir = s.dir.clone();
+                  std::mem::forget(s);
+                  let root = dir.join("root.bin");
+                  let f = File::create(&root).unwrap();
+                  f.set_len((SLOT4K * 2) as u64).unwrap();
+                  drop(f);
+                  let old = Head { epoch:0, content_gen:0, content_commit:10, maint_epoch:0, maint_state:20 };
+                  Self::write_slot_raw(&root, 0, &encode4k(old));
+                  File::open(&root).unwrap().sync_all().unwrap();
+                  Self { dir }
+              }
+              fn root(&self) -> PathBuf { self.dir.join("root.bin") }
+              fn write_slot_raw(path: &Path, index: usize, bytes: &[u8]) {
+                  let mut f = OpenOptions::new().read(true).write(true).open(path).unwrap();
+                  f.seek(SeekFrom::Start((index * SLOT4K) as u64)).unwrap();
+                  f.write_all(bytes).unwrap();
+              }
+              fn read_slot(&self, index: usize) -> Option<Head> {
+                  let mut f = File::open(self.root()).ok()?;
+                  f.seek(SeekFrom::Start((index * SLOT4K) as u64)).ok()?;
+                  let mut buf = vec![0u8; SLOT4K];
+                  f.read_exact(&mut buf).ok()?;
+                  let h = decode4k(&buf)?;
+                  (obj_path(&self.dir, h.content_commit).is_file() && obj_path(&self.dir, h.maint_state).is_file()).then_some(h)
+              }
+              fn select(&self) -> Option<Head> {
+                  match (self.read_slot(0), self.read_slot(1)) {
+                      (Some(x), Some(y)) if x.epoch == y.epoch && x != y => None,
+                      (Some(x), Some(y)) => Some(if y.epoch > x.epoch { y } else { x }),
+                      (Some(x), None) => Some(x),
+                      (None, Some(y)) => Some(y),
+                      _ => None,
+                  }
+              }
+          }
+
+          impl Drop for DualSlotStore {
+              fn drop(&mut self) { let _ = fs::remove_dir_all(&self.dir); }
+          }
+
+          #[test]
+          fn b1_dual_slot_4k_cut_matrix() {
+              let cuts = [0usize,1,8,16,24,32,40,48,55,56,64,512,4095,4096];
+              for cut in cuts {
+                  for variant in 0..3 {
+                      let s = DualSlotStore::fresh();
+                      let old = s.select().unwrap();
+                      let helper = Store { dir: s.dir.clone() };
+                      let new = candidate_for(&helper, old);
+                      std::mem::forget(helper);
+                      let nb = encode4k(new);
+                      let ob = encode4k(old);
+                      let fallback = match variant {
+                          0 => vec![0u8; SLOT4K],
+                          1 => ob.to_vec(),
+                          _ => vec![0xA5u8; SLOT4K],
+                      };
+                      let mutated = mix(&nb, &fallback, cut);
+                      DualSlotStore::write_slot_raw(&s.root(), 1, &mutated);
+                      File::open(s.root()).unwrap().sync_all().unwrap();
+                      let selected = s.select().expect("old root must survive or new root become valid");
+                      assert!(selected == old || selected == new, "cut={cut} variant={variant}");
+                  }
+              }
+          }
+
+          #[test]
+          #[ignore]
+          fn kill_child_worker() {
+              if env::var("UFMT_KILL_CHILD").ok().as_deref() != Some("1") { return; }
+              let dir = PathBuf::from(env::var("UFMT_KILL_DIR").unwrap());
+              let stage = env::var("UFMT_KILL_STAGE").unwrap();
+              let s = Store { dir: dir.clone() };
+              let old = s.select().unwrap().1;
+              let new = candidate_for(&s, old);
+              let (active, _) = s.select().unwrap();
+              let inactive = Store::inactive(active);
+              let tmp = dir.join(match inactive { Slot::A => "root.A.tmp", Slot::B => "root.B.tmp" });
+              let mut f = File::create(&tmp).unwrap();
+              f.write_all(&encode(new)).unwrap();
+              f.sync_all().unwrap();
+              if stage == "pre-rename" {
+                  fs::write(dir.join("kill-stage"), b"ready").unwrap();
+                  thread::sleep(Duration::from_secs(30));
+                  return;
+              }
+              fs::rename(&tmp, s.root_path(inactive)).unwrap();
+              fs::write(dir.join("kill-stage"), b"ready").unwrap();
+              thread::sleep(Duration::from_secs(30));
+          }
+
+          fn run_kill_case(stage: &str, expect_new_allowed: bool) {
+              let s = Store::fresh();
+              let old = s.select().unwrap().1;
+              let exe = env::current_exe().unwrap();
+              let mut child = Command::new(exe)
+                  .arg("extended::kill_child_worker")
+                  .arg("--exact")
+                  .arg("--ignored")
+                  .arg("--nocapture")
+                  .env("UFMT_KILL_CHILD", "1")
+                  .env("UFMT_KILL_DIR", &s.dir)
+                  .env("UFMT_KILL_STAGE", stage)
+                  .stdout(Stdio::null())
+                  .stderr(Stdio::null())
+                  .spawn().unwrap();
+              let marker = s.dir.join("kill-stage");
+              let start = Instant::now();
+              while !marker.exists() && start.elapsed() < Duration::from_secs(10) {
+                  thread::sleep(Duration::from_millis(20));
+              }
+              assert!(marker.exists(), "child did not reach {stage}");
+              let status = Command::new("kill").arg("-9").arg(child.id().to_string()).status().unwrap();
+              assert!(status.success());
+              let _ = child.wait();
+              let selected = oracle_select_dual_file(&s.dir).expect("root after kill");
+              if expect_new_allowed {
+                  assert!(selected == old || selected.epoch == old.epoch + 1);
+              } else {
+                  assert_eq!(selected, old);
+              }
+          }
+
+          #[test]
+          fn subprocess_kill_reopen_subset() {
+              run_kill_case("pre-rename", false);
+              run_kill_case("post-rename", true);
+          }
+          RUSTXEOF
 
           cp "$RUST/Cargo.toml" "$RECEIPT/source/Cargo.toml"
           cp "$RUST/src/lib.rs" "$RECEIPT/source/m0-lib.rs"
+          cp "$RUST/src/extended.rs" "$RECEIPT/source/m0-extended.rs"
 
-          CARGO_NET_OFFLINE=true cargo test --manifest-path "$RUST/Cargo.toml" -- --nocapture \
+          mkdir -p "$RECEIPT/fault"
+          UFMT_EVIDENCE_DIR="$RECEIPT/fault" CARGO_NET_OFFLINE=true cargo test --manifest-path "$RUST/Cargo.toml" -- --nocapture \
             >"$RECEIPT/rust/cargo-test.log" 2>&1
 
           grep -E "states generated|distinct states|Model checking completed|Finished in" \
