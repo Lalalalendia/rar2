@@ -15,6 +15,12 @@ from collections import Counter
 UA = "Chaptera-Migration-Corpus/2.0"
 CORE_EXPECTED = 65
 EXTENDED_EXPECTED = 86
+LALAMU_CORPUS_COMMIT = "f78cc6f455f4dc222868f9cc035511a6ca7a91ea"
+LALAMU_CORPUS_BASE = (
+    "https://raw.githubusercontent.com/Lalalendia/lalamu/"
+    + LALAMU_CORPUS_COMMIT
+    + "/pub-corpus/corpus/native/unclassified"
+)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -78,7 +84,11 @@ def build_entries(root: pathlib.Path, profile: str):
                 "family": item["candidate_id"],
                 "semantic": True,
                 "kind": "direct",
-                "url": item["source_url"],
+                # Use the already-materialized exact-byte Lalamu corpus rather than
+                # re-fetching mutable institutional/historical source URLs.
+                "url": LALAMU_CORPUS_BASE + "/" + item["sha256"] + ".pub",
+                "original_source_url": item["source_url"],
+                "materialization_authority": "Lalalalendia/lalamu@" + LALAMU_CORPUS_COMMIT,
             }
         )
 
