@@ -2313,7 +2313,10 @@ fn open_mature_0x2c_bundle(
         })
         .collect::<Vec<_>>();
     if !text_color_runs.is_empty() {
-        let unresolved = text_color_runs.iter().filter(|run| run.rgb.is_none()).count();
+        let unresolved = text_color_runs
+            .iter()
+            .filter(|run| run.rgb.is_none())
+            .count();
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.text.source_color_partial".to_owned(),
             severity: if unresolved == 0 {
