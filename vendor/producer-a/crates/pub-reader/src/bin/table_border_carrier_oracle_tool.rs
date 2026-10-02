@@ -22,7 +22,7 @@ struct CarrierKey {
     anchor: Vec<(u16, u32)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct FoptState {
     by_property: BTreeMap<u16, Vec<(u32, bool, bool)>>,
 }
@@ -32,6 +32,7 @@ struct ProfileReceipt {
     schema: &'static str,
     source_sha256: String,
     border_carrier_count: usize,
+    duplicate_anchor_group_count: usize,
     anchor_signature_histogram: BTreeMap<String, usize>,
     fopt_property_id_signature_histogram: BTreeMap<String, usize>,
     claims: Claims,
@@ -46,6 +47,7 @@ struct DiffReceipt {
     changed_carrier_count: usize,
     removed_carrier_count: usize,
     added_carrier_count: usize,
+    ambiguous_changed_group_count: usize,
     changed_anchor_signature_histogram: BTreeMap<String, usize>,
     changed_property_id_histogram: BTreeMap<String, usize>,
     removed_anchor_signature_histogram: BTreeMap<String, usize>,
@@ -143,14 +145,14 @@ fn fopt_state(shape: &SpContainerObservation) -> FoptState {
     FoptState { by_property }
 }
 
-fn read_carriers(path: &PathBuf) -> Result<(String, BTreeMap<CarrierKey, FoptState>)> {
+fn read_carriers(path: &PathBuf) -> Result<(String, BTreeMap<CarrierKey, Vec<FoptState>>)> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let escher = pub_cfb::read_stream_reader(Cursor::new(bytes.as_slice()), ESCHER_STREAM)
         .context("read EscherStm")?;
     let inventory = inspect_sp_containers(StreamPath(ESCHER_STREAM.into()), &escher)
         .context("inspect SpContainers")?;
 
-    let mut carriers = BTreeMap::new();
+    let mut carriers = BTreeMap::<CarrierKey, Vec<FoptState>>::new();
     for shape in inventory
         .shapes
         .iter()
@@ -158,10 +160,10 @@ fn read_carriers(path: &PathBuf) -> Result<(String, BTreeMap<CarrierKey, FoptSta
     {
         let key =
             carrier_key(shape).context("border carrier has no stable ClientAnchor/FSP key")?;
-        anyhow::ensure!(
-            carriers.insert(key, fopt_state(shape)).is_none(),
-            "duplicate border-carrier anchor key"
-        );
+        carriers.entry(key).or_default().push(fopt_state(shape));
+    }
+    for states in carriers.values_mut() {
+        states.sort_unstable();
     }
 
     Ok((sha256_hex(&bytes), carriers))
@@ -175,21 +177,26 @@ fn profile(input: PathBuf, output: PathBuf) -> Result<()> {
     let (source_sha256, carriers) = read_carriers(&input)?;
     let mut anchor_signature_histogram = BTreeMap::new();
     let mut fopt_property_id_signature_histogram = BTreeMap::new();
-    for (key, state) in &carriers {
-        bump(
-            &mut anchor_signature_histogram,
-            anchor_signature_from_key(key),
-        );
-        bump(
-            &mut fopt_property_id_signature_histogram,
-            fopt_id_signature(state),
-        );
+    let border_carrier_count = carriers.values().map(Vec::len).sum();
+    let duplicate_anchor_group_count = carriers.values().filter(|states| states.len() > 1).count();
+    for (key, states) in &carriers {
+        for state in states {
+            bump(
+                &mut anchor_signature_histogram,
+                anchor_signature_from_key(key),
+            );
+            bump(
+                &mut fopt_property_id_signature_histogram,
+                fopt_id_signature(state),
+            );
+        }
     }
 
     let receipt = ProfileReceipt {
         schema: "chaptera.table-border-carrier-profile.v1",
         source_sha256,
-        border_carrier_count: carriers.len(),
+        border_carrier_count,
+        duplicate_anchor_group_count,
         anchor_signature_histogram,
         fopt_property_id_signature_histogram,
         claims: Claims {
@@ -219,52 +226,89 @@ fn changed_property_ids(before: &FoptState, after: &FoptState) -> BTreeSet<u16> 
         .collect()
 }
 
+fn subtract_exact_matches(
+    before: &[FoptState],
+    after: &[FoptState],
+) -> (usize, Vec<FoptState>, Vec<FoptState>) {
+    let mut after_remaining = after.to_vec();
+    let mut before_remaining = Vec::new();
+    let mut exact_matches = 0usize;
+
+    for state in before {
+        if let Some(index) = after_remaining.iter().position(|candidate| candidate == state) {
+            after_remaining.remove(index);
+            exact_matches += 1;
+        } else {
+            before_remaining.push(state.clone());
+        }
+    }
+
+    (exact_matches, before_remaining, after_remaining)
+}
+
 fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
     let (before_sha256, before_map) = read_carriers(&before)?;
     let (after_sha256, after_map) = read_carriers(&after)?;
 
+    let keys = before_map
+        .keys()
+        .chain(after_map.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
     let mut matched_carrier_count = 0usize;
     let mut changed_carrier_count = 0usize;
+    let mut removed_carrier_count = 0usize;
+    let mut added_carrier_count = 0usize;
+    let mut ambiguous_changed_group_count = 0usize;
     let mut changed_anchor_signature_histogram = BTreeMap::new();
     let mut changed_property_id_histogram = BTreeMap::new();
-
-    for (key, before_state) in &before_map {
-        let Some(after_state) = after_map.get(key) else {
-            continue;
-        };
-        matched_carrier_count += 1;
-        if before_state == after_state {
-            continue;
-        }
-        changed_carrier_count += 1;
-        bump(
-            &mut changed_anchor_signature_histogram,
-            anchor_signature_from_key(key),
-        );
-        for id in changed_property_ids(before_state, after_state) {
-            bump(&mut changed_property_id_histogram, format!("0x{id:04x}"));
-        }
-    }
-
     let mut removed_anchor_signature_histogram = BTreeMap::new();
-    for key in before_map
-        .keys()
-        .filter(|key| !after_map.contains_key(*key))
-    {
-        bump(
-            &mut removed_anchor_signature_histogram,
-            anchor_signature_from_key(key),
-        );
-    }
     let mut added_anchor_signature_histogram = BTreeMap::new();
-    for key in after_map
-        .keys()
-        .filter(|key| !before_map.contains_key(*key))
-    {
-        bump(
-            &mut added_anchor_signature_histogram,
-            anchor_signature_from_key(key),
-        );
+
+    for key in keys {
+        let before_states = before_map.get(&key).map(Vec::as_slice).unwrap_or_default();
+        let after_states = after_map.get(&key).map(Vec::as_slice).unwrap_or_default();
+        let (exact_matches, mut before_remaining, mut after_remaining) =
+            subtract_exact_matches(before_states, after_states);
+        matched_carrier_count += exact_matches;
+
+        before_remaining.sort_unstable();
+        after_remaining.sort_unstable();
+
+        let changed_pairs = before_remaining.len().min(after_remaining.len());
+        if changed_pairs > 1 {
+            ambiguous_changed_group_count += 1;
+        }
+
+        for index in 0..changed_pairs {
+            let before_state = &before_remaining[index];
+            let after_state = &after_remaining[index];
+            matched_carrier_count += 1;
+            changed_carrier_count += 1;
+            bump(
+                &mut changed_anchor_signature_histogram,
+                anchor_signature_from_key(&key),
+            );
+            for id in changed_property_ids(before_state, after_state) {
+                bump(&mut changed_property_id_histogram, format!("0x{id:04x}"));
+            }
+        }
+
+        for _ in changed_pairs..before_remaining.len() {
+            removed_carrier_count += 1;
+            bump(
+                &mut removed_anchor_signature_histogram,
+                anchor_signature_from_key(&key),
+            );
+        }
+        for _ in changed_pairs..after_remaining.len() {
+            added_carrier_count += 1;
+            bump(
+                &mut added_anchor_signature_histogram,
+                anchor_signature_from_key(&key),
+            );
+        }
     }
 
     let receipt = DiffReceipt {
@@ -273,8 +317,9 @@ fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
         after_sha256,
         matched_carrier_count,
         changed_carrier_count,
-        removed_carrier_count: before_map.len() - matched_carrier_count,
-        added_carrier_count: after_map.len() - matched_carrier_count,
+        removed_carrier_count,
+        added_carrier_count,
+        ambiguous_changed_group_count,
         changed_anchor_signature_histogram,
         changed_property_id_histogram,
         removed_anchor_signature_histogram,
@@ -293,6 +338,30 @@ fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
     }
     fs::write(output, serde_json::to_vec_pretty(&receipt)?)?;
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(property: u16, op: u32) -> FoptState {
+        FoptState {
+            by_property: BTreeMap::from([(property, vec![(op, false, false)])]),
+        }
+    }
+
+    #[test]
+    fn exact_match_subtraction_preserves_duplicate_anchor_multiplicity() {
+        let before = vec![state(0x0181, 1), state(0x01c0, 2)];
+        let after = vec![state(0x0181, 1), state(0x01c0, 3)];
+        let (exact, before_remaining, after_remaining) =
+            subtract_exact_matches(&before, &after);
+
+        assert_eq!(exact, 1);
+        assert_eq!(before_remaining, vec![state(0x01c0, 2)]);
+        assert_eq!(after_remaining, vec![state(0x01c0, 3)]);
+    }
 }
 
 fn main() -> Result<()> {
