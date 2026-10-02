@@ -19,6 +19,13 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  PINNED_CORPUS_RUN_ID: "36573574820"
+  PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+  EXPECTED_1050_COUNT: "1050"
+  EXPECTED_1050_SHA_LIST_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
 
 jobs:
   scan:
@@ -31,30 +38,130 @@ jobs:
           - profile: extended86
             expected: 86
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Scanner source-free unit contract
         run: |
           set -euo pipefail
           python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py tools/migration_editable_corpus_v2.py
           python tools/test_pub_vba_estate_scan.py
-      - name: Materialize exact existing corpus profile
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: ${{ runner.temp }}/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Select exact profile from pinned 1050
+        env:
+          PROFILE: ${{ matrix.profile }}
+          EXPECTED_PROFILE_COUNT: ${{ matrix.expected }}
         run: |
           set -euo pipefail
-          python tools/migration_editable_corpus_v2.py materialize \
-            --repo-root . \
-            --profile "${{ matrix.profile }}" \
-            --out "$RUNNER_TEMP/pub-vba-${{ matrix.profile }}"
+          python - <<'PY'
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          import shutil
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "pinned1050" / "materialized" / "native"
+          paths = sorted(root.glob("*.pub"), key=lambda p: p.stem.casefold())
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(paths) == int(os.environ["EXPECTED_1050_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate SHA-named corpus entries"
+          assert digest == os.environ["EXPECTED_1050_SHA_LIST_DIGEST"], (
+              digest,
+              os.environ["EXPECTED_1050_SHA_LIST_DIGEST"],
+          )
+
+          module_path = Path("tools/migration_editable_corpus_v2.py")
+          spec = importlib.util.spec_from_file_location("migration_editable_corpus_v2", module_path)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+
+          profile = os.environ["PROFILE"]
+          expected = int(os.environ["EXPECTED_PROFILE_COUNT"])
+          entries = module.build_entries(Path("."), profile)
+          assert len(entries) == expected, (profile, len(entries), expected)
+
+          out = Path(os.environ["RUNNER_TEMP"]) / f"pub-vba-{profile}"
+          native = out / "native"
+          native.mkdir(parents=True, exist_ok=True)
+          rows = []
+          missing = []
+
+          for entry in entries:
+              sha = entry["sha256"].casefold()
+              source = root / f"{sha}.pub"
+              if not source.is_file():
+                  missing.append(sha)
+                  continue
+              data = source.read_bytes()
+              actual = hashlib.sha256(data).hexdigest()
+              assert actual == sha, (entry["name"], actual, sha)
+              assert len(data) == entry["byte_len"], (
+                  entry["name"],
+                  len(data),
+                  entry["byte_len"],
+              )
+              shutil.copyfile(source, native / f"{sha}.pub")
+              rows.append({
+                  "sha256": sha,
+                  "byte_len": len(data),
+                  "stratum": entry["stratum"],
+                  "family": entry["family"],
+              })
+
+          assert not missing, {
+              "profile": profile,
+              "missing_count": len(missing),
+              "missing_sha256": missing,
+          }
+          assert len(rows) == expected
+
+          receipt = {
+              "schema": "chaptera.pub-vba-profile-from-pinned1050.v1",
+              "profile": profile,
+              "profile_count": len(rows),
+              "pinned_1050_count": len(paths),
+              "pinned_1050_sha_list_digest": "sha256:" + digest,
+              "stratum_counts": dict(sorted(Counter(row["stratum"] for row in rows).items())),
+              "entries": sorted(rows, key=lambda row: row["sha256"]),
+          }
+          (out / "materialization.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "profile": profile,
+              "profile_count": len(rows),
+              "pinned_1050_count": len(paths),
+              "pinned_1050_sha_list_digest": "sha256:" + digest,
+              "stratum_counts": receipt["stratum_counts"],
+          }, indent=2, sort_keys=True))
+          PY
+
       - name: Inert VBA estate scan
         run: |
           set -euo pipefail
           mkdir -p "target/pub-vba-${{ matrix.profile }}"
+          cp "$RUNNER_TEMP/pub-vba-${{ matrix.profile }}/materialization.json" "target/pub-vba-${{ matrix.profile }}/materialization.json"
           python tools/pub_vba_estate_scan.py scan \
             --input "$RUNNER_TEMP/pub-vba-${{ matrix.profile }}/native" \
             --recursive \
@@ -77,10 +184,12 @@ jobs:
               "totals": data["totals"],
           }
           Path(f"target/pub-vba-{profile}/summary.json").write_text(
-              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+              json.dumps(summary, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
           )
           print(json.dumps(summary, indent=2, sort_keys=True))
           PY
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
