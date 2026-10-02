@@ -2103,7 +2103,9 @@ fn normalize_officeart_rotation_q16(raw: i64) -> i64 {
 /// Q30. Cardinal turns are exact; arbitrary turns avoid platform libm drift.
 fn officeart_rotation_cos_sin_q30(raw_q16: i64) -> (i64, i64) {
     const QUARTER_TURN_Q16: i64 = 90 * 65_536;
+    const NEG_QUARTER_TURN_Q16: i64 = -QUARTER_TURN_Q16;
     const HALF_TURN_Q16: i64 = 180 * 65_536;
+    const NEG_HALF_TURN_Q16: i64 = -HALF_TURN_Q16;
     const QUARTER_TURN_BAM: i64 = 1_i64 << 30;
     const HALF_TURN_BAM: i64 = 1_i64 << 31;
 
@@ -2111,8 +2113,8 @@ fn officeart_rotation_cos_sin_q30(raw_q16: i64) -> (i64, i64) {
     match normalized {
         0 => return (CORDIC_Q30_ONE, 0),
         QUARTER_TURN_Q16 => return (0, CORDIC_Q30_ONE),
-        -QUARTER_TURN_Q16 => return (0, -CORDIC_Q30_ONE),
-        -HALF_TURN_Q16 => return (-CORDIC_Q30_ONE, 0),
+        NEG_QUARTER_TURN_Q16 => return (0, -CORDIC_Q30_ONE),
+        NEG_HALF_TURN_Q16 => return (-CORDIC_Q30_ONE, 0),
         _ => {}
     }
 
