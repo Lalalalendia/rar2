@@ -3917,6 +3917,7 @@ pub fn resolve_bounded_effective_officeart_paint(
     })
 }
 
+// Measurement A/B carrier: sparse Publisher TextBox DGG color applicability.
 fn shape_has_explicit_filled_without_fill_color(
     shape: &pub_escher::SpContainerObservation,
 ) -> bool {
