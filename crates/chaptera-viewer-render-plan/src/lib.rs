@@ -169,6 +169,8 @@ pub struct RenderTypographyRunV1 {
     pub scalar_end: u32,
     pub source_font_name: String,
     pub text_size_emu: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
     pub font_inherited: bool,
     pub size_inherited: bool,
 }
@@ -608,6 +610,7 @@ fn projected_text(
                 scalar_end,
                 source_font_name: run.source_font_name.clone(),
                 text_size_emu: run.text_size_emu,
+                color_rgb: run.color_rgb,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
             })
@@ -1952,6 +1955,7 @@ mod tests {
                 scalar_end: 5,
                 source_font_name: "Source Font".to_owned(),
                 text_size_emu: 152_400,
+                color_rgb: None,
                 font_inherited: false,
                 size_inherited: false,
             }],
@@ -2049,6 +2053,7 @@ mod tests {
                     scalar_end: 2,
                     source_font_name: "Arial".to_owned(),
                     text_size_emu: 152_400,
+                    color_rgb: None,
                     font_inherited: false,
                     size_inherited: false,
                 },
@@ -2057,6 +2062,7 @@ mod tests {
                     scalar_end: 5,
                     source_font_name: "Caladea".to_owned(),
                     text_size_emu: 152_400,
+                    color_rgb: None,
                     font_inherited: false,
                     size_inherited: false,
                 },
