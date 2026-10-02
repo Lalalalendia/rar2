@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - "apps/chaptera-server/tests/virginia_p1_residual_probe.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/virginia_p1_rotation_probe.rs"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - ".github/workflows/virginia-p1-residual-probe.yml"
 
@@ -49,6 +50,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo test -p chaptera-server --test virginia_p1_residual_probe -- --ignored --nocapture
+
+      - name: Measure p1 raw image rotation
+        env:
+          CHAPTERA_VIRGINIA_P1_PUB: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_P1_ROTATION_RECEIPT: ${{ github.workspace }}/target/virginia-p1-residual/rotation.json
+        run: |
+          set -euo pipefail
+          cargo test -p pub-reader --test virginia_p1_rotation_probe -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
