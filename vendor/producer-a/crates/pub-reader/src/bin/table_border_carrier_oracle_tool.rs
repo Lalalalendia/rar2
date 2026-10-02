@@ -235,7 +235,10 @@ fn subtract_exact_matches(
     let mut exact_matches = 0usize;
 
     for state in before {
-        if let Some(index) = after_remaining.iter().position(|candidate| candidate == state) {
+        if let Some(index) = after_remaining
+            .iter()
+            .position(|candidate| candidate == state)
+        {
             after_remaining.remove(index);
             exact_matches += 1;
         } else {
@@ -340,7 +343,6 @@ fn diff(before: PathBuf, after: PathBuf, output: PathBuf) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,8 +357,7 @@ mod tests {
     fn exact_match_subtraction_preserves_duplicate_anchor_multiplicity() {
         let before = vec![state(0x0181, 1), state(0x01c0, 2)];
         let after = vec![state(0x0181, 1), state(0x01c0, 3)];
-        let (exact, before_remaining, after_remaining) =
-            subtract_exact_matches(&before, &after);
+        let (exact, before_remaining, after_remaining) = subtract_exact_matches(&before, &after);
 
         assert_eq!(exact, 1);
         assert_eq!(before_remaining, vec![state(0x01c0, 2)]);
