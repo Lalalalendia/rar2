@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    env, fs,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
 use chaptera_server::reader_scene_v1::{ReaderSceneV1, from_viewer_geometry};
 use pub_viewer::{ViewerOpenBundle, open_pub_bundle, viewer_geometry_environment_v0_1};
@@ -157,10 +153,8 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
                 && node.header.bounds.right().is_some()
                 && node.header.bounds.bottom().is_some(),
         );
-        source_order_covered_nodes += usize::from(
-            source_order
-                .is_some_and(|order| order.node_ids.contains(&node.header.id)),
-        );
+        source_order_covered_nodes +=
+            usize::from(source_order.is_some_and(|order| order.node_ids.contains(&node.header.id)));
 
         let Some(effective) = node.payload.effective_paint.as_ref() else {
             bump(&mut fill_state_histogram, "effective_paint_none");
@@ -169,8 +163,7 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
         };
 
         let fill = &effective.fill;
-        let fill_any =
-            fill.solid.is_some() || fill.color_rgb.is_some() || fill.visible.is_some();
+        let fill_any = fill.solid.is_some() || fill.color_rgb.is_some() || fill.visible.is_some();
         let fill_state = match (
             fill.solid.as_ref(),
             fill.color_rgb.as_ref(),
