@@ -24,6 +24,7 @@ mod resolve;
 mod salvage;
 mod structural_base;
 mod table_bridge;
+mod table_style_probe;
 mod wmf;
 mod wmf_preview;
 
@@ -136,6 +137,10 @@ pub use table_bridge::{
     PubMaterializedTableCell, PubTableCellCoordinates, PubTableCellPaintSource, PubTableCellSource,
     PubTableLayoutMetricsSource, PubTableSource, PubTableStoryOwnershipSource, PubTableTextError,
     RAW_TYPE_TABLE, materialize_bounded_simple_table_cells, materialize_bounded_table_cells,
+};
+pub use table_style_probe::{
+    PubTableMcldStyleObservation, PubTableMcldStyleSignatureClass,
+    analyze_mature_0x2c_table_mcld_style_fields,
 };
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
 pub use wmf_preview::{
