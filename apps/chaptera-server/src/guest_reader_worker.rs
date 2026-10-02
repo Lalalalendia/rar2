@@ -3,11 +3,13 @@ use std::{
     fs::{self as stdfs, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    str::FromStr,
     time::{Duration, Instant},
 };
 
 use chaptera_failure_intake_protocol::FailureClassificationV1;
 use chaptera_untrusted_pub_scan::install_post_read_filesystem_default_deny;
+use pub_editor::{EditorEditableTarget, EditorSession, Sha256Digest};
 use pub_viewer::{
     ViewerProductOpenOutcome, open_pub_bundle, open_pub_or_salvage,
     viewer_geometry_environment_v0_1,
@@ -94,6 +96,7 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub terminal_code: Option<String>,
     pub scene: Option<Value>,
     pub salvage: Option<Value>,
+    pub editable_routes: Option<ReaderEditableRoutesAssessmentV1>,
     pub failure_classification: Option<FailureClassificationV1>,
     pub filesystem_confinement: bool,
     pub structural_scan_duration_us: u64,
@@ -483,11 +486,14 @@ pub fn run_guest_scene_worker(
         terminal_code,
         scene,
         salvage,
+        editable_routes,
         structural_scan_duration_us,
         scene_duration_us,
     ) = match normal_open {
         Ok(bundle) => {
             let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
+            let mature_editable_profile =
+                is_mature_editable_profile(bundle.resolved_graph.source.format_version.as_deref());
             let scene_started = Instant::now();
             match from_viewer_geometry_with_fonts(
                 session_id.to_owned(),
@@ -509,11 +515,26 @@ pub fn run_guest_scene_worker(
                             "Reader scene serialization failed",
                         )
                     })?;
+                    let editable_routes = if mature_editable_profile {
+                        match EditorSession::new(bundle.resolved_graph) {
+                            Ok(session) => Some(assess_editable_routes_from_session(
+                                &session,
+                                expected_sha256,
+                            )),
+                            Err(_) => Some(unverified_routes(
+                                expected_sha256,
+                                "assessment_failed",
+                            )),
+                        }
+                    } else {
+                        Some(profile_unavailable_routes(expected_sha256))
+                    };
                     (
                         classification.to_owned(),
                         None,
                         Some(scene),
                         None,
+                        editable_routes,
                         structural_scan_duration_us,
                         Some(duration_us(scene_started.elapsed())),
                     )
@@ -521,6 +542,7 @@ pub fn run_guest_scene_worker(
                 Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_projection_failed".to_owned()),
+                    None,
                     None,
                     None,
                     structural_scan_duration_us,
@@ -544,6 +566,7 @@ pub fn run_guest_scene_worker(
                         None,
                         None,
                         Some(observation),
+                        None,
                         structural_scan_duration_us,
                         None,
                     )
@@ -551,6 +574,7 @@ pub fn run_guest_scene_worker(
                 Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_open_failed".to_owned()),
+                    None,
                     None,
                     None,
                     structural_scan_duration_us,
@@ -573,12 +597,111 @@ pub fn run_guest_scene_worker(
         terminal_code,
         scene,
         salvage,
+        editable_routes,
         failure_classification,
         filesystem_confinement: true,
         structural_scan_duration_us,
         scene_duration_us,
     };
     write_receipt(output, &receipt)
+}
+
+fn is_mature_editable_profile(format_version: Option<&str>) -> bool {
+    format_version == Some("0x2c")
+}
+
+fn assess_editable_routes_from_session(
+    session: &EditorSession,
+    expected_sha256: &str,
+) -> ReaderEditableRoutesAssessmentV1 {
+    let source_hash = match Sha256Digest::from_str(expected_sha256) {
+        Ok(source_hash) => source_hash,
+        Err(_) => return unverified_routes(expected_sha256, "source_identity_mismatch"),
+    };
+    if session.source_hash() != source_hash {
+        return unverified_routes(expected_sha256, "source_identity_mismatch");
+    }
+
+    ReaderEditableRoutesAssessmentV1 {
+        protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+        source_sha256: expected_sha256.to_owned(),
+        idml: assess_editable_target(session, EditorEditableTarget::Idml),
+        odg: assess_editable_target(session, EditorEditableTarget::Odg),
+    }
+}
+
+fn profile_unavailable_routes(source_sha256: &str) -> ReaderEditableRoutesAssessmentV1 {
+    ReaderEditableRoutesAssessmentV1 {
+        protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+        source_sha256: source_sha256.to_owned(),
+        idml: unavailable_route("editor_profile_unavailable"),
+        odg: unavailable_route("editor_profile_unavailable"),
+    }
+}
+
+fn assess_editable_target(
+    session: &EditorSession,
+    target: EditorEditableTarget,
+) -> ReaderEditableTargetAssessmentV1 {
+    match session.preview_editable_export(target, "guest:source") {
+        Ok(preview) => {
+            let counts = preview.report.counts;
+            let declared_loss_count = counts
+                .approximated
+                .saturating_add(counts.flattened)
+                .saturating_add(counts.rasterized)
+                .saturating_add(counts.unsupported);
+            if preview.report.can_serialize && counts.blocking == 0 {
+                ReaderEditableTargetAssessmentV1 {
+                    state: "available_with_declared_losses".to_owned(),
+                    reason_code: "serializable".to_owned(),
+                    declared_loss_count,
+                    blocking_loss_count: 0,
+                }
+            } else {
+                ReaderEditableTargetAssessmentV1 {
+                    state: "unavailable".to_owned(),
+                    reason_code: "blocking_losses".to_owned(),
+                    declared_loss_count,
+                    blocking_loss_count: counts.blocking,
+                }
+            }
+        }
+        Err(_) => ReaderEditableTargetAssessmentV1 {
+            state: "not_verified".to_owned(),
+            reason_code: "assessment_failed".to_owned(),
+            declared_loss_count: 0,
+            blocking_loss_count: 0,
+        },
+    }
+}
+
+fn unavailable_route(reason_code: &str) -> ReaderEditableTargetAssessmentV1 {
+    ReaderEditableTargetAssessmentV1 {
+        state: "unavailable".to_owned(),
+        reason_code: reason_code.to_owned(),
+        declared_loss_count: 0,
+        blocking_loss_count: 0,
+    }
+}
+
+fn unverified_routes(source_sha256: &str, reason_code: &str) -> ReaderEditableRoutesAssessmentV1 {
+    ReaderEditableRoutesAssessmentV1 {
+        protocol_version: READER_EDITABLE_ROUTES_ASSESSMENT_V1.to_owned(),
+        source_sha256: source_sha256.to_owned(),
+        idml: ReaderEditableTargetAssessmentV1 {
+            state: "not_verified".to_owned(),
+            reason_code: reason_code.to_owned(),
+            declared_loss_count: 0,
+            blocking_loss_count: 0,
+        },
+        odg: ReaderEditableTargetAssessmentV1 {
+            state: "not_verified".to_owned(),
+            reason_code: reason_code.to_owned(),
+            declared_loss_count: 0,
+            blocking_loss_count: 0,
+        },
+    }
 }
 
 fn configured_font_resource_id(expected_sha256: &str, face_index: u32) -> String {
@@ -1077,6 +1200,8 @@ mod tests {
             }),
             failure_classification: None,
             filesystem_confinement: true,
+            structural_scan_duration_us: 1,
+            scene_duration_us: Some(1),
         };
 
         validate_receipt(&receipt, "guest:0123456789abcdef", &"a".repeat(64), 1)
@@ -1106,6 +1231,7 @@ mod tests {
                 "facts":[],
                 "gaps":["text_unavailable","image_facts_unavailable","geometry_facts_unavailable"]
             })),
+            editable_routes: None,
             failure_classification: None,
             filesystem_confinement: true,
             structural_scan_duration_us: 1,
@@ -1126,6 +1252,7 @@ mod tests {
             terminal_code: Some("reader_scene_open_failed".to_owned()),
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
             salvage: None,
+            editable_routes: None,
             failure_classification: None,
             filesystem_confinement: true,
             structural_scan_duration_us: 1,
