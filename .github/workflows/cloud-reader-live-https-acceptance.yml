@@ -1,4 +1,5 @@
 name: Cloud Reader live HTTPS acceptance
+# Baseline comparator for PR #778; no runtime code change.
 
 on:
   pull_request:
