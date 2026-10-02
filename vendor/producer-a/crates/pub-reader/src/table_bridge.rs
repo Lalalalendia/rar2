@@ -414,7 +414,6 @@ fn populate_bounded_table_cell_fill(
     Ok(admitted)
 }
 
-
 fn unique_publisher_field(record: &pub_escher::PublisherFieldRecord, field_id: u16) -> Option<u32> {
     let mut values = record.values(field_id);
     let first = values.next()?;
