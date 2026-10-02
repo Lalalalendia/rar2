@@ -1486,6 +1486,33 @@ mod tests {
         let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
             .expect("shared Viewer bundle must open the probe source");
 
+        if actual_sha256 == "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" {
+            for run in &bundle.geometry.text_color_runs {
+                let Some(story) = bundle
+                    .geometry
+                    .document
+                    .stories
+                    .iter()
+                    .find(|story| story.id == run.story_id)
+                else {
+                    continue;
+                };
+                if story
+                    .text
+                    .contains("Together We Take Small Steps To Make Big Dreams Come True")
+                {
+                    println!(
+                        "CARLTON_TEXT_COLOR_PROBE range={}..{} color_index={} raw_reference=0x{:08x} rgb={:?}",
+                        run.scalar_start,
+                        run.scalar_end,
+                        run.color_index,
+                        run.raw_reference,
+                        run.rgb
+                    );
+                }
+            }
+        }
+
         let mut source_explicit_line_any = 0_usize;
         let mut source_explicit_line_color = 0_usize;
         let mut source_explicit_line_width = 0_usize;
