@@ -42,6 +42,26 @@ pub struct PubTableCellPaintSource {
     pub source_refs: Vec<SourceRef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubTableBorderAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTableBorderSegmentSource {
+    pub axis: PubTableBorderAxis,
+    pub row_start: u32,
+    pub column_start: u32,
+    pub row_end: u32,
+    pub column_end: u32,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellCoordinates {
     pub start_row: u32,
@@ -299,6 +319,8 @@ pub struct PubTableSource {
     pub simple_table: Option<SimpleRectangularTable<TableCellId>>,
     pub layout_metrics: Option<PubTableLayoutMetricsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub border_segments: Vec<PubTableBorderSegmentSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
 }
 
@@ -412,6 +434,11 @@ fn populate_bounded_table_cell_fill(
 const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
 const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
 const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
+const TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID: u16 = 0x2001;
+const TABLE_AUTOFORMAT_ROW_START_ID: u16 = 0x2004;
+const TABLE_AUTOFORMAT_COLUMN_START_ID: u16 = 0x2005;
+const TABLE_AUTOFORMAT_ROW_END_ID: u16 = 0x2006;
+const TABLE_AUTOFORMAT_COLUMN_END_ID: u16 = 0x2007;
 
 fn unique_anchor_scalar(anchor: &pub_escher::PublisherFieldRecord, field_id: u16) -> Option<u32> {
     let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
@@ -476,6 +503,207 @@ fn native_autoformat_cell_ordinal(
         table_seq_num,
         cell_count,
     )
+}
+
+fn unique_anchor_scalar_or_zero(
+    anchor: &pub_escher::PublisherFieldRecord,
+    field_id: u16,
+) -> Option<u32> {
+    let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
+    let Some(first) = fields.next() else {
+        return Some(0);
+    };
+    fields.next().is_none().then_some(first.value)
+}
+
+fn native_autoformat_border_segment(
+    shape: &pub_escher::SpContainerObservation,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+) -> Option<PubTableBorderSegmentSource> {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+        || has_any_client_data_identity(shape)
+    {
+        return None;
+    }
+    let anchor = shape.client_anchor.as_ref()?;
+    if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID)? != table_seq_num
+        || anchor
+            .fields
+            .iter()
+            .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+    {
+        return None;
+    }
+
+    let allowed = [
+        TABLE_AUTOFORMAT_OWNER_REF_ID,
+        TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID,
+        TABLE_AUTOFORMAT_ROW_START_ID,
+        TABLE_AUTOFORMAT_COLUMN_START_ID,
+        TABLE_AUTOFORMAT_ROW_END_ID,
+        TABLE_AUTOFORMAT_COLUMN_END_ID,
+    ];
+    if anchor
+        .fields
+        .iter()
+        .any(|field| !allowed.contains(&field.id))
+    {
+        return None;
+    }
+
+    let orientation = unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID)?;
+    let row_start = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_START_ID)?;
+    let column_start = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_START_ID)?;
+    let row_end = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_END_ID)?;
+    let column_end = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_END_ID)?;
+    if row_start > rows || row_end > rows || column_start > columns || column_end > columns {
+        return None;
+    }
+
+    let axis = match orientation {
+        1 if row_start == row_end && column_start < column_end => PubTableBorderAxis::Horizontal,
+        2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
+        _ => return None,
+    };
+
+    let rgb = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
+        .and_then(direct_officeart_rgb)?;
+    let width_emu = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
+        .and_then(|value| (value > 0 && value <= 0x0132_F540).then_some(i64::from(value)))?;
+
+    Some(PubTableBorderSegmentSource {
+        axis,
+        row_start,
+        column_start,
+        row_end,
+        column_end,
+        rgb,
+        width_emu,
+        source_refs: vec![source_ref(
+            context_source_placeholder(),
+            &shape.source,
+            None,
+            None,
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )],
+    })
+}
+
+fn populate_native_autoformat_table_borders(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+) -> Vec<PubTableBorderSegmentSource> {
+    let mut by_key = BTreeMap::<
+        (PubTableBorderAxis, u32, u32, u32, u32),
+        Vec<&pub_escher::SpContainerObservation>,
+    >::new();
+
+    for shape in &context.officeart_inventory.shapes {
+        if shape.fsp.as_ref().map(|fsp| fsp.shape_type) != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+            || has_any_client_data_identity(shape)
+        {
+            continue;
+        }
+        let Some(anchor) = shape.client_anchor.as_ref() else {
+            continue;
+        };
+        if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID) != Some(table_seq_num)
+            || anchor
+                .fields
+                .iter()
+                .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+        {
+            continue;
+        }
+        let allowed = [
+            TABLE_AUTOFORMAT_OWNER_REF_ID,
+            TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID,
+            TABLE_AUTOFORMAT_ROW_START_ID,
+            TABLE_AUTOFORMAT_COLUMN_START_ID,
+            TABLE_AUTOFORMAT_ROW_END_ID,
+            TABLE_AUTOFORMAT_COLUMN_END_ID,
+        ];
+        if anchor.fields.iter().any(|field| !allowed.contains(&field.id)) {
+            continue;
+        }
+
+        let Some(orientation) =
+            unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_SEGMENT_ORIENTATION_ID)
+        else {
+            continue;
+        };
+        let Some(row_start) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_START_ID)
+        else {
+            continue;
+        };
+        let Some(column_start) =
+            unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_START_ID)
+        else {
+            continue;
+        };
+        let Some(row_end) = unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_ROW_END_ID) else {
+            continue;
+        };
+        let Some(column_end) =
+            unique_anchor_scalar_or_zero(anchor, TABLE_AUTOFORMAT_COLUMN_END_ID)
+        else {
+            continue;
+        };
+        if row_start > rows || row_end > rows || column_start > columns || column_end > columns {
+            continue;
+        }
+        let axis = match orientation {
+            1 if row_start == row_end && column_start < column_end => PubTableBorderAxis::Horizontal,
+            2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
+            _ => continue,
+        };
+        by_key
+            .entry((axis, row_start, column_start, row_end, column_end))
+            .or_default()
+            .push(shape);
+    }
+
+    let mut out = Vec::new();
+    for ((axis, row_start, column_start, row_end, column_end), shapes) in by_key {
+        let [shape] = shapes.as_slice() else {
+            return Vec::new();
+        };
+        let Some(rgb) = unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR)
+            .and_then(direct_officeart_rgb)
+        else {
+            continue;
+        };
+        let Some(width_emu) = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)
+            .and_then(|value| (value > 0 && value <= 0x0132_F540).then_some(i64::from(value)))
+        else {
+            continue;
+        };
+        out.push(PubTableBorderSegmentSource {
+            axis,
+            row_start,
+            column_start,
+            row_end,
+            column_end,
+            rgb,
+            width_emu,
+            source_refs: vec![source_ref(
+                context.source,
+                &shape.source,
+                Some(contents_object_key(table_seq_num)),
+                Some("SpContainer/FOPT/table-autoformat-border-segment".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            )],
+        });
+    }
+    out
 }
 
 fn populate_native_autoformat_table_cell_fill(
@@ -1016,11 +1244,14 @@ pub(crate) fn build_table_source(
     }
 
     let simple_table = build_simple_table(rows, columns, &joined_cells);
-    if simple_table.is_some() {
+    let border_segments = if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
         let _ =
             populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
-    }
+        populate_native_autoformat_table_borders(context, table_seq_num, rows, columns)
+    } else {
+        Vec::new()
+    };
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
     Ok(Some(PubTableSource {
@@ -1033,6 +1264,7 @@ pub(crate) fn build_table_source(
         cells: joined_cells,
         simple_table,
         layout_metrics,
+        border_segments,
         source_refs: vec![
             source_ref(
                 context.source,
