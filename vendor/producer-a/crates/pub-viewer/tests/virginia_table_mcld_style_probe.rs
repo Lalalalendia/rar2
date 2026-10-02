@@ -6,12 +6,7 @@ use pub_reader::{
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    env, fs,
-    io::Cursor,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, env, fs, io::Cursor, path::PathBuf};
 
 fn source_hash(bytes: &[u8]) -> Sha256Digest {
     let digest = Sha256::digest(bytes);
@@ -31,9 +26,7 @@ fn signature_class(value: PubTableMcldStyleSignatureClass) -> &'static str {
         PubTableMcldStyleSignatureClass::RecordMissing => "mcld_record_missing",
         PubTableMcldStyleSignatureClass::StyleRangeAbsent => "style_range_absent",
         PubTableMcldStyleSignatureClass::StyleRangeUniform => "style_range_uniform",
-        PubTableMcldStyleSignatureClass::StyleRangeVariesByChild => {
-            "style_range_varies_by_child"
-        }
+        PubTableMcldStyleSignatureClass::StyleRangeVariesByChild => "style_range_varies_by_child",
     }
 }
 
@@ -146,12 +139,9 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
             let observation = observation_by_seq
                 .get(&node.payload.contents_seq_num)
                 .expect("selected TABLE must have a source MCLD observation");
-            receipt.layout_key_present_table_count +=
-                usize::from(observation.layout_key_present);
-            receipt.layout_key_missing_table_count +=
-                usize::from(!observation.layout_key_present);
-            receipt.mcld_record_present_table_count +=
-                usize::from(observation.mcld_record_present);
+            receipt.layout_key_present_table_count += usize::from(observation.layout_key_present);
+            receipt.layout_key_missing_table_count += usize::from(!observation.layout_key_present);
+            receipt.mcld_record_present_table_count += usize::from(observation.mcld_record_present);
             receipt.mcld_record_missing_table_count +=
                 usize::from(observation.layout_key_present && !observation.mcld_record_present);
             receipt.child_count_matches_cell_count +=
@@ -188,10 +178,7 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
             if observation.opaque_1d_class.is_some() {
                 bump(
                     &mut receipt.opaque_1d_distinct_payload_count_histogram,
-                    format!(
-                        "distinct={}",
-                        observation.opaque_1d_distinct_payload_count
-                    ),
+                    format!("distinct={}", observation.opaque_1d_distinct_payload_count),
                 );
             }
             for (length, count) in &observation.opaque_1d_payload_length_histogram {
@@ -210,7 +197,10 @@ fn exact_virginia_table_mcld_style_carrier_probe() {
         .find(|page| page.viewer_page_index == 22)
         .expect("p22 receipt");
     assert_eq!(p22.table_count, 3, "p22 exact TABLE cohort");
-    assert_eq!(p22.joined_mcld_child_count, 110, "p22 exact MCLD child cohort");
+    assert_eq!(
+        p22.joined_mcld_child_count, 110,
+        "p22 exact MCLD child cohort"
+    );
 
     let receipt = Receipt {
         schema: "chaptera.virginia-table-mcld-style-carrier-probe.v2",
