@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import struct
 import sys
 import urllib.error
@@ -110,7 +111,7 @@ def probe_symbol(cv):
         req = urllib.request.Request(
             url,
             method="GET",
-            headers={"User-Agent": "chaptera-c2r-pub-symbol-census/1", "Range": "bytes=0-0"},
+            headers={"User-Agent": "chaptera-c2r-pub-symbol-census/2", "Range": "bytes=0-0"},
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -168,8 +169,9 @@ def main():
             })
 
     summary = {
-        "schema": "c2r-publisher-symbol-census.v1",
-        "requested_office_version": "16.0.15601.20088",
+        "schema": "c2r-publisher-symbol-census.v2",
+        "requested_office_version": os.environ.get("PUB_OFFICE_VERSION", "unknown"),
+        "requested_architecture": os.environ.get("PUB_OFFICE_ARCH", "unknown"),
         "office_public_symbol_boundary": "16.0.15601.20037",
         "symbol_store": SYMBOL_ROOT,
         "module_records": len(records),
