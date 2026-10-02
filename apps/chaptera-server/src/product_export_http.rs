@@ -284,7 +284,6 @@ async fn authorize_download(
     }))
 }
 
-
 async fn authorize_loss_report_download(
     State(state): State<ProductExportHttpState>,
     Path(job_id): Path<String>,
