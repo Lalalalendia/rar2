@@ -88,7 +88,8 @@ fn main() -> Result<()> {
             }
         }
         wrap_properties.sort_by_key(|property| (property.property_id, property.opid, property.op));
-        recolor_properties.sort_by_key(|property| (property.property_id, property.opid, property.op));
+        recolor_properties
+            .sort_by_key(|property| (property.property_id, property.opid, property.op));
 
         observations.push(ShapeObservation {
             publisher_shape_id: unique_publisher_shape_id(shape.client_data.as_ref()),
