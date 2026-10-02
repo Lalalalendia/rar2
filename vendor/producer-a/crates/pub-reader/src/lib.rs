@@ -313,10 +313,7 @@ fn bounded_direct_image_transform(
     if signed_angle == 0 {
         return BoundedDirectImageTransform::Identity;
     }
-    if matches!(
-        signed_angle.abs(),
-        QUARTER_TURN_UNITS | HALF_TURN_UNITS
-    ) {
+    if matches!(signed_angle.abs(), QUARTER_TURN_UNITS | HALF_TURN_UNITS) {
         return BoundedDirectImageTransform::Unsupported;
     }
 
