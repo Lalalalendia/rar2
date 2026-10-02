@@ -128,11 +128,8 @@ fn exact_virginia_p22_table_layout_probe() {
         .collect::<String>();
     assert_eq!(actual_sha, expected_sha, "exact Virginia source identity");
 
-    let source = build_mature_0x2c_source_graph(
-        Cursor::new(bytes.as_slice()),
-        source_hash(&bytes),
-    )
-    .expect("build exact Virginia mature source graph");
+    let source = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash(&bytes))
+        .expect("build exact Virginia mature source graph");
     let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
         .expect("open exact Virginia through Viewer bundle");
 
@@ -208,7 +205,8 @@ fn exact_virginia_p22_table_layout_probe() {
             let all_exact_bounds =
                 !table.cells.is_empty() && table.cells.iter().all(|cell| cell.bounds.is_some());
             receipt.exact_track_geometry_complete_table_count += usize::from(all_exact_bounds);
-            receipt.mcld_fallback_metrics_table_count += usize::from(table.layout_metrics.is_some());
+            receipt.mcld_fallback_metrics_table_count +=
+                usize::from(table.layout_metrics.is_some());
             receipt.no_geometry_metrics_table_count +=
                 usize::from(!all_exact_bounds && table.layout_metrics.is_none());
 
