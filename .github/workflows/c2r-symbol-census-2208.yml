@@ -1,9 +1,6 @@
 name: C2R Publisher Symbol Same-Build Control
 
 on:
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
