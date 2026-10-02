@@ -6,7 +6,6 @@ on:
     paths:
       - "vendor/producer-a/crates/pub-reader/tests/restored_fill_stack_probe.rs"
       - "vendor/producer-a/crates/pub-viewer/tests/virginia_p24_occluder_viewer_probe.rs"
-      - "vendor/producer-a/crates/pub-viewer/tests/virginia_p24_occlusion_probe.rs"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - ".github/workflows/virginia-restored-fill-probe.yml"
 
@@ -63,23 +62,7 @@ jobs:
           set -euo pipefail
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p24_occluder_viewer_probe -- --ignored --nocapture
 
-      - name: Measure exact Stage-L p24 occluder product boundary
-        env:
-          CHAPTERA_VIRGINIA_OCCLUSION_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
-          CHAPTERA_VIRGINIA_OCCLUSION_SHA256: 88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506
-          CHAPTERA_VIRGINIA_OCCLUSION_OUT: ${{ github.workspace }}/target/virginia-restored-fill/p24-occlusion.json
-        run: |
-          set -euo pipefail
-          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p24_occlusion_probe -- --ignored --nocapture
 
-      - name: Measure p24 later-image Viewer survival
-        env:
-          CHAPTERA_VIRGINIA_OCCLUSION_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
-          CHAPTERA_VIRGINIA_OCCLUSION_SHA256: 88f57d800aeec808798ea487b9d4ab85dc85c02cd190b987a332709b81018506
-          CHAPTERA_VIRGINIA_OCCLUSION_OUT: ${{ github.workspace }}/target/virginia-restored-fill/occlusion-viewer.json
-        run: |
-          set -euo pipefail
-          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p24_occlusion_probe -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
