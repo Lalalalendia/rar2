@@ -582,9 +582,9 @@ def run_continuity_v2(
     project_output = project_output.expanduser().resolve()
     receipt_output = receipt_output.expanduser().resolve()
     suffix = export_output.suffix.lower()
-    if suffix not in {".idml", ".odg"}:
-        raise ContinuityV2Error("export output must end in .idml or .odg")
-    export_format = suffix[1:]
+    if suffix != ".odg":
+        raise ContinuityV2Error("Stage 0.1 continuity V2 closure is intentionally bounded to ODG")
+    export_format = "odg"
 
     for output in (project_output, export_output, receipt_output):
         output.parent.mkdir(parents=True, exist_ok=True)
