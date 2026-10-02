@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    env, fs,
-    io::Cursor,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, env, fs, io::Cursor, path::PathBuf};
 
 use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
@@ -111,8 +106,8 @@ fn exact_virginia_p1_image_rotation_source_probe() {
     let build = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
         .expect("build exact Virginia source graph");
 
-    let escher = read_stream_path(&fixture, "/Escher/EscherStm")
-        .expect("read exact Virginia Escher stream");
+    let escher =
+        read_stream_path(&fixture, "/Escher/EscherStm").expect("read exact Virginia Escher stream");
     let inventory = inspect_sp_containers(StreamPath("/Escher/EscherStm".to_owned()), &escher)
         .expect("inspect exact Virginia OfficeArt shapes");
 
