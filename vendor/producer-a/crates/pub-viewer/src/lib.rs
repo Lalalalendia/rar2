@@ -529,6 +529,19 @@ pub struct ViewerTable {
     pub rows: u32,
     pub columns: u32,
     pub cells: Vec<ViewerTableCell>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub border_segments: Vec<ViewerTableBorderSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTableBorderSegment {
+    pub axis: pub_reader::PubTableBorderAxis,
+    pub row_start: u32,
+    pub column_start: u32,
+    pub row_end: u32,
+    pub column_end: u32,
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3121,6 +3134,19 @@ fn viewer_tables_from_resolved(
             rows: source.rows,
             columns: source.columns,
             cells,
+            border_segments: source
+                .border_segments
+                .iter()
+                .map(|segment| ViewerTableBorderSegment {
+                    axis: segment.axis,
+                    row_start: segment.row_start,
+                    column_start: segment.column_start,
+                    row_end: segment.row_end,
+                    column_end: segment.column_end,
+                    rgb: segment.rgb,
+                    width_emu: segment.width_emu,
+                })
+                .collect(),
         });
     }
 
