@@ -1009,8 +1009,8 @@ fn parse_stsh1_character_defaults(
                     color_indices.push(value);
                 }
             } else if matches!(
-                    block.id,
-                    COLOR_INDEX_CONTAINER_ID | COLOR_INDEX_CONTAINER_EXTENDED_ID
+                block.id,
+                COLOR_INDEX_CONTAINER_ID | COLOR_INDEX_CONTAINER_EXTENDED_ID
             ) {
                 if let Some(value) = extract_color_index(bytes, block, unknown_block_types)? {
                     color_indices.push(value);
