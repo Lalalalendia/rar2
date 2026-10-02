@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "vendor/producer-a/crates/pub-reader/src/bin/table_rowcol_field_census.rs"
+      - "vendor/producer-a/crates/pub-viewer/tests/virginia_table_rowcol_field_census.rs"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - ".github/workflows/virginia-table-rowcol-field-census.yml"
 
@@ -46,7 +46,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/virginia-table-rowcol-fields
-          cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin table_rowcol_field_census --             "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"             "$GITHUB_WORKSPACE/target/virginia-table-rowcol-fields/receipt.json"
+          CHAPTERA_VIRGINIA_TABLE_ROWCOL_FIXTURE="$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" \
+          CHAPTERA_VIRGINIA_TABLE_ROWCOL_OUT="$GITHUB_WORKSPACE/target/virginia-table-rowcol-fields/receipt.json" \
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_table_rowcol_field_census -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
