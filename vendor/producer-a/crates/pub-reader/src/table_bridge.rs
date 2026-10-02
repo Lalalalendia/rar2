@@ -413,10 +413,7 @@ const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
 const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
 const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
 
-fn unique_anchor_scalar(
-    anchor: &pub_escher::PublisherFieldRecord,
-    field_id: u16,
-) -> Option<u32> {
+fn unique_anchor_scalar(anchor: &pub_escher::PublisherFieldRecord, field_id: u16) -> Option<u32> {
     let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
     let first = fields.next()?.value;
     if fields.next().is_some() {
@@ -489,7 +486,8 @@ fn populate_native_autoformat_table_cell_fill(
     let mut by_ordinal = BTreeMap::<u32, Vec<&pub_escher::SpContainerObservation>>::new();
 
     for shape in &context.officeart_inventory.shapes {
-        let Some(ordinal) = native_autoformat_cell_ordinal(shape, table_seq_num, cells.len()) else {
+        let Some(ordinal) = native_autoformat_cell_ordinal(shape, table_seq_num, cells.len())
+        else {
             continue;
         };
         by_ordinal.entry(ordinal).or_default().push(shape);
