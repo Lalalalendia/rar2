@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use pub_cfb::read_stream_path;
 use pub_core::StreamPath;
-use pub_quill::parse_confirmed_story_catalog;
+use pub_quill::{parse_bounded_typography, parse_confirmed_story_catalog};
 use std::{collections::BTreeSet, env, path::PathBuf};
 
 const FDPC: [u8; 4] = *b"FDPC";
@@ -155,11 +155,17 @@ fn main() -> Result<()> {
             cursor += 4;
             while cursor < record_end {
                 let (id, ty, value, next) = block(&quill, cursor, record_end)?;
-                if id == 1 {
+                println!(
+                    "TEXT_COLOR_PL_BLOCK ordinal={ordinal} at=0x{cursor:x} id=0x{id:03X} type=0x{ty:02X} value={}",
+                    value
+                        .map(|raw| format!("0x{raw:08X}"))
+                        .unwrap_or_else(|| "-".into())
+                );
+                if id & 0x00FF == 1 {
                     if let Some(raw) = value {
                         refs.push(raw);
                         println!(
-                            "TEXT_COLOR_PL_REF ordinal={ordinal} type=0x{ty:02X} raw=0x{raw:08X} high=0x{:02X}",
+                            "TEXT_COLOR_PL_REF ordinal={ordinal} id=0x{id:03X} type=0x{ty:02X} raw=0x{raw:08X} high=0x{:02X}",
                             raw >> 24
                         );
                     }
@@ -176,72 +182,83 @@ fn main() -> Result<()> {
     }
     println!("TEXT_COLOR_PL_TOTAL refs={} values={:X?}", refs.len(), refs);
 
-    let text_start = catalog.text.source.offset as u32;
-    let mut story_global_starts = Vec::new();
-    let mut global = 0_u32;
-    for story in &catalog.stories {
-        story_global_starts.push((
-            story.index,
-            global,
-            global + story.utf16_code_units,
-        ));
-        global += story.utf16_code_units;
-    }
-
-    for descriptor in descriptors
-        .iter()
-        .copied()
-        .filter(|descriptor| descriptor.name.value == FDPC)
-    {
-        let start = descriptor.data_offset.value as usize;
-        let end = start + descriptor.data_length.value as usize;
-        let count = u16le(&quill, start, end)? as usize;
-        let offsets_start = start + 8;
-        let style_offsets_start = offsets_start + count * 4;
-        let body_start = style_offsets_start + count * 2;
-        let mut previous = 0_u32;
-
-        for ordinal in 0..count {
-            let absolute_end = u32le(&quill, offsets_start + ordinal * 4, end)?;
-            if absolute_end < text_start || (absolute_end - text_start) % 2 != 0 {
-                continue;
-            }
-            let global_end = (absolute_end - text_start) / 2;
-            let relative = u16le(&quill, style_offsets_start + ordinal * 2, end)? as usize;
-            let style_start = start + relative;
-            if style_start < body_start || style_start + 4 > end {
-                bail!("FDPC style offset invalid");
-            }
-            let style_len = u32le(&quill, style_start, end)? as usize;
-            let style_end = style_start + style_len;
-            if style_len < 4 || style_end > end {
-                bail!("FDPC style length invalid");
-            }
-            let intersects_target = story_global_starts.iter().any(|(index, story_start, story_end)| {
-                target_story_indices.contains(index)
-                    && previous < *story_end
-                    && global_end > *story_start
-            });
-            if intersects_target {
-                println!(
-                    "TEXT_COLOR_FDPC_RANGE ordinal={ordinal} global={previous}..{global_end} style=0x{style_start:x}..0x{style_end:x}"
-                );
-                let mut cursor = style_start + 4;
-                while cursor < style_end {
-                    let (id, ty, value, next) = block(&quill, cursor, style_end)?;
+    let typography =
+        parse_bounded_typography(&quill, &catalog).context("parse bounded Quill typography")?;
+    for range in &typography.ranges {
+        if !range
+            .story_intersections
+            .iter()
+            .any(|intersection| target_story_indices.contains(&intersection.story_index))
+        {
+            continue;
+        }
+        let style_start = range.fdpc_style_source.offset as usize;
+        let style_end = style_start + range.fdpc_style_source.len as usize;
+        println!(
+            "TEXT_COLOR_FDPC_TARGET_RANGE descriptor={} ordinal={} global={}..{} style=0x{style_start:x}..0x{style_end:x} stories={:?}",
+            range.fdpc_descriptor_ordinal,
+            range.fdpc_style_ordinal,
+            range.global_start_utf16,
+            range.global_end_utf16,
+            range
+                .story_intersections
+                .iter()
+                .map(|intersection| intersection.story_index)
+                .collect::<Vec<_>>()
+        );
+        let mut cursor = style_start + 4;
+        while cursor < style_end {
+            let (id, ty, value, next) = block(&quill, cursor, style_end)?;
+            println!(
+                "TEXT_COLOR_FDPC_BLOCK descriptor={} ordinal={} at=0x{cursor:x} id=0x{id:03X} type=0x{ty:02X} value={}",
+                range.fdpc_descriptor_ordinal,
+                range.fdpc_style_ordinal,
+                value
+                    .map(|raw| format!("0x{raw:08X}"))
+                    .unwrap_or_else(|| "-".into())
+            );
+            if id == 0x244 && VARIABLE_BLOCK_TYPES.contains(&ty) {
+                let mut child = cursor + 2 + 4;
+                while child < next {
+                    let (child_id, child_ty, child_value, child_next) =
+                        block(&quill, child, next)?;
                     println!(
-                        "TEXT_COLOR_FDPC_BLOCK ordinal={ordinal} at=0x{cursor:x} id=0x{id:03X} type=0x{ty:02X} value={}",
-                        value
+                        "TEXT_COLOR_FDPC_COLOR_CHILD descriptor={} ordinal={} at=0x{child:x} id=0x{child_id:03X} type=0x{child_ty:02X} value={}",
+                        range.fdpc_descriptor_ordinal,
+                        range.fdpc_style_ordinal,
+                        child_value
                             .map(|raw| format!("0x{raw:08X}"))
                             .unwrap_or_else(|| "-".into())
                     );
-                    if next <= cursor {
-                        bail!("FDPC parser did not advance");
+                    if child_ty == 0x88 && VARIABLE_BLOCK_TYPES.contains(&child_ty) {
+                        let mut inner = child + 2 + 4;
+                        while inner < child_next {
+                            let (inner_id, inner_ty, inner_value, inner_next) =
+                                block(&quill, inner, child_next)?;
+                            println!(
+                                "TEXT_COLOR_FDPC_COLOR_INNER descriptor={} ordinal={} at=0x{inner:x} id=0x{inner_id:03X} type=0x{inner_ty:02X} value={}",
+                                range.fdpc_descriptor_ordinal,
+                                range.fdpc_style_ordinal,
+                                inner_value
+                                    .map(|raw| format!("0x{raw:08X}"))
+                                    .unwrap_or_else(|| "-".into())
+                            );
+                            if inner_next <= inner {
+                                bail!("FDPC color inner parser did not advance");
+                            }
+                            inner = inner_next;
+                        }
                     }
-                    cursor = next;
+                    if child_next <= child {
+                        bail!("FDPC color child parser did not advance");
+                    }
+                    child = child_next;
                 }
             }
-            previous = global_end;
+            if next <= cursor {
+                bail!("FDPC parser did not advance");
+            }
+            cursor = next;
         }
     }
 
