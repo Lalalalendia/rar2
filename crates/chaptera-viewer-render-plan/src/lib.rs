@@ -1732,6 +1732,7 @@ mod tests {
             },
             paints: vec![ViewerNodePaint {
                 node_id,
+                preset_shape: None,
                 solid_fill_rgb: Some([1, 2, 3]),
                 solid_line: Some(ViewerSolidLine {
                     rgb: [4, 5, 6],
