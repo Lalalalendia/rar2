@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "vendor/producer-a/crates/pub-reader/tests/restored_fill_stack_probe.rs"
+      - "vendor/producer-a/crates/pub-reader/tests/restored_fill_stack_probe.rs"\n      - "vendor/producer-a/crates/pub-viewer/tests/virginia_p24_image_materialization_probe.rs"
       - "vendor/producer-a/crates/pub-viewer/tests/virginia_p24_occluder_viewer_probe.rs"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - ".github/workflows/virginia-restored-fill-probe.yml"
@@ -61,6 +61,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p24_occluder_viewer_probe -- --ignored --nocapture
+
+      - name: Measure p24 IMAGE materialization
+        env:
+          CHAPTERA_VIRGINIA_P24_IMAGE_FIXTURE: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
+          CHAPTERA_VIRGINIA_P24_IMAGE_OUT: ${{ github.workspace }}/target/virginia-restored-fill/p24-image.json
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --test virginia_p24_image_materialization_probe -- --ignored --nocapture
 
       - uses: actions/upload-artifact@v4
         if: always()
