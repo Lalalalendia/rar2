@@ -3147,6 +3147,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "An image reference cannot be resolved to one confirmed embedded image.",
         ),
+        OfficeArtTransformUnavailable { .. } => (
+            "viewer.transform.unavailable",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "A source-backed object transform is present but cannot be projected unambiguously.",
+        ),
         IncompleteEscherAnchor { .. } => (
             "viewer.geometry.incomplete",
             ViewerDiagnosticSeverity::FidelityWarning,
