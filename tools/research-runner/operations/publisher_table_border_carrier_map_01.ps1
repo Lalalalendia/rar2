@@ -76,6 +76,23 @@ function Find-TaggedTableShape {
 }
 
 function Build-OracleTool {
+    $prebuilt = [string]$env:PUB_RESEARCH_TABLE_BORDER_ORACLE_TOOL
+    if (-not [string]::IsNullOrWhiteSpace($prebuilt)) {
+        if (-not (Test-Path -LiteralPath $prebuilt -PathType Leaf)) {
+            throw "Configured PUB_RESEARCH_TABLE_BORDER_ORACLE_TOOL does not exist."
+        }
+        $resolved = (Resolve-Path -LiteralPath $prebuilt).Path
+        $expectedHash = [string]$env:PUB_RESEARCH_TABLE_BORDER_ORACLE_TOOL_SHA256
+        if ([string]::IsNullOrWhiteSpace($expectedHash)) {
+            throw "PUB_RESEARCH_TABLE_BORDER_ORACLE_TOOL_SHA256 is required for a prebuilt oracle helper."
+        }
+        $actualHash = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actualHash -ne $expectedHash.ToLowerInvariant()) {
+            throw "Prebuilt TABLE border oracle helper SHA-256 mismatch."
+        }
+        return $resolved
+    }
+
     Push-Location $repoRoot
     try {
         & cargo build --locked --release --manifest-path "vendor/producer-a/Cargo.toml" -p pub-reader --bin table_border_carrier_oracle_tool
