@@ -36,47 +36,10 @@ pub struct PubTableMcldStyleObservation {
     pub opaque_1d_single_child_count: usize,
     pub opaque_1d_distinct_payload_count: usize,
     pub opaque_1d_payload_length_histogram: BTreeMap<usize, usize>,
-    pub table_field_presence: BTreeMap<String, usize>,
-    pub table_candidate_field_presence: BTreeMap<String, usize>,
-    pub table_unsupported_tail_present: bool,
 }
 
 fn field_key(id: u8, wire_type: u8) -> String {
     format!("0x{id:02x}/wire_0x{wire_type:02x}")
-}
-
-fn contents_field_key(id: u16, block_type: u8) -> String {
-    format!("0x{id:02x}/block_0x{block_type:02x}")
-}
-
-type TableFieldProfiles = (BTreeMap<String, usize>, BTreeMap<String, usize>, bool);
-
-fn table_field_profiles(
-    seq_num: u32,
-    contents_stream: &StreamPath,
-    contents: &[u8],
-    references: &BTreeMap<u32, Contents0x2cChunkReference>,
-) -> Result<TableFieldProfiles> {
-    let reference = references
-        .get(&seq_num)
-        .with_context(|| format!("TABLE seq {seq_num} is absent from Contents directory"))?;
-    let chunk = chunk_for_reference(contents_stream.clone(), contents, reference)
-        .with_context(|| format!("parse TABLE seq {seq_num} for style-carrier observation"))?;
-
-    let mut all = BTreeMap::<String, usize>::new();
-    let mut candidate = BTreeMap::<String, usize>::new();
-    for field in &chunk.fields {
-        let key = contents_field_key(field.id, field.block_type);
-        *all.entry(key.clone()).or_default() += 1;
-
-        // Keep the already-grounded identity/topology/geometry fields as controls,
-        // but exclude them from the open table-level style/default candidate set.
-        if !matches!(field.id, 0x27 | 0x66 | 0x67 | 0x68 | 0x69 | 0x6b | 0x6d) {
-            *candidate.entry(key).or_default() += 1;
-        }
-    }
-
-    Ok((all, candidate, chunk.unsupported_tail.is_some()))
 }
 
 fn empty_observation(
@@ -84,9 +47,6 @@ fn empty_observation(
     table_cell_count: usize,
     layout_key_present: bool,
     signature_class: PubTableMcldStyleSignatureClass,
-    table_field_presence: BTreeMap<String, usize>,
-    table_candidate_field_presence: BTreeMap<String, usize>,
-    table_unsupported_tail_present: bool,
 ) -> PubTableMcldStyleObservation {
     PubTableMcldStyleObservation {
         contents_seq_num,
@@ -102,9 +62,6 @@ fn empty_observation(
         opaque_1d_single_child_count: 0,
         opaque_1d_distinct_payload_count: 0,
         opaque_1d_payload_length_histogram: BTreeMap::new(),
-        table_field_presence,
-        table_candidate_field_presence,
-        table_unsupported_tail_present,
     }
 }
 
@@ -113,9 +70,7 @@ fn empty_observation(
 /// This deliberately exposes no MCLD field values and assigns no table-style,
 /// fill, border-side, color, or width semantics to the open 0x1D..0x2C range.
 /// The 0x1D/wire0x8A opaque payload is reduced internally to equality class,
-/// distinct-count, and byte-length topology only. TABLE-level Contents state
-/// is likewise reduced to field-id/block-type presence; values are never
-/// promoted or exposed by this research surface.
+/// distinct-count, and byte-length topology only.
 pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
     mut reader: R,
     source_hash: Sha256Digest,
@@ -126,18 +81,6 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
 
     let build = build_mature_0x2c_source_graph(Cursor::new(pub_bytes.as_slice()), source_hash)
         .context("build mature source graph for TABLE MCLD style observation")?;
-
-    let contents =
-        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
-            .with_context(|| {
-                format!("read {CONTENTS_STREAM_PATH} for TABLE style-carrier observation")
-            })?;
-    let contents_stream = StreamPath(CONTENTS_STREAM_PATH.into());
-    let header = parse_0x2c_header(contents_stream.clone(), &contents)
-        .context("parse Contents header for TABLE style-carrier observation")?;
-    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
-        .context("parse Contents trailer for TABLE style-carrier observation")?;
-    let references = build_reference_index(&contents, &trailer.directory)?;
 
     let quill = pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), QUILL_STREAM_PATH)
         .with_context(|| {
@@ -170,8 +113,6 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
             continue;
         };
         let seq_num = node.payload.contents_seq_num;
-        let (table_field_presence, table_candidate_field_presence, table_unsupported_tail_present) =
-            table_field_profiles(seq_num, &contents_stream, &contents, &references)?;
         let layout_key = table
             .layout_metrics
             .as_ref()
@@ -189,9 +130,6 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
                 table.cells.len(),
                 false,
                 PubTableMcldStyleSignatureClass::LayoutKeyMissing,
-                table_field_presence,
-                table_candidate_field_presence,
-                table_unsupported_tail_present,
             ));
             continue;
         };
@@ -202,9 +140,6 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
                 table.cells.len(),
                 true,
                 PubTableMcldStyleSignatureClass::McldUnavailable,
-                table_field_presence,
-                table_candidate_field_presence,
-                table_unsupported_tail_present,
             ));
             continue;
         };
@@ -219,9 +154,6 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
                 table.cells.len(),
                 true,
                 PubTableMcldStyleSignatureClass::RecordMissing,
-                table_field_presence,
-                table_candidate_field_presence,
-                table_unsupported_tail_present,
             ));
             continue;
         };
@@ -306,9 +238,6 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
             opaque_1d_single_child_count,
             opaque_1d_distinct_payload_count: opaque_1d_distinct_payloads.len(),
             opaque_1d_payload_length_histogram,
-            table_field_presence,
-            table_candidate_field_presence,
-            table_unsupported_tail_present,
         });
     }
 
