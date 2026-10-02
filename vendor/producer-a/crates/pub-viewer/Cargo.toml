@@ -19,6 +19,9 @@ pub-model={path="../pub-model"}
 pub-paint-bridge={path="../../../../crates/pub-paint-bridge"}
 pub-presentation-profile={path="../../../../crates/pub-presentation-profile",default-features=false}
 pub-reader={path="../pub-reader"}
+pub-core={path="../pub-core"}
+pub-cfb={path="../pub-cfb"}
+pub-contents={path="../pub-contents"}
 serde.workspace=true
 serde_json.workspace=true
 sha2.workspace=true
