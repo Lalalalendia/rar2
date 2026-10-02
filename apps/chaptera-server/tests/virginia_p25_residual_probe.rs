@@ -78,8 +78,16 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
 
         if let Some(table) = node.payload.table.as_ref() {
             table_cells += table.cells.len();
-            table_cells_with_bounds += table.cells.iter().filter(|cell| cell.bounds.is_some()).count();
-            table_cells_with_paint += table.cells.iter().filter(|cell| cell.paint.is_some()).count();
+            table_cells_with_bounds += table
+                .cells
+                .iter()
+                .filter(|cell| cell.bounds.is_some())
+                .count();
+            table_cells_with_paint += table
+                .cells
+                .iter()
+                .filter(|cell| cell.paint.is_some())
+                .count();
             spanning_table_cells += table
                 .cells
                 .iter()
@@ -224,7 +232,11 @@ fn scene_page_census(scene: &ReaderSceneV1, one_based_page: u32) -> Value {
 
         if let Some(table) = node.table.as_ref() {
             table_cells += table.cells.len();
-            table_cells_with_bounds += table.cells.iter().filter(|cell| cell.bounds.is_some()).count();
+            table_cells_with_bounds += table
+                .cells
+                .iter()
+                .filter(|cell| cell.bounds.is_some())
+                .count();
             table_cells_with_fill += table
                 .cells
                 .iter()
@@ -234,9 +246,11 @@ fn scene_page_census(scene: &ReaderSceneV1, one_based_page: u32) -> Value {
     }
 
     for diagnostic in &scene.diagnostics {
-        if diagnostic.origin_id.as_deref().is_some_and(|origin| {
-            nodes.iter().any(|node| node.node_id == origin)
-        }) {
+        if diagnostic
+            .origin_id
+            .as_deref()
+            .is_some_and(|origin| nodes.iter().any(|node| node.node_id == origin))
+        {
             bump(&mut diagnostic_histogram, diagnostic.code.clone());
         }
     }
