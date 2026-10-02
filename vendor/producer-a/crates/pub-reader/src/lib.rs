@@ -100,7 +100,7 @@ use pub_escher::{
     SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
-    Affine2D, AuthorityClass, ByteRange, CanonicalId, Document, DocumentId, LengthEmu, Node,
+    Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu, Node,
     NodeHeader, NodeId, NodeKind, Page, PageId, ReadConfidence, RectEmu, Sha256Digest, Size2D,
     SourceDerivedIdInput, SourceDescriptor, SourceGraph, SourceRef, SourceRole, Story, StoryId,
     derive_source_canonical_id,
@@ -783,6 +783,10 @@ pub enum PubBridgeDiagnostic {
     },
     AmbiguousOfficeArtDggDefaults {
         count: usize,
+    },
+    DirectShapeTransformUnavailable {
+        seq_num: u32,
+        reason: String,
     },
 }
 
@@ -1997,6 +2001,254 @@ fn inspect_grouped_geometry_chain(
     }
 }
 
+
+const CORDIC_Q30_ONE: i64 = 1_i64 << 30;
+const CORDIC_K_INV_Q30: i64 = 652_032_874;
+const CORDIC_ATAN_BAM: [i64; 31] = [
+    0x2000_0000,
+    0x12e4_051e,
+    0x09fb_385b,
+    0x0511_11d4,
+    0x028b_0d43,
+    0x0145_d7e1,
+    0x00a2_f61e,
+    0x0051_7c55,
+    0x0028_be53,
+    0x0014_5f2f,
+    0x000a_2f98,
+    0x0005_17cc,
+    0x0002_8be6,
+    0x0001_45f3,
+    0x0000_a2fa,
+    0x0000_517d,
+    0x0000_28be,
+    0x0000_145f,
+    0x0000_0a30,
+    0x0000_0518,
+    0x0000_028c,
+    0x0000_0146,
+    0x0000_00a3,
+    0x0000_0051,
+    0x0000_0029,
+    0x0000_0014,
+    0x0000_000a,
+    0x0000_0005,
+    0x0000_0003,
+    0x0000_0001,
+    0x0000_0001,
+];
+
+fn div_round_nearest_i128(numerator: i128, denominator: i128) -> i128 {
+    debug_assert!(denominator > 0);
+    let negative = numerator < 0;
+    let magnitude = numerator.unsigned_abs();
+    let denominator = denominator as u128;
+    let quotient = magnitude / denominator;
+    let remainder = magnitude % denominator;
+    let rounded = quotient + u128::from(remainder.saturating_mul(2) >= denominator);
+    if negative {
+        -(rounded as i128)
+    } else {
+        rounded as i128
+    }
+}
+
+fn decimal_from_pow2_ratio(numerator: i64, shift: u32) -> Result<Decimal> {
+    if numerator == 0 {
+        return Ok(Decimal::zero());
+    }
+
+    let negative = numerator < 0;
+    let magnitude = numerator.unsigned_abs() as u128;
+    let denominator = 1_u128 << shift;
+    let whole = magnitude / denominator;
+    let mut remainder = magnitude % denominator;
+    let mut encoded = String::new();
+    if negative {
+        encoded.push('-');
+    }
+    encoded.push_str(&whole.to_string());
+
+    if remainder != 0 {
+        encoded.push('.');
+        while remainder != 0 {
+            remainder *= 10;
+            let digit = remainder / denominator;
+            remainder %= denominator;
+            encoded.push(char::from(b'0' + u8::try_from(digit).expect("decimal digit")));
+        }
+    }
+
+    encoded
+        .parse()
+        .map_err(|error| anyhow!("derived transform decimal is invalid: {error}"))
+}
+
+fn normalize_officeart_rotation_q16(raw: i64) -> i64 {
+    const FULL_TURN_Q16: i64 = 360 * 65_536;
+    const HALF_TURN_Q16: i64 = 180 * 65_536;
+
+    let mut normalized = raw % FULL_TURN_Q16;
+    if normalized >= HALF_TURN_Q16 {
+        normalized -= FULL_TURN_Q16;
+    } else if normalized < -HALF_TURN_Q16 {
+        normalized += FULL_TURN_Q16;
+    }
+    normalized
+}
+
+/// Deterministic integer CORDIC for an OfficeArt signed 16.16-degree angle.
+///
+/// Binary-angle units use one full turn = 2^32. Coefficients are returned in
+/// Q30. Cardinal turns are exact; arbitrary turns avoid platform libm drift.
+fn officeart_rotation_cos_sin_q30(raw_q16: i64) -> (i64, i64) {
+    const QUARTER_TURN_Q16: i64 = 90 * 65_536;
+    const HALF_TURN_Q16: i64 = 180 * 65_536;
+    const QUARTER_TURN_BAM: i64 = 1_i64 << 30;
+    const HALF_TURN_BAM: i64 = 1_i64 << 31;
+
+    let normalized = normalize_officeart_rotation_q16(raw_q16);
+    match normalized {
+        0 => return (CORDIC_Q30_ONE, 0),
+        QUARTER_TURN_Q16 => return (0, CORDIC_Q30_ONE),
+        -QUARTER_TURN_Q16 => return (0, -CORDIC_Q30_ONE),
+        -HALF_TURN_Q16 => return (-CORDIC_Q30_ONE, 0),
+        _ => {}
+    }
+
+    let mut z = i64::try_from(div_round_nearest_i128(
+        i128::from(normalized) * i128::from(1_i64 << 16),
+        360,
+    ))
+    .expect("normalized OfficeArt angle fits binary-angle i64");
+    let mut sign = 1_i64;
+    if z > QUARTER_TURN_BAM {
+        z -= HALF_TURN_BAM;
+        sign = -1;
+    } else if z < -QUARTER_TURN_BAM {
+        z += HALF_TURN_BAM;
+        sign = -1;
+    }
+
+    let mut x = CORDIC_K_INV_Q30;
+    let mut y = 0_i64;
+    for (shift, angle) in CORDIC_ATAN_BAM.iter().copied().enumerate() {
+        let prior_x = x;
+        let prior_y = y;
+        if z >= 0 {
+            x = prior_x - (prior_y >> shift);
+            y = prior_y + (prior_x >> shift);
+            z -= angle;
+        } else {
+            x = prior_x + (prior_y >> shift);
+            y = prior_y - (prior_x >> shift);
+            z += angle;
+        }
+    }
+
+    (
+        (sign * x).clamp(-CORDIC_Q30_ONE, CORDIC_Q30_ONE),
+        (sign * y).clamp(-CORDIC_Q30_ONE, CORDIC_Q30_ONE),
+    )
+}
+
+fn officeart_affine_from_components(
+    bounds: RectEmu,
+    stored_rotation_q16: i64,
+    flip_h: bool,
+    flip_v: bool,
+) -> Result<Affine2D> {
+    if normalize_officeart_rotation_q16(stored_rotation_q16) == 0 && !flip_h && !flip_v {
+        return Ok(Affine2D::identity());
+    }
+
+    // Publisher/OfficeArt applies the stored rotation and H/V mirrors as
+    // independent shape-transform components. The canonical R*F form needs
+    // the rotation sign reversed under exactly one reflection.
+    let effective_rotation_q16 = if flip_h ^ flip_v {
+        -stored_rotation_q16
+    } else {
+        stored_rotation_q16
+    };
+    let (cos_q30, sin_q30) = officeart_rotation_cos_sin_q30(effective_rotation_q16);
+    let sx = if flip_h { -1_i64 } else { 1_i64 };
+    let sy = if flip_v { -1_i64 } else { 1_i64 };
+
+    let a = cos_q30 * sx;
+    let b = sin_q30 * sx;
+    let c = -sin_q30 * sy;
+    let d = cos_q30 * sy;
+
+    let center_x2 = i128::from(bounds.x.get())
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(i128::from(bounds.width.get())))
+        .context("shape transform center x overflow")?;
+    let center_y2 = i128::from(bounds.y.get())
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(i128::from(bounds.height.get())))
+        .context("shape transform center y overflow")?;
+    let q = i128::from(CORDIC_Q30_ONE);
+
+    let tx_numerator = center_x2
+        .checked_mul(q)
+        .and_then(|value| value.checked_sub(i128::from(a).checked_mul(center_x2)?))
+        .and_then(|value| value.checked_sub(i128::from(c).checked_mul(center_y2)?))
+        .context("shape transform tx overflow")?;
+    let ty_numerator = center_y2
+        .checked_mul(q)
+        .and_then(|value| value.checked_sub(i128::from(b).checked_mul(center_x2)?))
+        .and_then(|value| value.checked_sub(i128::from(d).checked_mul(center_y2)?))
+        .context("shape transform ty overflow")?;
+
+    let tx = i64::try_from(div_round_nearest_i128(tx_numerator, q * 2))
+        .context("shape transform tx does not fit EMU")?;
+    let ty = i64::try_from(div_round_nearest_i128(ty_numerator, q * 2))
+        .context("shape transform ty does not fit EMU")?;
+
+    Ok(Affine2D {
+        a: decimal_from_pow2_ratio(a, 30)?,
+        b: decimal_from_pow2_ratio(b, 30)?,
+        c: decimal_from_pow2_ratio(c, 30)?,
+        d: decimal_from_pow2_ratio(d, 30)?,
+        tx: LengthEmu::new(tx),
+        ty: LengthEmu::new(ty),
+    })
+}
+
+fn direct_officeart_shape_transform(
+    shape: &pub_escher::SpContainerObservation,
+    bounds: RectEmu,
+) -> std::result::Result<Affine2D, &'static str> {
+    let rotation = shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .filter(|property| property.property_id() == OFFICEART_PROPERTY_ROTATION)
+        .collect::<Vec<_>>();
+    let stored_rotation_q16 = match rotation.as_slice() {
+        [] => 0_i64,
+        [property] if !property.f_complex() && !property.f_bid() => {
+            i64::from(property.op as i32)
+        }
+        [..] => return Err("rotation_property_ambiguous"),
+    };
+    let flip_h = shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_H);
+    let flip_v = shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_V);
+
+    officeart_affine_from_components(bounds, stored_rotation_q16, flip_h, flip_v)
+        .map_err(|_| "transform_projection_failed")
+}
+
+fn has_officeart_transform_observation(shape: &pub_escher::SpContainerObservation) -> bool {
+    shape.fopts.iter().any(|record| {
+        record
+            .properties
+            .iter()
+            .any(|property| property.property_id() == OFFICEART_PROPERTY_ROTATION)
+    }) || shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_H)
+        || shape_has_fsp_flag(shape, OFFICEART_FSP_FLIP_V)
+}
+
 fn shape_has_nonzero_rotation(shape: &pub_escher::SpContainerObservation) -> bool {
     shape.fopts.iter().any(|record| {
         record.properties.iter().any(|property| {
@@ -2809,6 +3061,20 @@ pub fn build_mature_0x2c_from_streams(
         };
 
         let node_id = derive_pub_node_id(&source_hash, seq_num)?;
+        let transform = if grouped_sources.is_empty() && raw_type == Some(RAW_TYPE_SHAPE) {
+            match direct_officeart_shape_transform(shape, bounds) {
+                Ok(transform) => transform,
+                Err(reason) => {
+                    diagnostics.push(PubBridgeDiagnostic::DirectShapeTransformUnavailable {
+                        seq_num,
+                        reason: reason.to_owned(),
+                    });
+                    Affine2D::identity()
+                }
+            }
+        } else {
+            Affine2D::identity()
+        };
         let explicit_paint =
             explicit_officeart_paint(shape, color_scheme.as_ref().map(|scheme| &scheme.scheme));
         let effective_paint = dgg_defaults_unambiguous
@@ -2970,6 +3236,17 @@ pub fn build_mature_0x2c_from_streams(
                 ReadConfidence::Exact,
             ));
         }
+        if grouped_sources.is_empty() && has_officeart_transform_observation(shape) {
+            source_refs.push(source_ref(
+                &graph.source,
+                &shape.source,
+                Some(format!("escher/client-data-shape-id/{seq_num}")),
+                Some("SpContainer/FSP+FOPT/transform".into()),
+                SourceRole::Projection,
+                AuthorityClass::Authoritative,
+                ReadConfidence::Exact,
+            ));
+        }
         if paint_context_uses_officeart_scheme_color(shape, dgg_defaults) {
             if let Some(color_scheme) = &color_scheme {
                 source_refs.push(source_ref(
@@ -3040,7 +3317,7 @@ pub fn build_mature_0x2c_from_streams(
                     id: node_id,
                     parent_id: page_id.into_canonical(),
                     bounds,
-                    transform: Affine2D::identity(),
+                    transform,
                     source_refs,
                     extensions: Vec::new(),
                 },
@@ -4722,6 +4999,63 @@ fn add_missing_link_target_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn officeart_direct_rotation_uses_exact_centered_cardinal_affine() {
+        let bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(100),
+            LengthEmu::new(50),
+        );
+        let transform =
+            officeart_affine_from_components(bounds, 90_i64 * 65_536, false, false).unwrap();
+
+        assert_eq!(transform.a.as_str(), "0");
+        assert_eq!(transform.b.as_str(), "1");
+        assert_eq!(transform.c.as_str(), "-1");
+        assert_eq!(transform.d.as_str(), "0");
+        assert_eq!(transform.tx, LengthEmu::new(105));
+        assert_eq!(transform.ty, LengthEmu::new(-15));
+    }
+
+    #[test]
+    fn officeart_direct_flip_is_centered_and_independent_from_rotation() {
+        let bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(100),
+            LengthEmu::new(50),
+        );
+        let transform = officeart_affine_from_components(bounds, 0, true, false).unwrap();
+
+        assert_eq!(transform.a.as_str(), "-1");
+        assert_eq!(transform.b.as_str(), "0");
+        assert_eq!(transform.c.as_str(), "0");
+        assert_eq!(transform.d.as_str(), "1");
+        assert_eq!(transform.tx, LengthEmu::new(120));
+        assert_eq!(transform.ty, LengthEmu::ZERO);
+    }
+
+    #[test]
+    fn officeart_fractional_rotation_does_not_truncate_to_whole_degrees() {
+        let bounds = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(1_000_000),
+            LengthEmu::new(500_000),
+        );
+        // 17.71 degrees, represented at the source 16.16 precision.
+        let raw_q16 = 1_160_643_i64;
+        let fractional = officeart_affine_from_components(bounds, raw_q16, false, false).unwrap();
+        let truncated =
+            officeart_affine_from_components(bounds, 17_i64 * 65_536, false, false).unwrap();
+
+        assert_ne!(fractional, truncated);
+        assert_ne!(fractional, Affine2D::identity());
+        assert_ne!(fractional.b.as_str(), "0");
+        assert_ne!(fractional.c.as_str(), "0");
+    }
 
     #[test]
     #[ignore = "requires CHAPTERA_SOURCE_STACK_FIXTURE and CHAPTERA_SOURCE_STACK_EXPECTED_PAGE_COUNTS"]
