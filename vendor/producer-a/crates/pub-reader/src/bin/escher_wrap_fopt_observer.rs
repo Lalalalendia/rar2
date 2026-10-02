@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 const RECEIPT_SCHEMA: &str = "chaptera.escher-wrap-fopt-observer/v1";
 const ESCHER_STREAM_PATH: &str = "/Escher/EscherStm";
 const WRAP_PROPERTY_IDS: [u16; 4] = [900, 901, 902, 903];
+const RECOLOR_PROPERTY_ID: u16 = 0x011A;
 
 #[derive(Debug, Serialize)]
 struct FoptProperty {
@@ -23,6 +24,7 @@ struct ShapeObservation {
     officeart_spid: Option<u32>,
     officeart_shape_type: Option<u16>,
     wrap_properties: Vec<FoptProperty>,
+    recolor_properties: Vec<FoptProperty>,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,25 +71,31 @@ fn main() -> Result<()> {
     let mut observations = Vec::with_capacity(inventory.shapes.len());
     for shape in &inventory.shapes {
         let mut wrap_properties = Vec::new();
+        let mut recolor_properties = Vec::new();
         for fopt in &shape.fopts {
             for property in &fopt.properties {
                 let property_id = property.opid & 0x3FFF;
+                let observed = FoptProperty {
+                    property_id,
+                    opid: property.opid,
+                    op: property.op,
+                };
                 if WRAP_PROPERTY_IDS.contains(&property_id) {
-                    wrap_properties.push(FoptProperty {
-                        property_id,
-                        opid: property.opid,
-                        op: property.op,
-                    });
+                    wrap_properties.push(observed);
+                } else if property_id == RECOLOR_PROPERTY_ID {
+                    recolor_properties.push(observed);
                 }
             }
         }
         wrap_properties.sort_by_key(|property| (property.property_id, property.opid, property.op));
+        recolor_properties.sort_by_key(|property| (property.property_id, property.opid, property.op));
 
         observations.push(ShapeObservation {
             publisher_shape_id: unique_publisher_shape_id(shape.client_data.as_ref()),
             officeart_spid: shape.fsp.as_ref().map(|fsp| fsp.spid),
             officeart_shape_type: shape.fsp.as_ref().map(|fsp| fsp.shape_type),
             wrap_properties,
+            recolor_properties,
         });
     }
 
