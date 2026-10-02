@@ -44,7 +44,6 @@ fn overlaps(a: RectEmu, b: RectEmu) -> bool {
     a.x.get() < br.get() && b.x.get() < ar.get() && a.y.get() < bb.get() && b.y.get() < ab.get()
 }
 
-
 fn bump(map: &mut BTreeMap<String, usize>, key: impl Into<String>) {
     *map.entry(key.into()).or_default() += 1;
 }
@@ -62,10 +61,8 @@ fn intersection(a: RectEmu, b: RectEmu) -> Option<(i64, i64, i64, i64)> {
 }
 
 fn overlap_area_class(image_bounds: RectEmu, overlap: (i64, i64, i64, i64)) -> &'static str {
-    let image_area =
-        i128::from(image_bounds.width.get()) * i128::from(image_bounds.height.get());
-    let overlap_area =
-        i128::from(overlap.2 - overlap.0) * i128::from(overlap.3 - overlap.1);
+    let image_area = i128::from(image_bounds.width.get()) * i128::from(image_bounds.height.get());
+    let overlap_area = i128::from(overlap.2 - overlap.0) * i128::from(overlap.3 - overlap.1);
     if image_area <= 0 || overlap_area <= 0 {
         return "invalid";
     }
@@ -150,7 +147,10 @@ fn png_overlap_alpha_class(
         return "mapping_unavailable";
     }
 
-    if matches!(info.color_type, png::ColorType::Rgb | png::ColorType::Grayscale) {
+    if matches!(
+        info.color_type,
+        png::ColorType::Rgb | png::ColorType::Grayscale
+    ) {
         return "opaque_dominant";
     }
 
@@ -310,10 +310,8 @@ fn exact_virginia_p24_later_image_viewer_survival_probe() {
     let mut overlap_area_histogram = BTreeMap::new();
     let mut overlap_alpha_histogram = BTreeMap::new();
     for (fill_id, image_id) in &overlap_relations {
-        let (Some(fill), Some(image_node)) = (
-            graph.nodes.get(fill_id),
-            graph.nodes.get(image_id),
-        ) else {
+        let (Some(fill), Some(image_node)) = (graph.nodes.get(fill_id), graph.nodes.get(image_id))
+        else {
             continue;
         };
         let Some(overlap) = intersection(fill.header.bounds, image_node.header.bounds) else {
