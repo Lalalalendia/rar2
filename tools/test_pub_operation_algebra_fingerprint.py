@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -55,6 +57,24 @@ trailer << /ID [<CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC><DDDDDDDDDDDDDDDDDDDDDDDDDDDDD
             fp.normalize_publisher_pdf(left),
             fp.normalize_publisher_pdf(right),
         )
+
+    def test_semantic_fingerprint_ignores_json_key_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left = root / "left.json"
+            right = root / "right.json"
+            left.write_text(
+                json.dumps({"r2c2": {"fill": "red", "bold": True}, "rows": 4}),
+                encoding="utf-8",
+            )
+            right.write_text(
+                '{"rows":4,"r2c2":{"bold":true,"fill":"red"}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                fp.semantic_fingerprint(left),
+                fp.semantic_fingerprint(right),
+            )
 
 
 if __name__ == "__main__":
