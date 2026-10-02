@@ -447,7 +447,7 @@ fn extended_color_profile(records: &[FoptObservation]) -> &'static str {
     match matches.as_slice() {
         [] => "absent",
         [property] if property.f_bid() || property.f_complex() => "malformed_or_complex",
-        [_first, ..] => "duplicate_scalar",
+        [_, _, ..] => "duplicate_scalar",
         [property] if property.op == FILL_COLOR_EXT_DEFAULT => "default_sentinel",
         [property] => match (property.op >> 24) as u8 {
             0x00 => "nondefault_direct_rgb",
@@ -466,7 +466,7 @@ fn extended_color_mod_profile(records: &[FoptObservation]) -> &'static str {
     match matches.as_slice() {
         [] => "absent",
         [property] if property.f_bid() || property.f_complex() => "malformed_or_complex",
-        [_first, ..] => "duplicate_scalar",
+        [_, _, ..] => "duplicate_scalar",
         [property] if property.op == FILL_COLOR_EXT_MOD_DEFAULT => "normative_default",
         [_] => "nondefault_modifier",
     }
