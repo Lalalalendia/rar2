@@ -2923,6 +2923,7 @@ pub fn build_mature_0x2c_from_streams(
                     officeart_inventory: &escher_inventory,
                     dgg_defaults: dgg_defaults_unambiguous.then_some(dgg_defaults).flatten(),
                     color_scheme: color_scheme.as_ref().map(|scheme| &scheme.scheme),
+                    color_scheme_seq_num: color_scheme.as_ref().map(|scheme| scheme.seq_num),
                 };
                 (
                     table_bridge::build_table_story_ownership_source(&context, seq_num, &chunk)?,
