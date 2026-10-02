@@ -68,10 +68,7 @@ fn unique_signed_anchor_field(record: &PublisherFieldRecord, id: u16) -> Option<
     }
 }
 
-fn unique_publisher_field(
-    record: &PublisherFieldRecord,
-    id: u16,
-) -> Option<(u32, RawSpan)> {
+fn unique_publisher_field(record: &PublisherFieldRecord, id: u16) -> Option<(u32, RawSpan)> {
     let matches = record
         .fields
         .iter()
