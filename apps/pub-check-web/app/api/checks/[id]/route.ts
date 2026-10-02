@@ -1,4 +1,8 @@
-import { publicTokenMatches, readCheck } from '../../../../lib/checks';
+import {
+  isCanonicalCheckResult,
+  publicTokenMatches,
+  readCheck,
+} from '../../../../lib/checks';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,19 +18,32 @@ export async function GET(
     return Response.json({ error: 'Check not found.' }, { status: 404 });
   }
 
+  let result;
+  if (record.result && isCanonicalCheckResult(record.result)) {
+    result = {
+      kind: 'canonical' as const,
+      state: record.result.state,
+      pages: record.result.pages,
+      limitations: record.result.limitations,
+      outputRoutes: record.result.outputRoutes,
+      recommendedNextStep: record.result.recommendedNextStep,
+    };
+  } else if (record.result) {
+    result = {
+      kind: 'legacy' as const,
+      compatibility: record.result.compatibility,
+      summary: record.result.summary,
+      publisherFamily: record.result.publisherFamily,
+      pages: record.result.pages,
+      diagnosticsCode: record.result.diagnosticsCode,
+    };
+  }
+
   return Response.json(
     {
       status: record.status,
       emailStatus: record.emailStatus,
-      result: record.result
-        ? {
-            compatibility: record.result.compatibility,
-            summary: record.result.summary,
-            publisherFamily: record.result.publisherFamily,
-            pages: record.result.pages,
-            diagnosticsCode: record.result.diagnosticsCode,
-          }
-        : undefined,
+      result,
     },
     {
       headers: {
