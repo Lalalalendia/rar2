@@ -41,6 +41,7 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
     let mut provenance_histogram = BTreeMap::<String, usize>::new();
     let mut fill_state_histogram = BTreeMap::<String, usize>::new();
     let mut line_state_histogram = BTreeMap::<String, usize>::new();
+    let mut transform_histogram = BTreeMap::<String, usize>::new();
     let mut positive_bounds = 0_usize;
     let mut source_order_covered_nodes = 0_usize;
     let mut table_cells = 0_usize;
@@ -59,6 +60,31 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
             "other_shape"
         };
         bump(&mut family_histogram, family);
+
+        let transform = &node.header.transform;
+        let transform_class = if transform.a.as_str() == "1"
+            && transform.b.as_str() == "0"
+            && transform.c.as_str() == "0"
+            && transform.d.as_str() == "1"
+            && transform.tx.get() == 0
+            && transform.ty.get() == 0
+        {
+            "identity"
+        } else if transform.a.as_str() == "1"
+            && transform.b.as_str() == "0"
+            && transform.c.as_str() == "0"
+            && transform.d.as_str() == "1"
+        {
+            "translate_only"
+        } else if transform.b.as_str() == "0" && transform.c.as_str() == "0" {
+            "axis_scale_translate"
+        } else {
+            "general_affine"
+        };
+        bump(
+            &mut transform_histogram,
+            format!("{family}:{transform_class}"),
+        );
 
         let grouped = node.header.source_refs.iter().any(|source| {
             source
@@ -156,6 +182,7 @@ fn source_page_census(bundle: &ViewerOpenBundle, one_based_page: u32) -> Value {
         "provenance_histogram": provenance_histogram,
         "fill_state_histogram": fill_state_histogram,
         "line_state_histogram": line_state_histogram,
+        "transform_histogram": transform_histogram,
         "positive_bounds": positive_bounds,
         "source_order_node_count": source_order.map_or(0, |order| order.node_ids.len()),
         "source_order_covered_nodes": source_order_covered_nodes,
@@ -332,6 +359,7 @@ fn scene_page_census(scene: &ReaderSceneV1, one_based_page: u32) -> Value {
     let mut kind_histogram = BTreeMap::<String, usize>::new();
     let mut text_layout_histogram = BTreeMap::<String, usize>::new();
     let mut resource_availability_histogram = BTreeMap::<String, usize>::new();
+    let mut transform_histogram = BTreeMap::<String, usize>::new();
     let mut diagnostic_histogram = BTreeMap::<String, usize>::new();
     let mut fill_nodes = 0_usize;
     let mut line_nodes = 0_usize;
@@ -345,6 +373,30 @@ fn scene_page_census(scene: &ReaderSceneV1, one_based_page: u32) -> Value {
 
     for node in &nodes {
         bump(&mut kind_histogram, node.kind);
+        let transform = &node.transform;
+        let transform_class = if transform.a == "1"
+            && transform.b == "0"
+            && transform.c == "0"
+            && transform.d == "1"
+            && transform.tx == 0
+            && transform.ty == 0
+        {
+            "identity"
+        } else if transform.a == "1"
+            && transform.b == "0"
+            && transform.c == "0"
+            && transform.d == "1"
+        {
+            "translate_only"
+        } else if transform.b == "0" && transform.c == "0" {
+            "axis_scale_translate"
+        } else {
+            "general_affine"
+        };
+        bump(
+            &mut transform_histogram,
+            format!("{}:{transform_class}", node.kind),
+        );
         positive_bounds += usize::from(node.bounds.width > 0 && node.bounds.height > 0);
         fill_nodes += usize::from(
             node.paint
@@ -418,6 +470,7 @@ fn scene_page_census(scene: &ReaderSceneV1, one_based_page: u32) -> Value {
         "line_nodes": line_nodes,
         "resource_nodes": resource_nodes,
         "resource_availability_histogram": resource_availability_histogram,
+        "transform_histogram": transform_histogram,
         "text_nodes": text_nodes,
         "text_layout_nodes": text_layout_nodes,
         "text_layout_histogram": text_layout_histogram,
