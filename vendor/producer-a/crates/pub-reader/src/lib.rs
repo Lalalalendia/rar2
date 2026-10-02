@@ -139,7 +139,7 @@ pub use table_bridge::{
     RAW_TYPE_TABLE, materialize_bounded_simple_table_cells, materialize_bounded_table_cells,
 };
 pub use table_style_probe::{
-    PubTableMcldStyleObservation, PubTableMcldStyleSignatureClass,
+    PubTableMcldOpaque1dClass, PubTableMcldStyleObservation, PubTableMcldStyleSignatureClass,
     analyze_mature_0x2c_table_mcld_style_fields,
 };
 pub use wmf::{BoundedWmfMetafile, WmfMetafileInfo, bounded_wmf_metafile, validate_wmf_metafile};
