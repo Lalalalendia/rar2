@@ -517,7 +517,6 @@ fn effective_extended_color_profile(
     "none_or_default".to_owned()
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExtendedColorIntent {
     NoExtended,
@@ -529,8 +528,8 @@ fn publication_color_scheme(fixture: &PathBuf) -> MatureColorScheme {
     let contents = read_stream_path(fixture, "/Contents").expect("read exact Publisher Contents");
     let stream = StreamPath("/Contents".to_owned());
     let header = parse_0x2c_header(stream.clone(), &contents).expect("parse Contents header");
-    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
-        .expect("parse Contents trailer");
+    let trailer =
+        parse_confirmed_0x2c_trailer_root(&contents, &header).expect("parse Contents trailer");
 
     let mut candidates = Vec::new();
     for seq_num in 0..trailer.directory.slots.len() {
@@ -713,8 +712,14 @@ fn effective_extended_color_intent(
     scheme: &MatureColorScheme,
 ) -> ExtendedColorIntent {
     for records in std::iter::once(shape.fopts.as_slice())
-        .chain(dgg.into_iter().map(|group| group.primary_options.as_slice()))
-        .chain(dgg.into_iter().map(|group| group.tertiary_options.as_slice()))
+        .chain(
+            dgg.into_iter()
+                .map(|group| group.primary_options.as_slice()),
+        )
+        .chain(
+            dgg.into_iter()
+                .map(|group| group.tertiary_options.as_slice()),
+        )
     {
         match extended_color_intent_from_records(records, scheme) {
             ExtendedColorIntent::NoExtended => continue,
@@ -1249,7 +1254,8 @@ fn exact_virginia_restored_fill_stack_probe() {
             bump(
                 &mut page.restored_main_vs_extended_histogram,
                 main_vs_extended_profile(
-                    paint.fill
+                    paint
+                        .fill
                         .color_rgb
                         .as_ref()
                         .expect("restored visible solid fill has main RGB")
