@@ -1,5 +1,5 @@
 use super::{
-    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, RAW_TYPE_SHAPE, PubBridgeDiagnostic,
+    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, PubBridgeDiagnostic, RAW_TYPE_SHAPE,
     build_mature_0x2c_source_graph, build_reference_index, chunk_for_reference, seq_u32,
     single_raw_type,
 };
@@ -120,9 +120,10 @@ pub fn build_mature_0x2c_structural_base_manifest(
         // Discovery is deliberately independent of SourceGraph and Publisher
         // identity carriers. This is the PUB-RS-XWALK-01 evidence boundary:
         // raw OplPo AA/AB geometry first, unique ClientAnchor extent second.
-        let mut escher_matches = escher_inventory.shapes.iter().filter(|shape| {
-            exact_anchor_extent_matches(shape, contents_width, contents_height)
-        });
+        let mut escher_matches = escher_inventory
+            .shapes
+            .iter()
+            .filter(|shape| exact_anchor_extent_matches(shape, contents_width, contents_height));
         let Some(escher_shape) = escher_matches.next() else {
             continue;
         };
