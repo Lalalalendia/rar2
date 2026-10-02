@@ -42,6 +42,30 @@ pub struct PubTableCellPaintSource {
     pub source_refs: Vec<SourceRef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PubTableBorderAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTableBorderSegmentSource {
+    pub axis: PubTableBorderAxis,
+    pub row_start: u32,
+    pub column_start: u32,
+    pub row_end: u32,
+    pub column_end: u32,
+    /// Native Publisher TABLE border color carried by this segment's
+    /// OfficeArt fillColor (0x0181). Bounded to direct RGB only.
+    pub color_rgb: [u8; 3],
+    /// Native Publisher CellBorder.Weight persisted as OfficeArt lineWidth
+    /// (0x01CB), in EMU.
+    pub width_emu: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_refs: Vec<SourceRef>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTableCellCoordinates {
     pub start_row: u32,
@@ -297,6 +321,11 @@ pub struct PubTableSource {
     pub cells: Vec<PubTableCellSource>,
     /// Present only for a complete, unmerged, unambiguous rectangular grid.
     pub simple_table: Option<SimpleRectangularTable<TableCellId>>,
+    /// Bounded native TABLE border segments. This remains empty unless the
+    /// exact #740 ClientAnchor grammar, direct RGB color and positive 0x01CB
+    /// width all decode without ambiguity for the whole simple table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub border_segments: Vec<PubTableBorderSegmentSource>,
     pub layout_metrics: Option<PubTableLayoutMetricsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_refs: Vec<SourceRef>,
@@ -412,6 +441,20 @@ fn populate_bounded_table_cell_fill(
 const TABLE_AUTOFORMAT_OWNER_REF_ID: u16 = 0x6802;
 const TABLE_AUTOFORMAT_CELL_ORDINAL_ID: u16 = 0x2003;
 const TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE: u16 = 0x0001;
+
+const TABLE_BORDER_ORIENTATION_ID: u16 = 0x2001;
+const TABLE_BORDER_ROW_START_ID: u16 = 0x2004;
+const TABLE_BORDER_COLUMN_START_ID: u16 = 0x2005;
+const TABLE_BORDER_ROW_END_ID: u16 = 0x2006;
+const TABLE_BORDER_COLUMN_END_ID: u16 = 0x2007;
+const TABLE_BORDER_ALLOWED_ANCHOR_IDS: [u16; 6] = [
+    TABLE_AUTOFORMAT_OWNER_REF_ID,
+    TABLE_BORDER_ORIENTATION_ID,
+    TABLE_BORDER_ROW_START_ID,
+    TABLE_BORDER_COLUMN_START_ID,
+    TABLE_BORDER_ROW_END_ID,
+    TABLE_BORDER_COLUMN_END_ID,
+];
 
 fn unique_anchor_scalar(anchor: &pub_escher::PublisherFieldRecord, field_id: u16) -> Option<u32> {
     let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
@@ -566,6 +609,173 @@ fn populate_native_autoformat_table_cell_fill(
     }
 
     admitted
+}
+
+
+fn unique_anchor_scalar_or_zero(
+    anchor: &pub_escher::PublisherFieldRecord,
+    field_id: u16,
+) -> Option<u32> {
+    let mut fields = anchor.fields.iter().filter(|field| field.id == field_id);
+    let Some(first) = fields.next() else {
+        return Some(0);
+    };
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(first.value)
+}
+
+fn is_native_table_border_candidate(
+    shape: &pub_escher::SpContainerObservation,
+    table_seq_num: u32,
+) -> bool {
+    if shape.fsp.as_ref().map(|fsp| fsp.shape_type)
+        != Some(TABLE_AUTOFORMAT_RECTANGLE_SHAPE_TYPE)
+        || has_any_client_data_identity(shape)
+    {
+        return false;
+    }
+
+    let Some(anchor) = shape.client_anchor.as_ref() else {
+        return false;
+    };
+    if unique_anchor_scalar(anchor, TABLE_AUTOFORMAT_OWNER_REF_ID) != Some(table_seq_num)
+        || anchor
+            .fields
+            .iter()
+            .any(|field| field.id == TABLE_AUTOFORMAT_CELL_ORDINAL_ID)
+    {
+        return false;
+    }
+
+    anchor.fields.iter().any(|field| {
+        matches!(
+            field.id,
+            TABLE_BORDER_ORIENTATION_ID
+                | TABLE_BORDER_ROW_START_ID
+                | TABLE_BORDER_COLUMN_START_ID
+                | TABLE_BORDER_ROW_END_ID
+                | TABLE_BORDER_COLUMN_END_ID
+        )
+    })
+}
+
+fn decode_native_table_border_segment(
+    context: &TableBridgeContext<'_>,
+    shape: &pub_escher::SpContainerObservation,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+) -> Option<PubTableBorderSegmentSource> {
+    if !is_native_table_border_candidate(shape, table_seq_num) {
+        return None;
+    }
+    let anchor = shape.client_anchor.as_ref()?;
+    if anchor
+        .fields
+        .iter()
+        .any(|field| !TABLE_BORDER_ALLOWED_ANCHOR_IDS.contains(&field.id))
+    {
+        return None;
+    }
+
+    let orientation = unique_anchor_scalar(anchor, TABLE_BORDER_ORIENTATION_ID)?;
+    let row_start = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_ROW_START_ID)?;
+    let column_start = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_START_ID)?;
+    let row_end = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_ROW_END_ID)?;
+    let column_end = unique_anchor_scalar_or_zero(anchor, TABLE_BORDER_COLUMN_END_ID)?;
+
+    if row_start > rows || row_end > rows || column_start > columns || column_end > columns {
+        return None;
+    }
+
+    let axis = match orientation {
+        1 if row_start == row_end && column_start < column_end => PubTableBorderAxis::Horizontal,
+        2 if column_start == column_end && row_start < row_end => PubTableBorderAxis::Vertical,
+        _ => return None,
+    };
+
+    // #740 native authority is TABLE-specific: Border.Color.RGB mutates this
+    // carrier's fillColor 0x0181, and Border.Weight mutates lineWidth 0x01CB.
+    // Keep the product surface bounded to unique, scalar, direct RGB + positive
+    // EMU width. Scheme/system colors and ambiguous properties fail closed.
+    let color_rgb =
+        unique_explicit_officeart_scalar(shape, OFFICE_ART_FILL_COLOR).and_then(direct_officeart_rgb)?;
+    let width_emu = unique_explicit_officeart_scalar(shape, OFFICE_ART_LINE_WIDTH)?;
+    if width_emu == 0 {
+        return None;
+    }
+
+    Some(PubTableBorderSegmentSource {
+        axis,
+        row_start,
+        column_start,
+        row_end,
+        column_end,
+        color_rgb,
+        width_emu,
+        source_refs: vec![source_ref(
+            context.source,
+            &shape.source,
+            Some(format!("contents/0x2c/seq/{table_seq_num}/table-border")),
+            Some("SpContainer/FOPT/table-border-segment".into()),
+            SourceRole::Projection,
+            AuthorityClass::Authoritative,
+            ReadConfidence::Exact,
+        )],
+    })
+}
+
+fn populate_native_table_border_segments(
+    context: &TableBridgeContext<'_>,
+    table_seq_num: u32,
+    rows: u32,
+    columns: u32,
+) -> Vec<PubTableBorderSegmentSource> {
+    let candidates = context
+        .officeart_inventory
+        .shapes
+        .iter()
+        .filter(|shape| is_native_table_border_candidate(shape, table_seq_num))
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut segments = Vec::with_capacity(candidates.len());
+    let mut seen = BTreeSet::new();
+    for shape in candidates {
+        let Some(segment) =
+            decode_native_table_border_segment(context, shape, table_seq_num, rows, columns)
+        else {
+            // Never partially promote a TABLE border grammar. One malformed or
+            // unsupported candidate keeps the entire table source-fenced.
+            return Vec::new();
+        };
+        let key = (
+            segment.axis,
+            segment.row_start,
+            segment.column_start,
+            segment.row_end,
+            segment.column_end,
+        );
+        if !seen.insert(key) {
+            return Vec::new();
+        }
+        segments.push(segment);
+    }
+
+    segments.sort_by_key(|segment| {
+        (
+            segment.axis,
+            segment.row_start,
+            segment.column_start,
+            segment.row_end,
+            segment.column_end,
+        )
+    });
+    segments
 }
 
 fn populate_exact_table_cell_bounds(
@@ -1016,11 +1226,14 @@ pub(crate) fn build_table_source(
     }
 
     let simple_table = build_simple_table(rows, columns, &joined_cells);
-    if simple_table.is_some() {
+    let border_segments = if simple_table.is_some() {
         let _ = populate_bounded_table_cell_fill(context, table_seq_num, &mut joined_cells);
         let _ =
             populate_native_autoformat_table_cell_fill(context, table_seq_num, &mut joined_cells);
-    }
+        populate_native_table_border_segments(context, table_seq_num, rows, columns)
+    } else {
+        Vec::new()
+    };
     let layout_metrics = build_table_layout_metrics(context, table_seq_num, text_id, diagnostics);
 
     Ok(Some(PubTableSource {
@@ -1032,6 +1245,7 @@ pub(crate) fn build_table_source(
         tcd_story_ordinal: Some(tcd.story_ordinal.value),
         cells: joined_cells,
         simple_table,
+        border_segments,
         layout_metrics,
         source_refs: vec![
             source_ref(
@@ -1609,6 +1823,7 @@ mod tests {
             tcd_story_ordinal: None,
             cells: vec![source_cell],
             simple_table: Some(simple_table),
+            border_segments: Vec::new(),
             layout_metrics: None,
             source_refs: Vec::new(),
         };
@@ -1663,6 +1878,7 @@ mod tests {
                 source_refs: Vec::new(),
             }],
             simple_table: None,
+            border_segments: Vec::new(),
             layout_metrics: None,
             source_refs: Vec::new(),
         };
