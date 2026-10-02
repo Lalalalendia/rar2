@@ -36,6 +36,9 @@ pub struct PubTableMcldStyleObservation {
     pub opaque_1d_single_child_count: usize,
     pub opaque_1d_distinct_payload_count: usize,
     pub opaque_1d_payload_length_histogram: BTreeMap<usize, usize>,
+    /// Arbitrary source-local equality partition for the single uniform
+    /// 0x1D/wire0x8A payload. The numeric class has no semantic meaning.
+    pub opaque_1d_cross_table_class: Option<u32>,
 }
 
 fn field_key(id: u8, wire_type: u8) -> String {
@@ -62,6 +65,7 @@ fn empty_observation(
         opaque_1d_single_child_count: 0,
         opaque_1d_distinct_payload_count: 0,
         opaque_1d_payload_length_histogram: BTreeMap::new(),
+        opaque_1d_cross_table_class: None,
     }
 }
 
@@ -108,6 +112,7 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
     }
 
     let mut observations = Vec::new();
+    let mut opaque_1d_cross_table_classes = BTreeMap::<Vec<u8>, u32>::new();
     for node in build.graph.nodes.values() {
         let Some(table) = node.payload.table.as_ref() else {
             continue;
@@ -224,6 +229,24 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
             PubTableMcldOpaque1dClass::VariesByChild
         };
 
+        let opaque_1d_cross_table_class =
+            if opaque_1d_class == PubTableMcldOpaque1dClass::Uniform {
+                let payload = opaque_1d_distinct_payloads
+                    .iter()
+                    .next()
+                    .expect("uniform 0x1D class must retain one payload");
+                if let Some(class) = opaque_1d_cross_table_classes.get(payload) {
+                    Some(*class)
+                } else {
+                    let class = u32::try_from(opaque_1d_cross_table_classes.len())
+                        .context("TABLE 0x1D equality class count does not fit u32")?;
+                    opaque_1d_cross_table_classes.insert(payload.clone(), class);
+                    Some(class)
+                }
+            } else {
+                None
+            };
+
         observations.push(PubTableMcldStyleObservation {
             contents_seq_num: seq_num,
             table_cell_count: table.cells.len(),
@@ -238,6 +261,7 @@ pub fn analyze_mature_0x2c_table_mcld_style_fields<R: Read + Seek>(
             opaque_1d_single_child_count,
             opaque_1d_distinct_payload_count: opaque_1d_distinct_payloads.len(),
             opaque_1d_payload_length_histogram,
+            opaque_1d_cross_table_class,
         });
     }
 
