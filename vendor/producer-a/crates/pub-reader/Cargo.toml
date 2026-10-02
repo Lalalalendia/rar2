@@ -24,6 +24,7 @@ serde.workspace=true
 serde_json.workspace=true
 sha2.workspace=true
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+libm.workspace=true
 zip = { workspace = true, features = ["flate2", "deflate-flate2"] }
 
 [[bin]]
