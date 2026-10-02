@@ -317,32 +317,105 @@ export function tableCellFillPaintPlan(cell) {
   return Object.freeze({ geometry, fill });
 }
 
+export function tableBorderSegmentPaintPlan(table, segment) {
+  const rows = safeInteger(table?.rows, "table.rows");
+  const columns = safeInteger(table?.columns, "table.columns");
+  const rowBoundaries = new Map();
+  const columnBoundaries = new Map();
+
+  const bindBoundary = (map, index, value) => {
+    if (map.has(index) && map.get(index) !== value) return false;
+    map.set(index, value);
+    return true;
+  };
+
+  for (const cell of table?.cells ?? []) {
+    const geometry = tableCellPaintGeometry(cell);
+    if (!geometry) return null;
+    const row = safeInteger(cell.row, "table.cell.row");
+    const column = safeInteger(cell.column, "table.cell.column");
+    const rowSpan = safeInteger(cell.row_span ?? 1, "table.cell.row_span");
+    const columnSpan = safeInteger(cell.column_span ?? 1, "table.cell.column_span");
+    if (rowSpan !== 1 || columnSpan !== 1) return null;
+    if (
+      !bindBoundary(rowBoundaries, row, geometry.y) ||
+      !bindBoundary(rowBoundaries, row + 1, geometry.y + geometry.height) ||
+      !bindBoundary(columnBoundaries, column, geometry.x) ||
+      !bindBoundary(columnBoundaries, column + 1, geometry.x + geometry.width)
+    ) return null;
+  }
+
+  if (rowBoundaries.size !== rows + 1 || columnBoundaries.size !== columns + 1) return null;
+
+  const stroke = rgb(segment?.rgb);
+  const width = safeInteger(segment?.width_emu, "table.border.width_emu");
+  if (!stroke || width <= 0) return null;
+
+  const rs = safeInteger(segment.row_start, "table.border.row_start");
+  const cs = safeInteger(segment.column_start, "table.border.column_start");
+  const re = safeInteger(segment.row_end, "table.border.row_end");
+  const ce = safeInteger(segment.column_end, "table.border.column_end");
+
+  if (segment.axis === "horizontal" && rs === re && cs < ce) {
+    const y = rowBoundaries.get(rs);
+    const x1 = columnBoundaries.get(cs);
+    const x2 = columnBoundaries.get(ce);
+    if ([x1, x2, y].some((value) => value === undefined)) return null;
+    return Object.freeze({ x1, y1: y, x2, y2: y, stroke, width });
+  }
+  if (segment.axis === "vertical" && cs === ce && rs < re) {
+    const x = columnBoundaries.get(cs);
+    const y1 = rowBoundaries.get(rs);
+    const y2 = rowBoundaries.get(re);
+    if ([x, y1, y2].some((value) => value === undefined)) return null;
+    return Object.freeze({ x1: x, y1, x2: x, y2, stroke, width });
+  }
+  return null;
+}
+
 function appendTableText(group, node) {
   const table = node.table;
   if (!table) return;
+
+  for (const cell of table.cells ?? []) {
+    const fillPlan = tableCellFillPaintPlan(cell);
+    if (!fillPlan) continue;
+    group.appendChild(svgNode("rect", {
+      x: fillPlan.geometry.x,
+      y: fillPlan.geometry.y,
+      width: fillPlan.geometry.width,
+      height: fillPlan.geometry.height,
+      fill: fillPlan.fill,
+      "data-table-cell-id": cell.cell_id,
+      "data-table-cell-paint-authority": "source-table-cell"
+    }));
+  }
+
+  for (const segment of table.border_segments ?? []) {
+    const plan = tableBorderSegmentPaintPlan(table, segment);
+    if (!plan) continue;
+    group.appendChild(svgNode("line", {
+      x1: plan.x1,
+      y1: plan.y1,
+      x2: plan.x2,
+      y2: plan.y2,
+      fill: "none",
+      stroke: plan.stroke,
+      "stroke-width": plan.width,
+      "stroke-linecap": "butt",
+      "data-table-border-authority": "source-native-segment"
+    }));
+  }
+
   for (const cell of table.cells ?? []) {
     const geometry = tableCellPaintGeometry(cell);
-    if (!geometry) continue;
-
+    if (!geometry || !cell.text) continue;
     const fillPlan = tableCellFillPaintPlan(cell);
-    if (fillPlan) {
-      group.appendChild(svgNode("rect", {
-        x: fillPlan.geometry.x,
-        y: fillPlan.geometry.y,
-        width: fillPlan.geometry.width,
-        height: fillPlan.geometry.height,
-        fill: fillPlan.fill,
-        "data-table-cell-id": cell.cell_id,
-        "data-table-cell-paint-authority": "source-t595"
-      }));
-    }
-    if (!cell.text) continue;
-
     const foreign = previewForeignObject(geometry, {
       "data-table-cell-id": cell.cell_id,
       "data-table-row": cell.row,
       "data-table-column": cell.column,
-      "data-table-paint-authority": fillPlan ? "source-t595" : "none",
+      "data-table-paint-authority": fillPlan ? "source-table-cell" : "none",
       "data-text-authority": "browser-preview-only"
     });
     const div = document.createElementNS(XHTML_NS, "div");
