@@ -201,10 +201,7 @@ fn exact_virginia_p1_image_rotation_source_probe() {
             rotation_profile(&shape.fopts),
         );
         let flags = shape.fsp.as_ref().map_or(0, |fsp| fsp.flags);
-        let flip_profile = match (
-            flags & FSP_FLIP_H != 0,
-            flags & FSP_FLIP_V != 0,
-        ) {
+        let flip_profile = match (flags & FSP_FLIP_H != 0, flags & FSP_FLIP_V != 0) {
             (false, false) => "none",
             (true, false) => "h_only",
             (false, true) => "v_only",
