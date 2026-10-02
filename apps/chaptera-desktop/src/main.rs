@@ -5,6 +5,7 @@
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
 mod acceptance;
+mod acceptance_v2;
 mod agent;
 mod diagnostic_sweep;
 mod fallback_font;
@@ -962,6 +963,44 @@ fn main() -> eframe::Result<()> {
                     "{}",
                     serde_json::to_string(&observation)
                         .expect("desktop acceptance observation is JSON-serializable")
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--desktop-acceptance-v2")) {
+        let Some(fixture) = args.next().map(PathBuf::from) else {
+            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            std::process::exit(2);
+        };
+        let Some(replacement) = args.next().map(PathBuf::from) else {
+            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            std::process::exit(2);
+        };
+        let Some(project) = args.next().map(PathBuf::from) else {
+            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            std::process::exit(2);
+        };
+        let Some(export) = args.next().map(PathBuf::from) else {
+            eprintln!("usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT");
+            std::process::exit(2);
+        };
+        if args.next().is_some() {
+            eprintln!("desktop continuity V2 mode accepts exactly four path arguments");
+            std::process::exit(2);
+        }
+
+        match acceptance_v2::run(&fixture, &replacement, &project, &export) {
+            Ok(observation) => {
+                println!(
+                    "{}",
+                    serde_json::to_string(&observation)
+                        .expect("desktop continuity V2 observation is JSON-serializable")
                 );
                 return Ok(());
             }
