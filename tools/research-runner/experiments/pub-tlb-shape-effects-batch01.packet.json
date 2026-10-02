@@ -16,15 +16,51 @@
     "generated_property_put_count": 467,
     "admitted_candidate_count": 262,
     "candidates": [
-      {"id": "GlowFormat.Radius", "dispid": 1, "value_type": "VT_R4"},
-      {"id": "GlowFormat.Transparency", "dispid": 3, "value_type": "VT_R4"},
-      {"id": "GlowFormat.Visible", "dispid": 4, "value_type": "VT_USERDEFINED:MSOTRISTATE:TKIND_ENUM"},
-      {"id": "ReflectionFormat.Type", "dispid": 1, "value_type": "VT_USERDEFINED:MSOREFLECTIONTYPE:TKIND_ENUM"},
-      {"id": "ReflectionFormat.Transparency", "dispid": 2, "value_type": "VT_R4"},
-      {"id": "ReflectionFormat.Size", "dispid": 3, "value_type": "VT_R4"},
-      {"id": "ReflectionFormat.Offset", "dispid": 4, "value_type": "VT_R4"},
-      {"id": "ReflectionFormat.Blur", "dispid": 5, "value_type": "VT_R4"},
-      {"id": "ReflectionFormat.Visible", "dispid": 6, "value_type": "VT_USERDEFINED:MSOTRISTATE:TKIND_ENUM"}
+      {
+        "id": "GlowFormat.Radius",
+        "dispid": 1,
+        "value_type": "VT_R4"
+      },
+      {
+        "id": "GlowFormat.Transparency",
+        "dispid": 3,
+        "value_type": "VT_R4"
+      },
+      {
+        "id": "GlowFormat.Visible",
+        "dispid": 4,
+        "value_type": "VT_USERDEFINED:MSOTRISTATE:TKIND_ENUM"
+      },
+      {
+        "id": "ReflectionFormat.Type",
+        "dispid": 1,
+        "value_type": "VT_USERDEFINED:MSOREFLECTIONTYPE:TKIND_ENUM"
+      },
+      {
+        "id": "ReflectionFormat.Transparency",
+        "dispid": 2,
+        "value_type": "VT_R4"
+      },
+      {
+        "id": "ReflectionFormat.Size",
+        "dispid": 3,
+        "value_type": "VT_R4"
+      },
+      {
+        "id": "ReflectionFormat.Offset",
+        "dispid": 4,
+        "value_type": "VT_R4"
+      },
+      {
+        "id": "ReflectionFormat.Blur",
+        "dispid": 5,
+        "value_type": "VT_R4"
+      },
+      {
+        "id": "ReflectionFormat.Visible",
+        "dispid": 6,
+        "value_type": "VT_USERDEFINED:MSOTRISTATE:TKIND_ENUM"
+      }
     ]
   },
   "operation": {
@@ -36,7 +72,25 @@
     "required": [
       "environment.json",
       "analysis/tlb-shape-effects-batch01.json",
-      "logs/tlb-shape-effects-batch01.txt"
+      "logs/tlb-shape-effects-batch01.txt",
+      "analysis/blast-radius/glowformat-radius-same_value.json",
+      "analysis/blast-radius/glowformat-radius-changed_value.json",
+      "analysis/blast-radius/glowformat-transparency-same_value.json",
+      "analysis/blast-radius/glowformat-transparency-changed_value.json",
+      "analysis/blast-radius/glowformat-visible-same_value.json",
+      "analysis/blast-radius/glowformat-visible-changed_value.json",
+      "analysis/blast-radius/reflectionformat-type-same_value.json",
+      "analysis/blast-radius/reflectionformat-type-changed_value.json",
+      "analysis/blast-radius/reflectionformat-transparency-same_value.json",
+      "analysis/blast-radius/reflectionformat-transparency-changed_value.json",
+      "analysis/blast-radius/reflectionformat-size-same_value.json",
+      "analysis/blast-radius/reflectionformat-size-changed_value.json",
+      "analysis/blast-radius/reflectionformat-offset-same_value.json",
+      "analysis/blast-radius/reflectionformat-offset-changed_value.json",
+      "analysis/blast-radius/reflectionformat-blur-same_value.json",
+      "analysis/blast-radius/reflectionformat-blur-changed_value.json",
+      "analysis/blast-radius/reflectionformat-visible-same_value.json",
+      "analysis/blast-radius/reflectionformat-visible-changed_value.json"
     ]
   }
 }
