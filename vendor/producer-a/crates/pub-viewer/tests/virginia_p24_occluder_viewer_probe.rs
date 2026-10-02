@@ -32,10 +32,7 @@ fn overlaps(a: RectEmu, b: RectEmu) -> bool {
     else {
         return false;
     };
-    a.x.get() < br.get()
-        && b.x.get() < ar.get()
-        && a.y.get() < bb.get()
-        && b.y.get() < ab.get()
+    a.x.get() < br.get() && b.x.get() < ar.get() && a.y.get() < bb.get() && b.y.get() < ab.get()
 }
 
 #[test]
@@ -100,7 +97,8 @@ fn exact_virginia_p24_later_image_viewer_survival_probe() {
             let Some(later) = graph.nodes.get(&later_id) else {
                 continue;
             };
-            if later.payload.image_slot.is_none() || !overlaps(node.header.bounds, later.header.bounds)
+            if later.payload.image_slot.is_none()
+                || !overlaps(node.header.bounds, later.header.bounds)
             {
                 continue;
             }
