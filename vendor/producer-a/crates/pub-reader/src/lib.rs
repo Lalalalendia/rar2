@@ -480,6 +480,8 @@ pub struct PubSourceGraphBuild {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<PubParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_color_runs: Vec<PubTextColorRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<PubScriptFontMap>,
 }
 
@@ -531,6 +533,19 @@ pub struct PubParagraphAlignmentRun {
     pub alignment: PubParagraphAlignment,
     pub source_value: u16,
     pub source_ref: SourceRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTextColorRun {
+    pub story_id: StoryId,
+    pub story_utf16_start: u32,
+    pub story_utf16_end: u32,
+    pub story_scalar_start: u32,
+    pub story_scalar_end: u32,
+    pub rgb: [u8; 3],
+    pub source_color_index: u32,
+    pub inherited: bool,
+    pub source_refs: Vec<SourceRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2581,6 +2596,7 @@ pub fn build_mature_0x2c_from_streams(
     let mut typography_runs = Vec::new();
     let mut typography_size_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
+    let mut text_color_runs = Vec::new();
     let mut script_font_maps = Vec::new();
     if let Some(catalog) = typography_catalog {
         for map in &catalog.script_font_maps {
@@ -2712,6 +2728,103 @@ pub fn build_mature_0x2c_from_streams(
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
                 ),
+            });
+        }
+
+        for run in &catalog.text_color_runs {
+            let syid = run.story_syid.0;
+            let Some(story_id) = story_by_syid.get(&syid).copied() else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("text color references missing Story SYID {syid}"),
+                });
+                continue;
+            };
+            let Some(story) = graph.stories.get(&story_id) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("text color Story {story_id:?} is absent"),
+                });
+                continue;
+            };
+            let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                &story.text,
+                run.story_start_utf16,
+                run.story_end_utf16,
+            ) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!(
+                        "text color range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
+                        run.story_start_utf16, run.story_end_utf16
+                    ),
+                });
+                continue;
+            };
+            let Some(rgb) = bounded_quill_text_rgb(
+                run.raw_color_reference,
+                color_scheme.as_ref().map(|scheme| &scheme.scheme),
+            ) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!(
+                        "text color index {} uses unsupported color reference 0x{:08X}",
+                        run.color_index, run.raw_color_reference
+                    ),
+                });
+                continue;
+            };
+
+            let object_key = quill_story_object_key(syid);
+            let mut source_refs = vec![
+                source_ref(
+                    &graph.source,
+                    &run.fdpc_style_source,
+                    Some(object_key.clone()),
+                    Some("FDPC/TextColor".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    &graph.source,
+                    &run.color_reference_source,
+                    Some(object_key.clone()),
+                    Some("PL/TextColorReference".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ];
+            if let Some(source) = run.fdpp_style_source.as_ref() {
+                source_refs.push(source_ref(
+                    &graph.source,
+                    source,
+                    Some(object_key.clone()),
+                    Some("FDPP/DefaultCharacterStyle".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+            if let Some(source) = run.stsh_character_default_source.as_ref() {
+                source_refs.push(source_ref(
+                    &graph.source,
+                    source,
+                    Some(object_key),
+                    Some("STSH/CharacterDefault/TextColor".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+
+            text_color_runs.push(PubTextColorRun {
+                story_id,
+                story_utf16_start: run.story_start_utf16,
+                story_utf16_end: run.story_end_utf16,
+                story_scalar_start,
+                story_scalar_end,
+                rgb,
+                source_color_index: run.color_index,
+                inherited: run.color_source == QuillTypographyValueSource::InheritedStsh1,
+                source_refs,
             });
         }
         for run in &catalog.size_only_runs {
@@ -3315,6 +3428,7 @@ pub fn build_mature_0x2c_from_streams(
         typography_runs,
         typography_size_runs,
         paragraph_alignments,
+        text_color_runs,
         script_font_maps,
     })
 }
@@ -4529,6 +4643,24 @@ fn bounded_officeart_image_crop(
         right_raw,
         ambiguous: top_ambiguous || bottom_ambiguous || left_ambiguous || right_ambiguous,
     })
+}
+
+
+fn bounded_quill_text_rgb(
+    value: u32,
+    color_scheme: Option<&MatureColorScheme>,
+) -> Option<[u8; 3]> {
+    match (value >> 24) as u8 {
+        0x00 => {
+            let bytes = value.to_le_bytes();
+            Some([bytes[0], bytes[1], bytes[2]])
+        }
+        0x08 => {
+            let ordinal = usize::try_from(value & 0x00FF_FFFF).ok()?;
+            color_scheme?.slots.get(ordinal)?.rgb
+        }
+        _ => None,
+    }
 }
 
 fn direct_officeart_rgb(value: u32) -> Option<[u8; 3]> {
