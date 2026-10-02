@@ -3312,6 +3312,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             ViewerDiagnosticSeverity::FidelityWarning,
             "Document-wide OfficeArt drawing-group defaults are ambiguous; affected effective paint remains unresolved.",
         ),
+        DirectShapeTransformUnavailable { .. } => (
+            "viewer.geometry.transform_unavailable",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "A direct shape carries transform state that could not be projected safely.",
+        ),
     };
 
     ViewerDiagnostic {
@@ -4717,6 +4722,20 @@ mod tests {
         assert_eq!(mapped.severity, ViewerDiagnosticSeverity::FidelityWarning);
         assert!(!mapped.message.contains("Escher"));
         assert!(!mapped.message.contains("seq_num"));
+    }
+
+    #[test]
+    fn unavailable_direct_shape_transform_is_a_bounded_fidelity_warning() {
+        let mapped = map_bridge_diagnostic(&PubBridgeDiagnostic::DirectShapeTransformUnavailable {
+            seq_num: 42,
+            reason: "synthetic control".to_owned(),
+        });
+
+        assert_eq!(mapped.code, "viewer.geometry.transform_unavailable");
+        assert_eq!(mapped.severity, ViewerDiagnosticSeverity::FidelityWarning);
+        assert!(mapped.message.contains("transform state"));
+        assert!(!mapped.message.contains("synthetic control"));
+        assert!(!mapped.message.contains("42"));
     }
 
     #[test]
