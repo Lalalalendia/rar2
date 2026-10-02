@@ -182,7 +182,9 @@ fn effective_fill_rect_geometry_profile(
     }
     let [left, top, right, bottom] = values.map(|value| {
         i64::from(i32::from_le_bytes(
-            value.expect("checked effective fillRect scalar").to_le_bytes(),
+            value
+                .expect("checked effective fillRect scalar")
+                .to_le_bytes(),
         ))
     });
     if left == 0 && top == 0 && right == 0 && bottom == 0 {
