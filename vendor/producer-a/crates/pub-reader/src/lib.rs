@@ -5869,7 +5869,11 @@ mod tests {
         let paint = resolve_bounded_effective_officeart_paint(&shape, Some(&dgg), None, true)
             .expect("sparse TextBox fill remains bounded");
         assert_eq!(
-            paint.fill.color_rgb.expect("normative fill color").authority,
+            paint
+                .fill
+                .color_rgb
+                .expect("normative fill color")
+                .authority,
             PubEffectivePaintAuthority::NormativeDefault
         );
         assert!(paint.fill.visible.expect("explicit visibility").value);
