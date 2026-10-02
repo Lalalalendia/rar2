@@ -70,6 +70,19 @@ test("cardinal picture content rotation keeps the destination frame fixed", () =
   );
 });
 
+test("unrotated cropped image keeps fractional paint geometry", () => {
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 10.5, y: 20.25, width: 300.75, height: 400.125 }, null),
+    {
+      x: 10.5,
+      y: 20.25,
+      width: 300.75,
+      height: 400.125,
+      transform: null
+    }
+  );
+});
+
 test("cardinal picture content rotation is a placement transform, not a frame transform", () => {
   const resource = {
     resource_id: "resource:cardinal",
