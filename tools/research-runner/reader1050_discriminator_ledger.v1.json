@@ -1,0 +1,23 @@
+{
+  "schema": "chaptera.reader1050-discriminator-ledger.v1",
+  "entries": [
+    {
+      "source_sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+      "source_reader_run_id": "37072839900",
+      "discriminator_run_id": "37073284070",
+      "source_main_sha": "f98b00cc35410080d9dc3407701104427409b706",
+      "discriminator_kind": "typed_corruption_evidence_discovery",
+      "verdict": "salvage_path_reachable_if_typed_corruption_were_proven",
+      "decision": "superseded_by_existing_evidence",
+      "status": "superseded",
+      "superseded_by": {
+        "registry_schema": "chaptera.reader-known-evidence-registry.v1",
+        "registry_source_sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+        "authority_task_ids": [
+          "PUB-T-649",
+          "PUB-T-650"
+        ]
+      }
+    }
+  ]
+}
