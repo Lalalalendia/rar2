@@ -112,14 +112,8 @@ summary{padding:4px 0;color:#dfe6ef;font-size:12px;font-weight:700;cursor:pointe
 
 body.reader-open .intro{display:none}
 body.reader-open main{padding-top:14px}
-body.reader-open .workspace-shell{grid-template-columns:minmax(220px,245px) minmax(0,1fr);justify-content:stretch;align-items:start}
-body.reader-open .open-card{position:sticky;top:80px;padding:14px;max-height:calc(100vh - 96px);overflow:auto}
-body.reader-open .panel-heading{margin-bottom:10px}
-body.reader-open .drop{padding:18px 12px}
-body.reader-open .drop-icon{width:34px;height:34px;margin-bottom:8px;font-size:16px}
-body.reader-open .file-label{font-size:13px}
-body.reader-open .notice{font-size:10px}
-body.reader-open .saved-toolbar{gap:7px}
+body.reader-open .workspace-shell{grid-template-columns:minmax(0,1fr);justify-content:stretch;align-items:start}
+body.reader-open .open-card{display:none}
 
 .reader{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(250px,285px);overflow:hidden;border:1px solid var(--line);border-radius:13px;background:#11161d;box-shadow:0 12px 35px #0004}
 .reader-stage{min-width:0;border-right:1px solid var(--line)}
@@ -172,7 +166,6 @@ footer{padding:12px 20px 18px;text-align:center;color:#566273;font-size:10px}
 [hidden]{display:none!important}
 
 @media(max-width:1180px){
-  body.reader-open .workspace-shell{grid-template-columns:220px minmax(0,1fr)}
   .reader{grid-template-columns:minmax(0,1fr) 250px}
   .topbar-hint{display:none}
 }
@@ -186,13 +179,6 @@ footer{padding:12px 20px 18px;text-align:center;color:#566273;font-size:10px}
   .nav-item>span:first-child{width:auto}
   .sidebar-note{justify-content:center;padding:12px}
   body.reader-open .workspace-shell{grid-template-columns:1fr}
-  body.reader-open .open-card{position:relative;top:auto;max-height:none}
-  body.reader-open .open-card .drop{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;text-align:left}
-  body.reader-open .open-card .drop-icon{margin:0;grid-row:1/3}
-  body.reader-open .open-card .file-label{margin:0}
-  body.reader-open .open-card .drop>p{margin:0}
-  body.reader-open .open-card input[type=file],
-  body.reader-open .open-card .actions{grid-column:1/-1}
 }
 @media(max-width:760px){
   .reader{grid-template-columns:1fr}
@@ -221,8 +207,7 @@ footer{padding:12px 20px 18px;text-align:center;color:#566273;font-size:10px}
   .open-card{padding:13px}
   .drop{padding:24px 10px}
   body.reader-open main{padding-top:9px}
-  body.reader-open .open-card .drop{display:block;text-align:center}
-  body.reader-open .open-card .drop-icon{margin:0 auto 8px}
+
   .controls{gap:7px}
   .control-group{width:100%}
   .control-group select{flex:1}
