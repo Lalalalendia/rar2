@@ -42,6 +42,6 @@ pub use typography::{
     QuillParagraphAlignment, QuillParagraphAlignmentRun, QuillParagraphSelectorSource,
     QuillScriptFontEntry, QuillScriptFontEntryDisposition, QuillScriptFontMapObservation,
     QuillTextColorReference, QuillTextColorRun, QuillTextSizeRun, QuillTypographyCatalog,
-    QuillTypographyRange, QuillTypographyReadError,
-    QuillTypographyStoryIntersection, QuillTypographyValueSource, parse_bounded_typography,
+    QuillTypographyRange, QuillTypographyReadError, QuillTypographyStoryIntersection,
+    QuillTypographyValueSource, parse_bounded_typography,
 };
