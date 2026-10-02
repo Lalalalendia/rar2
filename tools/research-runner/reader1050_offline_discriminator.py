@@ -420,6 +420,48 @@ def build_discriminator(
         return payload
 
     selected_sha = str(selected["source_sha256"]).lower()
+    existing_owner = selected.get("existing_owner")
+    if isinstance(existing_owner, dict):
+        payload = {
+            "schema": SCHEMA,
+            "status": "existing_owner_handoff",
+            "source_reader_run_id": frontier.get("source_reader_run_id"),
+            "source_main_sha": frontier.get("source_main_sha"),
+            "selected_sha256": selected_sha,
+            "control_sha256": None,
+            "control_relation": "existing_owner",
+            "control_distance": None,
+            "verdict": "known_format_gap_not_corruption_candidate",
+            "closed_hypotheses": ["unowned_reader_failure", "generic_corruption_route"],
+            "next_discriminator": {
+                "kind": "handoff_existing_owner",
+                "owner": existing_owner.get("owner"),
+                "route": existing_owner.get("route"),
+                "reason": (
+                    "this exact witness already has a grounded format-research owner; "
+                    "normal Reader failure and diagnostic forced salvage reachability do not "
+                    "constitute independent corruption evidence"
+                ),
+                "target_carriers": [],
+            },
+            "physical_diff": None,
+            "control_shortlist": [],
+            "decision": "handoff_existing_owner",
+            "evidence_boundary": (
+                "source-free routing only; no new corruption classification is inferred "
+                "from forced-trigger diagnostics"
+            ),
+        }
+        out_root.mkdir(parents=True, exist_ok=True)
+        (out_root / "decision.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (out_root / "decision.md").write_text(
+            render_markdown(payload),
+            encoding="utf-8",
+        )
+        return payload
     fingerprints = index_rows(
         read_json(find_unique(reader_root, "fingerprints.json")),
         "sha256",
