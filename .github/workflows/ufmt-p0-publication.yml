@@ -659,6 +659,8 @@ jobs:
 
           #[cfg(test)]
           mod extended;
+          #[cfg(test)]
+          mod advanced;
           RUSTEOF
 
           cat > "$RUST/src/extended.rs" <<'RUSTXEOF'
@@ -937,13 +939,310 @@ jobs:
           }
           RUSTXEOF
 
+          cat > "$RUST/src/advanced.rs" <<'RUSTAEOF'
+          use super::*;
+          use std::collections::BTreeSet;
+          use std::env;
+          use std::fs::{self, File};
+          use std::path::{Path, PathBuf};
+
+          fn checked_bytes(payload: &[u8]) -> Vec<u8> {
+              let mut out = fnv64(payload).to_le_bytes().to_vec();
+              out.extend_from_slice(payload);
+              out
+          }
+
+          fn put_checked(dir: &Path, id: u64, payload: &[u8]) {
+              fs::write(
+                  dir.join("objects").join(format!("{id:016x}")),
+                  checked_bytes(payload),
+              ).unwrap();
+          }
+
+          fn read_checked(dir: &Path, id: u64) -> Option<Vec<u8>> {
+              let bytes = fs::read(dir.join("objects").join(format!("{id:016x}"))).ok()?;
+              if bytes.len() < 8 { return None; }
+              let expected = u64::from_le_bytes(bytes[..8].try_into().ok()?);
+              let payload = bytes[8..].to_vec();
+              (fnv64(&payload) == expected).then_some(payload)
+          }
+
+          fn payload_u64(bytes: &[u8]) -> Option<u64> {
+              let raw: [u8;8] = bytes.try_into().ok()?;
+              Some(u64::from_le_bytes(raw))
+          }
+
+          struct GraphStore { dir: PathBuf }
+
+          impl GraphStore {
+              fn fresh() -> Self {
+                  let s = Store::fresh();
+                  let dir = s.dir.clone();
+                  std::mem::forget(s);
+                  let g = Self { dir };
+                  let old = g.build_graph(100, 0);
+                  g.write_root(Slot::A, old);
+                  let _ = fs::remove_file(g.root_path(Slot::B));
+                  old_graph_sanity(&g, old);
+                  g
+              }
+
+              fn root_path(&self, slot: Slot) -> PathBuf {
+                  self.dir.join(match slot { Slot::A => "root.A", Slot::B => "root.B" })
+              }
+
+              fn build_graph(&self, base: u64, generation: u64) -> Head {
+                  let content = base;
+                  let manifest = base + 1;
+                  let commit = base + 2;
+                  put_checked(&self.dir, content, format!("content-generation-{generation}").as_bytes());
+                  put_checked(&self.dir, manifest, &content.to_le_bytes());
+                  put_checked(&self.dir, commit, &manifest.to_le_bytes());
+                  Head {
+                      epoch: generation,
+                      content_gen: generation,
+                      content_commit: commit,
+                      maint_epoch: 0,
+                      maint_state: 20,
+                  }
+              }
+
+              fn write_root(&self, slot: Slot, h: Head) {
+                  let mut f = File::create(self.root_path(slot)).unwrap();
+                  use std::io::Write;
+                  f.write_all(&encode(h)).unwrap();
+                  f.sync_all().unwrap();
+              }
+          }
+
+          impl Drop for GraphStore {
+              fn drop(&mut self) { let _ = fs::remove_dir_all(&self.dir); }
+          }
+
+          fn graph_closure(dir: &Path, h: Head) -> bool {
+              let Some(commit) = read_checked(dir, h.content_commit) else { return false; };
+              let Some(manifest_id) = payload_u64(&commit) else { return false; };
+              let Some(manifest) = read_checked(dir, manifest_id) else { return false; };
+              let Some(content_id) = payload_u64(&manifest) else { return false; };
+              read_checked(dir, content_id).is_some()
+                  && dir.join("objects").join(format!("{:016x}", h.maint_state)).is_file()
+          }
+
+          fn old_graph_sanity(g: &GraphStore, old: Head) {
+              assert!(graph_closure(&g.dir, old));
+          }
+
+          fn oracle_graph_slot(g: &GraphStore, slot: Slot) -> Option<Head> {
+              let bytes = fs::read(g.root_path(slot)).ok()?;
+              let h = decode(&bytes)?;
+              graph_closure(&g.dir, h).then_some(h)
+          }
+
+          fn oracle_graph_select(g: &GraphStore) -> Option<Head> {
+              match (oracle_graph_slot(g, Slot::A), oracle_graph_slot(g, Slot::B)) {
+                  (Some(x), Some(y)) if x.epoch == y.epoch && x != y => None,
+                  (Some(x), Some(y)) => Some(if y.epoch > x.epoch { y } else { x }),
+                  (Some(x), None) => Some(x),
+                  (None, Some(y)) => Some(y),
+                  _ => None,
+              }
+          }
+
+          fn corrupt_checked(g: &GraphStore, id: u64) {
+              let path = g.dir.join("objects").join(format!("{id:016x}"));
+              let mut bytes = fs::read(&path).unwrap();
+              let i = if bytes.len() > 8 { 8 } else { 0 };
+              bytes[i] ^= 0x5a;
+              fs::write(path, bytes).unwrap();
+          }
+
+          #[test]
+          fn f4_closure_damage_matrix() {
+              let cases = [
+                  ("remove-commit", 202u64, false),
+                  ("remove-manifest", 201u64, false),
+                  ("remove-content", 200u64, false),
+                  ("corrupt-commit", 202u64, true),
+                  ("corrupt-manifest", 201u64, true),
+                  ("corrupt-content", 200u64, true),
+              ];
+              for (name, id, corrupt) in cases {
+                  let g = GraphStore::fresh();
+                  let old = oracle_graph_select(&g).unwrap();
+                  let new = g.build_graph(200, 1);
+                  g.write_root(Slot::B, new);
+                  assert_eq!(oracle_graph_select(&g), Some(new), "precondition {name}");
+                  if corrupt {
+                      corrupt_checked(&g, id);
+                  } else {
+                      fs::remove_file(g.dir.join("objects").join(format!("{id:016x}"))).unwrap();
+                  }
+                  assert_eq!(oracle_graph_select(&g), Some(old), "{name}");
+              }
+              println!("UFMT_F4_CASES=6");
+          }
+
+          #[derive(Clone)]
+          struct GcPlan {
+              expected: Head,
+              targets: Vec<u64>,
+          }
+
+          fn graph_reachable(dir: &Path, h: Head) -> BTreeSet<u64> {
+              let mut out = BTreeSet::new();
+              out.insert(h.maint_state);
+              out.insert(h.content_commit);
+              if let Some(commit) = read_checked(dir, h.content_commit) {
+                  if let Some(manifest_id) = payload_u64(&commit) {
+                      out.insert(manifest_id);
+                      if let Some(manifest) = read_checked(dir, manifest_id) {
+                          if let Some(content_id) = payload_u64(&manifest) {
+                              out.insert(content_id);
+                          }
+                      }
+                  }
+              }
+              out
+          }
+
+          fn plan_gc(g: &GraphStore) -> GcPlan {
+              let expected = oracle_graph_select(g).unwrap();
+              let reachable = graph_reachable(&g.dir, expected);
+              let mut targets = Vec::new();
+              for entry in fs::read_dir(g.dir.join("objects")).unwrap() {
+                  let entry = entry.unwrap();
+                  let name = entry.file_name().to_string_lossy().into_owned();
+                  if let Ok(id) = u64::from_str_radix(&name, 16) {
+                      if !reachable.contains(&id) {
+                          targets.push(id);
+                      }
+                  }
+              }
+              targets.sort_unstable();
+              GcPlan { expected, targets }
+          }
+
+          fn apply_gc_safe(g: &GraphStore, plan: &GcPlan) -> Result<(), ()> {
+              if oracle_graph_select(g) != Some(plan.expected) { return Err(()); }
+              let reachable = graph_reachable(&g.dir, plan.expected);
+              for id in &plan.targets {
+                  if !reachable.contains(id) {
+                      let _ = fs::remove_file(g.dir.join("objects").join(format!("{id:016x}")));
+                  }
+              }
+              Ok(())
+          }
+
+          fn apply_gc_broken(g: &GraphStore, plan: &GcPlan) {
+              for id in &plan.targets {
+                  let _ = fs::remove_file(g.dir.join("objects").join(format!("{id:016x}")));
+              }
+          }
+
+          #[test]
+          fn f5_writer_writer_and_stale_gc_matrix() {
+              {
+                  let s = Store::fresh();
+                  let old = s.select().unwrap().1;
+                  let first = s.publish_content(old, 1, None).unwrap();
+                  assert_eq!(s.publish_content(old, 2, None), Err(PublishError::Conflict));
+                  let second = s.publish_content(first, 2, None).unwrap();
+                  assert_eq!(second.content_gen, old.content_gen + 2);
+                  assert!(s.closure_ok(second));
+              }
+
+              {
+                  let g = GraphStore::fresh();
+                  let old = oracle_graph_select(&g).unwrap();
+                  let new = g.build_graph(200, 1);
+                  let plan = plan_gc(&g);
+                  assert!(plan.targets.contains(&200));
+                  assert!(plan.targets.contains(&201));
+                  assert!(plan.targets.contains(&202));
+                  g.write_root(Slot::B, new);
+                  assert_eq!(oracle_graph_select(&g), Some(new));
+                  assert_eq!(apply_gc_safe(&g, &plan), Err(()));
+                  assert_eq!(oracle_graph_select(&g), Some(new));
+                  assert!(graph_closure(&g.dir, new));
+                  assert_eq!(old.epoch, 0);
+              }
+
+              {
+                  let g = GraphStore::fresh();
+                  let old = oracle_graph_select(&g).unwrap();
+                  let new = g.build_graph(200, 1);
+                  let plan = plan_gc(&g);
+                  g.write_root(Slot::B, new);
+                  assert_eq!(oracle_graph_select(&g), Some(new));
+                  apply_gc_broken(&g, &plan);
+                  assert_eq!(oracle_graph_select(&g), Some(old));
+                  assert!(!graph_closure(&g.dir, new));
+              }
+
+              let evidence = PathBuf::from(env::var("UFMT_EVIDENCE_DIR").expect("UFMT_EVIDENCE_DIR"));
+              fs::write(
+                  evidence.join("f4-f5-summary.json"),
+                  "{\n  \"schema\":\"ufmt.exp05.f4-f5.v1\",\n  \"f4_closure_damage_cases\":6,\n  \"f5_writer_writer_cases\":1,\n  \"f5_stale_gc_safe_cases\":1,\n  \"f5_broken_gc_negative_controls\":1\n}\n",
+              ).unwrap();
+              println!("UFMT_F5_CASES=3");
+          }
+          RUSTAEOF
+
           cp "$RUST/Cargo.toml" "$RECEIPT/source/Cargo.toml"
           cp "$RUST/src/lib.rs" "$RECEIPT/source/m0-lib.rs"
           cp "$RUST/src/extended.rs" "$RECEIPT/source/m0-extended.rs"
+          cp "$RUST/src/advanced.rs" "$RECEIPT/source/m0-advanced.rs"
 
           mkdir -p "$RECEIPT/fault"
           UFMT_EVIDENCE_DIR="$RECEIPT/fault" CARGO_NET_OFFLINE=true cargo test --manifest-path "$RUST/Cargo.toml" -- --nocapture \
             >"$RECEIPT/rust/cargo-test.log" 2>&1
+
+          python3 - <<'PYCHECK'
+          import json, pathlib
+          root = pathlib.Path("target/ufmt-p0/receipt/fault")
+          names = [f"P{i}" for i in range(11)]
+          counts = {"OLD":0, "NEW":0}
+          checked = []
+          for name in names:
+              plan = json.loads((root/f"fault-plan-{name}.json").read_text())
+              events = [json.loads(x) for x in (root/f"trace-{name}.jsonl").read_text().splitlines() if x.strip()]
+              assert plan["fault_point"] == name
+              assert plan["expected"] == "OLD_OR_NEW"
+              assert len(events) == 3
+              assert [e["seq"] for e in events] == [1,2,3]
+              assert events[0]["event_type"] == "PUBLISH_ATTEMPT"
+              assert events[1]["event_type"] == "CRASH_INJECT"
+              assert events[1]["fault_point"] == name
+              assert events[2]["event_type"] == "RECOVER"
+              expected_epoch = events[0]["expected_epoch"]
+              selected_epoch = events[2]["selected_epoch"]
+              classification = events[2]["classification"]
+              action = events[2]["abstract_action"]
+              if classification == "OLD":
+                  assert selected_epoch == expected_epoch
+                  assert action == "RecoverAfterCrash/Stutter"
+              elif classification == "NEW":
+                  assert selected_epoch == expected_epoch + 1
+                  assert action == "PublishContent"
+              else:
+                  raise AssertionError((name, classification))
+              counts[classification] += 1
+              checked.append(name)
+          summary = {
+              "schema":"ufmt.trace-refinement-check.v1",
+              "implementation":"independent-python-checker",
+              "schedules_checked":len(checked),
+              "fault_points":checked,
+              "old_recoveries":counts["OLD"],
+              "new_recoveries":counts["NEW"],
+              "invariant_violations":0,
+              "mapping":{
+                  "OLD":"RecoverAfterCrash/Stutter",
+                  "NEW":"PublishContent"
+              }
+          }
+          (root/"trace-refinement-summary.json").write_text(json.dumps(summary,indent=2,sort_keys=True)+"\n")
+          PYCHECK
 
           grep -E "states generated|distinct states|Model checking completed|Finished in" \
             "$RECEIPT/tla/correct.log" > "$RECEIPT/tla/correct-summary.txt" || true
@@ -951,7 +1250,7 @@ jobs:
 
           (
             cd "$RECEIPT"
-            sha256sum source/* tla/*.log rust/*.log > sha256sums.txt
+            find . -type f ! -name sha256sums.txt -print0 | sort -z | xargs -0 sha256sum > sha256sums.txt
           )
 
           python3 - <<'PYEOF'
@@ -980,6 +1279,15 @@ jobs:
                   "tests":"PASS",
                   "tests_passed": int(t.group(1)) if t else None,
                   "scope":"process-boundary/fs-API reference; not power-loss/filesystem-provider proof"
+              },
+              "exp03_exp05":{
+                  "b1_cut_suffix_cases":42,
+                  "b2_cut_suffix_cases":36,
+                  "f4_closure_damage_cases":6,
+                  "f5_concurrency_cases":3,
+                  "subprocess_kill_cases":2,
+                  "named_fault_schedules":11,
+                  "trace_refinement":json.loads((root/"fault/trace-refinement-summary.json").read_text())
               },
               "source_sha256":{
                   p.name:sha(p) for p in sorted((root/"source").iterdir())
