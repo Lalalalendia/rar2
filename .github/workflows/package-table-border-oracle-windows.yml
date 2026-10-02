@@ -29,7 +29,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build --locked --release --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin table_border_carrier_oracle_tool
+          cargo build --release --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin table_border_carrier_oracle_tool
           $exe = "vendor/producer-a/target/release/table_border_carrier_oracle_tool.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "helper missing" }
           $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
