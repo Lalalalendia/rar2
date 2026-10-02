@@ -19,6 +19,11 @@ const EXPECTED_SHA256: &str =
 const PICTURE_CONTRAST: u16 = 0x0108;
 const PICTURE_BRIGHTNESS: u16 = 0x0109;
 const PICTURE_RECOLOR: u16 = 0x011A;
+const PICTURE_RECOLOR_FAMILY_EXTRA_START: u16 = 0x011B;
+const PICTURE_RECOLOR_FAMILY_EXTRA_END: u16 = 0x011D;
+const BLIP_BOOLEANS: u16 = 0x013F;
+const BLIP_USE_PRESERVE_GRAYS_BIT: u32 = 1 << 22;
+const BLIP_PRESERVE_GRAYS_BIT: u32 = 1 << 6;
 
 const FILL_TYPE: u16 = 0x0180;
 const FILL_COLOR: u16 = 0x0181;
@@ -170,7 +175,9 @@ struct PageReceipt {
     image_recolor_resource_bound_count: usize,
     image_brightness_count: usize,
     image_contrast_count: usize,
+    recolor_family_extra_count: usize,
     recolor_storage_classes: BTreeMap<String, usize>,
+    recolor_preserve_grays_classes: BTreeMap<String, usize>,
     recolor_colorref_classes: BTreeMap<String, usize>,
     image_recolor_binding_classes: BTreeMap<String, usize>,
 
@@ -334,6 +341,35 @@ fn exact_virginia_p21_color_effect_source_census() {
                         recolor_class.clone(),
                     );
 
+                    let preserve_grays_class = match scalar_property(shape, BLIP_BOOLEANS) {
+                        Some(property) if property.op & BLIP_USE_PRESERVE_GRAYS_BIT != 0 => {
+                            if property.op & BLIP_PRESERVE_GRAYS_BIT != 0 {
+                                "preserve_grays"
+                            } else {
+                                "recolor_grays"
+                            }
+                        }
+                        Some(_) => "preserve_grays_unspecified",
+                        None if properties(shape, BLIP_BOOLEANS).is_empty() => "blip_booleans_absent",
+                        None => "blip_booleans_ambiguous_or_flagged",
+                    };
+                    bump(
+                        &mut receipt.recolor_preserve_grays_classes,
+                        preserve_grays_class,
+                    );
+
+                    receipt.recolor_family_extra_count += shape
+                        .fopts
+                        .iter()
+                        .flat_map(|record| record.properties.iter())
+                        .filter(|property| {
+                            let id = property.property_id();
+                            (PICTURE_RECOLOR_FAMILY_EXTRA_START
+                                ..=PICTURE_RECOLOR_FAMILY_EXTRA_END)
+                                .contains(&id)
+                        })
+                        .count();
+
                     if let (Some(image_slot), Some(recolor_property)) = (
                         node.payload.image_slot,
                         scalar_property(shape, PICTURE_RECOLOR),
@@ -413,7 +449,7 @@ fn exact_virginia_p21_color_effect_source_census() {
         }
 
         println!(
-            "P21_COLOR_CENSUS page={} scene={} canonical={} exact_shape={} missing_shape={} ambiguous_shape={} images={} image_bound={} recolor={} recolor_bound={} brightness={} contrast={} recolor_storage={:?} recolor_colorref={:?} recolor_bindings={:?} shapes={} large_shapes={} fill_types={:?} large_fill_types={:?} pattern={} pattern_bg_pxid={} pattern_viewer_solid={} pattern_bg_classes={:?}",
+            "P21_COLOR_CENSUS page={} scene={} canonical={} exact_shape={} missing_shape={} ambiguous_shape={} images={} image_bound={} recolor={} recolor_bound={} brightness={} contrast={} recolor_extra={} recolor_storage={:?} preserve_grays={:?} recolor_colorref={:?} recolor_bindings={:?} shapes={} large_shapes={} fill_types={:?} large_fill_types={:?} pattern={} pattern_bg_pxid={} pattern_viewer_solid={} pattern_bg_classes={:?}",
             receipt.viewer_page,
             receipt.scene_node_count,
             receipt.canonical_node_count,
@@ -426,7 +462,9 @@ fn exact_virginia_p21_color_effect_source_census() {
             receipt.image_recolor_resource_bound_count,
             receipt.image_brightness_count,
             receipt.image_contrast_count,
+            receipt.recolor_family_extra_count,
             receipt.recolor_storage_classes,
+            receipt.recolor_preserve_grays_classes,
             receipt.recolor_colorref_classes,
             receipt.image_recolor_binding_classes,
             receipt.non_table_shape_count,
