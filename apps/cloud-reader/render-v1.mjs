@@ -116,10 +116,10 @@ function imageDataUrl(resource) {
 }
 
 export function imageContentRotationGeometry(bounds, degrees = null) {
-  const x = safeInteger(bounds.x, "image.rotation.bounds.x");
-  const y = safeInteger(bounds.y, "image.rotation.bounds.y");
-  const width = safeInteger(bounds.width, "image.rotation.bounds.width");
-  const height = safeInteger(bounds.height, "image.rotation.bounds.height");
+  const x = finiteNumber(bounds.x, "image.rotation.bounds.x");
+  const y = finiteNumber(bounds.y, "image.rotation.bounds.y");
+  const width = finiteNumber(bounds.width, "image.rotation.bounds.width");
+  const height = finiteNumber(bounds.height, "image.rotation.bounds.height");
   if (width <= 0 || height <= 0) return null;
   if (degrees === null || degrees === undefined || degrees === 0) {
     return Object.freeze({ x, y, width, height, transform: null });
