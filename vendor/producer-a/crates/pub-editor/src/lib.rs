@@ -44,9 +44,9 @@ use pub_odg::{
     add_embedded_images_to_odg, project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
-    PubResolvedGraph, PubResolvedNodePayload, PubResolvedStoryFrame,
-    build_mature_0x2c_source_graph, materialize_bounded_simple_table_cells,
-    resolve_pub_source_graph,
+    PubAssetExportBundle, PubResolvedGraph, PubResolvedNodePayload, PubResolvedStoryFrame,
+    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -439,6 +439,48 @@ pub struct EditorReplacementAsset {
     pub sha256: Sha256Digest,
     pub mime: String,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditorSourceImageAsset {
+    mime: String,
+    bytes: Vec<u8>,
+}
+
+fn source_image_context_from_bundle(
+    bundle: PubAssetExportBundle,
+) -> (
+    BTreeMap<ResourceId, EditorSourceImageAsset>,
+    BTreeMap<NodeId, ResourceId>,
+) {
+    let mut files = bundle
+        .files
+        .into_iter()
+        .map(|file| (file.resource_id, file.bytes))
+        .collect::<BTreeMap<_, _>>();
+    let mut assets = BTreeMap::new();
+    let mut nodes = BTreeMap::new();
+
+    for entry in bundle.manifest.assets {
+        if !matches!(entry.mime.as_str(), "image/png" | "image/jpeg") {
+            continue;
+        }
+        let Some(bytes) = files.remove(&entry.resource_id) else {
+            continue;
+        };
+        assets.insert(
+            entry.resource_id,
+            EditorSourceImageAsset {
+                mime: entry.mime,
+                bytes,
+            },
+        );
+        for usage in entry.uses {
+            nodes.insert(usage.node_id, entry.resource_id);
+        }
+    }
+
+    (assets, nodes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1392,9 +1434,16 @@ pub fn open_mature_0x2c_editor(
 ) -> Result<EditorSession, EditorOpenError> {
     let source = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
         .map_err(|error| EditorOpenError::SourceGraph(error.to_string()))?;
+    let source_images = build_mature_0x2c_asset_export_bundle_from_bytes(bytes, &source.graph).ok();
     let resolved = resolve_pub_source_graph(&source.graph)
         .map_err(|error| EditorOpenError::Resolve(error.to_string()))?;
-    EditorSession::new(resolved.graph).map_err(EditorOpenError::Session)
+    let mut session = EditorSession::new(resolved.graph).map_err(EditorOpenError::Session)?;
+    if let Some(bundle) = source_images {
+        let (assets, nodes) = source_image_context_from_bundle(bundle);
+        session.source_image_assets = assets;
+        session.source_image_nodes = nodes;
+    }
+    Ok(session)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1515,6 +1564,8 @@ pub struct EditorSession {
     source_hash: Sha256Digest,
     graph: PubResolvedGraph,
     project_identity: Option<EditorProjectIdentity>,
+    source_image_assets: BTreeMap<ResourceId, EditorSourceImageAsset>,
+    source_image_nodes: BTreeMap<NodeId, ResourceId>,
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
@@ -1533,6 +1584,8 @@ impl EditorSession {
             source_hash,
             graph,
             project_identity: Some(new_project_identity()),
+            source_image_assets: BTreeMap::new(),
+            source_image_nodes: BTreeMap::new(),
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
@@ -1695,6 +1748,21 @@ impl EditorSession {
 
     pub fn authored_shape(&self, node_id: NodeId) -> Option<&AuthoredShapeRuntimeV1> {
         self.authored_shapes.get(&node_id)
+    }
+
+    pub fn source_image_count(&self) -> usize {
+        self.source_image_nodes
+            .keys()
+            .filter(|node_id| !self.image_replacements.contains_key(node_id))
+            .count()
+    }
+
+    fn externally_projected_image_nodes(&self) -> BTreeSet<NodeId> {
+        self.image_replacements
+            .keys()
+            .chain(self.source_image_nodes.keys())
+            .copied()
+            .collect()
     }
 
     pub fn replacement_assets(
@@ -2085,7 +2153,7 @@ impl EditorSession {
             match target {
                 EditorEditableTarget::Idml => {
                     let projection_plan =
-                        idml_base_projection_plan(&plan, self.image_replacements.keys().copied());
+                        idml_base_projection_plan(&plan, self.externally_projected_image_nodes());
                     let mut package = project_resolved_graph_to_idml(
                         &projection_plan,
                         &self.graph,
@@ -2096,7 +2164,7 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
-                    let placements = self.idml_replacement_placements()?;
+                    let placements = self.idml_image_placements()?;
                     add_embedded_images_to_idml(&plan, &mut package, &placements).map_err(
                         |error| EditorExportError::Projection {
                             target,
@@ -2111,7 +2179,7 @@ impl EditorSession {
                                 target,
                                 message: error.to_string(),
                             })?;
-                    let placements = self.odg_replacement_placements()?;
+                    let placements = self.odg_image_placements()?;
                     add_embedded_images_to_odg(&plan, &mut package, &placements).map_err(
                         |error| EditorExportError::Projection {
                             target,
@@ -2146,7 +2214,7 @@ impl EditorSession {
         let bytes = match target {
             EditorEditableTarget::Idml => {
                 let projection_plan =
-                    idml_base_projection_plan(&plan, self.image_replacements.keys().copied());
+                    idml_base_projection_plan(&plan, self.externally_projected_image_nodes());
                 let mut package = project_resolved_graph_to_idml(
                     &projection_plan,
                     &self.graph,
@@ -2157,7 +2225,7 @@ impl EditorSession {
                     target,
                     message: error.to_string(),
                 })?;
-                let placements = self.idml_replacement_placements()?;
+                let placements = self.idml_image_placements()?;
                 add_embedded_images_to_idml(&plan, &mut package, &placements).map_err(|error| {
                     EditorExportError::Projection {
                         target,
@@ -2177,7 +2245,7 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
-                let placements = self.odg_replacement_placements()?;
+                let placements = self.odg_image_placements()?;
                 add_embedded_images_to_odg(&plan, &mut package, &placements).map_err(|error| {
                     EditorExportError::Projection {
                         target,
@@ -2206,7 +2274,12 @@ impl EditorSession {
     ) -> Result<(ExportReport, String, ExportPlan), EditorExportError> {
         self.validate_source_identity()
             .map_err(EditorExportError::Session)?;
-        let plan = editable_export_plan(target, &self.graph, &self.image_replacements);
+        let plan = editable_export_plan(
+            target,
+            &self.graph,
+            &self.image_replacements,
+            &self.source_image_nodes,
+        );
         let report = build_export_report(
             &plan,
             ExportReportSource {
@@ -2217,6 +2290,68 @@ impl EditorSession {
         .map_err(|error| EditorExportError::Report(error.to_string()))?;
         let human_summary = render_human_summary(&report);
         Ok((report, human_summary, plan))
+    }
+
+    fn idml_image_placements(&self) -> Result<Vec<IdmlEmbeddedImagePlacement>, EditorExportError> {
+        let mut placements = self.idml_source_placements()?;
+        placements.extend(self.idml_replacement_placements()?);
+        placements.sort_by_key(|placement| placement.node_id);
+        Ok(placements)
+    }
+
+    fn idml_source_placements(&self) -> Result<Vec<IdmlEmbeddedImagePlacement>, EditorExportError> {
+        let target = EditorEditableTarget::Idml;
+        let mut placements = Vec::with_capacity(self.source_image_nodes.len());
+
+        for (node_id, resource_id) in &self.source_image_nodes {
+            if self.image_replacements.contains_key(node_id) {
+                continue;
+            }
+            let node =
+                self.graph
+                    .nodes
+                    .get(node_id)
+                    .ok_or_else(|| EditorExportError::Projection {
+                        target,
+                        message: format!(
+                            "source image node {} is missing from the resolved graph",
+                            node_id.as_canonical()
+                        ),
+                    })?;
+            let asset = self.source_image_assets.get(resource_id).ok_or_else(|| {
+                EditorExportError::Projection {
+                    target,
+                    message: format!(
+                        "source image resource {} has no exact PNG/JPEG byte backing",
+                        resource_id.as_canonical()
+                    ),
+                }
+            })?;
+            let (page_id, page) = self
+                .graph
+                .pages
+                .iter()
+                .find(|(page_id, _)| page_id.into_canonical() == node.header.parent_id)
+                .ok_or_else(|| EditorExportError::Projection {
+                    target,
+                    message: format!(
+                        "source image node {} is not directly authored on a page",
+                        node_id.as_canonical()
+                    ),
+                })?;
+
+            placements.push(IdmlEmbeddedImagePlacement {
+                node_id: *node_id,
+                page_id: *page_id,
+                page_size: page.size,
+                resource_id: *resource_id,
+                frame_bounds: node.header.bounds,
+                mime: asset.mime.clone(),
+                bytes: asset.bytes.clone(),
+            });
+        }
+
+        Ok(placements)
     }
 
     fn idml_replacement_placements(
@@ -2264,6 +2399,100 @@ impl EditorSession {
                 page_size: page.size,
                 resource_id: replacement_asset_resource_id(*asset_sha),
                 frame_bounds: node.header.bounds,
+                mime: asset.mime.clone(),
+                bytes: asset.bytes.clone(),
+            });
+        }
+
+        Ok(placements)
+    }
+
+    fn odg_image_placements(&self) -> Result<Vec<OdgEmbeddedImagePlacement>, EditorExportError> {
+        let mut placements = self.odg_source_placements()?;
+        placements.extend(self.odg_replacement_placements()?);
+        placements
+            .sort_by_key(|placement| (placement.page_id, placement.z_index, placement.node_id));
+        Ok(placements)
+    }
+
+    fn odg_source_placements(&self) -> Result<Vec<OdgEmbeddedImagePlacement>, EditorExportError> {
+        let target = EditorEditableTarget::Odg;
+        let mut placements = Vec::with_capacity(self.source_image_nodes.len());
+
+        for (node_id, resource_id) in &self.source_image_nodes {
+            if self.image_replacements.contains_key(node_id) {
+                continue;
+            }
+            let node =
+                self.graph
+                    .nodes
+                    .get(node_id)
+                    .ok_or_else(|| EditorExportError::Projection {
+                        target,
+                        message: format!(
+                            "source image node {} is missing from the resolved graph",
+                            node_id.as_canonical()
+                        ),
+                    })?;
+            let asset = self.source_image_assets.get(resource_id).ok_or_else(|| {
+                EditorExportError::Projection {
+                    target,
+                    message: format!(
+                        "source image resource {} has no exact PNG/JPEG byte backing",
+                        resource_id.as_canonical()
+                    ),
+                }
+            })?;
+            let (page_id, page) = self
+                .graph
+                .pages
+                .iter()
+                .find(|(page_id, _)| page_id.into_canonical() == node.header.parent_id)
+                .ok_or_else(|| EditorExportError::Projection {
+                    target,
+                    message: format!(
+                        "source image node {} is not directly authored on a page",
+                        node_id.as_canonical()
+                    ),
+                })?;
+
+            let authored = self
+                .graph
+                .nodes
+                .iter()
+                .filter_map(|(candidate_id, candidate)| {
+                    (candidate.header.parent_id == page_id.into_canonical())
+                        .then_some(*candidate_id)
+                })
+                .collect::<Vec<_>>();
+            let ordered = if page.children.len() == authored.len()
+                && page
+                    .children
+                    .iter()
+                    .zip(authored.iter())
+                    .all(|(left, right)| left == right)
+            {
+                page.children.as_slice()
+            } else {
+                authored.as_slice()
+            };
+            let z_index = ordered
+                .iter()
+                .position(|candidate| candidate == node_id)
+                .ok_or_else(|| EditorExportError::Projection {
+                    target,
+                    message: format!(
+                        "source image node {} has no page-local object order",
+                        node_id.as_canonical()
+                    ),
+                })?;
+
+            placements.push(OdgEmbeddedImagePlacement {
+                node_id: *node_id,
+                page_id: *page_id,
+                resource_id: *resource_id,
+                frame_bounds: node.header.bounds,
+                z_index,
                 mime: asset.mime.clone(),
                 bytes: asset.bytes.clone(),
             });
@@ -3778,6 +4007,7 @@ fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
     image_replacements: &BTreeMap<NodeId, Sha256Digest>,
+    source_image_nodes: &BTreeMap<NodeId, ResourceId>,
 ) -> ExportPlan {
     let mut features = BTreeMap::new();
     features.insert("page.geometry".into(), CapabilityLevel::Preserved);
@@ -3876,6 +4106,25 @@ fn editable_export_plan(
                 feature: IMAGE_BYTES_FEATURE.into(),
                 origin: Some(resource_id.into_canonical()),
                 property_path: Some("replacement_asset.bytes".into()),
+                require_preserved: true,
+            });
+            requests.push(SemanticFeatureRequest {
+                feature: IMAGE_FRAME_GEOMETRY_FEATURE.into(),
+                origin: Some(node_id.into_canonical()),
+                property_path: Some("node.bounds".into()),
+                require_preserved: true,
+            });
+            requests.push(SemanticFeatureRequest {
+                feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
+                origin: Some(node_id.into_canonical()),
+                property_path: Some("image.content_transform".into()),
+                require_preserved: false,
+            });
+        } else if let Some(resource_id) = source_image_nodes.get(node_id) {
+            requests.push(SemanticFeatureRequest {
+                feature: IMAGE_BYTES_FEATURE.into(),
+                origin: Some(resource_id.into_canonical()),
+                property_path: Some("source_image.bytes".into()),
                 require_preserved: true,
             });
             requests.push(SemanticFeatureRequest {
