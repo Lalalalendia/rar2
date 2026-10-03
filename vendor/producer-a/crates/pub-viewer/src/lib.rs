@@ -4129,6 +4129,7 @@ mod tests {
         let structural = legacy_noquill_structural_point_group_ids(&graph, &[page_id]);
         assert_eq!(structural, BTreeSet::from([node_id]));
 
+        let node = graph.nodes.get_mut(&node_id).expect("fixture node");
         node.header.bounds = RectEmu::new(
             LengthEmu::new(100),
             LengthEmu::new(200),
