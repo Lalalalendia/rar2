@@ -360,6 +360,7 @@ SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/image_decode_adapter.rs",
     "apps/chaptera-desktop/src/product_smoke.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
+    "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/fallback_font.rs",
     "apps/chaptera-desktop/src/source_font.rs",
 }
