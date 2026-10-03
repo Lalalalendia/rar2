@@ -24,7 +24,7 @@ diff_spec.loader.exec_module(cfb_diff)
 
 
 class Reader1050FrontierTests(unittest.TestCase):
-    def test_known_owned_format_gap_is_deprioritized(self) -> None:
+    def test_known_owned_format_gap_is_resolved_and_not_selectable(self) -> None:
         owned = {
             "source_sha256": "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
             "salvage_eligibility": "awaiting_typed_corruption_evidence",
@@ -33,16 +33,80 @@ class Reader1050FrontierTests(unittest.TestCase):
             "contents_family": None,
             "open_error_signature_sha256": "a" * 64,
         }
-        unowned = {
-            **owned,
-            "source_sha256": "f" * 64,
+        evidence = {
+            "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
+            "evidence_class": "format_gap",
+            "disposition": "existing_format_owner",
         }
-        owned_score, owned_reasons = frontier.priority(owned)
-        unowned_score, _ = frontier.priority(unowned)
+        resolution = frontier.research_resolution(
+            owned["source_sha256"],
+            evidence,
+            [],
+        )
+        self.assertIsNotNone(resolution)
+        self.assertFalse(resolution["selectable"])
+        owned_score, owned_reasons = frontier.priority(owned, resolution)
+        unowned_score, _ = frontier.priority(owned)
         self.assertLess(owned_score, unowned_score)
-        self.assertTrue(any("already owned by" in item for item in owned_reasons))
-        gap, _ = frontier.suggested_discriminator(owned)
+        self.assertTrue(any("resolved by" in item for item in owned_reasons))
+        gap, _ = frontier.suggested_discriminator(owned, resolution)
         self.assertEqual(gap, "existing_format_owner")
+
+    def test_typed_corruption_resolution_requires_matching_evidence_digest(self) -> None:
+        sha = "2" * 64
+        evidence = {
+            "owner": "PUB-T-650",
+            "evidence_class": "typed_corruption",
+            "authority_receipt": {
+                "evidence_digest": "sha256:authority",
+                "classification": "malformed-or-stale-publisher97-media-variant",
+            },
+            "disposition": "existing_typed_corruption_evidence",
+        }
+        stale = [{
+            "source_sha256": sha,
+            "discriminator": "typed_corruption_evidence_discovery",
+            "evidence_digest": "sha256:stale",
+            "state": "closed",
+        }]
+        self.assertIsNone(frontier.research_resolution(sha, evidence, stale))
+
+        current = [{
+            "source_sha256": sha,
+            "discriminator": "typed_corruption_evidence_discovery",
+            "evidence_digest": "sha256:authority",
+            "state": "closed",
+        }]
+        resolution = frontier.research_resolution(sha, evidence, current)
+        self.assertIsNotNone(resolution)
+        self.assertEqual(
+            resolution["kind"],
+            "existing_typed_corruption_evidence",
+        )
+        self.assertFalse(resolution["selectable"])
+
+    def test_forced_probe_becomes_effective_frontier_state(self) -> None:
+        row = {
+            "salvage_eligibility": "awaiting_typed_corruption_evidence",
+            "cfb_inventory_available": False,
+            "contents_family": None,
+            "has_surviving_evidence": False,
+            "forced_trigger_probe": {
+                "cfb_inventory_available": True,
+                "contents_family": "0x2c",
+                "has_surviving_evidence": True,
+            },
+            "forced_partial_graph": {
+                "status": "constructed",
+                "gap_count": 2,
+            },
+        }
+        effective = frontier.effective_reader_state(row)
+        self.assertTrue(effective["cfb_inventory_available"])
+        self.assertEqual(effective["contents_family"], "0x2c")
+        self.assertTrue(effective["has_surviving_evidence"])
+        gap, _ = frontier.suggested_discriminator(row)
+        self.assertEqual(gap, "typed_corruption_evidence_gap")
 
     def test_selects_bounded_highest_priority_unsupported_case(self) -> None:
         with tempfile.TemporaryDirectory() as td:
