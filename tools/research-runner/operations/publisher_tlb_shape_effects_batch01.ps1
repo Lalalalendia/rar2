@@ -50,6 +50,31 @@ $logDir = Join-Path $OutputRoot "logs"
 $privateDir = Join-Path $OutputRoot "private/tlb-shape-effects-batch01"
 New-Item -ItemType Directory -Force -Path $analysisDir,$blastDir,$logDir,$privateDir | Out-Null
 
+$progressPath = Join-Path $analysisDir "tlb-shape-effects-progress.json"
+$progressLogPath = Join-Path $logDir "tlb-shape-effects-progress.ndjson"
+$script:ProgressSequence = 0
+
+function Write-Progress {
+    param(
+        [string]$CandidateId = "",
+        [string]$ArmName = "",
+        [Parameter(Mandatory = $true)][string]$Step
+    )
+
+    $script:ProgressSequence++
+    $payload = [ordered]@{
+        schema = "chaptera.pub.t891-native-progress.v1"
+        experiment_id = $ExpectedExperiment
+        sequence = [int]$script:ProgressSequence
+        captured_at_utc = [DateTime]::UtcNow.ToString("o")
+        candidate_id = $CandidateId
+        arm = $ArmName
+        step = $Step
+    }
+    Write-PubJson -Value $payload -Path $progressPath
+    Add-Content -LiteralPath $progressLogPath -Value ($payload | ConvertTo-Json -Compress) -Encoding UTF8
+}
+
 function Release-Com($Value) {
     if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
         try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value) } catch {}
