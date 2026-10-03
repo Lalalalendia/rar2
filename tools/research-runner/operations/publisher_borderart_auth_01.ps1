@@ -479,6 +479,153 @@ function New-BaselinePublication {
     }
 }
 
+function Build-BorderArtFbidTool {
+    $prebuilt = [string]$env:PUB_RESEARCH_BORDERART_FBID_TOOL
+    if (-not [string]::IsNullOrWhiteSpace($prebuilt)) {
+        if (-not (Test-Path -LiteralPath $prebuilt -PathType Leaf)) {
+            throw "Configured PUB_RESEARCH_BORDERART_FBID_TOOL does not exist."
+        }
+        $expected = [string]$env:PUB_RESEARCH_BORDERART_FBID_TOOL_SHA256
+        if ([string]::IsNullOrWhiteSpace($expected)) {
+            throw "PUB_RESEARCH_BORDERART_FBID_TOOL_SHA256 is required for a prebuilt helper."
+        }
+        $resolved = (Resolve-Path -LiteralPath $prebuilt).Path
+        $actual = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected.ToLowerInvariant()) {
+            throw "Prebuilt BorderArt Fbid helper SHA-256 mismatch."
+        }
+        return [pscustomobject]@{
+            path = $resolved
+            sha256 = $actual
+            source = "prebuilt"
+            cargo_version = $null
+            cargo_lock_sha256 = $null
+            cargo_lock_origin = $null
+        }
+    }
+
+    $manifestPath = Join-Path $repoRoot "vendor/producer-a/Cargo.toml"
+    $workspaceRoot = Split-Path -Parent $manifestPath
+    $lockPath = Join-Path $workspaceRoot "Cargo.lock"
+    $targetDir = Join-Path $privateDir "cargo-target"
+    New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+
+    $cargoVersion = (& cargo --version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo --version failed with exit code $LASTEXITCODE"
+    }
+
+    $lockExisted = Test-Path -LiteralPath $lockPath -PathType Leaf
+    $generatedLock = $false
+    try {
+        if (-not $lockExisted) {
+            Push-Location $repoRoot
+            try {
+                & cargo generate-lockfile --offline --manifest-path $manifestPath
+                if ($LASTEXITCODE -ne 0) {
+                    throw "offline Cargo.lock generation failed with exit code $LASTEXITCODE"
+                }
+            }
+            finally {
+                Pop-Location
+            }
+            if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+                throw "Cargo.lock missing after offline generation"
+            }
+            $generatedLock = $true
+        }
+
+        $lockSha = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        Push-Location $repoRoot
+        try {
+            & cargo build --locked --offline --release --target-dir $targetDir --manifest-path $manifestPath -p pub-reader --bin borderart-fbid-census
+            if ($LASTEXITCODE -ne 0) {
+                throw "borderart-fbid-census offline build failed with exit code $LASTEXITCODE"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        $exe = Join-Path $targetDir "release/borderart-fbid-census.exe"
+        if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "borderart-fbid-census.exe missing after offline private-target build"
+        }
+        $helperSha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+
+        return [pscustomobject]@{
+            path = $exe
+            sha256 = $helperSha
+            source = "offline-cargo-build"
+            cargo_version = $cargoVersion
+            cargo_lock_sha256 = $lockSha
+            cargo_lock_origin = $(if ($generatedLock) { "generated-offline-for-run" } else { "preexisting" })
+        }
+    }
+    finally {
+        if ($generatedLock -and (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $lockPath -Force
+        }
+    }
+}
+
+function Invoke-BorderArtPhysicalScan {
+    param(
+        [Parameter(Mandatory = $true)][string]$Tool,
+        [Parameter(Mandatory = $true)][string]$PubPath,
+        [Parameter(Mandatory = $true)][string]$StageDir
+    )
+
+    $inputDir = Join-Path $StageDir "physical-input"
+    if (Test-Path -LiteralPath $inputDir) {
+        Remove-Item -LiteralPath $inputDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $inputDir | Out-Null
+    $subject = Join-Path $inputDir "subject.pub"
+    Copy-Item -LiteralPath $PubPath -Destination $subject -Force
+
+    $receiptPath = Join-Path $StageDir "borderart-fbid.json"
+    & $Tool $inputDir $receiptPath | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "borderart-fbid-census failed with exit code $LASTEXITCODE"
+    }
+    if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
+        throw "borderart-fbid-census did not write receipt."
+    }
+
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    if ([string]$receipt.schema -ne "chaptera.borderart-fbid-corpus-census.v1") {
+        throw "Unexpected BorderArt Fbid census schema: $($receipt.schema)"
+    }
+    if ([int]$receipt.corpus_file_count -ne 1 -or @($receipt.rows).Count -ne 1) {
+        throw "Expected a one-file BorderArt physical scan."
+    }
+
+    $row = @($receipt.rows)[0]
+    if ([string]$row.status -ne "mature_scanned" -or [string]$row.contents_family -ne "0x2c") {
+        throw "Generated Publisher output is not a mature 0x2C physical scan target."
+    }
+    if ([int]$row.shape_fbid_wrong_wire_count -ne 0 -or [int]$row.ifbmax_wrong_wire_count -ne 0) {
+        throw "BorderArt physical target coordinates were present with an unexpected wire type."
+    }
+
+    return [ordered]@{
+        source_sha256 = [string]$row.source_sha256
+        contents_family = [string]$row.contents_family
+        shape_chunk_count = [int]$row.shape_chunk_count
+        shape_chunks_with_opaque_tail = [int]$row.shape_chunks_with_opaque_tail
+        shape_fbid_wrong_wire_count = [int]$row.shape_fbid_wrong_wire_count
+        shape_fbid_observations = @($row.shape_fbid_observations)
+        fancy_borders_object_count = [int]$row.fancy_borders_object_count
+        fancy_borders_chunks_with_opaque_tail = [int]$row.fancy_borders_chunks_with_opaque_tail
+        ifbmax_wrong_wire_count = [int]$row.ifbmax_wrong_wire_count
+        ifbmax_observations = @($row.ifbmax_observations)
+        single_ifbmax = $row.single_ifbmax
+        all_fbid_in_range_when_single_ifbmax = $row.all_fbid_in_range_when_single_ifbmax
+    }
+}
+
 function Invoke-Fingerprint {
     param(
         [Parameter(Mandatory = $true)][string]$PubPath,
@@ -498,7 +645,8 @@ function Invoke-Fingerprint {
 function Snapshot-Publication {
     param(
         [Parameter(Mandatory = $true)][string]$PubPath,
-        [Parameter(Mandatory = $true)][string]$StageDir
+        [Parameter(Mandatory = $true)][string]$StageDir,
+        [Parameter(Mandatory = $true)][string]$FbidTool
     )
 
     New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
@@ -522,8 +670,10 @@ function Snapshot-Publication {
     }
 
     $fingerprint = Invoke-Fingerprint -PubPath $PubPath -PdfPath $pdfPath -SemanticPath $semanticPath -FingerprintPath $fingerprintPath
+    $physicalBorderArt = Invoke-BorderArtPhysicalScan -Tool $FbidTool -PubPath $PubPath -StageDir $StageDir
     return [ordered]@{
         semantic = $semantic
+        physical_borderart = $physicalBorderArt
         semantic_fingerprint = $fingerprint.semantic_fingerprint
         persistence_fingerprint = $fingerprint.persistence_fingerprint
         render_fingerprint = $fingerprint.render_fingerprint
@@ -614,9 +764,24 @@ function Line-Equivalent {
     )
 }
 
+function Get-FbidValueVector {
+    param($Stage)
+    return @(
+        @($Stage.physical_borderart.shape_fbid_observations) |
+            ForEach-Object { [int]$_.value }
+    )
+}
+
+function Fbid-VectorEqual {
+    param($Left, $Right)
+    return ((@(Get-FbidValueVector -Stage $Left) -join ",") -eq (@(Get-FbidValueVector -Stage $Right) -join ","))
+}
+
+$fbidToolInfo = Build-BorderArtFbidTool
+
 $baselinePub = Join-Path $privateDir "baseline.pub"
 New-BaselinePublication -Path $baselinePub
-$control = Snapshot-Publication -PubPath $baselinePub -StageDir (Join-Path $privateDir "control")
+$control = Snapshot-Publication -PubPath $baselinePub -StageDir (Join-Path $privateDir "control") -FbidTool $fbidToolInfo.path
 
 $catalog = @($control.semantic.borderart_catalog)
 if ($catalog.Count -lt 1) {
@@ -633,7 +798,7 @@ $applyReceipt = Save-FromSource -SourcePub $baselinePub -OutputPub $applyPub -Mu
     param($doc, $shape)
     return Apply-BorderArtByName -Document $doc -Shape $shape -CatalogIndex ([int]$selectedCatalog.index) -Name $selectedName
 }
-$applied = Snapshot-Publication -PubPath $applyPub -StageDir (Join-Path $privateDir "apply")
+$applied = Snapshot-Publication -PubPath $applyPub -StageDir (Join-Path $privateDir "apply") -FbidTool $fbidToolInfo.path
 
 $deletePub = Join-Path $privateDir "delete.pub"
 $deleteReceipt = Save-FromSource -SourcePub $applyPub -OutputPub $deletePub -Mutation {
@@ -641,7 +806,7 @@ $deleteReceipt = Save-FromSource -SourcePub $applyPub -OutputPub $deletePub -Mut
     Delete-BorderArt -Shape $shape
     return [ordered]@{ deleted = $true }
 }
-$deleted = Snapshot-Publication -PubPath $deletePub -StageDir (Join-Path $privateDir "delete")
+$deleted = Snapshot-Publication -PubPath $deletePub -StageDir (Join-Path $privateDir "delete") -FbidTool $fbidToolInfo.path
 
 $linePub = Join-Path $privateDir "line-mutate.pub"
 $lineReceipt = Save-FromSource -SourcePub $applyPub -OutputPub $linePub -Mutation {
@@ -651,28 +816,28 @@ $lineReceipt = Save-FromSource -SourcePub $applyPub -OutputPub $linePub -Mutatio
     $after = Get-LineSnapshot -Shape $shape
     return [ordered]@{ before = $before; after = $after }
 }
-$lineMutated = Snapshot-Publication -PubPath $linePub -StageDir (Join-Path $privateDir "line-mutate")
+$lineMutated = Snapshot-Publication -PubPath $linePub -StageDir (Join-Path $privateDir "line-mutate") -FbidTool $fbidToolInfo.path
 
 $weightPub = Join-Path $privateDir "border-weight.pub"
 $weightReceipt = Save-FromSource -SourcePub $applyPub -OutputPub $weightPub -Mutation {
     param($doc, $shape)
     return Mutate-BorderArtWeight -Shape $shape
 }
-$weightMutated = Snapshot-Publication -PubPath $weightPub -StageDir (Join-Path $privateDir "border-weight")
+$weightMutated = Snapshot-Publication -PubPath $weightPub -StageDir (Join-Path $privateDir "border-weight") -FbidTool $fbidToolInfo.path
 
 $colorPub = Join-Path $privateDir "border-color.pub"
 $colorReceipt = Save-FromSource -SourcePub $applyPub -OutputPub $colorPub -Mutation {
     param($doc, $shape)
     return Mutate-BorderArtColor -Shape $shape
 }
-$colorMutated = Snapshot-Publication -PubPath $colorPub -StageDir (Join-Path $privateDir "border-color")
+$colorMutated = Snapshot-Publication -PubPath $colorPub -StageDir (Join-Path $privateDir "border-color") -FbidTool $fbidToolInfo.path
 
 $stretchPub = Join-Path $privateDir "border-stretch.pub"
 $stretchReceipt = Save-FromSource -SourcePub $applyPub -OutputPub $stretchPub -Mutation {
     param($doc, $shape)
     return Mutate-BorderArtStretch -Shape $shape
 }
-$stretchMutated = Snapshot-Publication -PubPath $stretchPub -StageDir (Join-Path $privateDir "border-stretch")
+$stretchMutated = Snapshot-Publication -PubPath $stretchPub -StageDir (Join-Path $privateDir "border-stretch") -FbidTool $fbidToolInfo.path
 
 $controlVsApply = Compare-Stages -Left $control -Right $applied
 $applyVsDelete = Compare-Stages -Left $applied -Right $deleted
@@ -713,6 +878,35 @@ $stretchMutationPersists = (
     [bool]$stretchMutated.semantic.borderart.stretch_pictures -eq [bool]$stretchReceipt.requested
 )
 
+$controlFbidValues = @(Get-FbidValueVector -Stage $control)
+$appliedFbidValues = @(Get-FbidValueVector -Stage $applied)
+$deletedFbidValues = @(Get-FbidValueVector -Stage $deleted)
+$lineFbidValues = @(Get-FbidValueVector -Stage $lineMutated)
+$weightFbidValues = @(Get-FbidValueVector -Stage $weightMutated)
+$colorFbidValues = @(Get-FbidValueVector -Stage $colorMutated)
+$stretchFbidValues = @(Get-FbidValueVector -Stage $stretchMutated)
+
+$applyPhysicalFbidPresent = $appliedFbidValues.Count -gt 0
+$applyPhysicalIfbMaxPresent = $null -ne $applied.physical_borderart.single_ifbmax
+$applyPhysicalFbidInRange = (
+    $applyPhysicalFbidPresent -and
+    $applyPhysicalIfbMaxPresent -and
+    [bool]$applied.physical_borderart.all_fbid_in_range_when_single_ifbmax
+)
+$deleteChangesOrRemovesFbidProjection = -not (Fbid-VectorEqual -Left $applied -Right $deleted)
+$lineMutationPreservesFbidProjection = Fbid-VectorEqual -Left $applied -Right $lineMutated
+$weightMutationPreservesFbidProjection = Fbid-VectorEqual -Left $applied -Right $weightMutated
+$colorMutationPreservesFbidProjection = Fbid-VectorEqual -Left $applied -Right $colorMutated
+$stretchMutationPreservesFbidProjection = Fbid-VectorEqual -Left $applied -Right $stretchMutated
+
+$physicalAuthoritySignal = "physical-projection-not-yet-localized"
+if ($applyPhysicalFbidInRange -and $deleteChangesOrRemovesFbidProjection) {
+    $physicalAuthoritySignal = "runtime-borderart-to-fbid-projection"
+}
+elseif ($applyPhysicalFbidInRange) {
+    $physicalAuthoritySignal = "persisted-fbid-projection-without-delete-delta"
+}
+
 $classification = "inconclusive"
 if ($applyPersists -and $deleteRemoves -and $linePreservedAcrossApply -and $lineRestoredAfterDelete -and $lineMutationPersists -and $borderSurvivesLineMutation) {
     $classification = "independent-borderart-layer-candidate"
@@ -730,8 +924,15 @@ $result = [ordered]@{
     authority_boundary = "Bounded Publisher2019 rectangle experiment only. It proves COM/persistence/render relations among built-in Shape.BorderArt, ordinary Shape.Line and Save/reopen. It does not generalize to text boxes, picture frames, custom BorderArt portability, or exact .PUB carrier naming without separate byte-localization evidence."
     documentation_contract = [ordered]@{
         shape_borderart_surface = "Shape.BorderArt -> BorderArtFormat"
-        borderart_operations = @("Set/Name","Delete","Weight","Color.RGB","StretchPictures")
+        borderart_operations = @("catalog-object assignment","Set/Name","Delete","Weight","Color.RGB","StretchPictures")
         eligible_control = "rectangle"
+    }
+    tooling = [ordered]@{
+        borderart_fbid_helper_source = [string]$fbidToolInfo.source
+        borderart_fbid_helper_sha256 = [string]$fbidToolInfo.sha256
+        cargo_version = $fbidToolInfo.cargo_version
+        cargo_lock_sha256 = $fbidToolInfo.cargo_lock_sha256
+        cargo_lock_origin = $fbidToolInfo.cargo_lock_origin
     }
     fixture = [ordered]@{
         kind = "generated"
@@ -771,6 +972,23 @@ $result = [ordered]@{
         apply_vs_border_color = $applyVsColor
         apply_vs_border_stretch = $applyVsStretch
     }
+    physical_projection = [ordered]@{
+        control_fbid_values = @($controlFbidValues)
+        applied_fbid_values = @($appliedFbidValues)
+        deleted_fbid_values = @($deletedFbidValues)
+        line_mutated_fbid_values = @($lineFbidValues)
+        weight_mutated_fbid_values = @($weightFbidValues)
+        color_mutated_fbid_values = @($colorFbidValues)
+        stretch_mutated_fbid_values = @($stretchFbidValues)
+        control_ifbmax = $control.physical_borderart.single_ifbmax
+        applied_ifbmax = $applied.physical_borderart.single_ifbmax
+        deleted_ifbmax = $deleted.physical_borderart.single_ifbmax
+        line_mutated_ifbmax = $lineMutated.physical_borderart.single_ifbmax
+        weight_mutated_ifbmax = $weightMutated.physical_borderart.single_ifbmax
+        color_mutated_ifbmax = $colorMutated.physical_borderart.single_ifbmax
+        stretch_mutated_ifbmax = $stretchMutated.physical_borderart.single_ifbmax
+        authority_signal = $physicalAuthoritySignal
+    }
     checks = [ordered]@{
         apply_persists_after_reopen = [bool]$applyPersists
         ordinary_line_preserved_across_apply = [bool]$linePreservedAcrossApply
@@ -781,6 +999,14 @@ $result = [ordered]@{
         borderart_weight_mutation_persists = [bool]$weightMutationPersists
         borderart_color_mutation_persists = [bool]$colorMutationPersists
         borderart_stretch_mutation_persists = [bool]$stretchMutationPersists
+        applied_physical_fbid_present = [bool]$applyPhysicalFbidPresent
+        applied_physical_ifbmax_present = [bool]$applyPhysicalIfbMaxPresent
+        applied_physical_fbid_in_range = [bool]$applyPhysicalFbidInRange
+        delete_changes_or_removes_fbid_projection = [bool]$deleteChangesOrRemovesFbidProjection
+        ordinary_line_mutation_preserves_fbid_projection = [bool]$lineMutationPreservesFbidProjection
+        borderart_weight_mutation_preserves_fbid_projection = [bool]$weightMutationPreservesFbidProjection
+        borderart_color_mutation_preserves_fbid_projection = [bool]$colorMutationPreservesFbidProjection
+        borderart_stretch_mutation_preserves_fbid_projection = [bool]$stretchMutationPreservesFbidProjection
     }
     classification = $classification
 }
@@ -801,5 +1027,10 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "borderart-auth-01.js
     "weight_mutation_persists=$weightMutationPersists",
     "color_mutation_persists=$colorMutationPersists",
     "stretch_mutation_persists=$stretchMutationPersists",
+    "applied_fbid_values=$($appliedFbidValues -join ',')",
+    "applied_ifbmax=$($applied.physical_borderart.single_ifbmax)",
+    "delete_fbid_values=$($deletedFbidValues -join ',')",
+    "line_fbid_values=$($lineFbidValues -join ',')",
+    "physical_authority_signal=$physicalAuthoritySignal",
     "classification=$classification"
 ) | Set-Content -LiteralPath (Join-Path $logDir "borderart-auth-01.txt") -Encoding ASCII
