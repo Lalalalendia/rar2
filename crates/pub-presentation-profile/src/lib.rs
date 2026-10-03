@@ -264,15 +264,11 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     let first_service = input.pages.get(customer_end)?;
     let tail_pages = input.pages.get(customer_end.checked_add(1)?..)?;
 
-    if !customer_pages
-        .iter()
-        .enumerate()
-        .all(|(offset, page)| {
-            page.document_ordinal == offset + 1
-                && oid_is_nonzero(page)
-                && page.applied_master_seq_num == Some(master_seq)
-        })
-        || first_service.document_ordinal != service_ordinal
+    if !customer_pages.iter().enumerate().all(|(offset, page)| {
+        page.document_ordinal == offset + 1
+            && oid_is_nonzero(page)
+            && page.applied_master_seq_num == Some(master_seq)
+    }) || first_service.document_ordinal != service_ordinal
         || !oid_is_zero(first_service)
         || first_service.applied_master_seq_num != Some(master_seq)
         || tail_pages.len() != 2
