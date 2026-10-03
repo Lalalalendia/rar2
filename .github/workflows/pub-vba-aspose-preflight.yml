@@ -10,6 +10,7 @@ concurrency:
   group: pub-vba-aspose-preflight-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Temporary measurement workflow; do not merge into main.
 permissions:
   contents: read
 
