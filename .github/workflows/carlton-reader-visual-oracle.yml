@@ -201,6 +201,12 @@ jobs:
           "CHAPTERA_CARLTON_REFERENCE_PDF=$pdf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHAPTERA_CARLTON_VISUAL_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Emit source-safe Carlton paragraph-alignment receipt
+        shell: pwsh
+        run: |
+          cargo test --manifest-path vendor/producer-a/crates/pub-quill/Cargo.toml --test effective_typography_real real_carlton_paragraph_alignment_receipt_is_source_safe -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "Carlton paragraph-alignment receipt failed" }
+
       - name: Check shared render plan
         run: cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml
 
