@@ -25,7 +25,9 @@ fn main() {
     }
     if let Some(parent) = output.parent() {
         if let Err(error) = fs::create_dir_all(parent) {
-            fail(format!("cannot create fallback-font parent directory: {error}"));
+            fail(format!(
+                "cannot create fallback-font parent directory: {error}"
+            ));
         }
     }
     if let Err(error) = fs::write(&output, resource::bytes()) {
