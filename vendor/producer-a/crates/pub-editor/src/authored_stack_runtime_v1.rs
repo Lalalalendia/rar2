@@ -53,7 +53,10 @@ impl fmt::Display for AuthoredStackReorderErrorV1 {
                 write!(formatter, "authored stack does not contain {node_id:?}")
             }
             Self::NoChange { node_id } => {
-                write!(formatter, "authored-stack reorder for {node_id:?} is a no-op")
+                write!(
+                    formatter,
+                    "authored-stack reorder for {node_id:?} is a no-op"
+                )
             }
             Self::BeforeStateMismatch => {
                 formatter.write_str("authored-stack reorder before state is stale")
