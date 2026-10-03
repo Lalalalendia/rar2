@@ -36,8 +36,8 @@
     {
       "source_sha256": "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
       "discriminator": "typed_corruption_evidence_discovery",
-      "evidence_digest": null,
-      "state": "open",
+      "evidence_digest": "sha256:cc3655207b887ccf55b20494b066c5af394ddc1d0ef579cb9cf0a48bc751fe63",
+      "state": "closed",
       "receipt": {
         "source_main_sha": "9c58d1273ea496ea0f25c535540cc5c54356df20",
         "source_reader_run_id": "37111581663",
@@ -49,10 +49,41 @@
         "verdict": "salvage_path_reachable_if_typed_corruption_were_proven",
         "forced_contents_family": "0x2c",
         "forced_verified_image_count": 6,
-        "forced_gap_count": 2
+        "forced_gap_count": 2,
+        "research_pr_number": 931,
+        "research_workflow_run_id": "37125662981",
+        "research_artifact_id": "11275135765",
+        "research_artifact_digest": "sha256:f2b840ba9f00792ad378544f2b87608c1a863e160d041eb88f1da5fd118991c7",
+        "evidence_payload_sha256": "sha256:cc3655207b887ccf55b20494b066c5af394ddc1d0ef579cb9cf0a48bc751fe63",
+        "research_verdict": "typed_structural_corruption_evidence",
+        "classification": "quill_descriptor_tail_overwritten_or_malformed",
+        "corpus_pub_count": 1050,
+        "quill_stream_present_count": 399,
+        "same_root_envelope_witness_count": 8,
+        "normal_open_control_count": 7,
+        "invalid_marker_witness_count": 1,
+        "exact_prefix_match_count": 2
       },
-      "outcome": "independent_typed_corruption_evidence_required",
-      "next_owner": "typed_corruption_evidence_discovery"
+      "outcome": "existing_typed_corruption_evidence"
+    },
+    {
+      "source_sha256": "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
+      "discriminator": "bounded_salvage_admission_validation",
+      "evidence_digest": "sha256:cc3655207b887ccf55b20494b066c5af394ddc1d0ef579cb9cf0a48bc751fe63",
+      "state": "handoff",
+      "receipt": {
+        "research_workflow_run_id": "37125662981",
+        "research_artifact_id": "11275135765",
+        "research_artifact_digest": "sha256:f2b840ba9f00792ad378544f2b87608c1a863e160d041eb88f1da5fd118991c7",
+        "evidence_payload_sha256": "sha256:cc3655207b887ccf55b20494b066c5af394ddc1d0ef579cb9cf0a48bc751fe63",
+        "research_verdict": "typed_structural_corruption_evidence",
+        "frontier_workflow_run_id": "37111717745",
+        "frontier_artifact_id": "11269274273",
+        "frontier_artifact_digest": "sha256:25b4b46b3f720dbe350a24b97dc40379f9eb2bee8ff50d172d9cd8dd4f9a8e5c",
+        "frontier_verdict": "salvage_path_reachable_if_typed_corruption_were_proven"
+      },
+      "outcome": "bind_existing_authority_to_forced_salvage_path",
+      "next_owner": "reader_salvage_admission"
     }
   ]
 }
