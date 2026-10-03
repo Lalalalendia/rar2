@@ -15,7 +15,9 @@ GEOMETRY_PREFIX = "CHAPTERA_SCENE_GEOMETRY "
 REASONS = {
     "source_identity", "page_index", "page_dimensions", "duplicate_page",
     "duplicate_node", "node_bounds", "node_ancestry", "story_binding",
-    "image_binding", "table_binding", "paint_binding", "text_binding",
+    "image_binding", "image_placement_unknown_node", "image_resource_unknown_node",
+    "duplicate_image_resource", "multiple_image_resources", "duplicate_image_window",
+    "duplicate_image_recolor", "table_binding", "paint_binding", "text_binding",
     "projected_instance", "scene_byte_cap", "fallback_font", "unclassified",
 }
 FIXTURES = [
@@ -39,9 +41,13 @@ fn research_scene_projection_reason(error: &str) -> &'static str {
     else if error.starts_with("Viewer node parent cycle ") || error.starts_with("missing Viewer node ")
         || error.starts_with("Viewer node ") && error.ends_with(" resolves to neither page nor node") { "node_ancestry" }
     else if error.starts_with("story frame references unknown node ") { "story_binding" }
-    else if error.starts_with("image ") || error.starts_with("duplicate image ")
-        || error.starts_with("duplicate Viewer image resource ")
-        || error.starts_with("node ") && error.ends_with(" has multiple image resources") { "image_binding" }
+    else if error.starts_with("image placement references unknown node ") { "image_placement_unknown_node" }
+    else if error.starts_with("image resource references unknown node ") { "image_resource_unknown_node" }
+    else if error.starts_with("duplicate Viewer image resource ") { "duplicate_image_resource" }
+    else if error.starts_with("node ") && error.ends_with(" has multiple image resources") { "multiple_image_resources" }
+    else if error.starts_with("duplicate image source window ") { "duplicate_image_window" }
+    else if error.starts_with("duplicate image recolor ") { "duplicate_image_recolor" }
+    else if error.starts_with("image ") || error.starts_with("duplicate image ") { "image_binding" }
     else if error.starts_with("table ") || error.starts_with("duplicate table binding ") { "table_binding" }
     else if error.starts_with("duplicate paint binding ") { "paint_binding" }
     else if error.starts_with("text fragment ") || error.starts_with("direct render-plan ")
@@ -133,6 +139,8 @@ def safe_diagnostics(stderr: str) -> dict:
 
 
 def observe(source_root: Path, corpus: Path, output: Path, probe_commit: str) -> dict:
+    # subprocess.cwd differs from this caller; all data paths cross that boundary absolutely.
+    source_root, corpus, output = source_root.resolve(), corpus.resolve(), output.resolve()
     worker = source_root / "target/scene-projection-probe/debug/chaptera"
     harness = source_root / "tools/migration_pdf_worker_isolation.py"
     rows = []
@@ -143,6 +151,7 @@ def observe(source_root: Path, corpus: Path, output: Path, probe_commit: str) ->
                "role": role, "publisher_reference_state": ref_state}
         source = corpus / (sha + ".pub")
         worker_output = work_root / fid
+        stage = "fixture_admission"
         try:
             data = source.read_bytes()
             if len(data) != size or digest(data) != sha:
@@ -155,6 +164,7 @@ def observe(source_root: Path, corpus: Path, output: Path, probe_commit: str) ->
                 "--session-id", "guest:" + str(index).zfill(32),
                 "--expected-sha256", sha, "--expected-byte-len", str(size),
             ]
+            stage = "worker_execution"
             completed = subprocess.run(command, cwd=source_root, capture_output=True,
                                        text=True, timeout=135, check=False)
             isolation = json.loads(completed.stdout)
@@ -163,8 +173,10 @@ def observe(source_root: Path, corpus: Path, output: Path, probe_commit: str) ->
             if isolation.get("status") != "success":
                 row["measurement_status"] = "isolation_failed"
             else:
+                stage = "worker_receipt_read"
                 receipt_bytes = (worker_output / "result.json").read_bytes()
                 receipt = json.loads(receipt_bytes)
+                stage = "worker_receipt_admission"
                 if receipt.get("source_sha256") != sha or receipt.get("source_byte_len") != size:
                     raise ValueError("worker_receipt_identity_mismatch")
                 if receipt.get("filesystem_confinement") is not True:
@@ -193,6 +205,7 @@ def observe(source_root: Path, corpus: Path, output: Path, probe_commit: str) ->
         except (ValueError, OSError, subprocess.TimeoutExpired):
             # Exceptions may contain source paths/raw subprocess output; retain a fixed code only.
             row["measurement_status"] = "probe_input_or_harness_failed"
+            row["probe_failure_stage"] = stage
         finally:
             shutil.rmtree(worker_output, ignore_errors=True)
         rows.append(row)
@@ -245,4 +258,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

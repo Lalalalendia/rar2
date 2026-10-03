@@ -1,5 +1,13 @@
+import hashlib
+import json
+import tempfile
 import unittest
-from batch01_scene_projection_probe import ERROR_PREFIX, GEOMETRY_PREFIX, ERROR_ARM, instrument, safe_diagnostics
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from subprocess import CompletedProcess
+from unittest.mock import patch
+from batch01_scene_projection_probe import ERROR_PREFIX, GEOMETRY_PREFIX, ERROR_ARM, instrument, observe, safe_diagnostics
 
 
 class ProbeContractTests(unittest.TestCase):
@@ -34,7 +42,52 @@ class ProbeContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             instrument("unrelated source")
 
+    def test_relative_output_survives_worker_cwd_change(self):
+        with tempfile.TemporaryDirectory(dir=".") as temp:
+            root = Path(temp)
+            source = root / "producer"
+            corpus = root / "corpus"
+            corpus.mkdir(parents=True)
+            binary = source / "target/scene-projection-probe/debug/chaptera"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"synthetic worker identity")
+            worker_source = source / "apps/chaptera-server/src/guest_reader_worker.rs"
+            worker_source.parent.mkdir(parents=True)
+            worker_source.write_text("synthetic instrumentation identity")
+            fixtures = []
+            for i, role in enumerate(("control", "target", "target", "target")):
+                data = bytes([i + 1])
+                sha = hashlib.sha256(data).hexdigest()
+                (corpus / (sha + ".pub")).write_bytes(data)
+                fixtures.append((str(i), sha, len(data), role, "synthetic"))
+
+            def fake_worker(command, **kwargs):
+                out = Path(command[command.index("--output-dir") + 1])
+                self.assertTrue(out.is_absolute())
+                sha = command[command.index("--expected-sha256") + 1]
+                control = sha == fixtures[0][1]
+                out.mkdir(parents=True)
+                (out / "result.json").write_text(json.dumps({
+                    "source_sha256": sha, "source_byte_len": 1,
+                    "filesystem_confinement": True,
+                    "classification": "partial" if control else "unsupported",
+                    "terminal_code": None if control else "reader_scene_projection_failed",
+                }))
+                stderr = GEOMETRY_PREFIX + "1 2 0 0 0 0"
+                if not control:
+                    stderr += "\n" + ERROR_PREFIX + "node_bounds"
+                return CompletedProcess(command, 0, stdout=json.dumps({
+                    "status": "success", "exit_code": 0, "timed_out": False,
+                    "network_policy": "seccomp_default_deny", "stderr_tail": stderr,
+                }))
+
+            with patch("batch01_scene_projection_probe.FIXTURES", fixtures), \
+                    patch("batch01_scene_projection_probe.subprocess.run", fake_worker), \
+                    redirect_stdout(StringIO()):
+                result = observe(source, corpus, root / "out/summary.json", "a" * 40)
+            self.assertTrue(result["complete"])
+            self.assertFalse(list((root / "out/private-worker-results").glob("*/result.json")))
+
 
 if __name__ == "__main__":
     unittest.main()
-
