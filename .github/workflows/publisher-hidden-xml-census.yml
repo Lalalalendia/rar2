@@ -1,0 +1,55 @@
+name: Publisher Hidden XML Census
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Self-test harvester
+        run: python research/publisher_hidden_xml_harvest.py --self-test
+
+      - name: Harvest public Publisher hidden XML metadata
+        run: |
+          mkdir -p out
+          python research/publisher_hidden_xml_harvest.py             research/publisher_hidden_xml_seeds.json             out/publisher-hidden-xml-census.json
+
+      - name: Publish census summary
+        run: |
+          python - <<'PY'
+          import json, os
+          d = json.load(open("out/publisher-hidden-xml-census.json", encoding="utf-8"))
+          keys = [
+              "source_count","sources_ok","sources_with_pub_blocks",
+              "unique_block_count","observation_count","distinct_type_names",
+              "distinct_property_names","distinct_priv_coordinates",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("## Publisher hidden XML census\n\n")
+              for k in keys:
+                  f.write(f"- **{k}**: {d[k]}\n")
+              f.write("\n### Top type names\n")
+              for row in d["type_names"][:30]:
+                  f.write(f"- `{row['name']}`: {row['count']}\n")
+              f.write("\n### Descriptor types\n")
+              for row in d["descriptor_types"]:
+                  f.write(f"- `0x{row['descriptor_type']:02X}`: {row['count']}\n")
+          PY
+
+      - name: Upload derived metadata only
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-hidden-xml-census-${{ github.run_id }}
+          path: out/publisher-hidden-xml-census.json
+          if-no-files-found: error
+          retention-days: 30
