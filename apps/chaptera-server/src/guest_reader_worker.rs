@@ -999,7 +999,63 @@ impl Drop for GuestSceneTempDir {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::*;
+
+    fn configured_font_test_path() -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let suffix = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "chaptera-configured-font-test-{}-{suffix}.ttf",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn configured_font_loader_admits_exact_bytes_and_rejects_hash_drift() {
+        let path = configured_font_test_path();
+        let bytes = chaptera_desktop_fallback_font_resource::bytes();
+        stdfs::write(&path, bytes).expect("write redistribution-safe configured font fixture");
+
+        let config = CloudReaderFontResourceConfig {
+            source_family: "Chaptera Test Family".to_owned(),
+            path: path.clone(),
+            expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
+            face_index: 0,
+            mime: "font/ttf".to_owned(),
+        };
+
+        let resources = load_configured_font_resources(std::slice::from_ref(&config))
+            .expect("exact configured font bytes must be admitted");
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].source_family, "Chaptera Test Family");
+        assert_eq!(
+            resources[0].resource_id,
+            configured_font_resource_id(
+                chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
+                0
+            )
+        );
+        assert_eq!(
+            resources[0].expected_sha256,
+            chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+        );
+        assert_eq!(resources[0].face_index, 0);
+        assert_eq!(resources[0].mime, "font/ttf");
+        assert_eq!(resources[0].bytes, bytes);
+
+        let mut mismatch = config.clone();
+        mismatch.expected_sha256 = "0".repeat(64);
+        let error = load_configured_font_resources(&[mismatch])
+            .expect_err("configured font hash drift must fail closed");
+        assert_eq!(error.code, "guest_scene_font_hash_mismatch");
+
+        stdfs::remove_file(&path).expect("remove configured font fixture");
+        let error = load_configured_font_resources(&[config])
+            .expect_err("missing configured font file must fail closed");
+        assert_eq!(error.code, "guest_scene_font_read_failed");
+    }
 
     #[test]
     fn worker_receipt_accepts_source_neutral_salvage_observation() {

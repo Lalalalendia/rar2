@@ -82,6 +82,27 @@ worker_open_files = 64
 worker_output_file_mb = 32
 temp_root = "/var/lib/chaptera/source-baseline-tmp"
 
+# Optional public Cloud Reader guest surface. Source-font bytes are operator-provided.
+# Chaptera does not discover ambient host fonts and does not download fonts.
+#
+# [cloud_reader_guest]
+# session_ttl_seconds = 1800
+# max_file_bytes = 268435456
+# max_concurrent_uploads = 4
+# max_reserved_bytes = 536870912
+# rate_subject_secret = { source = "systemd", name = "cloud_reader_rate_subject_secret" }
+#
+# Each configured source family is bound to one exact local file, SHA-256 and
+# face index. Proprietary fonts must be supplied under the operator's license;
+# never commit those bytes to the repository.
+#
+# [[cloud_reader_guest.font_resources]]
+# source_family = "Licensed Font Family"
+# path = "/etc/chaptera/fonts/licensed-font.ttf"
+# expected_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+# face_index = 0
+# mime = "font/ttf"
+
 [edge]
 # Only these immediate peers may assert X-Forwarded-* authority to Chaptera.
 trusted_proxy_ips = ["127.0.0.1", "::1"]
