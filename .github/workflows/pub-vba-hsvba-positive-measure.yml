@@ -107,6 +107,123 @@ jobs:
           }, indent=2, sort_keys=True))
           PY
 
+      - name: Source-free static safety classification
+        working-directory: rar2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import sys
+          from collections import Counter
+
+          sys.path.insert(0, "tools")
+          from pub_vba_cfb import CfbFile, decode_codepage, parse_vba_dir_metadata, vba_decompress
+          from pub_vba_estate_scan import strip_vba_comments
+
+          inputs = [
+              pathlib.Path("../hsvba/testdata/mso/publisher_office2003-11.5608_pub_ja-JP_001.pub"),
+              pathlib.Path("../hsvba/testdata/mso/publisher_office2007-12.0.6735.5000_pub-tmpl_ja-jp_001.pub"),
+              pathlib.Path("../hsvba/testdata/mso/publisher_office2007-12.0.6735.5000_pub_ja-jp_001.pub"),
+              pathlib.Path("../hsvba/testdata/mso/publisher_office365-2506_pub_ja-JP_001.pub"),
+          ]
+
+          patterns = {
+              "autoexec_or_document_event": re.compile(
+                  r"(?i)\\b(?:auto_open|autoopen|auto_close|autoclose|document_open|document_beforeclose|document_close)\\b"
+              ),
+              "process_or_shell": re.compile(
+                  r"(?i)\\b(?:shell|shellexecute|winexec|createprocess)\\b|wscript\\.shell"
+              ),
+              "network": re.compile(
+                  r"(?i)\\b(?:xmlhttp|winhttp|urldownloadtofile|internetopen|internetreadfile|serverxmlhttp)\\b"
+              ),
+              "registry": re.compile(
+                  r"(?i)\\b(?:regwrite|regread|regdelete|savesetting|deletesetting)\\b"
+              ),
+              "external_automation": re.compile(r"(?i)\\b(?:createobject|getobject)\\s*\\("),
+              "native_api_declare": re.compile(r"(?i)\\bdeclare\\s+(?:ptrsafe\\s+)?(?:sub|function)\\b"),
+              "filesystem_write": re.compile(
+                  r"(?i)\\b(?:filecopy|kill|mkdir|rmdir)\\b|\\bopen\\b[^\\r\\n]*\\bfor\\s+(?:output|append|binary|random)\\b"
+              ),
+          }
+
+          def children(cfb, storage):
+              prefix = storage.path
+              n = len(prefix) + 1
+              return {
+                  entry.name.casefold(): entry
+                  for entry in cfb.entries
+                  if len(entry.path) == n and entry.path[:len(prefix)] == prefix
+              }
+
+          rows = []
+          totals = Counter()
+          for path in inputs:
+              data = path.read_bytes()
+              cfb = CfbFile(data)
+              modules_out = []
+              project_count = 0
+              for storage in [e for e in cfb.entries if e.object_type == 1 and e.name.casefold() == "vba"]:
+                  kids = children(cfb, storage)
+                  root = storage.path[:-1]
+                  project = cfb.entry(root + ("PROJECT",))
+                  dir_entry = kids.get("dir")
+                  vba_project = kids.get("_vba_project")
+                  if not (project and project.object_type == 2 and dir_entry and dir_entry.object_type == 2 and vba_project and vba_project.object_type == 2):
+                      continue
+                  project_count += 1
+                  meta = parse_vba_dir_metadata(vba_decompress(cfb.read_stream(dir_entry)))
+                  for module in meta["modules"]:
+                      stream_name = decode_codepage(module["stream_name_bytes"], meta["codepage"])
+                      entry = kids.get(stream_name.casefold())
+                      if entry is None or module["text_offset"] is None:
+                          continue
+                      raw = cfb.read_stream(entry)
+                      source_bytes = vba_decompress(raw[module["text_offset"]:])
+                      source = decode_codepage(source_bytes, meta["codepage"])
+                      cleaned = strip_vba_comments(source)
+                      flags = {}
+                      for name, pattern in patterns.items():
+                          count = len(pattern.findall(cleaned))
+                          flags[name] = count
+                          totals[name] += count
+                      modules_out.append({
+                          "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                          "source_byte_len": len(source_bytes),
+                          "risk_counts": flags,
+                      })
+              rows.append({
+                  "file_sha256": hashlib.sha256(data).hexdigest(),
+                  "byte_len": len(data),
+                  "project_count": project_count,
+                  "module_count": len(modules_out),
+                  "modules": modules_out,
+              })
+
+          receipt = {
+              "schema": "chaptera.pub-vba-source-free-safety.v1",
+              "claims": {
+                  "vba_executed": False,
+                  "source_text_emitted": False,
+                  "classification_is_static_only": True,
+              },
+              "risk_totals": dict(sorted(totals.items())),
+              "files": sorted(rows, key=lambda r: r["file_sha256"]),
+          }
+          out = pathlib.Path("target/pub-vba-hsvba-positive/safety-receipt.json")
+          out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps({
+              "file_count": len(rows),
+              "project_count": sum(r["project_count"] for r in rows),
+              "module_count": sum(r["module_count"] for r in rows),
+              "risk_totals": receipt["risk_totals"],
+          }, indent=2, sort_keys=True))
+          PY
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -114,5 +231,6 @@ jobs:
           path: |
             rar2/target/pub-vba-hsvba-positive/receipt.json
             rar2/target/pub-vba-hsvba-positive/upstream-provenance.json
+            rar2/target/pub-vba-hsvba-positive/safety-receipt.json
           if-no-files-found: error
           retention-days: 90
