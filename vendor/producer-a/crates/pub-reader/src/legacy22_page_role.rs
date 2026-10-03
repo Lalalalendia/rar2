@@ -58,11 +58,9 @@ pub fn analyze_legacy_0x22_page_roles<R: Read + Seek>(
 
     let mut page_list_entries = Vec::with_capacity(page_list.len());
     for (document_ordinal, object_id) in page_list.into_iter().enumerate() {
-        let entry = directory
-            .entry_by_object_id(object_id)
-            .with_context(|| {
-                format!("legacy DOCUMENT PageList references missing object {object_id}")
-            })?;
+        let entry = directory.entry_by_object_id(object_id).with_context(|| {
+            format!("legacy DOCUMENT PageList references missing object {object_id}")
+        })?;
         page_list_entries.push(Legacy22PageListEntryObservationV1 {
             document_ordinal,
             raw_type: entry.chunk_type,
@@ -135,9 +133,7 @@ fn parse_u16_id_list(
         bail!("{label}: max_count {max_count} is less than count {count}");
     }
     if record_size != LEGACY_LIST_U16_RECORD_SIZE {
-        bail!(
-            "{label}: record size {record_size}, expected {LEGACY_LIST_U16_RECORD_SIZE}"
-        );
+        bail!("{label}: record size {record_size}, expected {LEGACY_LIST_U16_RECORD_SIZE}");
     }
 
     let payload_start = header_end;
