@@ -39,6 +39,10 @@ const MAX_CONFIGURED_FONT_TOTAL_BYTES: usize = 4 * 1024 * 1024;
 const MAX_FONT_MANIFEST_BYTES: u64 = 64 * 1024;
 const GUEST_FONT_MANIFEST_V1: &str = "chaptera.reader-configured-font-manifest.v1";
 
+fn batch01_worker_phase_trace(marker: &str) {
+    eprintln!("CHAPTERA_READER_PHASE {marker}");
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestSceneWorkerError {
     pub code: &'static str,
@@ -472,7 +476,9 @@ pub fn run_guest_scene_worker(
     })?;
 
     let structural_scan_started = Instant::now();
+    batch01_worker_phase_trace("guest_open_pub_bundle:start");
     let normal_open = open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1());
+    batch01_worker_phase_trace("guest_open_pub_bundle:done");
 
     let (
         classification,
@@ -485,6 +491,7 @@ pub fn run_guest_scene_worker(
         Ok(bundle) => {
             let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
             let scene_started = Instant::now();
+            batch01_worker_phase_trace("guest_scene_projection:start");
             match from_viewer_geometry_with_fonts(
                 session_id.to_owned(),
                 expected_sha256.to_owned(),
@@ -494,6 +501,7 @@ pub fn run_guest_scene_worker(
                 &configured_fonts,
             ) {
                 Ok(scene) => {
+                    batch01_worker_phase_trace("guest_scene_projection:done");
                     let classification = if scene.fidelity.state == "supported" {
                         "supported"
                     } else {
@@ -514,14 +522,17 @@ pub fn run_guest_scene_worker(
                         Some(duration_us(scene_started.elapsed())),
                     )
                 }
-                Err(_) => (
+                Err(_) => {
+                    batch01_worker_phase_trace("guest_scene_projection:error");
+                    (
                     "unsupported".to_owned(),
                     Some("reader_scene_projection_failed".to_owned()),
                     None,
                     None,
                     structural_scan_duration_us,
                     Some(duration_us(scene_started.elapsed())),
-                ),
+                    )
+                },
             }
         }
         Err(_) => {
@@ -556,9 +567,11 @@ pub fn run_guest_scene_worker(
         }
     };
 
+    batch01_worker_phase_trace("guest_failure_classification:start");
     let failure_classification =
         guest_failure_intake_evidence(&source_bytes, &classification, terminal_code.as_deref())
             .map(|evidence| evidence.classification);
+    batch01_worker_phase_trace("guest_failure_classification:done");
 
     let receipt = GuestSceneWorkerReceiptV1 {
         protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
@@ -574,7 +587,10 @@ pub fn run_guest_scene_worker(
         structural_scan_duration_us,
         scene_duration_us,
     };
-    write_receipt(output, &receipt)
+    batch01_worker_phase_trace("guest_receipt_write:start");
+    let result = write_receipt(output, &receipt);
+    batch01_worker_phase_trace("guest_receipt_write:done");
+    result
 }
 
 fn configured_font_resource_id(expected_sha256: &str, face_index: u32) -> String {
