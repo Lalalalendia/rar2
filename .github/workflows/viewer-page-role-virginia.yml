@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/crates/pub-reader/**"
+      - "!vendor/producer-a/crates/pub-reader/src/bin/**"
       - "vendor/producer-a/crates/pub-viewer/**"
+      - "!vendor/producer-a/crates/pub-viewer/src/bin/**"
       - "crates/pub-presentation-profile/**"
       - "tools/acquire_virginia_pub_pdf_pairs.py"
       - "tools/validate_virginia_page_roles.py"
