@@ -1,8 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pub_contents::{
-    parse_0x2c_header, parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
-    parse_confirmed_chunk_reference, parse_confirmed_mature_story_catalog,
-    CONTENTS_RAW_TYPE_STORY_CATALOG,
+    CONTENTS_RAW_TYPE_STORY_CATALOG, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    parse_confirmed_mature_story_catalog,
 };
 use pub_core::StreamPath;
 use serde::{Deserialize, Serialize};
@@ -157,7 +157,9 @@ fn unique_descriptor(descriptors: &[Descriptor], name: [u8; 4]) -> Result<&Descr
 fn descriptor_range<'a>(bytes: &'a [u8], descriptor: &Descriptor) -> Result<&'a [u8]> {
     let start = usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
     let len = usize::try_from(descriptor.data_length).context("descriptor length too large")?;
-    let end = start.checked_add(len).context("descriptor range overflow")?;
+    let end = start
+        .checked_add(len)
+        .context("descriptor range overflow")?;
     bytes
         .get(start..end)
         .with_context(|| format!("descriptor {:?} outside Quill", descriptor.name))
@@ -192,23 +194,18 @@ fn grounded_story_count(contents: &[u8]) -> Result<(u16, u32)> {
         );
     }
 
-    let chunk = parse_confirmed_0x2c_chunk(
-        stream,
-        contents,
-        story_refs[0].chunk_offsets[0].value,
-    )
-    .context("parse Story catalog chunk")?;
+    let chunk = parse_confirmed_0x2c_chunk(stream, contents, story_refs[0].chunk_offsets[0].value)
+        .context("parse Story catalog chunk")?;
     let catalog = parse_confirmed_mature_story_catalog(contents, &chunk)
         .context("parse grounded Story catalog")?;
 
-    Ok((header.preamble.serialization_revision, catalog.declared_count))
+    Ok((
+        header.preamble.serialization_revision,
+        catalog.declared_count,
+    ))
 }
 
-fn fdpp_boundaries_utf16(
-    quill: &[u8],
-    fdpp: &Descriptor,
-    text: &Descriptor,
-) -> Result<Vec<u64>> {
+fn fdpp_boundaries_utf16(quill: &[u8], fdpp: &Descriptor, text: &Descriptor) -> Result<Vec<u64>> {
     let payload = descriptor_range(quill, fdpp)?;
     let count = usize::from(u16_at(payload, 0).context("FDPP stored count missing")?);
     let offsets_start = 8usize;
@@ -326,11 +323,7 @@ fn search_partitions(
     search.solutions
 }
 
-fn com_order_matches(
-    text: &[u8],
-    endpoints: &[u64],
-    stories: &[OracleStory],
-) -> bool {
+fn com_order_matches(text: &[u8], endpoints: &[u64], stories: &[OracleStory]) -> bool {
     let mut ordered = stories.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|story| story.com_ordinal);
     if ordered.len() != endpoints.len() {
@@ -413,10 +406,20 @@ fn resolve_one(bytes: &[u8], oracle: &OracleWitness) -> Result<ResolutionRow> {
         bail!("oracle Story length sum is internally inconsistent");
     }
 
-    let length_solutions =
-        search_partitions(text_payload, text_utf16_units, &fdpp_set, &oracle.stories, false);
-    let hash_solutions =
-        search_partitions(text_payload, text_utf16_units, &fdpp_set, &oracle.stories, true);
+    let length_solutions = search_partitions(
+        text_payload,
+        text_utf16_units,
+        &fdpp_set,
+        &oracle.stories,
+        false,
+    );
+    let hash_solutions = search_partitions(
+        text_payload,
+        text_utf16_units,
+        &fdpp_set,
+        &oracle.stories,
+        true,
+    );
 
     let unique = hash_solutions.len() == 1;
     let endpoints = hash_solutions.iter().next().cloned().unwrap_or_default();
@@ -468,9 +471,7 @@ fn resolve_one(bytes: &[u8], oracle: &OracleWitness) -> Result<ResolutionRow> {
 fn main() -> Result<()> {
     let args = env::args_os().skip(1).collect::<Vec<_>>();
     if args.len() != 3 {
-        bail!(
-            "usage: quill-story-readonly-oracle-resolver WITNESS_DIR ORACLE.json OUTPUT.json"
-        );
+        bail!("usage: quill-story-readonly-oracle-resolver WITNESS_DIR ORACLE.json OUTPUT.json");
     }
     let root = PathBuf::from(&args[0]);
     let oracle_path = PathBuf::from(&args[1]);
@@ -548,7 +549,10 @@ mod tests {
     use super::*;
 
     fn story(text: &str, ordinal: usize) -> OracleStory {
-        let bytes = text.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+        let bytes = text
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
         OracleStory {
             com_ordinal: ordinal,
             utf16_code_units: u64::try_from(bytes.len() / 2).unwrap(),
