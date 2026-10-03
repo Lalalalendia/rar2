@@ -2421,12 +2421,28 @@ impl EditorSession {
     }
 
     pub fn full_story_typography_v1(&self) -> Vec<FullStoryTypographyV1> {
+        let table_story_ids = self
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| {
+                [
+                    node.payload
+                        .table_story
+                        .as_ref()
+                        .and_then(|owner| owner.story_id),
+                    node.payload.table.as_ref().and_then(|table| table.story_id),
+                ]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
         let ordinary_story_ids = self
             .graph
             .nodes
             .iter()
             .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
             .map(|frame| frame.story_id)
+            .filter(|story_id| !table_story_ids.contains(story_id))
             .collect::<BTreeSet<_>>();
 
         let mut runs_by_story = BTreeMap::<StoryId, Vec<&PubTypographyRun>>::new();
