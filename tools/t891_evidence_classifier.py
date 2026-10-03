@@ -102,7 +102,7 @@ def load_blast(path: Path, candidate_id: str, mode: str) -> dict[str, Any]:
         require(invariants.get(key) is expected, f"{path}: invariant {key} mismatch")
 
     return {
-        "receipt_path": str(path),
+        "receipt_path": f"analysis/blast-radius/{path.name}",
         "changed_stream_count": len(cfb["control_mutation_stream_delta"]),
         "topology_delta_count": len(cfb["control_mutation_topology_delta"]),
         "changed_range_count": len(cfb["control_mutation_byte_ranges"]),
