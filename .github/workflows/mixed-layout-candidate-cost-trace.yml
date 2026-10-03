@@ -69,8 +69,12 @@ jobs:
               ("064", "fb2927045c23292717df0a67ccb1e879d526a4ad8a6bb3c1046c72119fba3910", 750080),
           ]
 
-          policy_re = re.compile(r"^CHAPTERA_READER_PERF mixed_layout:policy_candidates:(\d+)$")
-          candidate_re = re.compile(r"^CHAPTERA_READER_PERF mixed_layout:line:(\d+):candidate:(\d+):(start|done)$")
+          policy_re = re.compile(
+              r"^CHAPTERA_READER_PERF mixed_layout:policy_candidates:(\d+):safe:(\d+):reshape:(\d+)$"
+          )
+          candidate_re = re.compile(
+              r"^CHAPTERA_READER_PERF mixed_layout:line:(\d+):candidate:(\d+):reshape:([01]):(start|done)$"
+          )
 
           rows = []
           for index, (fixture_id, sha, byte_len) in enumerate(fixtures, 1):
@@ -112,13 +116,18 @@ jobs:
               for line in stderr_tail.splitlines():
                   m = policy_re.match(line)
                   if m:
-                      policies.append(int(m.group(1)))
+                      policies.append({
+                          "total": int(m.group(1)),
+                          "safe": int(m.group(2)),
+                          "reshape": int(m.group(3)),
+                      })
                   m = candidate_re.match(line)
                   if m:
                       last_candidate = {
                           "line_index": int(m.group(1)),
                           "candidate_ordinal": int(m.group(2)),
-                          "event": m.group(3),
+                          "requires_reshaping": m.group(3) == "1",
+                          "event": m.group(4),
                       }
               row = {
                   "fixture_id": fixture_id,
@@ -127,7 +136,7 @@ jobs:
                   "status": isolation.get("status"),
                   "exit_code": isolation.get("exit_code"),
                   "timed_out": isolation.get("timed_out"),
-                  "policy_candidate_counts_seen": policies,
+                  "policy_candidate_profiles_seen": policies,
                   "last_candidate_marker": last_candidate,
               }
               rows.append(row)
