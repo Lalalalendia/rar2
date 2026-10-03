@@ -40,6 +40,13 @@ jobs:
             --harvest out/publisher-html-harvest/harvest.json \
             --out out/publisher-html-harvest/legacy-odpo-frontier.json
 
+      - name: Close Publisher 11 FBID to FancyBorders catalog join
+        run: |
+          python research/publisher_html_borderart_join.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-fbid-join.json
+
       - name: Publish summary
         if: always()
         run: |
@@ -82,6 +89,21 @@ jobs:
                   f.write(f"- `{row['property_name']} {row['priv']}`: **{mark}**, sources={row['source_count']}\n")
           PY
           fi
+          if [ -f out/publisher-html-harvest/borderart-fbid-join.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-fbid-join.json").read_text(encoding="utf-8"))
+          t = d["target"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## FBID -> FancyBorders same-document join\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write(f"- FBID: `{t['fbid_value']}` / priv `{t['fbid_priv']}`\n")
+              f.write(f"- catalog-name match: `{t['catalog_name_match']}`\n")
+              f.write(f"- Publication.OhFancyBorders <-> OplPlbFb handle join: `{','.join(t['handle_join'])}`\n")
+              f.write(f"- four-way join: `{t['four_way_join']}`\n")
+          PY
+          fi
 
       - name: Upload derived corpus metadata
         if: always()
@@ -96,5 +118,6 @@ jobs:
             out/publisher-html-harvest/registry.tsv
             out/publisher-html-harvest/version-diff.json
             out/publisher-html-harvest/legacy-odpo-frontier.json
+            out/publisher-html-harvest/borderart-fbid-join.json
           if-no-files-found: error
           retention-days: 30
