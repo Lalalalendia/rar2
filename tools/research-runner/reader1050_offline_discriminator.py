@@ -417,6 +417,10 @@ def build_discriminator(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        (out_root / "decision.md").write_text(
+            render_markdown(payload),
+            encoding="utf-8",
+        )
         return payload
 
     selected_sha = str(selected["source_sha256"]).lower()
