@@ -300,6 +300,116 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     })
 }
 
+pub const MATURE_MULTI_REFERENCED_ROOT_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/multi-referenced-no-master-root/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatureMultiReferencedRootSelectionV1 {
+    pub profile_id: String,
+    pub raw_page_count: usize,
+    pub customer_page_seq_nums: Vec<u32>,
+    pub non_customer_page_seq_nums: Vec<u32>,
+}
+
+/// Selects the bounded multi-root PAGE relation family proven by #1010.
+///
+/// Customer pages are the contiguous PAGE-prefix roots which have no applied
+/// master of their own and are referenced as master by at least one other PAGE.
+/// The profile is intentionally admitted only when there are at least two such
+/// roots, every applied PAGE targets one of them, and no applied-master target
+/// escapes the observed PAGE set. Structural drift fails open.
+pub fn select_mature_multi_referenced_root_customer_page_seq_nums_v1(
+    mut input: StandardPrintServiceTailProfileInputV1,
+) -> Option<MatureMultiReferencedRootSelectionV1> {
+    if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
+        || input.confirmed_page_count != input.pages.len()
+        || input.document_page_list_entry_count
+            != input
+                .confirmed_page_count
+                .checked_add(input.special_entry_count)?
+    {
+        return None;
+    }
+
+    input.pages.sort_by_key(|page| page.document_ordinal);
+    let mut ordinals = BTreeSet::new();
+    let mut seq_nums = BTreeSet::new();
+    for page in &input.pages {
+        if page.document_ordinal >= input.document_page_list_entry_count
+            || !ordinals.insert(page.document_ordinal)
+            || !seq_nums.insert(page.contents_seq_num)
+        {
+            return None;
+        }
+    }
+
+    let page_by_seq = input
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| (page.contents_seq_num, index))
+        .collect::<BTreeMap<_, _>>();
+    let mut incoming = vec![0usize; input.pages.len()];
+    for page in &input.pages {
+        let Some(master_seq) = page.applied_master_seq_num else {
+            continue;
+        };
+        let target_index = *page_by_seq.get(&master_seq)?;
+        incoming[target_index] = incoming[target_index].checked_add(1)?;
+    }
+
+    let customer_count = input
+        .pages
+        .iter()
+        .take_while(|page| {
+            page.applied_master_seq_num.is_none()
+                && incoming
+                    .get(page.document_ordinal)
+                    .copied()
+                    .unwrap_or_default()
+                    > 0
+        })
+        .count();
+    if customer_count < 2 {
+        return None;
+    }
+
+    let customer_pages = input.pages.get(..customer_count)?;
+    if customer_pages
+        .iter()
+        .enumerate()
+        .any(|(ordinal, page)| page.document_ordinal != ordinal)
+    {
+        return None;
+    }
+    let customer_seq_nums = customer_pages
+        .iter()
+        .map(|page| page.contents_seq_num)
+        .collect::<BTreeSet<_>>();
+
+    if input.pages.iter().any(|page| {
+        page.applied_master_seq_num
+            .is_some_and(|master_seq| !customer_seq_nums.contains(&master_seq))
+    }) {
+        return None;
+    }
+
+    Some(MatureMultiReferencedRootSelectionV1 {
+        profile_id: MATURE_MULTI_REFERENCED_ROOT_PROFILE_ID_V1.to_owned(),
+        raw_page_count: input.pages.len(),
+        customer_page_seq_nums: customer_pages
+            .iter()
+            .map(|page| page.contents_seq_num)
+            .collect(),
+        non_customer_page_seq_nums: input
+            .pages
+            .iter()
+            .skip(customer_count)
+            .map(|page| page.contents_seq_num)
+            .collect(),
+    })
+}
+
 pub const MATURE_ZERO_LEADER_DETACHED_TAIL_PROFILE_ID_V1: &str =
     "publisher-mature-0x2c/zero-leader-detached-post-special-tail/v1";
 
