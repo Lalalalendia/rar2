@@ -151,11 +151,7 @@ fn reorder_is_one_v0_13_history_unit_with_exact_undo_redo_and_replay() {
     create_two(&mut session);
 
     let reorder = session
-        .reorder_authored_stack(
-            page_id(),
-            node_a(),
-            AuthoredStackReorderModeV1::StepForward,
-        )
+        .reorder_authored_stack(page_id(), node_a(), AuthoredStackReorderModeV1::StepForward)
         .expect("step A forward");
     assert!(matches!(
         reorder,
@@ -213,11 +209,7 @@ fn all_four_reorder_modes_are_exact_and_noop_edges_fail_closed() {
         vec![node_b(), node_a()]
     );
     session
-        .reorder_authored_stack(
-            page_id(),
-            node_b(),
-            AuthoredStackReorderModeV1::StepForward,
-        )
+        .reorder_authored_stack(page_id(), node_b(), AuthoredStackReorderModeV1::StepForward)
         .expect("B forward");
     assert_eq!(
         session.authored_stack(page_id()).expect("stack").members,
@@ -264,7 +256,13 @@ fn tampered_or_pre_v0_13_reorder_project_fails_transactionally() {
         Err(EditorProjectError::LegacyProjectCarriesReorderAuthoredStackOperation { index: 2 })
     ));
     assert!(target.operations().is_empty());
-    assert!(target.authored_stack(page_id()).expect("stack").members.is_empty());
+    assert!(
+        target
+            .authored_stack(page_id())
+            .expect("stack")
+            .members
+            .is_empty()
+    );
 
     let mut tampered = project.clone();
     let EditOperation::ReorderAuthoredStack { transition } = &mut tampered.operations[2] else {
@@ -278,8 +276,7 @@ fn tampered_or_pre_v0_13_reorder_project_fails_transactionally() {
         Err(EditorProjectError::Operation {
             index: 2,
             error: EditorError::StaleAuthoredStack { .. }
-        })
-            | Err(EditorProjectError::OperationMismatch { index: 2 })
+        }) | Err(EditorProjectError::OperationMismatch { index: 2 })
     ));
     assert!(target.operations().is_empty());
     assert!(target.authored_stack(page_id()).expect("stack").members.is_empty());
