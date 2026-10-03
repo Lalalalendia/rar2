@@ -4631,6 +4631,61 @@ impl ViewerApp {
         self.canvas_resize = None;
     }
 
+    fn process_global_save_shortcut(&mut self, ctx: &egui::Context) {
+        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let save_pressed = ctx.input(|input| {
+            let command = input.modifiers.ctrl || input.modifiers.command;
+            command
+                && !input.modifiers.alt
+                && !input.modifiers.shift
+                && input.key_pressed(egui::Key::S)
+        });
+        if !save_pressed {
+            return;
+        }
+
+        let operation_count = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
+
+        if operation_count == 0 {
+            self.project_status = Some("Editor project has no edit operations to save.".to_owned());
+            self.edit_status =
+                Some("Nothing new to save. Source PUB was not overwritten.".to_owned());
+            return;
+        }
+
+        if self.saved_project_operation_count().ok().flatten() == Some(operation_count) {
+            self.project_status = Some(format!(
+                "Editor project is already saved with {operation_count} operations."
+            ));
+            self.edit_status = Some(
+                "Chaptera Project is already saved. Source PUB was not overwritten.".to_owned(),
+            );
+            return;
+        }
+
+        match self.save_editor_project_sidecar() {
+            Ok(path) => {
+                self.project_status = Some(format!(
+                    "Saved editor project with {operation_count} operations."
+                ));
+                self.edit_status = Some(format!(
+                    "Project saved to {}. Source PUB was not overwritten.",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Could not save editor project: {error}"));
+            }
+        }
+    }
+
     fn process_global_history_shortcuts(&mut self, ctx: &egui::Context) {
         if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
             return;
@@ -5997,6 +6052,7 @@ impl eframe::App for ViewerApp {
         if !text_keyboard_owned {
             self.process_canvas_object_keyboard(ctx);
             self.process_global_history_shortcuts(ctx);
+            self.process_global_save_shortcut(ctx);
         }
 
         debug_assert_eq!(
@@ -8196,11 +8252,56 @@ mod tests {
             "Ctrl+Y must not append a new authoring operation"
         );
 
-        harness.get_by_label("Save Project").click();
+        let save_operation_count = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
         harness.step();
         harness.step();
         let sidecar = editor_project_sidecar_path(&fixture).expect("sidecar path");
-        assert!(sidecar.is_file(), "GUI Save Project must write the sidecar");
+        assert!(
+            sidecar.is_file(),
+            "Ctrl+S must write the EditorProject sidecar"
+        );
+        let shortcut_sidecar = fs::read(&sidecar).expect("read Ctrl+S sidecar");
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            save_operation_count,
+            "Ctrl+S must not append an Editor operation"
+        );
+
+        harness.get_by_label("Save Project").click();
+        harness.step();
+        harness.step();
+        let button_sidecar = fs::read(&sidecar).expect("read Save Project sidecar");
+        assert_eq!(
+            shortcut_sidecar, button_sidecar,
+            "Ctrl+S and Save Project must materialize identical sidecar bytes"
+        );
+
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
+        harness.step();
+        assert_eq!(
+            harness.state().project_status.as_deref(),
+            Some("Editor project is already saved with 2 operations."),
+            "Ctrl+S on an already-saved project must be an honest no-op confirmation"
+        );
+        assert_eq!(
+            fs::read(&sidecar).expect("read unchanged sidecar"),
+            button_sidecar,
+            "saved-state Ctrl+S must not change sidecar bytes"
+        );
+
         // Save happens after command enablement is computed for this frame.
         // Advance once more so the accessibility tree reflects the saved sidecar.
         harness.step();
