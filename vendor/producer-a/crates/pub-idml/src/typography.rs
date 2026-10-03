@@ -1,6 +1,4 @@
-use crate::{
-    IDML_PACKAGING_NAMESPACE, IdmlPackage, IdmlPart, IdmlPartContent, IdmlPartKind,
-};
+use crate::{IDML_PACKAGING_NAMESPACE, IdmlPackage, IdmlPart, IdmlPartContent, IdmlPartKind};
 use pub_export::{
     ExportPlan, FullStoryTypographyV1, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
 };
