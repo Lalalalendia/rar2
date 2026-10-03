@@ -1,9 +1,8 @@
 use anyhow::{Context, Result, bail};
 use pub_contents::{
     BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_CONTAINER_A0, BLOCK_TYPE_EMPTY, BLOCK_TYPE_U16,
-    BLOCK_TYPE_U32,
-    Contents0x2cChunkReference, ContentsCursor, RawContentsBlock, RawContentsBlockBody,
-    decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    BLOCK_TYPE_U32, Contents0x2cChunkReference, ContentsCursor, RawContentsBlock,
+    RawContentsBlockBody, decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_block, parse_confirmed_chunk_reference,
 };
 use pub_core::{RawSpan, StreamPath};
@@ -592,7 +591,10 @@ mod tests {
             decode_shape_borderart_stretch_pictures(&fields, 7, &mut diagnostics),
             None
         );
-        assert_eq!(diagnostics[0].code, "borderart_shape_stretch_marker_wrong_wire");
+        assert_eq!(
+            diagnostics[0].code,
+            "borderart_shape_stretch_marker_wrong_wire"
+        );
     }
 
     #[test]
