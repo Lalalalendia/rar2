@@ -32,3 +32,8 @@ zip = { workspace = true, features = ["flate2", "deflate-flate2"] }
 name="cmo_projection_bridge_receipt"
 path="src/bin/cmo_projection_bridge_receipt.rs"
 required-features=["cmo-authority-bridge"]
+
+[[bin]]
+name="master_projection_bridge_receipt"
+path="src/bin/master_projection_bridge_receipt.rs"
+required-features=["master-authority-bridge"]
