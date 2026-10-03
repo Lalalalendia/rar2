@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -77,6 +78,41 @@ def normalized_basename(url: str) -> str:
     return urllib.parse.unquote(urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]).lower()
 
 
+def basename_original_regex(url: str) -> str:
+    basename = urllib.parse.unquote(
+        urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    )
+    escaped = re.escape(basename)
+    escaped = escaped.replace(r"\ ", r"(?:%20| )")
+    return rf"(?i).*/{escaped}(?:[?#].*)?$"
+
+
+def cdx_domain_basename_query(url: str) -> list[dict[str, str]]:
+    split = urllib.parse.urlsplit(url)
+    host = split.netloc.removeprefix("www.")
+    params = [
+        ("url", host),
+        ("matchType", "domain"),
+        ("output", "json"),
+        ("fl", "timestamp,original,statuscode,mimetype,digest,length"),
+        ("filter", "statuscode:200"),
+        ("filter", "original:" + basename_original_regex(url)),
+        ("collapse", "digest"),
+        ("limit", "5000"),
+    ]
+    endpoint = "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode(params)
+    raw = request_bytes(endpoint, timeout=20, attempts=2)
+    parsed = json.loads(raw)
+    if not parsed:
+        return []
+    header = parsed[0]
+    out = []
+    for row in parsed[1:]:
+        if len(row) == len(header):
+            out.append(dict(zip(header, row)))
+    return out
+
+
 def discover(target: dict[str, object]) -> tuple[list[dict[str, str]], list[str]]:
     url = str(target["url"])
     errors: list[str] = []
@@ -112,6 +148,14 @@ def discover(target: dict[str, object]) -> tuple[list[dict[str, str]], list[str]
             for row in prefix_rows
             if normalized_basename(row.get("original", "")) == wanted
         )
+
+    # Final bounded discovery arm: search the entire historical domain (including
+    # subdomains) but let CDX filter server-side by this exact basename. This
+    # catches moved copies that no longer live under the known parent directory.
+    try:
+        rows.extend(cdx_domain_basename_query(url))
+    except Exception as exc:
+        errors.append(type(exc).__name__)
 
     dedup: dict[tuple[str, str], dict[str, str]] = {}
     for row in rows:
@@ -220,7 +264,7 @@ def main() -> int:
         "targets": report_targets,
         "evidence_boundary": (
             "exact two remaining helenhudspith.com source URLs only; Wayback discovery "
-            "uses exact URL plus parent-directory/www prefix CDX; two prior captures are "
+            "uses exact URL, parent-directory/www prefix CDX, and a domain-wide server-side basename filter; two prior captures are "
             "prequalified as byte-identical duplicates and skipped; downloaded bytes are temporary and only CFB SHA/size/timestamp metadata is retained in this receipt"
         ),
     }
