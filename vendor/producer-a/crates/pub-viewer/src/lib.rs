@@ -3016,8 +3016,7 @@ fn select_viewer_pages(
             };
         }
 
-        if let Some(selection) =
-            select_mature_master_bank_customer_page_seq_nums_v1(input.clone())
+        if let Some(selection) = select_mature_master_bank_customer_page_seq_nums_v1(input.clone())
         {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
