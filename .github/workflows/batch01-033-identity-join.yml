@@ -1,0 +1,149 @@
+name: Batch01 033 identity join
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/batch01-033-identity-join.yml"
+      - "tools/research_batch01_033_identity_join_v1.py"
+      - "vendor/producer-a/crates/pub-reader/src/bin/page-role-fingerprint-receipt.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: batch01-033-identity-join-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/batch01-033-identity
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install exact visual runtime
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+          python -m py_compile tools/research_batch01_033_identity_join_v1.py
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Materialize exact 033
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/batch01-033-identity"
+          mkdir -p "$RUNNER_TEMP/batch01-033-identity"
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          PY
+          python tools/cloud_reader_visual_fingerprint_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv \
+            out/pinned1050/materialized/native \
+            "$RUNNER_TEMP/no-second-source-root" \
+            "$RUNNER_TEMP/batch01-033-identity/fixtures" \
+            "$RUNNER_TEMP/batch01-033-identity/manifest-all.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "batch01-033-identity"
+          src = json.loads((root / "manifest-all.json").read_text())
+          rows = [row for row in src["fixtures"] if row["name"] == "033_4029d4a1bf5be89d"]
+          assert len(rows) == 1
+          assert rows[0]["sha256"] == "4029d4a1bf5be89d745c079b9c06ab33e5bdceb997a4761c5e11238110d879c9"
+          (root / "manifest.json").write_text(json.dumps({"schema": src["schema"], "fixtures": rows}, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Build source-role receipt and Cloud worker
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-fingerprint-receipt --jobs 2
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Resolve exact source PAGE identities
+        run: |
+          mkdir -p target/batch01-033-identity
+          "$CARGO_TARGET_DIR/debug/page-role-fingerprint-receipt" \
+            "$RUNNER_TEMP/batch01-033-identity/fixtures/033_4029d4a1bf5be89d.pub" \
+            target/batch01-033-identity/page-role.json
+
+      - name: Render fail-open exact 033
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/batch01-033-identity/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/batch01-033-identity/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/batch01-033-identity/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "0"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Join Viewer outputs to source PAGE roles
+        run: |
+          python tools/research_batch01_033_identity_join_v1.py \
+            "$RUNNER_TEMP/batch01-033-identity/browser/receipt.json" \
+            target/batch01-033-identity/page-role.json \
+            033_4029d4a1bf5be89d \
+            target/batch01-033-identity/summary.json
+
+      - name: Assert source-safe boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("target/batch01-033-identity/summary.json").read_text())
+          assert data["schema"] == "chaptera.batch01-033-identity-join.v1"
+          assert data["viewer_page_count"] == 12
+          assert data["root_ordinals"] == [0,1,2,3]
+          assert data["claims"]["measurement_only"] is True
+          assert data["claims"]["raw_page_id_emitted"] is False
+          assert data["claims"]["raw_contents_seq_num_emitted"] is False
+          assert data["claims"]["raw_oid_values_emitted"] is False
+          print("033 identity join fences verified")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: batch01-033-identity-join
+          path: target/batch01-033-identity/summary.json
+          if-no-files-found: error
+          retention-days: 30
