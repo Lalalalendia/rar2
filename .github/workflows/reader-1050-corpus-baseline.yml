@@ -371,6 +371,9 @@ jobs:
           assert opnhous["outcome"] == "salvage_open", opnhous
           assert opnhous["salvage_eligibility"] == "eligible_known_publisher_corruption", opnhous
           assert opnhous["corruption_evidence"] == "exact_sha_typed_corruption_authority", opnhous
+          assert opnhous["authority_task_id"] == "PUB-T-650", opnhous
+          assert opnhous["authority_run_id"] == 36072949588, opnhous
+          assert opnhous["authority_artifact_id"] == 10838639727, opnhous
           assert opnhous["authority_evidence_digest"] == (
               "sha256:b814c65752ecdbfcbafcfb16b869f000313fdb7327a4a6a6ad9865fb294a4aed"
           ), opnhous
