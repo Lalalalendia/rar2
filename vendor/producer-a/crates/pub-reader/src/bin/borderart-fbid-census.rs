@@ -73,7 +73,10 @@ struct CorpusReceipt {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn exact_raw_type(reference: &pub_contents::Contents0x2cChunkReference) -> Option<u16> {
