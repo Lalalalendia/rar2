@@ -8,6 +8,8 @@ on:
     paths:
       - ".github/workflows/publisher-visual-golden-batch01.yml"
       - "tools/cloud_reader_visual_fingerprint_v1.py"
+      - "tools/cloud_reader_page_membership_gate_v1.py"
+      - "tools/corpus/receipts/publisher-visual-page-membership-authority-v1.json"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
       - "apps/cloud-reader/**"
@@ -150,6 +152,8 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
           python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+          python -m py_compile tools/cloud_reader_page_membership_gate_v1.py
+          python tools/cloud_reader_page_membership_gate_v1.py --self-test
           python - <<'PY'
           import hashlib
           from pathlib import Path
@@ -242,6 +246,16 @@ jobs:
           echo "baseline_found=true" >> "$GITHUB_OUTPUT"
           echo "baseline_run_id=$baseline_run" >> "$GITHUB_OUTPUT"
 
+      - name: Enforce exact PAGE membership authority
+        if: steps.baseline-delta.outputs.baseline_found == 'true'
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_page_membership_gate_v1.py \
+            --current target/publisher-visual-batch01/summary.json \
+            --baseline "$RUNNER_TEMP/publisher-visual-baseline/summary.json" \
+            --authority tools/corpus/receipts/publisher-visual-page-membership-authority-v1.json \
+            --out target/publisher-visual-batch01/membership-gate.json
+
       - name: Print top residuals
         run: |
           python - <<'PY'
@@ -284,5 +298,6 @@ jobs:
           path: |
             target/publisher-visual-batch01/summary.json
             target/publisher-visual-batch01/delta.json
+            target/publisher-visual-batch01/membership-gate.json
           if-no-files-found: warn
           retention-days: 90
