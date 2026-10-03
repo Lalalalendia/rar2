@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolvers_v1,
     effective_source_font_family_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
@@ -192,6 +192,10 @@ pub struct ReaderTextSpanV1 {
     pub x_offset_emu: i64,
     pub measured_width_emu: i64,
     pub font_size_emu: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_resource_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_fingerprint_sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -348,6 +352,8 @@ fn reader_text_layout_from_render_text(
                         x_offset_emu: span.x_offset_emu,
                         measured_width_emu: span.measured_width_emu,
                         font_size_emu: span.font_size_emu,
+                        font_resource_id: span.font_resource_id.clone(),
+                        font_fingerprint_sha256: span.font_fingerprint_sha256.clone(),
                     })
                     .collect(),
             })
@@ -685,13 +691,19 @@ pub fn from_viewer_geometry_with_fonts(
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
     for page_index in 0..geometry.document.pages.len() {
-        let plan = match build_page_render_plan_with_text_layout_resolver_v1(
+        let plan = match build_page_render_plan_with_text_layout_resolvers_v1(
             geometry,
             page_index,
             &fallback_font,
             |fragment| {
                 let source_family = effective_source_font_family_v1(geometry, fragment)?;
                 let normalized = source_family.trim().to_lowercase();
+                configured_fonts_by_family
+                    .get(&normalized)
+                    .map(|font| font.explicit_resource())
+            },
+            |_, run| {
+                let normalized = run.source_font_name.trim().to_lowercase();
                 configured_fonts_by_family
                     .get(&normalized)
                     .map(|font| font.explicit_resource())
@@ -705,12 +717,25 @@ pub fn from_viewer_geometry_with_fonts(
         };
         let plan_page_id = serialized_string(&plan.page_id, "render-plan page id")?;
         for node in &plan.nodes {
-            if let Some(resource_id) = node
-                .text
-                .as_ref()
-                .and_then(|text| text.backend_font_resource_id.as_ref())
-            {
+            let Some(text) = node.text.as_ref() else {
+                continue;
+            };
+            if let Some(resource_id) = text.backend_font_resource_id.as_ref() {
                 used_configured_font_ids.insert(resource_id.clone());
+            }
+            if let Some(layout) = text.layout.as_ref()
+                && let RenderTextLayoutDispositionV1::SharedResolved {
+                    font_resource_id, ..
+                } = &layout.disposition
+            {
+                used_configured_font_ids.insert(font_resource_id.clone());
+                for line in &layout.lines {
+                    for span in &line.spans {
+                        if let Some(resource_id) = span.font_resource_id.as_ref() {
+                            used_configured_font_ids.insert(resource_id.clone());
+                        }
+                    }
+                }
             }
         }
 

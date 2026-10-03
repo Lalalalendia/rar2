@@ -448,7 +448,9 @@ test("mixed shared text plan preserves server span sizes and cumulative line hei
               text: "A ",
               x_offset_emu: 0,
               measured_width_emu: 180,
-              font_size_emu: 100
+              font_size_emu: 100,
+              font_resource_id: "font-elephant",
+              font_fingerprint_sha256: "sha-elephant"
             },
             {
               scalar_start: 2,
@@ -456,7 +458,9 @@ test("mixed shared text plan preserves server span sizes and cumulative line hei
               text: "B",
               x_offset_emu: 180,
               measured_width_emu: 240,
-              font_size_emu: 180
+              font_size_emu: 180,
+              font_resource_id: "font-times",
+              font_fingerprint_sha256: "sha-times"
             }
           ]
         }
@@ -474,9 +478,44 @@ test("mixed shared text plan preserves server span sizes and cumulative line hei
       span.scalar_end,
       span.x_offset_emu,
       span.font_size_emu,
+      span.font_resource_id,
+      span.font_fingerprint_sha256,
       span.text
     ]),
-    [[0, 2, 0, 100, "A "], [2, 3, 180, 180, "B"]]
+    [
+      [0, 2, 0, 100, "font-elephant", "sha-elephant", "A "],
+      [2, 3, 180, 180, "font-times", "sha-times", "B"]
+    ]
+  );
+});
+
+test("shared text span font identity is all-or-nothing", () => {
+  assert.equal(
+    resolvedTextLinePaintPlan({
+      bounds: { x: 0, y: 0, width: 1000, height: 600 },
+      text_layout: {
+        disposition: "shared_resolved",
+        font_resource_id: "font-1",
+        font_size_emu: 100,
+        line_height_emu: 120,
+        lines: [{
+          line_index: 0,
+          text: "mixed",
+          measured_width_emu: 300,
+          line_height_emu: 120,
+          spans: [{
+            scalar_start: 0,
+            scalar_end: 5,
+            text: "mixed",
+            x_offset_emu: 0,
+            measured_width_emu: 300,
+            font_size_emu: 100,
+            font_resource_id: "font-elephant"
+          }]
+        }]
+      }
+    }),
+    null
   );
 });
 
