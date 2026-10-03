@@ -1434,8 +1434,7 @@ pub fn open_mature_0x2c_editor(
 ) -> Result<EditorSession, EditorOpenError> {
     let source = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
         .map_err(|error| EditorOpenError::SourceGraph(error.to_string()))?;
-    let source_images =
-        build_mature_0x2c_asset_export_bundle_from_bytes(bytes, &source.graph).ok();
+    let source_images = build_mature_0x2c_asset_export_bundle_from_bytes(bytes, &source.graph).ok();
     let resolved = resolve_pub_source_graph(&source.graph)
         .map_err(|error| EditorOpenError::Resolve(error.to_string()))?;
     let mut session = EditorSession::new(resolved.graph).map_err(EditorOpenError::Session)?;
@@ -2293,18 +2292,14 @@ impl EditorSession {
         Ok((report, human_summary, plan))
     }
 
-    fn idml_image_placements(
-        &self,
-    ) -> Result<Vec<IdmlEmbeddedImagePlacement>, EditorExportError> {
+    fn idml_image_placements(&self) -> Result<Vec<IdmlEmbeddedImagePlacement>, EditorExportError> {
         let mut placements = self.idml_source_placements()?;
         placements.extend(self.idml_replacement_placements()?);
         placements.sort_by_key(|placement| placement.node_id);
         Ok(placements)
     }
 
-    fn idml_source_placements(
-        &self,
-    ) -> Result<Vec<IdmlEmbeddedImagePlacement>, EditorExportError> {
+    fn idml_source_placements(&self) -> Result<Vec<IdmlEmbeddedImagePlacement>, EditorExportError> {
         let target = EditorEditableTarget::Idml;
         let mut placements = Vec::with_capacity(self.source_image_nodes.len());
 
@@ -2412,18 +2407,15 @@ impl EditorSession {
         Ok(placements)
     }
 
-    fn odg_image_placements(
-        &self,
-    ) -> Result<Vec<OdgEmbeddedImagePlacement>, EditorExportError> {
+    fn odg_image_placements(&self) -> Result<Vec<OdgEmbeddedImagePlacement>, EditorExportError> {
         let mut placements = self.odg_source_placements()?;
         placements.extend(self.odg_replacement_placements()?);
-        placements.sort_by_key(|placement| (placement.page_id, placement.z_index, placement.node_id));
+        placements
+            .sort_by_key(|placement| (placement.page_id, placement.z_index, placement.node_id));
         Ok(placements)
     }
 
-    fn odg_source_placements(
-        &self,
-    ) -> Result<Vec<OdgEmbeddedImagePlacement>, EditorExportError> {
+    fn odg_source_placements(&self) -> Result<Vec<OdgEmbeddedImagePlacement>, EditorExportError> {
         let target = EditorEditableTarget::Odg;
         let mut placements = Vec::with_capacity(self.source_image_nodes.len());
 
