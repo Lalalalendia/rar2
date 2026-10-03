@@ -1647,6 +1647,7 @@ pub struct EditorSession {
     project_identity: Option<EditorProjectIdentity>,
     source_image_assets: BTreeMap<ResourceId, EditorSourceImageAsset>,
     source_image_nodes: BTreeMap<NodeId, ResourceId>,
+    source_story_state_ids: BTreeMap<StoryId, String>,
     source_typography_runs: Vec<PubTypographyRun>,
     source_typography_size_runs: Vec<PubTypographySizeRun>,
     source_paragraph_alignments: Vec<PubParagraphAlignmentRun>,
@@ -1664,12 +1665,19 @@ impl EditorSession {
             return Err(EditorError::SourceIdentityChanged);
         }
 
+        let source_story_state_ids = graph
+            .stories
+            .iter()
+            .map(|(story_id, story)| (*story_id, story_state_id_v1(*story_id, &story.text)))
+            .collect();
+
         Ok(Self {
             source_hash,
             graph,
             project_identity: Some(new_project_identity()),
             source_image_assets: BTreeMap::new(),
             source_image_nodes: BTreeMap::new(),
+            source_story_state_ids,
             source_typography_runs: Vec::new(),
             source_typography_size_runs: Vec::new(),
             source_paragraph_alignments: Vec::new(),
@@ -2447,6 +2455,10 @@ impl EditorSession {
             let Some(story) = self.graph.stories.get(&story_id) else {
                 continue;
             };
+            let current_story_state_id = story_state_id_v1(story_id, &story.text);
+            if self.source_story_state_ids.get(&story_id) != Some(&current_story_state_id) {
+                continue;
+            }
             let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
                 continue;
             };
