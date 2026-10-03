@@ -2424,21 +2424,7 @@ impl ViewerApp {
                     }
                 }
                 if save_clicked {
-                    match self.save_editor_project_sidecar() {
-                        Ok(path) => {
-                            self.project_status = Some(format!(
-                                "Saved editor project with {operation_count} operations."
-                            ));
-                            self.edit_status = Some(format!(
-                                "Project saved to {}. Source PUB was not overwritten.",
-                                path.display()
-                            ));
-                        }
-                        Err(error) => {
-                            self.edit_status =
-                                Some(format!("Could not save editor project: {error}"));
-                        }
-                    }
+                    self.save_project_with_status(operation_count);
                 }
                 if redo_clicked {
                     self.apply_redo();
@@ -4631,28 +4617,7 @@ impl ViewerApp {
         self.canvas_resize = None;
     }
 
-    fn process_global_save_shortcut(&mut self, ctx: &egui::Context) {
-        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
-            return;
-        }
-
-        let save_pressed = ctx.input(|input| {
-            let command = input.modifiers.ctrl || input.modifiers.command;
-            command
-                && !input.modifiers.alt
-                && !input.modifiers.shift
-                && input.key_pressed(egui::Key::S)
-        });
-        if !save_pressed {
-            return;
-        }
-
-        let operation_count = self
-            .editor
-            .as_ref()
-            .map(|editor| editor.operations().len())
-            .unwrap_or(0);
-
+    fn save_project_with_status(&mut self, operation_count: usize) {
         if operation_count == 0 {
             self.project_status = Some("Editor project has no edit operations to save.".to_owned());
             self.edit_status =
@@ -4684,6 +4649,30 @@ impl ViewerApp {
                 self.edit_status = Some(format!("Could not save editor project: {error}"));
             }
         }
+    }
+
+    fn process_global_save_shortcut(&mut self, ctx: &egui::Context) {
+        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let save_pressed = ctx.input(|input| {
+            let command = input.modifiers.ctrl || input.modifiers.command;
+            command
+                && !input.modifiers.alt
+                && !input.modifiers.shift
+                && input.key_pressed(egui::Key::S)
+        });
+        if !save_pressed {
+            return;
+        }
+
+        let operation_count = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
+        self.save_project_with_status(operation_count);
     }
 
     fn process_global_history_shortcuts(&mut self, ctx: &egui::Context) {
