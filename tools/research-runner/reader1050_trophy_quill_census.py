@@ -19,7 +19,55 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tools" / "corpus"))
 
-from cfb_physical import CFB, END, NO  # noqa: E402
+from cfb_physical import CFB, END, NO, decode_directory_name, u16, u32, u64  # noqa: E402
+
+
+class CorpusCFB(CFB):
+    """Corpus-tolerant CFB view.
+
+    Some historical PUBs retain garbage in unused directory slots. The shared
+    physical parser intentionally rejects those slots. For this census only,
+    unknown directory-entry types are treated as unused; all allocation,
+    chain, stream-size and mini-stream bounds remain inherited unchanged.
+    """
+
+    def _dirs(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        index = 0
+        for sector in self.dirsecs:
+            data = self.sec(sector)
+            base = self.off(sector)
+            for position in range(0, self.ss, 128):
+                raw = data[position : position + 128]
+                entry_type = raw[66]
+                if entry_type not in (0, 1, 2, 5):
+                    entry_type = 0
+                low = u32(raw, 120)
+                high = u32(raw, 124)
+                effective = low if self.ss == 512 else low + (high << 32)
+                out.append(
+                    {
+                        "i": index,
+                        "name": decode_directory_name(raw[:64], u16(raw, 64)),
+                        "type": entry_type,
+                        "color": raw[67],
+                        "left": u32(raw, 68),
+                        "right": u32(raw, 72),
+                        "child": u32(raw, 76),
+                        "clsid": raw[80:96].hex(),
+                        "state": u32(raw, 96),
+                        "ctime": u64(raw, 100),
+                        "mtime": u64(raw, 108),
+                        "start": u32(raw, 116),
+                        "size": effective,
+                        "size_low": low,
+                        "size_high": high,
+                        "raw": base + position,
+                    }
+                )
+                index += 1
+        return out
+
 
 SCHEMA = "chaptera.reader1050-trophy-quill-census.v1"
 TARGET_SHA = "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027"
@@ -160,7 +208,7 @@ def main() -> None:
         sha = sha256_bytes(data)
         if path.stem.lower() != sha:
             raise ValueError(f"corpus identity drift: {path.name} hashes to {sha}")
-        cfb = CFB(data)
+        cfb = CorpusCFB(data)
         sid = logical_stream_sid(cfb, ["Quill", "QuillSub", "CONTENTS"])
         if sid is None:
             continue
