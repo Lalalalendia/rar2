@@ -251,18 +251,84 @@ function Set-OrdinaryLine {
 
 function Apply-BorderArtByName {
     param(
+        [Parameter(Mandatory = $true)]$Document,
         [Parameter(Mandatory = $true)]$Shape,
+        [Parameter(Mandatory = $true)][int]$CatalogIndex,
         [Parameter(Mandatory = $true)][string]$Name
     )
 
     $attempts = @()
-    $border = $null
 
+    # Microsoft Publisher documentation describes first-time assignment as:
+    #   Shape.BorderArtFormat = Document.BorderArts(1)
+    # while Shape.BorderArt is documented as read-only and may return
+    # "Permission Denied" when no BorderArt is currently applied. Try the
+    # object assignment before getter-based Set/Name paths.
+    $catalog = $null
+    $catalogItem = $null
+    try {
+        $catalog = $Document.BorderArts
+        $catalogItem = $catalog.Item($CatalogIndex)
+        try {
+            $Shape.BorderArtFormat = $catalogItem
+
+            $probe = $null
+            try {
+                $probe = $Shape.BorderArt
+                $readName = [string]$probe.Name
+                $exists = [bool]$probe.Exists
+                if ($exists -and $readName -eq $Name) {
+                    return [ordered]@{
+                        method = "Shape.BorderArtFormat=<Document.BorderArts.Item>"
+                        catalog_index = $CatalogIndex
+                        attempts = @($attempts)
+                    }
+                }
+                $attempts += [ordered]@{
+                    method = "Shape.BorderArtFormat=<Document.BorderArts.Item>"
+                    error = "assignment returned without exact BorderArt readback"
+                    exists = $exists
+                    read_name = $readName
+                }
+            }
+            catch {
+                $attempts += [ordered]@{
+                    method = "Shape.BorderArtFormat=<Document.BorderArts.Item>/readback"
+                    error = $_.Exception.Message
+                }
+            }
+            finally {
+                Release-Com $probe
+            }
+        }
+        catch {
+            $attempts += [ordered]@{
+                method = "Shape.BorderArtFormat=<Document.BorderArts.Item>"
+                error = $_.Exception.Message
+            }
+        }
+    }
+    catch {
+        $attempts += [ordered]@{
+            method = "Document.BorderArts.Item"
+            error = $_.Exception.Message
+        }
+    }
+    finally {
+        Release-Com $catalogItem
+        Release-Com $catalog
+    }
+
+    $border = $null
     try {
         $border = $Shape.BorderArt
         try {
             $border.Set($Name)
-            return [ordered]@{ method = "Shape.BorderArt.Set"; attempts = @($attempts) }
+            return [ordered]@{
+                method = "Shape.BorderArt.Set"
+                catalog_index = $CatalogIndex
+                attempts = @($attempts)
+            }
         }
         catch {
             $attempts += [ordered]@{ method = "Shape.BorderArt.Set"; error = $_.Exception.Message }
@@ -270,7 +336,11 @@ function Apply-BorderArtByName {
 
         try {
             $border.Name = $Name
-            return [ordered]@{ method = "Shape.BorderArt.Name"; attempts = @($attempts) }
+            return [ordered]@{
+                method = "Shape.BorderArt.Name"
+                catalog_index = $CatalogIndex
+                attempts = @($attempts)
+            }
         }
         catch {
             $attempts += [ordered]@{ method = "Shape.BorderArt.Name"; error = $_.Exception.Message }
@@ -287,7 +357,11 @@ function Apply-BorderArtByName {
     try {
         $borderFormat = $Shape.BorderArtFormat
         $borderFormat.Name = $Name
-        return [ordered]@{ method = "Shape.BorderArtFormat.Name"; attempts = @($attempts) }
+        return [ordered]@{
+            method = "Shape.BorderArtFormat.Name"
+            catalog_index = $CatalogIndex
+            attempts = @($attempts)
+        }
     }
     catch {
         $attempts += [ordered]@{ method = "Shape.BorderArtFormat.Name"; error = $_.Exception.Message }
@@ -557,7 +631,7 @@ $selectedName = [string]$selectedCatalog.name
 $applyPub = Join-Path $privateDir "apply.pub"
 $applyReceipt = Save-FromSource -SourcePub $baselinePub -OutputPub $applyPub -Mutation {
     param($doc, $shape)
-    return Apply-BorderArtByName -Shape $shape -Name $selectedName
+    return Apply-BorderArtByName -Document $doc -Shape $shape -CatalogIndex ([int]$selectedCatalog.index) -Name $selectedName
 }
 $applied = Snapshot-Publication -PubPath $applyPub -StageDir (Join-Path $privateDir "apply")
 
