@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_V0_8, EDITOR_PROJECT_VERSION_V0_9,
-    EditOperation, EditorError, EditorProject, EditorProjectError,
-    EditorSession, LengthEmu, MoveNodeBatchEntry, RectEmu,
+    EDITOR_PROJECT_VERSION_V0_8, EDITOR_PROJECT_VERSION_V0_9, EditOperation, EditorError,
+    EditorProject, EditorProjectError, EditorSession, LengthEmu, MoveNodeBatchEntry, RectEmu,
 };
 use pub_model::{
     Affine2D, Document, DocumentId, Node, NodeHeader, NodeId, NodeKind, Page, PageId,
