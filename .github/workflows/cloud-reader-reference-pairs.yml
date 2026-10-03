@@ -1,25 +1,8 @@
 name: Cloud Reader reference PUB-PDF pairs
 
 on:
+  workflow_call:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "apps/cloud-reader/**"
-      - "apps/chaptera-server/src/reader_scene_v1.rs"
-      - "apps/chaptera-server/src/guest_reader_worker.rs"
-      - "crates/chaptera-viewer-render-plan/**"
-      - "vendor/producer-a/crates/pub-viewer/**"
-      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
-      - "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs"
-      - "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs"
-      - "tools/acquire_carlton_march_pair.py"
-      - "tools/acquire_virginia_pub_pdf_pairs.py"
-      - "tools/cloud_reader_reference_pdf_raster_v1.py"
-      - "tools/cloud_reader_manual_oracle_bundle_v1.py"
-      - "tools/test_cloud_reader_manual_oracle_bundle_v1.py"
-      - "tools/pdf_reference_diff_v1.py"
-      - "tools/census_embedded_eot.py"
-      - ".github/workflows/cloud-reader-reference-pairs.yml"
   push:
     branches: [main]
     paths:
