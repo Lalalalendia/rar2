@@ -616,7 +616,7 @@ impl EditorProject {
         });
 
         Ok(Self {
-            schema_version: EDITOR_PROJECT_VERSION_CURRENT.into(),
+            schema_version: self.schema_version.clone(),
             source_hash: self.source_hash,
             identity: Some(identity),
             assets: self.assets.clone(),
@@ -1947,6 +1947,9 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }));
+        if carries_reorder && self.project_identity.is_none() {
+            return Err(EditorProjectError::MissingProjectIdentity);
+        }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (
                 if carries_reorder {
@@ -2073,6 +2076,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -2101,6 +2105,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2118,6 +2123,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2134,6 +2140,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -2144,6 +2151,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -2156,6 +2164,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2169,6 +2178,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2181,6 +2191,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2192,6 +2203,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2203,7 +2215,9 @@ impl EditorSession {
                 );
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_12 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+        {
             if let Some(index) = project
                 .operations
                 .iter()
@@ -2212,14 +2226,25 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesDeleteNodeOperation { index });
             }
         }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_13 {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(operation, EditOperation::ReorderAuthoredStack { .. })
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesReorderAuthoredStackOperation { index },
+                );
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
         }
         if (project.schema_version == EDITOR_PROJECT_VERSION_V0_11
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -2235,12 +2260,14 @@ impl EditorSession {
             || !self.replacement_assets.is_empty()
             || !self.image_replacements.is_empty()
             || !self.authored_shapes.is_empty()
+            || !self.authored_stacks.is_empty()
         {
             return Err(EditorProjectError::SessionNotEmpty);
         }
 
         if project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -2305,6 +2332,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_10
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
         {
             let actual_grids = effective_table_grids(&candidate.graph);
             if actual_grids != project.table_grids {
@@ -3999,6 +4027,9 @@ fn replay_canonical_operation(
         EditOperation::DeleteNode { .. } => session
             .consume_canonical_delete_node(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ReorderAuthoredStack { .. } => session
+            .consume_canonical_reorder_authored_stack(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
     }
 }
 
@@ -4991,6 +5022,9 @@ fn apply_forward(
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is applied to the authored overlay state")
         }
+        EditOperation::ReorderAuthoredStack { .. } => {
+            unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
+        }
     }
     Ok(())
 }
@@ -5229,6 +5263,9 @@ fn apply_inverse(
         }
         EditOperation::DeleteNode { .. } => {
             unreachable!("DeleteNode is reverted in the authored overlay state")
+        }
+        EditOperation::ReorderAuthoredStack { .. } => {
+            unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
         }
     }
     Ok(())
