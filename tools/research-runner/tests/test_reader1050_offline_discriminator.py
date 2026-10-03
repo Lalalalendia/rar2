@@ -53,6 +53,39 @@ def fp(sha: str, logical: str, topology: str = "t") -> dict:
 
 
 class Reader1050OfflineDiscriminatorTests(unittest.TestCase):
+    def test_exhausted_frontier_emits_terminal_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            reader = root / "reader"
+            reader.mkdir()
+            frontier = root / "frontier.json"
+            frontier.write_text(
+                json.dumps(
+                    {
+                        "schema": "chaptera.reader1050-hosted-frontier.v1",
+                        "source_reader_run_id": "123",
+                        "source_main_sha": "deadbeef",
+                        "status": "exhausted",
+                        "selected": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            out = root / "out"
+            payload = discriminator.build_discriminator(
+                reader,
+                frontier,
+                out,
+                None,
+            )
+
+            self.assertEqual(payload["status"], "exhausted")
+            self.assertEqual(payload["decision"], "stop")
+            markdown = (out / "decision.md").read_text(encoding="utf-8")
+            self.assertIn("Status: **exhausted**", markdown)
+            self.assertIn("Decision: **stop**", markdown)
+
     def make_inputs(self, root: Path, selected_sha: str, control_sha: str) -> tuple[Path, Path]:
         reader = root / "reader"
         reader.mkdir()
