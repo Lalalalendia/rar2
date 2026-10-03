@@ -168,6 +168,16 @@ try {
       try {
         failure = JSON.parse(String(error.stdout ?? ""));
       } catch {}
+      let workerLastStage = null;
+      try {
+        const progressLines = (await readFile(join(workerOutput, "progress.jsonl"), "utf8"))
+          .trim()
+          .split("\n")
+          .filter(Boolean);
+        if (progressLines.length > 0) {
+          workerLastStage = JSON.parse(progressLines.at(-1)).stage ?? null;
+        }
+      } catch {}
       results.push({
         fixture: fixture.name,
         source_sha256: fixture.sha256,
@@ -179,7 +189,13 @@ try {
           status: failure.status ?? null,
           exit_code: failure.exit_code ?? null,
           timed_out: failure.timed_out ?? null,
-        } : null,
+          last_stage: workerLastStage,
+        } : {
+          status: null,
+          exit_code: null,
+          timed_out: null,
+          last_stage: workerLastStage,
+        },
         filesystem_confinement: null,
         network_policy: failure?.network_policy ?? "seccomp_default_deny",
         screenshots: []
@@ -188,7 +204,8 @@ try {
         fixture: fixture.name,
         classification: "unsupported",
         terminal_code: "reader_worker_isolation_failed",
-        worker_exit_code: failure?.exit_code ?? null
+        worker_exit_code: failure?.exit_code ?? null,
+        worker_last_stage: workerLastStage
       }));
       continue;
     }
