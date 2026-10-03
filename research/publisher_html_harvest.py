@@ -231,7 +231,8 @@ def parse_publisher_xml(text, source_id):
             continue
         key = (prop.get("owner_type"), prop.get("name"))
         candidates = explicit_by_key.get(key, set()) if key[0] and key[1] else set()
-        if len(candidates) == 1:
+        is_self_container = bool(key[0] and key[1] and key[0].lower() == key[1].lower())
+        if len(candidates) == 1 and not is_self_container:
             inferred_priv = next(iter(candidates))
             prop.update(priv_decode(inferred_priv, prop.get("value") or ""))
             prop["priv_origin"] = "inferred_same_source_owner_name"
