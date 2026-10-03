@@ -223,6 +223,22 @@ mod tests {
         editor_windows=False,
     )
     assert_scope(
+        ["apps/chaptera-desktop/src/main.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=True,
+        editor_windows=False,
+        update_accept=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/reader_update_control.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=True,
+        editor_windows=False,
+        update_accept=True,
+    )
+    assert_scope(
         ["apps/chaptera-desktop/src/fallback_font.rs"],
         tier_a=True,
         reader_windows_smoke=False,
