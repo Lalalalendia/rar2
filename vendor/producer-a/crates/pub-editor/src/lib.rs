@@ -32,15 +32,17 @@ use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, LossItem, LossKind, LossSeverity, PersistenceCompatibilityAssessment,
     PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
-    PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
-    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, SemanticFeatureRequest,
+    FullStoryTypographyV1, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
+    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
+    SemanticFeatureRequest,
     TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
     assess_persistence_compatibility, build_export_report, plan_export, render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
-    IdmlWireProfile, add_embedded_images_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
+    IdmlWireProfile, add_embedded_images_to_idml, add_full_story_typography_to_idml,
+    project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
@@ -50,7 +52,8 @@ use pub_model::{
 pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
-    add_embedded_images_to_odg, project_resolved_graph_to_odg, write_odg,
+    OdgFullStoryTypographyPlacement, add_embedded_images_to_odg,
+    add_full_story_typography_to_odg, project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
@@ -2284,6 +2287,13 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
+                    let typography = self.full_story_typography_v1();
+                    add_full_story_typography_to_idml(&plan, &mut package, &typography).map_err(
+                        |error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        },
+                    )?;
                 }
                 EditorEditableTarget::Odg => {
                     let mut package =
@@ -2299,6 +2309,18 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
+                    let typography = self.full_story_typography_v1();
+                    let typography_placements =
+                        self.odg_full_story_typography_placements_v1(&typography);
+                    add_full_story_typography_to_odg(
+                        &plan,
+                        &mut package,
+                        &typography_placements,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 }
             }
         }
@@ -2345,6 +2367,13 @@ impl EditorSession {
                         message: error.to_string(),
                     }
                 })?;
+                let typography = self.full_story_typography_v1();
+                add_full_story_typography_to_idml(&plan, &mut package, &typography).map_err(
+                    |error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    },
+                )?;
                 write_idml_ucf(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -2365,6 +2394,14 @@ impl EditorSession {
                         message: error.to_string(),
                     }
                 })?;
+                let typography = self.full_story_typography_v1();
+                let typography_placements =
+                    self.odg_full_story_typography_placements_v1(&typography);
+                add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 write_odg(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -2378,6 +2415,170 @@ impl EditorSession {
             human_summary,
             bytes,
         })
+    }
+
+    fn full_story_typography_v1(&self) -> Vec<FullStoryTypographyV1> {
+        let ordinary_story_ids = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
+            .map(|frame| frame.story_id)
+            .collect::<BTreeSet<_>>();
+
+        let mut runs_by_story = BTreeMap::<StoryId, Vec<&PubTypographyRun>>::new();
+        for run in &self.source_typography_runs {
+            if ordinary_story_ids.contains(&run.story_id)
+                && self.graph.stories.contains_key(&run.story_id)
+            {
+                runs_by_story.entry(run.story_id).or_default().push(run);
+            }
+        }
+
+        let mut size_only_by_story = BTreeMap::<StoryId, Vec<&PubTypographySizeRun>>::new();
+        for run in &self.source_typography_size_runs {
+            if ordinary_story_ids.contains(&run.story_id)
+                && self.graph.stories.contains_key(&run.story_id)
+            {
+                size_only_by_story
+                    .entry(run.story_id)
+                    .or_default()
+                    .push(run);
+            }
+        }
+
+        let mut result = Vec::new();
+        for (story_id, mut runs) in runs_by_story {
+            let Some(story) = self.graph.stories.get(&story_id) else {
+                continue;
+            };
+            let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+                continue;
+            };
+            let Ok(story_utf16_len) = u32::try_from(story.text.encode_utf16().count()) else {
+                continue;
+            };
+            if story_scalar_len == 0 || story_utf16_len == 0 {
+                continue;
+            }
+
+            runs.sort_by_key(|run| {
+                (
+                    run.story_scalar_start,
+                    run.story_scalar_end,
+                    run.story_utf16_start,
+                    run.story_utf16_end,
+                )
+            });
+
+            let mut scalar_cursor = 0_u32;
+            let mut utf16_cursor = 0_u32;
+            let mut font_family: Option<&str> = None;
+            let mut font_size_emu: Option<u32> = None;
+            let mut valid = true;
+
+            for run in runs {
+                if run.story_scalar_start != scalar_cursor
+                    || run.story_utf16_start != utf16_cursor
+                    || run.story_scalar_end <= run.story_scalar_start
+                    || run.story_utf16_end <= run.story_utf16_start
+                    || run.story_scalar_end > story_scalar_len
+                    || run.story_utf16_end > story_utf16_len
+                    || run.font_inherited
+                    || run.size_inherited
+                    || run.source_font_name.trim().is_empty()
+                    || run.text_size_emu == 0
+                {
+                    valid = false;
+                    break;
+                }
+
+                match font_family {
+                    None => font_family = Some(run.source_font_name.as_str()),
+                    Some(existing) if existing == run.source_font_name => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+                match font_size_emu {
+                    None => font_size_emu = Some(run.text_size_emu),
+                    Some(existing) if existing == run.text_size_emu => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                scalar_cursor = run.story_scalar_end;
+                utf16_cursor = run.story_utf16_end;
+            }
+
+            if !valid || scalar_cursor != story_scalar_len || utf16_cursor != story_utf16_len {
+                continue;
+            }
+
+            let Some(font_family) = font_family else {
+                continue;
+            };
+            let Some(font_size_emu) = font_size_emu else {
+                continue;
+            };
+
+            if size_only_by_story.get(&story_id).is_some_and(|runs| {
+                runs.iter().any(|run| {
+                    run.size_inherited
+                        || run.text_size_emu == 0
+                        || run.text_size_emu != font_size_emu
+                        || run.story_scalar_end > story_scalar_len
+                        || run.story_utf16_end > story_utf16_len
+                })
+            }) {
+                continue;
+            }
+
+            result.push(FullStoryTypographyV1 {
+                story_id,
+                font_family: font_family.to_owned(),
+                font_size_emu: LengthEmu::new(i64::from(font_size_emu)),
+            });
+        }
+
+        result.sort_by_key(|item| item.story_id);
+        result
+    }
+
+    fn odg_full_story_typography_placements_v1(
+        &self,
+        typography: &[FullStoryTypographyV1],
+    ) -> Vec<OdgFullStoryTypographyPlacement> {
+        let eligible = typography
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
+
+        for (node_id, node) in &self.graph.nodes {
+            let Some(frame) = frame_from_payload(*node_id, &node.payload) else {
+                continue;
+            };
+            if frame.previous.is_none() && eligible.contains(&frame.story_id) {
+                roots.entry(frame.story_id).or_default().push(frame.frame_id);
+            }
+        }
+
+        typography
+            .iter()
+            .filter_map(|item| {
+                let mut frame_ids = roots.get(&item.story_id)?.clone();
+                frame_ids.sort_unstable();
+                frame_ids.dedup();
+                (!frame_ids.is_empty()).then(|| OdgFullStoryTypographyPlacement {
+                    typography: item.clone(),
+                    frame_ids,
+                })
+            })
+            .collect()
     }
 
     fn build_editable_export_plan(

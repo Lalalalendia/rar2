@@ -26,7 +26,7 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::CanonicalId;
+use pub_model::{CanonicalId, LengthEmu, StoryId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -35,6 +35,16 @@ pub const STORY_FONT_FAMILY_FEATURE: &str = "story.typography.font_family";
 pub const STORY_FONT_SIZE_FEATURE: &str = "story.typography.font_size";
 pub const STORY_TEXT_COLOR_FEATURE: &str = "story.typography.color";
 pub const STORY_PARAGRAPH_ALIGNMENT_FEATURE: &str = "story.paragraph_alignment";
+pub const FULL_STORY_TYPOGRAPHY_SCHEMA_V1: &str = "chaptera.full-story-typography.v1";
+
+/// Target-neutral bounded typography authority for a Story whose entire text
+/// range is proven to use one explicit font family and one explicit font size.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FullStoryTypographyV1 {
+    pub story_id: StoryId,
+    pub font_family: String,
+    pub font_size_emu: LengthEmu,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TargetProfile {
