@@ -243,7 +243,6 @@ jobs:
             target/publisher-visual-batch01/summary.json \
             "$RUNNER_TEMP/publisher-visual-baseline/summary.json" \
             target/publisher-visual-batch01/delta.json
-            target/publisher-visual-batch01/membership-gate.json
           echo "baseline_found=true" >> "$GITHUB_OUTPUT"
           echo "baseline_run_id=$baseline_run" >> "$GITHUB_OUTPUT"
 
@@ -295,5 +294,6 @@ jobs:
           path: |
             target/publisher-visual-batch01/summary.json
             target/publisher-visual-batch01/delta.json
+            target/publisher-visual-batch01/membership-gate.json
           if-no-files-found: warn
           retention-days: 90
