@@ -4357,6 +4357,43 @@ impl ViewerApp {
         }
     }
 
+    fn enter_canvas_text_mode_at_pointer(
+        &mut self,
+        story_id: pub_editor::StoryId,
+        frame_id: pub_editor::NodeId,
+        page_id: &str,
+        point: pub_interaction::DocumentPoint,
+    ) {
+        let outcome = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())
+            .and_then(|editor| {
+                text_session::enter_pointer_text_mode(
+                    editor,
+                    story_id,
+                    frame_id,
+                    page_id,
+                    point.x.get(),
+                    point.y.get(),
+                )
+            });
+        match outcome {
+            Ok(mode) => {
+                self.text_mode = Some(mode);
+                self.canvas_drag = None;
+                self.canvas_resize = None;
+                self.edit_status = Some(
+                    "Text editing activated from the TextFrame interior. Typing is committed through canonical Story range operations."
+                        .to_owned(),
+                );
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Text activation unavailable: {error}"));
+            }
+        }
+    }
+
     fn exit_canvas_text_mode(&mut self, trigger: &str) {
         let Some(mode) = self.text_mode.as_ref() else {
             return;
@@ -5275,6 +5312,12 @@ impl ViewerApp {
         let mut rectangle_release = None;
         let mut rectangle_error = None;
         let mut edit_text_request: Option<(pub_editor::StoryId, pub_editor::NodeId)> = None;
+        let mut text_activation_request: Option<(
+            pub_editor::StoryId,
+            pub_editor::NodeId,
+            String,
+            pub_interaction::DocumentPoint,
+        )> = None;
         let mut text_pointer_request: Option<(String, pub_interaction::DocumentPoint)> = None;
         let mut text_exit_request = false;
         egui::ScrollArea::both()
@@ -5611,8 +5654,26 @@ impl ViewerApp {
                                 canvas_hit = None;
                             }
                         }
+                    } else if let Some(hit) = topmost {
+                        canvas_hit = Some(hit.instance_id.clone());
+                        if strict_document_rect_interior(&hit.bounds, point)
+                            && let Some(fragment) = visual
+                                .text_fragments
+                                .iter()
+                                .find(|fragment| fragment.frame_id == hit.node_id)
+                            && self.editor.as_ref().is_some_and(|editor| {
+                                editor.can_replace_story_text(fragment.story_id).is_ok()
+                            })
+                        {
+                            text_activation_request = Some((
+                                fragment.story_id,
+                                fragment.frame_id,
+                                page_id_text.clone(),
+                                point,
+                            ));
+                        }
                     } else {
-                        canvas_hit = topmost.map(|hit| hit.instance_id.clone());
+                        canvas_hit = None;
                     }
                 }
 
@@ -5957,6 +6018,9 @@ impl ViewerApp {
         if let Some((page_id, point)) = text_pointer_request {
             self.reposition_canvas_text_caret(&page_id, point);
         }
+        if let Some((story_id, frame_id, page_id, point)) = text_activation_request {
+            self.enter_canvas_text_mode_at_pointer(story_id, frame_id, &page_id, point);
+        }
         if let Some((story_id, frame_id)) = edit_text_request {
             self.enter_canvas_text_mode(story_id, frame_id);
         }
@@ -6142,6 +6206,19 @@ fn canvas_document_point(
     transform
         .screen_to_document(ScreenPoint::new(f64::from(pointer.x), f64::from(pointer.y)))
         .ok()
+}
+
+fn strict_document_rect_interior(
+    bounds: &pub_editor::RectEmu,
+    point: pub_interaction::DocumentPoint,
+) -> bool {
+    let x = i128::from(point.x.get());
+    let y = i128::from(point.y.get());
+    let left = i128::from(bounds.x.get());
+    let top = i128::from(bounds.y.get());
+    let right = left + i128::from(bounds.width.get());
+    let bottom = top + i128::from(bounds.height.get());
+    x > left && x < right && y > top && y < bottom
 }
 
 fn paint_selection_overlay(painter: &egui::Painter, rect: egui::Rect, show_handles: bool) {
@@ -9515,6 +9592,37 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn strict_text_activation_interior_excludes_exact_frame_boundary() {
+        let bounds = pub_editor::RectEmu::new(
+            pub_editor::LengthEmu::new(100),
+            pub_editor::LengthEmu::new(200),
+            pub_editor::LengthEmu::new(300),
+            pub_editor::LengthEmu::new(400),
+        );
+        assert!(strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(250),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+        assert!(!strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(100),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+        assert!(!strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(400),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+    }
+
     #[cfg(not(feature = "reader-only"))]
     #[test]
     #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
@@ -9552,7 +9660,7 @@ mod tests {
                 .text_fragments
                 .iter()
                 .find_map(|fragment| {
-                    text_session::enter_explicit_text_mode(
+                    let explicit_mode = text_session::enter_explicit_text_mode(
                         editor,
                         fragment.story_id,
                         fragment.frame_id,
@@ -9569,6 +9677,7 @@ mod tests {
                         .iter()
                         .find(|page| node.parent_origin == page.id.into_canonical())?;
                     let page_id_text = page.id.as_canonical().to_string();
+                    let frame_id_text = fragment.frame_id.as_canonical().to_string();
                     let page_nodes = visual
                         .scene
                         .nodes
@@ -9592,26 +9701,35 @@ mod tests {
                             })
                             .collect(),
                     );
-                    let point = pub_interaction::DocumentPoint::new(
-                        pub_editor::LengthEmu::new(
-                            node.bounds.x.get() + node.bounds.width.get() / 2,
-                        ),
-                        pub_editor::LengthEmu::new(
-                            node.bounds.y.get() + node.bounds.height.get() / 2,
-                        ),
-                    );
-                    hit_index
-                        .topmost_at(point)
-                        .filter(|top| top.node_id == fragment.frame_id)
-                        .map(|_| {
-                            (
-                                format!("Page {}", page.index),
-                                point,
-                                fragment.story_id,
-                                fragment.frame_id,
-                                fragment.text.clone(),
-                            )
+                    let point = explicit_mode
+                        .layout
+                        .caret_map
+                        .caret_stops
+                        .iter()
+                        .filter(|caret| {
+                            caret.page_id == page_id_text && caret.frame_id == frame_id_text
                         })
+                        .find_map(|caret| {
+                            let point = pub_interaction::DocumentPoint::new(
+                                pub_editor::LengthEmu::new(caret.page_x_emu),
+                                pub_editor::LengthEmu::new(
+                                    caret.page_y_top_emu
+                                        + (caret.page_y_bottom_emu - caret.page_y_top_emu) / 2,
+                                ),
+                            );
+                            let admitted = strict_document_rect_interior(&node.bounds, point)
+                                && hit_index
+                                    .topmost_at(point)
+                                    .is_some_and(|top| top.node_id == fragment.frame_id);
+                            admitted.then_some(point)
+                        })?;
+                    Some((
+                        format!("Page {}", page.index),
+                        point,
+                        fragment.story_id,
+                        fragment.frame_id,
+                        fragment.text.clone(),
+                    ))
                 })
                 .expect("real fixture exposes one topmost capability-safe TextFrame")
         };
@@ -9683,14 +9801,12 @@ mod tests {
             .operations()
             .len();
 
-        harness.get_by_label("Edit Text").click();
-        harness.step();
         assert_eq!(
             harness
                 .state()
                 .text_mode
                 .as_ref()
-                .expect("explicit Edit Text enters a session")
+                .expect("strict TextFrame interior click enters a session")
                 .story_id,
             target_story_id
         );
