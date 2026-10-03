@@ -219,6 +219,8 @@ fn main() -> Result<()> {
         &control_diag,
         control_opened,
     );
+    let target_quill_coarse_key = target_diag.quill.coarse_key();
+    let control_quill_coarse_key = control_diag.quill.coarse_key();
 
     let payload = json!({
         "schema": SCHEMA,
@@ -227,26 +229,20 @@ fn main() -> Result<()> {
             "byte_len": target_diag.byte_len,
             "reader": target_reader,
             "diagnostic": target_diag,
-            "quill_coarse_key": target_diag.quill.coarse_key(),
+            "quill_coarse_key": target_quill_coarse_key,
         },
         "control": {
             "source_sha256": CONTROL_SHA,
             "byte_len": control_diag.byte_len,
             "reader": control_reader,
             "diagnostic": control_diag,
-            "quill_coarse_key": control_diag.quill.coarse_key(),
+            "quill_coarse_key": control_quill_coarse_key,
         },
         "decision": decision,
         "evidence_boundary": "exact-SHA source-safe sibling A/B only; no document text, raw stream bytes, filenames/paths or repaired PUB materialization retained"
     });
 
-    out_dir
-        .try_exists()
-        .context("inspect output directory")?
-        .then_some(())
-        .unwrap_or_else(|| {
-            fs::create_dir_all(&out_dir).expect("create output directory");
-        });
+    fs::create_dir_all(&out_dir).context("create sibling A/B output directory")?;
     fs::write(
         out_dir.join("decision.json"),
         serde_json::to_vec_pretty(&payload).context("serialize sibling A/B receipt")?,
