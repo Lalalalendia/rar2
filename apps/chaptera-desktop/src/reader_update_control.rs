@@ -137,16 +137,11 @@ where
     if !reader_only {
         return Err("update control mode is reserved for the Chaptera Reader product".to_owned());
     }
-    let request_path = args
-        .next()
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            "usage: chaptera-reader --chaptera-update-control HANDOFF-REQUEST.json".to_owned()
-        })?;
+    let request_path = args.next().map(PathBuf::from).ok_or_else(|| {
+        "usage: chaptera-reader --chaptera-update-control HANDOFF-REQUEST.json".to_owned()
+    })?;
     if args.next().is_some() {
-        return Err(
-            "Reader update control mode accepts exactly one handoff request".to_owned(),
-        );
+        return Err("Reader update control mode accepts exactly one handoff request".to_owned());
     }
 
     run(&request_path).map_err(|error| format!("Reader update control failed: {error}"))?;
