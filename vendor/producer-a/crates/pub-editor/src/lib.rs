@@ -7,6 +7,7 @@
 //! writer gate.
 
 mod authored_stack_lifecycle_v1;
+mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
 mod writer_assessment;
 
@@ -16,6 +17,11 @@ pub use authored_stack_lifecycle_v1::{
     apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
     authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
     validate_authored_stack_v1,
+};
+pub use authored_stack_runtime_v1::{
+    AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1,
+    apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
+    plan_reorder_authored_stack_v1,
 };
 pub use create_shape_runtime_v1::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
@@ -77,7 +83,8 @@ pub const EDITOR_PROJECT_VERSION_V0_9: &str = "pub-editor-v0.9";
 pub const EDITOR_PROJECT_VERSION_V0_10: &str = "pub-editor-v0.10";
 pub const EDITOR_PROJECT_VERSION_V0_11: &str = "pub-editor-v0.11";
 pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_12;
+pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_13;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -287,6 +294,9 @@ pub enum EditOperation {
         before: AuthoredShapeRuntimeV1,
         before_state_id: String,
     },
+    ReorderAuthoredStack {
+        transition: AuthoredStackReorderTransitionV1,
+    },
 }
 
 impl EditOperation {
@@ -321,7 +331,8 @@ impl EditOperation {
             | Self::ResizeNodes { .. }
             | Self::CreateTextBox { .. }
             | Self::CreateShape { .. }
-            | Self::DeleteNode { .. } => Vec::new(),
+            | Self::DeleteNode { .. }
+            | Self::ReorderAuthoredStack { .. } => Vec::new(),
         }
     }
 }
@@ -449,6 +460,11 @@ impl PersistenceRequirements for EditOperation {
                 feature: "node.deleted_identity".into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("node".into()),
+            }],
+            Self::ReorderAuthoredStack { transition } => vec![PersistenceRequirement {
+                feature: "node.authored_stack_order".into(),
+                origin: Some(transition.node_id.into_canonical()),
+                property_path: Some("page.authored_stack".into()),
             }],
         }
     }
@@ -1651,6 +1667,7 @@ pub struct EditorSession {
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    authored_stacks: BTreeMap<PageId, AuthoredStackV1>,
     undo: Vec<EditOperation>,
     redo: Vec<EditOperation>,
 }
@@ -1674,6 +1691,7 @@ impl EditorSession {
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
+            authored_stacks: BTreeMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -1835,6 +1853,15 @@ impl EditorSession {
         self.authored_shapes.get(&node_id)
     }
 
+    pub fn authored_stack(&self, page_id: PageId) -> Option<AuthoredStackV1> {
+        self.graph.pages.contains_key(&page_id).then(|| {
+            self.authored_stacks
+                .get(&page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
+        })
+    }
+
     pub fn source_image_count(&self) -> usize {
         self.source_image_nodes
             .keys()
@@ -1892,8 +1919,19 @@ impl EditorSession {
 
     pub fn try_project(&self) -> Result<EditorProject, EditorProjectError> {
         let table_grids = effective_table_grids(&self.graph);
+        let carries_reorder = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }));
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
-            (EDITOR_PROJECT_VERSION_V0_12, Some(identity.clone()))
+            (
+                if carries_reorder {
+                    EDITOR_PROJECT_VERSION_V0_13
+                } else {
+                    EDITOR_PROJECT_VERSION_V0_12
+                },
+                Some(identity.clone()),
+            )
         } else {
             let legacy_schema = if self
                 .undo
