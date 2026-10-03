@@ -179,7 +179,7 @@ jobs:
 
 
   quill-census:
-    needs: exact-pair
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -252,6 +252,7 @@ jobs:
           from pathlib import Path
 
           root = Path("out/quill-census")
+          root.mkdir(parents=True, exist_ok=True)
           files = []
           for path in sorted(p for p in root.rglob("*") if p.is_file()):
               data = path.read_bytes()
