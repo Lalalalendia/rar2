@@ -2071,8 +2071,7 @@ mod tests {
                 font_size_emu: LengthEmu::new(run.font_size_emu),
                 font_bytes,
             };
-            let shaped =
-                shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).unwrap();
+            let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).unwrap();
             prepared.push(prepare_typography_run_v1(*run, &shaped.glyphs).unwrap());
             policy_glyphs.extend(shaped.glyphs);
         }
