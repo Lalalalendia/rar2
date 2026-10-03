@@ -1,0 +1,21 @@
+{
+  "schema": "publisher-hidden-xml-seeds.v1",
+  "sources": [
+    {
+      "label": "Supersociedades 27539",
+      "url": "https://www.supersociedades.gov.co/documents/107391/159040/27539.pdf/dcfe9b61-29d8-cc19-166c-d639ba281d80?download=true&t=1743209555571"
+    },
+    {
+      "label": "Supersociedades 28150",
+      "url": "https://www.supersociedades.gov.co/documents/107391/159040/28150.pdf/ab941b5a-a359-0863-f559-68284c8647e7?download=true&t=1743209611365"
+    },
+    {
+      "label": "Supersociedades 27599",
+      "url": "https://www.supersociedades.gov.co/documents/107391/159040/27599.pdf/da73ff26-e80d-e617-9e49-da4acb6338b1?download=true&t=1743209566778"
+    },
+    {
+      "label": "Planet Source Code pdesgal",
+      "url": "https://raw.githubusercontent.com/Planet-Source-Code/hartoto-flexible-phoone-book__1-69597/1400f033db5f4a57cca6d5392f551943271b7f72/pdesgal.htm"
+    }
+  ]
+}
