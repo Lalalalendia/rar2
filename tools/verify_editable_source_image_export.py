@@ -8,7 +8,7 @@ import re
 import zipfile
 
 CONTENTS_RE = re.compile(
-    r"<Contents><!\\[CDATA\\[([A-Za-z0-9+/=\\s]+)\\]\\]></Contents>"
+    r"<Contents><!\[CDATA\[([A-Za-z0-9+/=\s]+)\]\]></Contents>"
 )
 
 def load_json(path):
