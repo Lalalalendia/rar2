@@ -113,7 +113,8 @@ class T891EvidenceClassifierTests(unittest.TestCase):
 
     def test_complete_batch_stays_below_law_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            analysis, blast_dir = self.fixture(Path(tmp))
+            root = Path(tmp)
+            analysis, blast_dir = self.fixture(root)
             summary = T891.build_summary(T891.load_json(analysis), blast_dir)
             self.assertEqual("evidence-complete-carrier-attribution-required", summary["batch_state"])
             self.assertEqual(9, summary["candidate_count"])
