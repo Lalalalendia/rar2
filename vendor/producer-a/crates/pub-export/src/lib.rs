@@ -26,7 +26,7 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::{CanonicalId, LengthEmu, StoryId};
+use pub_model::{CanonicalId, LengthEmu, NodeId, PageId, RectEmu, Size2D, StoryId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,6 +36,45 @@ pub const STORY_FONT_SIZE_FEATURE: &str = "story.typography.font_size";
 pub const STORY_TEXT_COLOR_FEATURE: &str = "story.typography.color";
 pub const STORY_PARAGRAPH_ALIGNMENT_FEATURE: &str = "story.paragraph_alignment";
 pub const FULL_STORY_TYPOGRAPHY_SCHEMA_V1: &str = "chaptera.full-story-typography.v1";
+pub const AUTHORED_SHAPE_GEOMETRY_FEATURE: &str = "authored_shape.geometry";
+pub const AUTHORED_SHAPE_FILL_FEATURE: &str = "authored_shape.fill";
+pub const AUTHORED_SHAPE_STROKE_FEATURE: &str = "authored_shape.stroke";
+pub const AUTHORED_SHAPE_Z_ORDER_FEATURE: &str = "authored_shape.z_order";
+pub const AUTHORED_RECTANGLE_SCHEMA_V1: &str = "chaptera.authored-rectangle-export.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ExportSrgb8V1 {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ExportSolidPaintV1 {
+    pub visible: bool,
+    pub color: ExportSrgb8V1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ExportSolidStrokeV1 {
+    pub visible: bool,
+    pub color: ExportSrgb8V1,
+    pub width_emu: LengthEmu,
+}
+
+/// Target-neutral projection of one Chaptera-authored rectangle.
+///
+/// Z-order is deliberately absent: the current authored overlay has no
+/// consumer-proven interleaving authority relative to imported page items.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AuthoredRectangleExportV1 {
+    pub node_id: NodeId,
+    pub page_id: PageId,
+    pub page_size: Size2D,
+    pub bounds: RectEmu,
+    pub fill: ExportSolidPaintV1,
+    pub stroke: ExportSolidStrokeV1,
+}
 
 /// Target-neutral bounded typography authority for a Story whose entire text
 /// range is proven to use one explicit font family and one explicit font size.
