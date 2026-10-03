@@ -12,10 +12,12 @@ use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
+mod authored_shape;
 mod image;
 mod semantic;
 mod typography;
 
+pub use authored_shape::{OdgAuthoredShapeError, add_authored_rectangles_to_odg};
 pub use image::{
     IMAGE_BYTES_FEATURE, IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE,
     OdgEmbeddedImagePlacement, OdgImageError, add_embedded_images_to_odg,
