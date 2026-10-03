@@ -190,7 +190,9 @@ pub fn paint_document_node_foreground(
     node_rect: egui::Rect,
     scene_scale: f32,
 ) -> NodePaintOutcome {
-    if let Some(line) = node.solid_line.as_ref() {
+    if node.decorative_border.is_none()
+        && let Some(line) = node.solid_line.as_ref()
+    {
         let line_width_px = line.width_emu as f32 * scene_scale;
         if line_width_px > 0.0_f32 {
             painter.rect_stroke(
