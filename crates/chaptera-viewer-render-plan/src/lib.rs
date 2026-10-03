@@ -2533,6 +2533,8 @@ mod tests {
                     text_size_emu: 304_800,
                     font_inherited: false,
                     size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -2541,6 +2543,8 @@ mod tests {
                     text_size_emu: 228_600,
                     font_inherited: false,
                     size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
                 },
             ],
         );
