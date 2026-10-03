@@ -3271,6 +3271,188 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned public Carlton March PUB path"]
+    fn carlton_missing_paragraph_alignment_topology_is_source_safe() {
+        let carlton = std::env::var_os("CHAPTERA_GOLDEN_CARLTON_MARCH")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_GOLDEN_CARLTON_MARCH");
+        let pub_bytes = std::fs::read(&carlton).expect("read pinned Carlton PUB");
+        let quill = pub_cfb::read_stream_reader(
+            std::io::Cursor::new(pub_bytes.as_slice()),
+            "/Quill/QuillSub/CONTENTS",
+        )
+        .expect("read Carlton Quill stream");
+        let story_catalog = crate::parse_confirmed_story_catalog(
+            StreamPath("/Quill/QuillSub/CONTENTS".into()),
+            &quill,
+        )
+        .expect("parse Carlton Story catalog");
+
+        let descriptors = story_catalog
+            .descriptor_nodes
+            .iter()
+            .flat_map(|node| node.descriptors.iter())
+            .enumerate()
+            .collect::<Vec<_>>();
+        let font_names = parse_font_catalog(&quill, &descriptors).expect("parse FONT catalog");
+
+        let mut fdpp_unknown = BTreeSet::new();
+        let paragraph_styles =
+            parse_fdpp_styles(&quill, &story_catalog, &descriptors, &mut fdpp_unknown)
+                .expect("parse Carlton FDPP");
+        validate_monotone_fdpp_text_offsets(&paragraph_styles)
+            .expect("Carlton FDPP offsets are monotone");
+
+        let text_start =
+            u32::try_from(story_catalog.text.source.offset).expect("TEXT offset fits u32");
+        let text_len = u32::try_from(story_catalog.text.source.len).expect("TEXT len fits u32");
+        let text_end = text_start.checked_add(text_len).expect("TEXT end fits u32");
+        let story_extents = build_story_extents(&story_catalog.stories).expect("Story extents");
+        let total_utf16 = story_extents
+            .last()
+            .map(|extent| extent.global_end_utf16)
+            .unwrap_or(0);
+        let mut ranges =
+            materialize_paragraph_ranges(&paragraph_styles, text_start, text_end, total_utf16)
+                .expect("materialize Carlton paragraph ranges");
+
+        let mut inheritance_unknown = BTreeSet::new();
+        let paragraph_defaults = parse_stsh1_paragraph_defaults(
+            &quill,
+            &story_catalog,
+            &descriptors,
+            &mut inheritance_unknown,
+        )
+        .expect("parse Carlton STSH1 paragraph defaults");
+        let character_defaults = parse_stsh1_character_defaults(
+            &quill,
+            &story_catalog,
+            &descriptors,
+            &font_names,
+            &mut inheritance_unknown,
+        )
+        .expect("parse Carlton STSH1 character defaults");
+
+        assert!(
+            fdpp_unknown.is_empty() && inheritance_unknown.is_empty(),
+            "exact Carlton topology receipt must not cross unknown fixed block widths"
+        );
+
+        let implicit_style_zero_applied =
+            apply_bounded_implicit_style_zero(&mut ranges, &character_defaults);
+
+        let mut no_selector = 0_usize;
+        let mut default_missing = 0_usize;
+        let mut default_duplicate = 0_usize;
+        let mut default_alignment_absent = 0_usize;
+        let mut default_alignment_supported = 0_usize;
+        let mut default_alignment_unsupported = 0_usize;
+        let mut default_alignment_ambiguous = 0_usize;
+        let mut missing_total = 0_usize;
+
+        eprintln!("CARLTON_PARAGRAPH_DEFAULT_TOPOLOGY_BEGIN");
+        eprintln!("implicit_style_zero_applied={implicit_style_zero_applied}");
+
+        for (ordinal, range) in ranges.iter().enumerate() {
+            if range.alignment.is_some() {
+                continue;
+            }
+            missing_total += 1;
+
+            let selector_source = match range.selector_source {
+                Some(QuillParagraphSelectorSource::ExplicitFdpp0x19) => "explicit_fdpp_0x0219",
+                Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence) => {
+                    "implicit_style_zero"
+                }
+                None => "none",
+            };
+
+            let default_class = if let Some(style_index) = range.selected_style_index {
+                let matches = paragraph_defaults
+                    .iter()
+                    .filter(|default| default.logical_style_index == style_index)
+                    .collect::<Vec<_>>();
+                match matches.as_slice() {
+                    [] => {
+                        default_missing += 1;
+                        "default_missing"
+                    }
+                    [default] => match default.alignment_values.as_slice() {
+                        [] => {
+                            default_alignment_absent += 1;
+                            "default_alignment_absent"
+                        }
+                        [value] if QuillParagraphAlignment::from_persisted_value(*value).is_some() => {
+                            default_alignment_supported += 1;
+                            "default_alignment_supported"
+                        }
+                        [_] => {
+                            default_alignment_unsupported += 1;
+                            "default_alignment_unsupported"
+                        }
+                        _ => {
+                            default_alignment_ambiguous += 1;
+                            "default_alignment_ambiguous"
+                        }
+                    },
+                    _ => {
+                        default_duplicate += 1;
+                        "default_duplicate"
+                    }
+                }
+            } else {
+                no_selector += 1;
+                "no_selector"
+            };
+
+            let story_parts = story_extents
+                .iter()
+                .filter_map(|story| {
+                    let start = range.global_start_utf16.max(story.global_start_utf16);
+                    let end = range.global_end_utf16.min(story.global_end_utf16);
+                    (start < end).then_some(format!(
+                        "{}:{}",
+                        story.story_index,
+                        end.saturating_sub(start)
+                    ))
+                })
+                .collect::<Vec<_>>();
+
+            eprintln!(
+                "missing_range ordinal={} utf16_len={} stories={} selector_source={} default_class={}",
+                ordinal,
+                range.global_end_utf16.saturating_sub(range.global_start_utf16),
+                story_parts.join(","),
+                selector_source,
+                default_class,
+            );
+        }
+
+        let mut resolved_ranges = ranges.clone();
+        apply_paragraph_alignment_defaults(&mut resolved_ranges, &paragraph_defaults);
+        let effective_runs = build_paragraph_alignment_runs(&resolved_ranges, &story_extents);
+
+        eprintln!(
+            "missing_summary total={} no_selector={} default_missing={} default_duplicate={} default_alignment_absent={} default_alignment_supported={} default_alignment_unsupported={} default_alignment_ambiguous={} effective_runs_after_defaults={}",
+            missing_total,
+            no_selector,
+            default_missing,
+            default_duplicate,
+            default_alignment_absent,
+            default_alignment_supported,
+            default_alignment_unsupported,
+            default_alignment_ambiguous,
+            effective_runs.len(),
+        );
+        eprintln!("CARLTON_PARAGRAPH_DEFAULT_TOPOLOGY_END");
+
+        assert_eq!(
+            default_alignment_supported, 0,
+            "a supported selected STSH1 paragraph alignment would have been consumed by merged #959"
+        );
+    }
+
+    #[test]
     fn fixed_block_parser_preserves_known_size_value() {
         let bytes = [0x0c, 0x22, 0x40, 0xa6, 0x04, 0x00];
         let mut unknown = BTreeSet::new();
