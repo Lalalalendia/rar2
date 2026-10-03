@@ -1,0 +1,103 @@
+name: Free PUB exact asset CLI V1
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/chaptera-pub-cli/**"
+      - "vendor/producer-a/crates/pub-reader/src/asset_export.rs"
+      - "vendor/producer-a/crates/pub-reader/src/assets.rs"
+      - ".github/workflows/free-pub-asset-cli-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Format
+        run: cargo fmt --manifest-path apps/chaptera-pub-cli/Cargo.toml -- --check
+
+      - name: Check
+        run: cargo check --manifest-path apps/chaptera-pub-cli/Cargo.toml --all-targets
+
+      - name: Clippy
+        run: cargo clippy --manifest-path apps/chaptera-pub-cli/Cargo.toml --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --manifest-path apps/chaptera-pub-cli/Cargo.toml
+
+      - name: Acquire pinned SampleNewsletter
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/SampleNewsletter.pub"
+          curl --fail --location --silent --show-error             "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"             --output "$fixture"
+          python - "$fixture" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          data = path.read_bytes()
+          assert len(data) == 291840, len(data)
+          assert hashlib.sha256(data).hexdigest() == "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
+          PY
+          echo "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" >> "$GITHUB_ENV"
+
+      - name: Extract exact assets twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(sha256sum "$CHAPTERA_SAMPLE_NEWSLETTER" | awk '{print $1}')"
+          cargo run --quiet --manifest-path apps/chaptera-pub-cli/Cargo.toml --             extract-assets "$CHAPTERA_SAMPLE_NEWSLETTER"             --output "$RUNNER_TEMP/assets-a"             --json > "$RUNNER_TEMP/stdout-manifest.json"
+          cargo run --quiet --manifest-path apps/chaptera-pub-cli/Cargo.toml --             extract-assets "$CHAPTERA_SAMPLE_NEWSLETTER"             --output "$RUNNER_TEMP/assets-b"
+          after="$(sha256sum "$CHAPTERA_SAMPLE_NEWSLETTER" | awk '{print $1}')"
+          test "$before" = "$after"
+          cmp "$RUNNER_TEMP/stdout-manifest.json" "$RUNNER_TEMP/assets-a/manifest.json"
+          cmp "$RUNNER_TEMP/assets-a/manifest.json" "$RUNNER_TEMP/assets-b/manifest.json"
+
+      - name: Validate exact-byte manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/assets-a" "$RUNNER_TEMP/assets-b" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          out_a = pathlib.Path(sys.argv[1])
+          out_b = pathlib.Path(sys.argv[2])
+          manifest = json.loads((out_a / "manifest.json").read_text(encoding="utf-8"))
+          assert manifest["schema_version"] == "pub-assets-v0.1"
+          assert manifest["assets"], "pinned real PUB must expose at least one exact asset"
+
+          expected = {"manifest.json"}
+          for entry in manifest["assets"]:
+              name = entry["filename"]
+              expected.add(name)
+              a = (out_a / name).read_bytes()
+              b = (out_b / name).read_bytes()
+              assert a == b
+              assert len(a) == entry["byte_len"]
+              assert hashlib.sha256(a).hexdigest() == entry["sha256"]
+              assert entry["uses"], name
+
+          assert {path.name for path in out_a.iterdir()} == expected
+          assert {path.name for path in out_b.iterdir()} == expected
+          PY
