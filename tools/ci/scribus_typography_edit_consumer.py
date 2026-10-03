@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import re
 import sys
 
 import scribus
@@ -46,10 +48,37 @@ def marker_present(frames: list[str], marker: str) -> bool:
     return any(marker in frame_text(frame) for frame in frames)
 
 
+def normalized_family(value: str) -> str:
+    value = re.sub(r"\s+", " ", value.strip().strip("'\"")).casefold()
+    if value.endswith(" regular"):
+        value = value[: -len(" regular")]
+    return value
+
+
+def frame_matches_typography(frame: str, family: str, size_pt: float) -> bool:
+    length = int(scribus.getTextLength(frame))
+    if length <= 0:
+        return False
+    try:
+        scribus.selectText(0, 1, frame)
+        actual_family = scribus.getFont(frame)
+        actual_size = float(scribus.getFontSize(frame))
+    finally:
+        try:
+            scribus.selectText(0, 0, frame)
+        except Exception:
+            pass
+    return normalized_family(actual_family) == normalized_family(family) and math.isclose(
+        actual_size, size_pt, rel_tol=0.0, abs_tol=0.02
+    )
+
+
 def main() -> int:
     output = Path(required_env("CHAPTERA_SCRIBUS_EDIT_OUT")).resolve()
     receipt_path = Path(required_env("CHAPTERA_SCRIBUS_EDIT_RECEIPT")).resolve()
     marker = required_env("CHAPTERA_EDIT_MARKER")
+    expected_family = required_env("CHAPTERA_EXPECTED_FONT_FAMILY")
+    expected_size_pt = float(required_env("CHAPTERA_EXPECTED_FONT_SIZE_PT"))
     mode = os.environ.get("CHAPTERA_SCRIBUS_EDIT_MODE", "edit")
 
     if mode not in {"edit", "verify"}:
@@ -75,12 +104,14 @@ def main() -> int:
 
         for frame in frames:
             length = scribus.getTextLength(frame)
-            if length <= 0:
+            if length <= 0 or not frame_matches_typography(
+                frame, expected_family, expected_size_pt
+            ):
                 continue
             before_length = int(length)
-            # Insert through Scribus itself so existing document structure and
-            # unrelated formatting remain consumer-owned. Appending is chosen
-            # deliberately; setText would replace all text and can reset style.
+            # Insert through Scribus itself into the consumer-resolved target
+            # typography Story. Appending is deliberate; setText would replace
+            # all text and can reset style.
             scribus.insertText(marker, length, frame)
             try:
                 scribus.layoutTextChain(frame)
@@ -94,7 +125,10 @@ def main() -> int:
             break
 
         if edited_frame is None:
-            print("scribus document has no non-empty editable TextFrame", file=sys.stderr)
+            print(
+                "scribus document has no editable TextFrame matching expected typography",
+                file=sys.stderr,
+            )
             return 6
         if not marker_present(all_text_frames(), marker):
             print("scribus edit marker is not observable after insertText", file=sys.stderr)
@@ -118,6 +152,8 @@ def main() -> int:
         "mode": mode,
         "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         "marker_observed": True,
+        "expected_font_family": expected_family,
+        "expected_font_size_pt": expected_size_pt,
         "edited_frame_name_sha256": (
             hashlib.sha256(edited_frame.encode("utf-8")).hexdigest()
             if edited_frame is not None
