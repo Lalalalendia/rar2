@@ -38,7 +38,7 @@ def strip_vba_comments(source: str) -> str:
     return "\n".join(lines)
 
 
-CALL_CLASSIFIER_VERSION = "v2.1"
+CALL_CLASSIFIER_VERSION = "v2.2"
 
 CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "application_lifecycle": [
