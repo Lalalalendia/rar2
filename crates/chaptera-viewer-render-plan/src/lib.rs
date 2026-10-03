@@ -2549,26 +2549,27 @@ mod tests {
         let elephant_sha = font_fingerprint_sha256(elephant_bytes);
         let times_sha = font_fingerprint_sha256(times_bytes);
 
-        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| {
-            match run.source_font_name.as_str() {
-                "Elephant" => Some(ExplicitRenderTextFontResourceV1 {
-                    resource_id: "font-elephant",
-                    expected_sha256: &elephant_sha,
-                    face_index: 0,
-                    default_font_size_emu: 152_400,
-                    default_line_height_emu: 190_500,
-                    bytes: elephant_bytes,
-                }),
-                "Times New Roman" => Some(ExplicitRenderTextFontResourceV1 {
-                    resource_id: "font-times",
-                    expected_sha256: &times_sha,
-                    face_index: 0,
-                    default_font_size_emu: 152_400,
-                    default_line_height_emu: 190_500,
-                    bytes: times_bytes,
-                }),
-                _ => None,
-            }
+        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| match run
+            .source_font_name
+            .as_str()
+        {
+            "Elephant" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-elephant",
+                expected_sha256: &elephant_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: elephant_bytes,
+            }),
+            "Times New Roman" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-times",
+                expected_sha256: &times_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: times_bytes,
+            }),
+            _ => None,
         };
 
         let runs = admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver)
