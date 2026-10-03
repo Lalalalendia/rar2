@@ -61,7 +61,7 @@ def sha256_bytes(data: bytes) -> str:
 
 def load_evidence_registry(path: Path) -> dict[str, dict[str, Any]]:
     payload = read_json(path)
-    if payload.get("schema") != "chaptera.reader1050-evidence-registry.v1":
+    if payload.get("schema") != "chaptera.reader-evidence-registry.v1":
         raise ValueError(f"unexpected evidence registry schema: {payload.get('schema')!r}")
     entries: dict[str, dict[str, Any]] = {}
     for row in payload.get("entries") or []:
