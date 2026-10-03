@@ -3034,9 +3034,7 @@ fn legacy_noquill_structural_point_group_ids(
         .nodes
         .values()
         .filter(|node| node.kind == NodeKind::Group)
-        .filter(|node| {
-            selected_pages.contains(&PageId::from_canonical(node.header.parent_id))
-        })
+        .filter(|node| selected_pages.contains(&PageId::from_canonical(node.header.parent_id)))
         .filter(|node| node.header.bounds.width.get() == 0 && node.header.bounds.height.get() == 0)
         .filter(|node| node.header.transform == Affine2D::identity())
         .map(|node| node.header.id)
@@ -4128,8 +4126,7 @@ mod tests {
         );
         node.header.transform = Affine2D::identity();
 
-        let structural =
-            legacy_noquill_structural_point_group_ids(&graph, &[page_id]);
+        let structural = legacy_noquill_structural_point_group_ids(&graph, &[page_id]);
         assert_eq!(structural, BTreeSet::from([node_id]));
 
         node.header.bounds = RectEmu::new(
@@ -4138,9 +4135,7 @@ mod tests {
             LengthEmu::new(1),
             LengthEmu::new(1),
         );
-        assert!(
-            legacy_noquill_structural_point_group_ids(&graph, &[page_id]).is_empty()
-        );
+        assert!(legacy_noquill_structural_point_group_ids(&graph, &[page_id]).is_empty());
     }
 
     #[test]
