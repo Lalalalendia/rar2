@@ -1,0 +1,148 @@
+name: Quill same-document donor stream diff
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/quill-story-packag-donor-diff.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-packag-donor-diff.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quill-story-packag-donor-diff-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  exact-pair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout exact current source witness only
+        uses: actions/checkout@v5
+        with:
+          repository: Lalalalendia/lalamu
+          ref: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+          path: _witness/lalamu
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub
+
+      - name: Fetch exact 2009 same-document donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _witness/donor out
+          python - <<'PY'
+          import hashlib
+          import urllib.request
+          from pathlib import Path
+
+          url = "https://web.archive.org/web/20090210183325id_/http://helenhudspith.com/resources/graphics/laura_dale/packag_advDis.pub"
+          req = urllib.request.Request(
+              url,
+              headers={"User-Agent": "Chaptera-PUB-research/1.0 (+exact-public-lineage-probe)"},
+          )
+          with urllib.request.urlopen(req, timeout=90) as response:
+              payload = response.read()
+          expected = "e8c360c97f4604e60fd84fbc106f59723b03838e05c74b74f4d56aef8d40088e"
+          actual = hashlib.sha256(payload).hexdigest()
+          assert actual == expected, (actual, len(payload))
+          assert payload.startswith(bytes.fromhex("d0cf11e0a1b11ae1"))
+          Path("_witness/donor/packag_advDis-2009.pub").write_bytes(payload)
+          PY
+
+          source="_witness/lalamu/pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub"
+          echo "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a  ${source}" | sha256sum -c -
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check targeted Rust surface
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2021 --check             vendor/producer-a/crates/pub-reader/src/bin/quill-story-packag-donor-diff.rs
+          cargo clippy             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-packag-donor-diff             -- -D warnings
+
+      - name: Compare exact same-document logical streams and Quill payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-packag-donor-diff --             "_witness/lalamu/pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub"             "_witness/donor/packag_advDis-2009.pub"             "out/quill-story-packag-donor-diff.json"
+
+      - name: Enforce source-safe decision fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("out/quill-story-packag-donor-diff.json")
+          report = json.loads(path.read_text())
+          assert report["schema"] == "chaptera.quill-story-same-document-stream-diff.v1"
+          assert report["source_sha256"] == "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a"
+          assert report["variant_sha256"] == "e8c360c97f4604e60fd84fbc106f59723b03838e05c74b74f4d56aef8d40088e"
+          assert report["source_byte_len"] == 52224
+          assert report["variant_byte_len"] == 52224
+          assert report["text_payloads_equal"] is True
+
+          if report["fdpp_payloads_equal"]:
+              if report["fdpc_payloads_equal"]:
+                  decision = "no_fdpp_or_fdpc_same_document_delta"
+              else:
+                  decision = "fdpc_same_document_delta_only"
+          else:
+              decision = "fdpp_same_document_delta_requires_localization"
+
+          summary = {
+              "schema": "chaptera.quill-story-same-document-stream-diff-summary.v1",
+              "decision": decision,
+              "contents_stream_equal": report["contents_stream_equal"],
+              "logical_stream_topology_equal": report["logical_stream_topology_equal"],
+              "changed_logical_stream_paths": report["changed_logical_stream_paths"],
+              "quill_descriptor_topology_equal": report["quill_descriptor_topology_equal"],
+              "changed_quill_descriptor_names": report["changed_quill_descriptor_names"],
+              "text_payloads_equal": report["text_payloads_equal"],
+              "fdpp_payloads_equal": report["fdpp_payloads_equal"],
+              "fdpc_payloads_equal": report["fdpc_payloads_equal"],
+              "stsh_payloads_equal": report["stsh_payloads_equal"],
+              "syid_payloads_equal": report["syid_payloads_equal"],
+              "strs_payloads_equal": report["strs_payloads_equal"],
+              "interpretation_fence": (
+                  "This exact-pair diff may localize where same-document state changed. "
+                  "It does not by itself authorize ordinary Reader grammar or family-wide corruption."
+              ),
+          }
+          Path("out/quill-story-packag-donor-diff-summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+
+          lowered = path.read_text().lower()
+          for forbidden in ("document_text", "raw_payload", "source_path", "filename"):
+              assert forbidden not in lowered
+          PY
+
+      - name: Remove PUB bytes before artifact upload
+        if: always()
+        shell: bash
+        run: rm -rf _witness
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quill-story-packag-donor-diff-${{ github.run_id }}
+          path: |
+            out/quill-story-packag-donor-diff.json
+            out/quill-story-packag-donor-diff-summary.json
+          if-no-files-found: error
+          retention-days: 30
