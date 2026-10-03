@@ -2337,7 +2337,7 @@ impl ViewerApp {
             }
 
             let duplicate_enabled =
-                !rectangle_active && self.selected_authored_rectangle_target().is_ok();
+                !self.rectangle_creation.active() && self.selected_authored_rectangle_target().is_ok();
             let duplicate_response =
                 ui.add_enabled(duplicate_enabled, egui::Button::new("Duplicate"));
             if duplicate_response.clicked()
