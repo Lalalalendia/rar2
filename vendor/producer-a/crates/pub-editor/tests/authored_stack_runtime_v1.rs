@@ -240,11 +240,7 @@ fn tampered_or_pre_v0_13_reorder_project_fails_transactionally() {
     let mut producer = EditorSession::new(graph()).expect("producer");
     create_two(&mut producer);
     producer
-        .reorder_authored_stack(
-            page_id(),
-            node_a(),
-            AuthoredStackReorderModeV1::StepForward,
-        )
+        .reorder_authored_stack(page_id(), node_a(), AuthoredStackReorderModeV1::StepForward)
         .expect("reorder");
     let project = producer.project();
 
@@ -279,5 +275,11 @@ fn tampered_or_pre_v0_13_reorder_project_fails_transactionally() {
         }) | Err(EditorProjectError::OperationMismatch { index: 2 })
     ));
     assert!(target.operations().is_empty());
-    assert!(target.authored_stack(page_id()).expect("stack").members.is_empty());
+    assert!(
+        target
+            .authored_stack(page_id())
+            .expect("stack")
+            .members
+            .is_empty()
+    );
 }
