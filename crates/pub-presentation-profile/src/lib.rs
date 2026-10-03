@@ -1688,6 +1688,92 @@ mod tests {
         }
     }
 
+    fn mature_multi_root_input() -> StandardPrintServiceTailProfileInputV1 {
+        StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: 7,
+            confirmed_page_count: 6,
+            special_entry_count: 1,
+            scenario_evidence_list_count: 0,
+            observed_scenario_page_count: 0,
+            pages: vec![
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 0,
+                    contents_seq_num: 100,
+                    oid_dword0: Some(1),
+                    oid_dword1: Some(1),
+                    applied_master_seq_num: None,
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 1,
+                    contents_seq_num: 101,
+                    oid_dword0: Some(2),
+                    oid_dword1: Some(2),
+                    applied_master_seq_num: None,
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 2,
+                    contents_seq_num: 200,
+                    oid_dword0: Some(3),
+                    oid_dword1: Some(3),
+                    applied_master_seq_num: Some(100),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 3,
+                    contents_seq_num: 201,
+                    oid_dword0: Some(4),
+                    oid_dword1: Some(4),
+                    applied_master_seq_num: Some(101),
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 5,
+                    contents_seq_num: 300,
+                    oid_dword0: Some(5),
+                    oid_dword1: Some(5),
+                    applied_master_seq_num: None,
+                },
+                StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: 6,
+                    contents_seq_num: 301,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn mature_multi_root_profile_selects_referenced_prefix_roots() {
+        let selection =
+            select_mature_multi_referenced_root_customer_page_seq_nums_v1(mature_multi_root_input())
+                .unwrap();
+        assert_eq!(
+            selection.profile_id,
+            MATURE_MULTI_REFERENCED_ROOT_PROFILE_ID_V1
+        );
+        assert_eq!(selection.customer_page_seq_nums, vec![100, 101]);
+        assert_eq!(selection.non_customer_page_seq_nums, vec![200, 201, 300, 301]);
+    }
+
+    #[test]
+    fn mature_multi_root_profile_fails_open_for_single_root() {
+        let mut input = mature_multi_root_input();
+        input.pages[3].applied_master_seq_num = Some(100);
+        assert!(
+            select_mature_multi_referenced_root_customer_page_seq_nums_v1(input).is_none()
+        );
+    }
+
+    #[test]
+    fn mature_multi_root_profile_fails_open_for_external_master_target() {
+        let mut input = mature_multi_root_input();
+        input.pages[2].applied_master_seq_num = Some(999);
+        assert!(
+            select_mature_multi_referenced_root_customer_page_seq_nums_v1(input).is_none()
+        );
+    }
+
     #[test]
     fn mature_zero_leader_detached_profile_selects_customer_block() {
         let input = mature_zero_leader_detached_input(1);
