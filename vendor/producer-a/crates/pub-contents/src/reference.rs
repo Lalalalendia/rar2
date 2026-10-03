@@ -392,7 +392,7 @@ mod tests {
     fn unsupported_reference_wire_type_is_local_error() {
         let bytes = [
             0x00, 0x88, 0x08, 0x00, 0x00, 0x00, // occupied, 4 bytes content
-            0x02, 0x80, 0x44, 0x00,
+            0x02, 0xB0, 0x44, 0x00,
         ];
         let directory = parse_directory(&bytes);
 
@@ -400,7 +400,7 @@ mod tests {
             parse_confirmed_chunk_reference(&bytes, &directory, 0)
                 .expect_err("неподтверждённый wire-type должен быть ошибкой"),
             ChunkReferenceReadError::UnsupportedReferenceWireType {
-                block_type: 0x80,
+                block_type: 0xB0,
                 offset: 6,
             }
         );
