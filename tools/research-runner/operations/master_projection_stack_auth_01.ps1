@@ -442,7 +442,8 @@ function Invoke-Master-Visibility-Control {
     $pixel = Read-OverlapPixel -Path $pngPath -PageWidth $pageWidth -PageHeight $pageHeight -Left $left -Top $top -Width $width -Height $height
     $distanceMaster = Color-DistanceSq -R $pixel.r -G $pixel.g -B $pixel.b -TargetR 255 -TargetG 0 -TargetB 0
     $distanceWhite = Color-DistanceSq -R $pixel.r -G $pixel.g -B $pixel.b -TargetR 255 -TargetG 255 -TargetB 255
-    $masterVisible = $distanceMaster -lt $distanceWhite
+    # Opaque center pixel should be effectively the authored red, not merely "closer to red than white".
+    $masterVisible = $distanceMaster -le (3 * 16 * 16)
 
     return [ordered]@{
         removed_page_shape_count = $removedPageShapeCount
