@@ -7,7 +7,6 @@ on:
       - editor-created-story-edit-rust-01
   pull_request:
     paths:
-      - "vendor/producer-a/crates/pub-editor/tests/create_text_box_v1.rs"
       - "crates/chaptera-text-input-adapter/src/domain.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - ".github/workflows/editor-created-story-edit-rust-v1.yml"
