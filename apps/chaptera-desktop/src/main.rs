@@ -5088,14 +5088,7 @@ impl ViewerApp {
         let movable_nodes = &frame_work.movable_nodes;
         let resizable_nodes = &frame_work.resizable_nodes;
 
-        let page_origin = page.id.into_canonical();
         let page_id_text = page.id.as_canonical().to_string();
-        let page_nodes = visual
-            .scene
-            .nodes
-            .iter()
-            .filter(|node| node.parent_origin == page_origin)
-            .collect::<Vec<_>>();
         let selected_bounds = self
             .canvas_selection
             .primary()
@@ -5549,24 +5542,20 @@ impl ViewerApp {
                 }
 
                 if let Some(selected_instance_id) = selected_canvas_instance.as_deref()
-                    && let Some(selected_node_id) =
-                        hit_index.node_for_instance(selected_instance_id)
-                    && let Some(node) = page_nodes
-                        .iter()
-                        .copied()
-                        .find(|node| node.origin == selected_node_id)
-                    && node.bounds.width.get() > 0
-                    && node.bounds.height.get() > 0
+                    && let Some(selected_hit) = hit_index.entry_for_instance(selected_instance_id)
+                    && selected_hit.bounds.width.get() > 0
+                    && selected_hit.bounds.height.get() > 0
                 {
+                    let selected_node_id = selected_hit.node_id;
                     let selected_bounds = next_canvas_resize
-                        .filter(|resize| resize.node_id() == node.origin)
+                        .filter(|resize| resize.node_id() == selected_node_id)
                         .and_then(|resize| resize.preview_bounds())
                         .or_else(|| {
                             next_canvas_drag
-                                .filter(|drag| drag.node_id() == node.origin)
+                                .filter(|drag| drag.node_id() == selected_node_id)
                                 .map(|drag| drag.preview_bounds())
                         })
-                        .unwrap_or(node.bounds);
+                        .unwrap_or(selected_hit.bounds);
                     let min = egui::pos2(
                         page_rect.left() + selected_bounds.x.get() as f32 * scene_scale,
                         page_rect.top() + selected_bounds.y.get() as f32 * scene_scale,
@@ -5584,7 +5573,7 @@ impl ViewerApp {
                         && let Some(fragment) = visual
                             .text_fragments
                             .iter()
-                            .find(|fragment| fragment.frame_id == node.origin)
+                            .find(|fragment| fragment.frame_id == selected_node_id)
                         && self.editor.as_ref().is_some_and(|editor| {
                             editor.can_replace_story_text(fragment.story_id).is_ok()
                         })
@@ -5604,7 +5593,7 @@ impl ViewerApp {
                             .put(button_rect, egui::Button::new("Edit Text"))
                             .clicked()
                         {
-                            edit_text_request = Some((fragment.story_id, node.origin));
+                            edit_text_request = Some((fragment.story_id, selected_node_id));
                         }
                     }
                     if resize_enabled {
