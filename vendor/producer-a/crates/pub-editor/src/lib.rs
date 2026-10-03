@@ -2313,9 +2313,9 @@ impl EditorSession {
                         self.odg_full_story_typography_placements_v1(&typography);
                     add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
                         .map_err(|error| EditorExportError::Projection {
-                            target,
-                            message: error.to_string(),
-                        })?;
+                        target,
+                        message: error.to_string(),
+                    })?;
                 }
             }
         }
