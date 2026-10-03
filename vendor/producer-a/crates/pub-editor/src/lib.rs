@@ -2923,9 +2923,7 @@ impl EditorSession {
             unreachable!("consume_canonical_delete_node receives DeleteNode")
         };
 
-        if before.node_id != *node_id
-            || before.page_id != *page_id
-            || before.parent_id != *page_id
+        if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id
         {
             return Err(EditorError::NodeDeletePageMismatch {
                 node_id: *node_id,
@@ -4775,10 +4773,7 @@ fn apply_authored_shape_delete_forward(
         unreachable!("DeleteNode forward receives DeleteNode operation")
     };
 
-    if before.node_id != *node_id
-        || before.page_id != *page_id
-        || before.parent_id != *page_id
-    {
+    if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id {
         return Err(EditorError::NodeDeletePageMismatch {
             node_id: *node_id,
             page_id: *page_id,
@@ -4807,10 +4802,7 @@ fn apply_authored_shape_delete_inverse(
         unreachable!("DeleteNode inverse receives DeleteNode operation")
     };
 
-    if before.node_id != *node_id
-        || before.page_id != *page_id
-        || before.parent_id != *page_id
-    {
+    if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id {
         return Err(EditorError::NodeDeletePageMismatch {
             node_id: *node_id,
             page_id: *page_id,
