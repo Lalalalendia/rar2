@@ -336,8 +336,19 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+
+          cleanup_scribus_consumer() {
+            pkill -9 -x scribus 2>/dev/null || true
+            pkill -9 -x Xvfb 2>/dev/null || true
+            pkill -9 -x magick 2>/dev/null || true
+            pkill -9 -x convert 2>/dev/null || true
+            sleep 1
+          }
+
+          trap cleanup_scribus_consumer EXIT
           for idml in "$EVIDENCE_ROOT"/consumer/*/output.idml; do
             dir="$(dirname "$idml")"
+            cleanup_scribus_consumer
             rm -f "$dir/consumer.sla"
             rm -rf "$dir/scribus-home"
             mkdir -p \
@@ -347,7 +358,8 @@ jobs:
               "$dir/scribus-home/runtime"
             chmod 700 "$dir/scribus-home/runtime"
             echo "::notice::Scribus validating $idml"
-            timeout 180s env \
+            set +e
+            timeout --kill-after=5s 180s env \
               HOME="$dir/scribus-home" \
               XDG_CONFIG_HOME="$dir/scribus-home/.config" \
               XDG_CACHE_HOME="$dir/scribus-home/.cache" \
@@ -356,8 +368,17 @@ jobs:
               CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla" \
               xvfb-run -a scribus -g -ns \
                 -py tools/ci/scribus_idml_consumer.py -- "$idml"
+            rc=$?
+            set -e
+            cleanup_scribus_consumer
+            if [[ $rc -ne 0 ]]; then
+              echo "::error::Scribus consumer failed rc=$rc for $idml"
+              exit "$rc"
+            fi
             test -s "$dir/consumer.sla"
           done
+          trap - EXIT
+          cleanup_scribus_consumer
 
       - name: Validate materialized ODG through LibreOffice Draw
         run: |
