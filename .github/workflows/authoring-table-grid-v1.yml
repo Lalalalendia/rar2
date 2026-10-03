@@ -6,8 +6,6 @@ on:
       - "vendor/producer-a/crates/pub-model/src/entity_id.rs"
       - "vendor/producer-a/crates/pub-model/src/table.rs"
       - "vendor/producer-a/crates/pub-model/src/lib.rs"
-      - "vendor/producer-a/crates/pub-editor/tests/effective_table_grid_v1.rs"
-      - "vendor/producer-a/crates/pub-editor/tests/resize_node_v1.rs"
       - "vendor/producer-a/crates/pub-layout/src/lib.rs"
       - ".github/workflows/authoring-table-grid-v1.yml"
   push:
