@@ -1,0 +1,216 @@
+name: Batch01 worker phase trace
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/batch01-worker-phase-trace.yml"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "apps/cloud-reader/real-browser.test.mjs"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: batch01-worker-phase-trace-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/batch01-worker-phase-trace
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
+      - name: Build canonical Cloud Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Trace exact CPU-bound fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p target/batch01-worker-phase-trace
+          python - <<'PY'
+          import hashlib
+          import json
+          import subprocess
+          from pathlib import Path
+
+          root = Path.cwd()
+          source_root = root / "out/pinned1050/materialized/native"
+          worker = root / "target/batch01-worker-phase-trace/debug/chaptera"
+          harness = root / "tools/migration_pdf_worker_isolation.py"
+          out_root = root / "target/batch01-worker-phase-trace"
+
+          fixtures = [
+              {
+                  "id": "025",
+                  "sha256": "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb",
+                  "bytes": 4286464,
+              },
+              {
+                  "id": "029",
+                  "sha256": "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e",
+                  "bytes": 496640,
+              },
+              {
+                  "id": "064",
+                  "sha256": "fb2927045c23292717df0a67ccb1e879d526a4ad8a6bb3c1046c72119fba3910",
+                  "bytes": 750080,
+              },
+          ]
+
+          def last_phase(stderr_tail):
+              prefix = "CHAPTERA_READER_PHASE "
+              phases = []
+              for line in str(stderr_tail or "").splitlines():
+                  if not line.startswith(prefix):
+                      continue
+                  phase = line[len(prefix):].strip()
+                  if phase and len(phase) <= 96 and all(
+                      ch.islower() or ch.isdigit() or ch in "_:.-" for ch in phase
+                  ):
+                      phases.append(phase)
+              return phases[-1] if phases else None
+
+          rows = []
+          for index, fixture in enumerate(fixtures, 1):
+              source = source_root / (fixture["sha256"] + ".pub")
+              data = source.read_bytes()
+              assert len(data) == fixture["bytes"], (fixture["id"], len(data))
+              assert hashlib.sha256(data).hexdigest() == fixture["sha256"]
+
+              output_dir = out_root / ("fixture-" + fixture["id"])
+              command = [
+                  "python3",
+                  str(harness),
+                  "run",
+                  "--output-dir",
+                  str(output_dir),
+                  "--input",
+                  str(source),
+                  "--timeout",
+                  "120",
+                  "--address-space-mb",
+                  "768",
+                  "--cpu-seconds",
+                  "90",
+                  "--open-files",
+                  "64",
+                  "--output-file-mb",
+                  "32",
+                  "--clear-environment",
+                  "--",
+                  str(worker),
+                  "guest-reader-scene",
+                  "--session-id",
+                  "guest:" + str(index).zfill(32),
+                  "--expected-sha256",
+                  fixture["sha256"],
+                  "--expected-byte-len",
+                  str(fixture["bytes"]),
+              ]
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  timeout=135,
+                  check=False,
+              )
+              try:
+                  isolation = json.loads(completed.stdout)
+              except json.JSONDecodeError:
+                  isolation = {
+                      "status": "harness_output_invalid",
+                      "exit_code": completed.returncode,
+                      "timed_out": False,
+                      "stderr_tail": "",
+                  }
+
+              row = {
+                  "fixture_id": fixture["id"],
+                  "source_sha256": fixture["sha256"],
+                  "source_byte_len": fixture["bytes"],
+                  "isolation_status": isolation.get("status"),
+                  "exit_code": isolation.get("exit_code"),
+                  "timed_out": isolation.get("timed_out"),
+                  "last_reader_phase": last_phase(isolation.get("stderr_tail")),
+              }
+              if isolation.get("status") == "success":
+                  receipt = json.loads((output_dir / "result.json").read_text())
+                  row["reader_classification"] = receipt.get("classification")
+                  row["reader_terminal_code"] = receipt.get("terminal_code")
+                  row["structural_scan_duration_us"] = receipt.get("structural_scan_duration_us")
+                  row["scene_duration_us"] = receipt.get("scene_duration_us")
+              rows.append(row)
+              print(json.dumps(row, sort_keys=True))
+
+          payload = {
+              "schema": "chaptera.batch01-worker-phase-trace.v1",
+              "repository_commit_sha": "${{ github.sha }}",
+              "worker_limits": {
+                  "wall_seconds": 120,
+                  "cpu_seconds": 90,
+                  "address_space_mb": 768,
+                  "open_files": 64,
+                  "output_file_mb": 32,
+              },
+              "source_bytes_emitted": False,
+              "source_text_emitted": False,
+              "raw_stderr_emitted": False,
+              "fixtures": rows,
+          }
+          (out_root / "summary.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload source-neutral trace receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: batch01-worker-phase-trace
+          path: target/batch01-worker-phase-trace/summary.json
+          if-no-files-found: error
+          retention-days: 30
