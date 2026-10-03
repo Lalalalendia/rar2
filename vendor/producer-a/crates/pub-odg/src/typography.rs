@@ -16,19 +16,41 @@ pub struct OdgFullStoryTypographyPlacement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OdgTypographyError {
     NonOdgPackage,
-    DuplicateStory { story_id: StoryId },
-    DuplicateFrame { node_id: NodeId },
-    EmptyFrames { story_id: StoryId },
-    InvalidFontFamily { story_id: StoryId },
-    InvalidFontSize { story_id: StoryId },
-    MissingPlannedFeature { story_id: StoryId, feature: &'static str },
+    DuplicateStory {
+        story_id: StoryId,
+    },
+    DuplicateFrame {
+        node_id: NodeId,
+    },
+    EmptyFrames {
+        story_id: StoryId,
+    },
+    InvalidFontFamily {
+        story_id: StoryId,
+    },
+    InvalidFontSize {
+        story_id: StoryId,
+    },
+    MissingPlannedFeature {
+        story_id: StoryId,
+        feature: &'static str,
+    },
     MissingContent,
     InvalidContentUtf8,
     MissingAutomaticStyles,
-    MissingFrame { node_id: NodeId },
-    MissingTextCarrier { node_id: NodeId },
-    ExistingTextStyle { node_id: NodeId },
-    InvalidXmlCharacter { story_id: StoryId, scalar: u32 },
+    MissingFrame {
+        node_id: NodeId,
+    },
+    MissingTextCarrier {
+        node_id: NodeId,
+    },
+    ExistingTextStyle {
+        node_id: NodeId,
+    },
+    InvalidXmlCharacter {
+        story_id: StoryId,
+        scalar: u32,
+    },
 }
 
 impl fmt::Display for OdgTypographyError {
@@ -166,9 +188,8 @@ pub fn add_full_story_typography_to_odg(
         }
     }
 
-    let replacement = format!(
-        "  <office:automatic-styles>\n{style_xml}  </office:automatic-styles>\n"
-    );
+    let replacement =
+        format!("  <office:automatic-styles>\n{style_xml}  </office:automatic-styles>\n");
     xml = xml.replacen(automatic_marker, &replacement, 1);
     package.parts[content_index].content = xml.into_bytes();
     Ok(())
@@ -200,9 +221,9 @@ fn validate_plan_and_value(
 }
 
 fn has_planned_feature(plan: &ExportPlan, origin: CanonicalId, feature: &str) -> bool {
-    plan.features.iter().any(|planned| {
-        planned.request.origin == Some(origin) && planned.request.feature == feature
-    })
+    plan.features
+        .iter()
+        .any(|planned| planned.request.origin == Some(origin) && planned.request.feature == feature)
 }
 
 fn apply_style_to_frame(
@@ -292,10 +313,7 @@ fn format_emu_points(value: LengthEmu) -> String {
     result
 }
 
-fn escape_xml_attr(
-    story_id: StoryId,
-    input: &str,
-) -> Result<String, OdgTypographyError> {
+fn escape_xml_attr(story_id: StoryId, input: &str) -> Result<String, OdgTypographyError> {
     let mut output = String::new();
     for character in input.chars() {
         let scalar = u32::from(character);
