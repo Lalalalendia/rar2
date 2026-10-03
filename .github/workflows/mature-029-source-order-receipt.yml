@@ -1,0 +1,122 @@
+name: Mature 029 source order receipt
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-029-source-order-receipt.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-029-source-order-receipt-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-029-source-order
+
+jobs:
+  receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Bind exact 029
+        run: |
+          set -euo pipefail
+          mkdir -p target/mature-029-source-order
+          cp out/pinned1050/materialized/native/c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e.pub target/mature-029-source-order/029.pub
+          echo "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e  target/mature-029-source-order/029.pub" | sha256sum -c -
+
+      - name: Build existing page-role receipt
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt --jobs 2
+
+      - name: Capture structural source receipt
+        run: |
+          set -euo pipefail
+          "$CARGO_TARGET_DIR/debug/page-role-receipt"             target/mature-029-source-order/029.pub             target/mature-029-source-order/raw.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          raw = json.loads(Path("target/mature-029-source-order/raw.json").read_text())
+
+          pages = []
+          for page in sorted(raw.get("pages", []), key=lambda p: p["document_ordinal"]):
+              seq = int(page["contents_seq_num"])
+              pages.append({
+                  "document_ordinal": page["document_ordinal"],
+                  "contents_seq_num": seq,
+                  "page_id_pack_candidate_same_build_only": 0x02000000 | seq,
+                  "oid_dword0": page.get("oid_dword0"),
+                  "oid_dword1": page.get("oid_dword1"),
+                  "pgt_type": page.get("pgt_type"),
+                  "applied_master_seq_num": page.get("applied_master_seq_num"),
+                  "applied_master_raw_type": page.get("applied_master_raw_type"),
+                  "shape_child_count": page.get("shape_child_count", 0),
+                  "group_child_count": page.get("group_child_count", 0),
+              })
+
+          controlling = []
+          for item in raw.get("controlling", []):
+              pgids = []
+              for field in item.get("fields", []):
+                  for pgid in field.get("pgids", []):
+                      pgids.append(pgid)
+              controlling.append({
+                  "contents_seq_num": item.get("contents_seq_num"),
+                  "parent_seq_num": item.get("parent_seq_num"),
+                  "pgids": pgids,
+              })
+
+          summary = {
+              "schema": "chaptera.mature-029-source-order-receipt.v1",
+              "source_sha256": "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e",
+              "document_page_list_entry_count": raw.get("document_page_list_entry_count"),
+              "confirmed_page_count": raw.get("confirmed_page_count"),
+              "special_entry_count": raw.get("special_entry_count"),
+              "document_entries": raw.get("document_entries", []),
+              "pages": pages,
+              "controlling": controlling,
+              "claims": {
+                  "existing_parser_only": True,
+                  "new_parser_semantics_added": False,
+                  "page_id_pack_candidate_is_validation_only": True,
+                  "page_id_pack_candidate_not_product_authority": True,
+                  "story_text_emitted": False,
+                  "image_bytes_emitted": False,
+              },
+          }
+          Path("target/mature-029-source-order/summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload structural receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-029-source-order-receipt
+          path: target/mature-029-source-order/summary.json
+          if-no-files-found: error
+          retention-days: 30
