@@ -3098,6 +3098,21 @@ impl EditorSession {
         Ok(operation)
     }
 
+    fn current_authored_stack_v1(&self, page_id: PageId) -> AuthoredStackV1 {
+        self.authored_stacks
+            .get(&page_id)
+            .cloned()
+            .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
+    }
+
+    fn install_authored_stack_v1(&mut self, stack: AuthoredStackV1) {
+        if stack.members.is_empty() {
+            self.authored_stacks.remove(&stack.page_id);
+        } else {
+            self.authored_stacks.insert(stack.page_id, stack);
+        }
+    }
+
     pub fn create_shape(
         &mut self,
         node_id: NodeId,
@@ -3126,7 +3141,19 @@ impl EditorSession {
         let shape = authored_shape_from_operation(&operation)
             .expect("consume_canonical_create_shape receives CreateShape");
         self.validate_create_shape_candidate(&shape)?;
+
+        let before_stack = self.current_authored_stack_v1(shape.page_id);
+        let transition = plan_create_shape_append_v1(&before_stack, &shape)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: shape.page_id,
+            })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: shape.page_id,
+            })?;
+
         self.authored_shapes.insert(shape.node_id, shape);
+        self.install_authored_stack_v1(after_stack);
         self.undo.push(operation.clone());
         self.redo.clear();
         self.validate_source_identity()?;
@@ -3247,7 +3274,93 @@ impl EditorSession {
             return Err(EditorError::StaleNodeDelete { node_id: *node_id });
         }
         self.can_delete_node(*node_id)?;
-        apply_authored_shape_delete_forward(&mut self.authored_shapes, &operation)?;
+
+        let before_stack = self.current_authored_stack_v1(*page_id);
+        let transition = plan_delete_shape_remove_v1(&before_stack, before)
+            .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+
+        let mut candidate_shapes = self.authored_shapes.clone();
+        apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
+
+        self.authored_shapes = candidate_shapes;
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn reorder_authored_stack(
+        &mut self,
+        page_id: PageId,
+        node_id: NodeId,
+        mode: AuthoredStackReorderModeV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
+        }
+        let shape = self
+            .authored_shapes
+            .get(&node_id)
+            .ok_or(EditorError::AuthoredStackReorderUnsupported { node_id })?;
+        if shape.page_id != page_id
+            || shape.parent_id != page_id
+            || validate_authored_shape_runtime_v1(shape).is_err()
+        {
+            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
+        }
+
+        let before = self.current_authored_stack_v1(page_id);
+        let transition = plan_reorder_authored_stack_v1(&before, node_id, mode).map_err(|error| {
+            match error {
+                AuthoredStackReorderErrorV1::NoChange { .. } => {
+                    EditorError::AuthoredStackReorderNoChange { node_id }
+                }
+                AuthoredStackReorderErrorV1::MissingMember { .. }
+                | AuthoredStackReorderErrorV1::PageMismatch
+                | AuthoredStackReorderErrorV1::InvalidStack => {
+                    EditorError::AuthoredStackReorderUnsupported { node_id }
+                }
+                AuthoredStackReorderErrorV1::BeforeStateMismatch
+                | AuthoredStackReorderErrorV1::AfterStateMismatch
+                | AuthoredStackReorderErrorV1::TransitionMismatch => {
+                    EditorError::StaleAuthoredStack { page_id }
+                }
+            }
+        })?;
+        self.consume_canonical_reorder_authored_stack(EditOperation::ReorderAuthoredStack {
+            transition,
+        })
+    }
+
+    fn consume_canonical_reorder_authored_stack(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let EditOperation::ReorderAuthoredStack { transition } = &operation else {
+            unreachable!("consume_canonical_reorder_authored_stack receives ReorderAuthoredStack")
+        };
+        let shape = self
+            .authored_shapes
+            .get(&transition.node_id)
+            .ok_or(EditorError::AuthoredStackReorderUnsupported {
+                node_id: transition.node_id,
+            })?;
+        if shape.page_id != transition.page_id || shape.parent_id != transition.page_id {
+            return Err(EditorError::AuthoredStackReorderUnsupported {
+                node_id: transition.node_id,
+            });
+        }
+        let current = self.current_authored_stack_v1(transition.page_id);
+        let after = apply_authored_stack_reorder_forward_v1(&current, transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: transition.page_id,
+            })?;
+        self.install_authored_stack_v1(after);
         self.undo.push(operation.clone());
         self.redo.clear();
         self.validate_source_identity()?;
