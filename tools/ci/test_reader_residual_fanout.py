@@ -55,7 +55,21 @@ FORBIDDEN = {
     '.github/workflows/authoring-table-grid-v1.yml': (
         'vendor/producer-a/crates/pub-editor/src/lib.rs',
     ),
+    '.github/workflows/reader1050-hosted-frontier.yml': (
+        'vendor/producer-a/crates/pub-reader/src/lib.rs',
+        'vendor/producer-a/crates/pub-viewer/src/lib.rs',
+    ),
+    '.github/workflows/editor-guide-projection-v1.yml': (
+        'vendor/producer-a/crates/pub-reader/src/lib.rs',
+    ),
+    '.github/workflows/chaptera-win-support-matrix.yml': (
+        'apps/chaptera-desktop/**',
+    ),
 }
+
+NO_DIRECT_PR = (
+    '.github/workflows/brochure-effective-paint-probe.yml',
+)
 
 DIRECT_PR = re.compile(r'^  pull_request:\s*$', re.MULTILINE)
 REUSABLE_USE = re.compile(
@@ -73,6 +87,13 @@ def main() -> int:
             needles = (f'- "{pattern}"', f"- '{pattern}'")
             if any(needle in text for needle in needles):
                 violations.append(f'{raw}: residual duplicate PR trigger {pattern}')
+
+    for raw in NO_DIRECT_PR:
+        text = Path(raw).read_text(encoding='utf-8')
+        if DIRECT_PR.search(text):
+            violations.append(
+                f'{raw}: measurement workflow must run on main/manual, not direct PR'
+            )
 
     reader_ci = Path('.github/workflows/reader-pr-ci.yml').read_text(encoding='utf-8')
     reusable = sorted(set(REUSABLE_USE.findall(reader_ci)))
