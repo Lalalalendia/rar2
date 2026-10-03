@@ -1,0 +1,354 @@
+name: Build Publisher VBA call-bearing portable V1
+
+on:
+  push:
+    branches:
+      - "research/package-vba-call-bearing-native-portable-v1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 1bacd9f56e53882a98e97c0f3e7dc6760613bbb4
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build portable scanner and packet validator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --disable-pip-version-check pyinstaller
+          pyinstaller --noconfirm --clean --onefile --name pub_vba_estate_scan --paths tools tools/pub_vba_estate_scan.py
+          pyinstaller --noconfirm --clean --onefile --name validate_packet --paths tools tools/research-runner/validate_packet.py
+
+          & dist/pub_vba_estate_scan.exe --help | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "Scanner portable smoke test failed." }
+          & dist/validate_packet.exe --help | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "Packet validator portable smoke test failed." }
+
+      - name: Assemble portable Publisher VBA estate bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $sourceSha = (git rev-parse HEAD).Trim()
+          $expectedSource = "1bacd9f56e53882a98e97c0f3e7dc6760613bbb4"
+          if ($sourceSha -ne $expectedSource) {
+              throw "Unexpected source commit: expected $expectedSource got $sourceSha"
+          }
+
+          $bundle = Join-Path $env:RUNNER_TEMP "pub-vba-call-bearing-native-portable-v1"
+          if (Test-Path -LiteralPath $bundle) {
+              Remove-Item -LiteralPath $bundle -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+
+          $files = @(
+              "tools/research-runner/experiments/vba-call-bearing-native-estate-2019-01.packet.json",
+              "tools/research-runner/operations/vba_call_bearing_native_estate_2019_01.ps1",
+              "tools/research-runner/prepare_native_run.ps1",
+              "tools/research-runner/finalize_native_run.ps1",
+              "tools/windows/pub-runtime/PubRuntime.psm1",
+              "tools/pub_vba_estate_scan.py",
+              "tools/pub_vba_cfb.py",
+              "tools/research-runner/validate_packet.py"
+          )
+
+          foreach ($relative in $files) {
+              $destination = Join-Path $bundle $relative
+              New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+              Copy-Item -LiteralPath $relative -Destination $destination -Force
+          }
+
+          $bin = Join-Path $bundle "tools-bin"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item -LiteralPath "dist/pub_vba_estate_scan.exe" -Destination (Join-Path $bin "pub_vba_estate_scan.exe") -Force
+          Copy-Item -LiteralPath "dist/validate_packet.exe" -Destination (Join-Path $bin "validate_packet.exe") -Force
+
+          $pythonShim = @'
+          param(
+              [Parameter(ValueFromRemainingArguments = $true)]
+              [string[]]$RemainingArgs
+          )
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          if ($null -eq $RemainingArgs -or $RemainingArgs.Count -lt 1) {
+              throw "Bundled python shim requires a script path."
+          }
+
+          $scriptName = [IO.Path]::GetFileName([string]$RemainingArgs[0]).ToLowerInvariant()
+          $rest = @()
+          if ($RemainingArgs.Count -gt 1) {
+              $rest = @($RemainingArgs[1..($RemainingArgs.Count - 1)])
+          }
+
+          switch ($scriptName) {
+              "pub_vba_estate_scan.py" {
+                  $exe = Join-Path $PSScriptRoot "pub_vba_estate_scan.exe"
+              }
+              default {
+                  throw "Unsupported bundled Python entrypoint: $scriptName"
+              }
+          }
+
+          & $exe @rest
+          exit $LASTEXITCODE
+          '@
+          Set-Content -LiteralPath (Join-Path $bin "python-shim.ps1") -Value $pythonShim -Encoding UTF8
+
+          $pythonCmd = @'
+          @echo off
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0python-shim.ps1" %*
+          exit /b %ERRORLEVEL%
+          '@
+          Set-Content -LiteralPath (Join-Path $bin "python.cmd") -Value $pythonCmd -Encoding ASCII
+
+          $runner = @'
+          param(
+              [string]$FixtureRoot = "",
+              [string]$OutputRoot = ""
+          )
+
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          $root = $PSScriptRoot
+          $manifestPath = Join-Path $root "bundle-manifest.json"
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+          foreach ($property in $manifest.files.PSObject.Properties) {
+              $relative = [string]$property.Name
+              $expected = [string]$property.Value
+              $candidate = Join-Path $root ($relative.Replace("/", "\"))
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                  throw "Portable bundle file missing: $relative"
+              }
+              $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $expected.ToLowerInvariant()) {
+                  throw "Portable bundle SHA-256 mismatch: $relative"
+              }
+          }
+
+          $packet = Join-Path $root "tools\research-runner\experiments\vba-call-bearing-native-estate-2019-01.packet.json"
+          $operation = Join-Path $root "tools\research-runner\operations\vba_call_bearing_native_estate_2019_01.ps1"
+          $prepare = Join-Path $root "tools\research-runner\prepare_native_run.ps1"
+          $finalize = Join-Path $root "tools\research-runner\finalize_native_run.ps1"
+          $validator = Join-Path $root "tools-bin\validate_packet.exe"
+          $packetDoc = Get-Content -LiteralPath $packet -Raw | ConvertFrom-Json
+
+          & $validator --packet $packet --expected-environment publisher-2019
+          if ($LASTEXITCODE -ne 0) {
+              throw "Bundled packet validation failed."
+          }
+
+          $fixtureRelative = [string]$packetDoc.fixture.relative_path
+          $fixtureExpectedSha = ([string]$packetDoc.fixture.sha256).ToLowerInvariant()
+
+          function Test-FixtureRoot([string]$CandidateRoot) {
+              if ([string]::IsNullOrWhiteSpace($CandidateRoot)) { return $null }
+              $candidate = Join-Path $CandidateRoot $fixtureRelative
+              if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $null }
+              $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $fixtureExpectedSha) { return $null }
+              return (Resolve-Path -LiteralPath $CandidateRoot).Path
+          }
+
+          $resolvedFixtureRoot = Test-FixtureRoot $FixtureRoot
+          if ($null -eq $resolvedFixtureRoot -and -not [string]::IsNullOrWhiteSpace($env:PUB_RESEARCH_FIXTURE_ROOT)) {
+              $resolvedFixtureRoot = Test-FixtureRoot ([string]$env:PUB_RESEARCH_FIXTURE_ROOT)
+          }
+
+          if ($null -eq $resolvedFixtureRoot) {
+              $candidateRoots = @()
+              if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+                  $candidateRoots += (Join-Path $env:USERPROFILE "rar2\out")
+              }
+              $candidateRoots += "C:\Users\User\rar2\out"
+
+              foreach ($candidateRoot in $candidateRoots | Select-Object -Unique) {
+                  if (-not (Test-Path -LiteralPath $candidateRoot -PathType Container)) { continue }
+                  $probe = Test-FixtureRoot $candidateRoot
+                  if ($null -ne $probe) {
+                      $resolvedFixtureRoot = $probe
+                      break
+                  }
+              }
+          }
+
+          if ($null -eq $resolvedFixtureRoot) {
+              throw "Exact fixture not found. Provide -FixtureRoot pointing to the directory that contains '$fixtureRelative' with SHA-256 $fixtureExpectedSha."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+              $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+              $OutputRoot = Join-Path $root ("out\vba-call-bearing-native-" + $stamp)
+          }
+          New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+
+          $oldPath = $env:PATH
+          $env:PATH = (Join-Path $root "tools-bin") + ";" + $env:PATH
+          $env:PUB_RESEARCH_FIXTURE_ROOT = $resolvedFixtureRoot
+          $env:PUB_RESEARCH_PACKET_SHA256 = (Get-FileHash -LiteralPath $packet -Algorithm SHA256).Hash.ToLowerInvariant()
+          $env:GITHUB_SHA = [string]$manifest.source_main_sha
+          $env:PUB_RESEARCH_PROFILE_ID = "portable-publisher-2019"
+          $env:RUNNER_ARCH = $env:PROCESSOR_ARCHITECTURE
+
+          $resultPath = Join-Path $OutputRoot "analysis\vba-call-bearing-native-estate-2019-01.json"
+          $scanPath = Join-Path $OutputRoot "analysis\vba-call-bearing-native-estate-scan.json"
+          $logPath = Join-Path $OutputRoot "logs\vba-call-bearing-native-estate-2019-01.txt"
+          $receiptZip = Join-Path $root "PUB-VBA-CALL-BEARING-RECEIPTS.zip"
+
+          try {
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $prepare -PacketPath $packet -OutputRoot $OutputRoot
+              if ($LASTEXITCODE -ne 0) { throw "prepare_native_run failed: $LASTEXITCODE" }
+
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $operation -PacketPath $packet -OutputRoot $OutputRoot
+              if ($LASTEXITCODE -ne 0) { throw "native estate operation failed: $LASTEXITCODE" }
+
+              & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $finalize -PacketPath $packet -OutputRoot $OutputRoot
+              if ($LASTEXITCODE -ne 0) { throw "finalize_native_run failed: $LASTEXITCODE" }
+
+              Get-Content -LiteralPath $resultPath -Raw | Write-Host
+              Get-Content -LiteralPath $scanPath -Raw | Write-Host
+              Get-Content -LiteralPath $logPath -Raw | Write-Host
+
+              $receiptRoot = Join-Path $env:TEMP ("pub-vba-call-bearing-receipts-" + [guid]::NewGuid().ToString("N"))
+              New-Item -ItemType Directory -Force -Path $receiptRoot | Out-Null
+              try {
+                  foreach ($relative in @(
+                      "environment.json",
+                      "evidence-manifest.json",
+                      "analysis",
+                      "logs"
+                  )) {
+                      $src = Join-Path $OutputRoot $relative
+                      if (-not (Test-Path -LiteralPath $src)) { continue }
+                      Copy-Item -LiteralPath $src -Destination (Join-Path $receiptRoot $relative) -Recurse -Force
+                  }
+
+                  if (Test-Path -LiteralPath $receiptZip) {
+                      Remove-Item -LiteralPath $receiptZip -Force
+                  }
+                  Compress-Archive -Path (Join-Path $receiptRoot "*") -DestinationPath $receiptZip -Force
+              }
+              finally {
+                  Remove-Item -LiteralPath $receiptRoot -Recurse -Force -ErrorAction SilentlyContinue
+              }
+
+              Write-Host ""
+              Write-Host "SEND BACK THIS SOURCE-FREE FILE:" -ForegroundColor Yellow
+              Write-Host $receiptZip -ForegroundColor Yellow
+              Write-Host ""
+              Write-Host "Generated PUB bytes remain only under the private output subtree and are intentionally excluded." -ForegroundColor Yellow
+          }
+          finally {
+              $env:PATH = $oldPath
+              Remove-Item Env:PUB_RESEARCH_PACKET_SHA256 -ErrorAction SilentlyContinue
+          }
+          '@
+          Set-Content -LiteralPath (Join-Path $bundle "run-native.ps1") -Value $runner -Encoding UTF8
+
+          $cmd = @'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-native.ps1"
+          set EXITCODE=%ERRORLEVEL%
+          echo.
+          echo Exit code: %EXITCODE%
+          pause
+          exit /b %EXITCODE%
+          '@
+          Set-Content -LiteralPath (Join-Path $bundle "RUN_NATIVE.cmd") -Value $cmd -Encoding ASCII
+
+          $readme = @'
+          PUB-T-900 portable Publisher 2019 call-bearing VBA estate
+
+          Purpose:
+          - create three benign call-bearing Publisher PUB files;
+          - NEVER execute the VBA;
+          - inert-scan the saved files with classifier v2.1;
+          - return source-free receipts only.
+
+          Requirements:
+          - exact Publisher 2019 runtime required by the packet;
+          - the existing local fixture:
+            pubgen-create-20260923\minimal-blank-v1-generated.pub
+            SHA-256 5bf6057b8b11c8ee4a421d93885ae6e9e7c03a7a42d541e6d0df33497c08c33b
+          - fixture root should normally be the local rar2\out directory.
+
+          Easiest run:
+          1. Extract this ZIP on the Publisher2019 host.
+          2. Run RUN_NATIVE.cmd.
+          3. If the fixture is not auto-found, run:
+             powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run-native.ps1 -FixtureRoot C:\Users\User\rar2\out
+          4. Send back only:
+             PUB-VBA-CALL-BEARING-RECEIPTS.zip
+
+          Do NOT send the generated PUB files. They remain in the bundle output/private subtree.
+          The bundle does not modify Trust Center settings and does not invoke Application.Run.
+          '@
+          Set-Content -LiteralPath (Join-Path $bundle "README_RU.txt") -Value $readme -Encoding UTF8
+
+          $manifestFiles = $files + @(
+              "tools-bin/pub_vba_estate_scan.exe",
+              "tools-bin/validate_packet.exe",
+              "tools-bin/python-shim.ps1",
+              "tools-bin/python.cmd",
+              "run-native.ps1",
+              "RUN_NATIVE.cmd",
+              "README_RU.txt"
+          )
+          $hashes = [ordered]@{}
+          foreach ($relative in $manifestFiles) {
+              $candidate = Join-Path $bundle ($relative.Replace("/", "\"))
+              $hashes[$relative.Replace("\", "/")] = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+
+          $manifest = [ordered]@{
+              schema = "chaptera.pub.vba-call-bearing-native-portable.v1"
+              source_main_sha = $sourceSha
+              experiment_id = "VBA-CALL-BEARING-NATIVE-ESTATE-2019-01"
+              publisher_version_prefix = "16.0.12527."
+              publisher_exe_sha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
+              fixture_relative_path = "pubgen-create-20260923/minimal-blank-v1-generated.pub"
+              fixture_sha256 = "5bf6057b8b11c8ee4a421d93885ae6e9e7c03a7a42d541e6d0df33497c08c33b"
+              repo_checkout_required = $false
+              git_required = $false
+              python_required = $false
+              rust_required = $false
+              pwsh_required = $false
+              generated_pub_upload_allowed = $false
+              files = $hashes
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
+
+          $zip = Join-Path $env:RUNNER_TEMP "PUB_VBA_CALL_BEARING_NATIVE_PORTABLE_V1.zip"
+          if (Test-Path -LiteralPath $zip) {
+              Remove-Item -LiteralPath $zip -Force
+          }
+          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath $zip -Force
+
+          Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-vba-call-bearing-native-portable-v1
+          path: ${{ runner.temp }}/PUB_VBA_CALL_BEARING_NATIVE_PORTABLE_V1.zip
+          if-no-files-found: error
+          retention-days: 14
