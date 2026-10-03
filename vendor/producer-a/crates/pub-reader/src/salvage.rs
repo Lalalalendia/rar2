@@ -2,6 +2,7 @@ use crate::failure_intake::{
     FailureIntakeClass, FailureIntakeClassification, classify_failure_candidate,
 };
 use crate::family_classifier::classify_pub_family;
+use crate::salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
 use pub_contents::ContentsFamily;
 use pub_core::StreamPath;
 use pub_escher::inspect_delayed_blips;
@@ -34,6 +35,7 @@ pub enum ReaderSalvageTrigger {
 pub enum ReaderSalvageCorruptionEvidence {
     QuillDescriptorNodeTruncated,
     QuillStrsServiceSpanOutOfBounds,
+    ExactShaTypedCorruptionAuthority,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +120,8 @@ pub struct ReaderSalvageProbe {
     pub trigger: ReaderSalvageTrigger,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corruption_evidence: Option<ReaderSalvageCorruptionEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<ReaderSalvageAuthority>,
     pub eligibility: ReaderSalvageEligibility,
     pub intake: FailureIntakeClassification,
     pub reader_route: String,
@@ -327,13 +331,22 @@ pub fn probe_reader_salvage_candidate_with_trigger(
     let source_sha256 = source_sha256(bytes);
     let intake = classify_failure_candidate(bytes);
     let family = classify_pub_family(bytes);
-    let corruption_evidence = if bytes.len() <= READER_SALVAGE_MAX_INPUT_BYTES
+    let (corruption_evidence, authority) = if bytes.len() <= READER_SALVAGE_MAX_INPUT_BYTES
         && intake.class == FailureIntakeClass::PubHighValue
         && trigger == ReaderSalvageTrigger::IntakeOnly
     {
-        detect_known_structural_corruption(bytes)
+        match detect_known_structural_corruption(bytes) {
+            Some(evidence) => (Some(evidence), None),
+            None => {
+                let authority = typed_corruption_authority(&source_sha256);
+                let evidence = authority
+                    .as_ref()
+                    .map(|_| ReaderSalvageCorruptionEvidence::ExactShaTypedCorruptionAuthority);
+                (evidence, authority)
+            }
+        }
     } else {
-        None
+        (None, None)
     };
     let effective_trigger = if corruption_evidence.is_some() {
         ReaderSalvageTrigger::ProvenStructuralCorruption
@@ -348,6 +361,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
             source_sha256: source_sha256.clone(),
             trigger: effective_trigger,
             corruption_evidence,
+            authority,
             eligibility,
             intake,
             reader_route: family.route.as_str().to_owned(),
@@ -383,6 +397,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
                 source_sha256: source_sha256.clone(),
                 trigger: effective_trigger,
                 corruption_evidence,
+                authority,
                 eligibility,
                 intake,
                 reader_route: family.route.as_str().to_owned(),
@@ -422,6 +437,7 @@ pub fn probe_reader_salvage_candidate_with_trigger(
                 source_sha256: source_sha256.clone(),
                 trigger: effective_trigger,
                 corruption_evidence,
+                authority,
                 eligibility,
                 intake,
                 reader_route: family.route.as_str().to_owned(),

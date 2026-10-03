@@ -25,7 +25,15 @@ from cfb_physical import CFB  # noqa: E402
 SCHEMA = "chaptera.reader1050-hosted-frontier.v1"
 CASE_SCHEMA = "chaptera.reader1050-hosted-frontier-case.v1"
 
-DEFAULT_EVIDENCE_REGISTRY = REPO_ROOT / "tools" / "research-runner" / "reader1050-evidence-registry.json"
+DEFAULT_EVIDENCE_REGISTRY = (
+    REPO_ROOT
+    / "vendor"
+    / "producer-a"
+    / "crates"
+    / "pub-reader"
+    / "data"
+    / "reader-evidence-registry.json"
+)
 DEFAULT_RESEARCH_LEDGER = REPO_ROOT / "tools" / "research-runner" / "reader1050-research-ledger.json"
 
 KNOWN_STREAMS = {
@@ -53,7 +61,7 @@ def sha256_bytes(data: bytes) -> str:
 
 def load_evidence_registry(path: Path) -> dict[str, dict[str, Any]]:
     payload = read_json(path)
-    if payload.get("schema") != "chaptera.reader1050-evidence-registry.v1":
+    if payload.get("schema") != "chaptera.reader-evidence-registry.v1":
         raise ValueError(f"unexpected evidence registry schema: {payload.get('schema')!r}")
     entries: dict[str, dict[str, Any]] = {}
     for row in payload.get("entries") or []:

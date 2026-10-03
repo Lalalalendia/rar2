@@ -37,6 +37,18 @@ struct AcceptanceRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     corruption_evidence: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    authority_owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_run_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_artifact_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_evidence_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_classification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     has_surviving_evidence: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cfb_inventory_available: Option<bool>,
@@ -105,6 +117,9 @@ fn corruption_name(value: ReaderSalvageCorruptionEvidence) -> &'static str {
         }
         ReaderSalvageCorruptionEvidence::QuillStrsServiceSpanOutOfBounds => {
             "quill_strs_service_span_out_of_bounds"
+        }
+        ReaderSalvageCorruptionEvidence::ExactShaTypedCorruptionAuthority => {
+            "exact_sha_typed_corruption_authority"
         }
     }
 }
@@ -199,6 +214,12 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
             pub_profile: family.profile.as_str().to_owned(),
             salvage_eligibility: None,
             corruption_evidence: None,
+            authority_owner: None,
+            authority_task_id: None,
+            authority_run_id: None,
+            authority_artifact_id: None,
+            authority_evidence_digest: None,
+            authority_classification: None,
             has_surviving_evidence: None,
             cfb_inventory_available: None,
             contents_family: None,
@@ -221,6 +242,24 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 pub_profile: family.profile.as_str().to_owned(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
+                authority_owner: probe.authority.as_ref().map(|authority| authority.owner.clone()),
+                authority_task_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.task_id.clone()),
+                authority_run_id: probe.authority.as_ref().map(|authority| authority.run_id),
+                authority_artifact_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.artifact_id),
+                authority_evidence_digest: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.evidence_digest.clone()),
+                authority_classification: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.classification.clone()),
                 has_surviving_evidence: Some(probe.has_surviving_evidence()),
                 cfb_inventory_available: Some(probe.cfb_inventory_available),
                 contents_family: graph.contents_family.clone(),
@@ -244,6 +283,24 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 pub_profile: family.profile.as_str().to_owned(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
+                authority_owner: probe.authority.as_ref().map(|authority| authority.owner.clone()),
+                authority_task_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.task_id.clone()),
+                authority_run_id: probe.authority.as_ref().map(|authority| authority.run_id),
+                authority_artifact_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.artifact_id),
+                authority_evidence_digest: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.evidence_digest.clone()),
+                authority_classification: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.classification.clone()),
                 has_surviving_evidence: Some(probe.has_surviving_evidence()),
                 cfb_inventory_available: Some(probe.cfb_inventory_available),
                 contents_family: probe.contents_family.clone(),
@@ -370,6 +427,14 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_sha_authority_evidence_name_is_stable() {
+        assert_eq!(
+            corruption_name(ReaderSalvageCorruptionEvidence::ExactShaTypedCorruptionAuthority),
+            "exact_sha_typed_corruption_authority"
+        );
+    }
 
     #[test]
     fn unsafe_is_reserved_for_policy_or_resource_fail_closed_classes() {

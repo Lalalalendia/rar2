@@ -22,6 +22,7 @@ mod mature_wmf;
 mod ole_presentation;
 mod resolve;
 mod salvage;
+mod salvage_authority;
 mod structural_base;
 mod table_bridge;
 mod wmf;
@@ -124,6 +125,7 @@ pub use salvage::{
     build_reader_partial_source_graph, probe_reader_salvage_candidate,
     probe_reader_salvage_candidate_with_trigger,
 };
+pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};

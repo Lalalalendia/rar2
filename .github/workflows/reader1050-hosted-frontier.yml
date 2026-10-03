@@ -6,7 +6,12 @@ on:
       - ".github/workflows/reader1050-hosted-frontier.yml"
       - "tools/research-runner/reader1050_frontier.py"
       - "tools/research-runner/reader1050_offline_discriminator.py"
-      - "tools/research-runner/reader1050-evidence-registry.json"
+      - "vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json"
+      - "vendor/producer-a/crates/pub-reader/src/salvage.rs"
+      - "vendor/producer-a/crates/pub-reader/src/salvage_authority.rs"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-salvage-acceptance.rs"
       - "tools/research-runner/reader1050-research-ledger.json"
       - "tools/research-runner/tests/test_reader1050_frontier.py"
       - "tools/research-runner/tests/test_reader1050_offline_discriminator.py"
@@ -35,7 +40,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
@@ -45,6 +50,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
 
       - name: Install pinned discriminator dependency
         run: python -m pip install --disable-pip-version-check --no-cache-dir olefile==0.47
@@ -58,6 +67,24 @@ jobs:
           python -m unittest \
             tools/research-runner/tests/test_reader1050_frontier.py \
             tools/research-runner/tests/test_reader1050_offline_discriminator.py
+
+      - name: Validate Reader salvage authority product seam
+        run: |
+          set -euo pipefail
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --lib \
+            salvage_authority::tests
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --lib \
+            salvage::tests
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --bin corpus-reader-salvage-acceptance
 
   frontier:
     needs: validate
@@ -113,7 +140,7 @@ jobs:
             --out out/reader1050-frontier \
             --source-run-id "$READER_RUN_ID" \
             --source-sha "$READER_SOURCE_SHA" \
-            --evidence-registry tools/research-runner/reader1050-evidence-registry.json \
+            --evidence-registry vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json \
             --research-ledger tools/research-runner/reader1050-research-ledger.json
 
           cat out/reader1050-frontier/frontier.md >> "$GITHUB_STEP_SUMMARY"

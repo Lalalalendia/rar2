@@ -168,7 +168,7 @@ class Reader1050FrontierTests(unittest.TestCase):
             evidence = root / "evidence.json"
             evidence.write_text(
                 json.dumps({
-                    "schema": "chaptera.reader1050-evidence-registry.v1",
+                    "schema": "chaptera.reader-evidence-registry.v1",
                     "entries": [{
                         "source_sha256": closed_sha,
                         "owner": "PUB-T-650",

@@ -1829,12 +1829,14 @@ pub enum ViewerProductOpenOutcome {
 }
 
 /// Opens a Publisher source normally first, then attempts the conservative
-/// intake-only damaged-file salvage path.
+/// damaged-file salvage path.
 ///
 /// Valid known-PUB files that fail normal parsing are not automatically called
-/// damaged: those require a typed ProvenStructuralCorruption trigger from a
-/// stronger discriminator. This keeps unsupported grammar research separate
-/// from recovery.
+/// damaged. Intake-only probes remain fail-closed unless either a narrow
+/// structural detector or the compiled exact-SHA evidence registry supplies a
+/// typed ProvenStructuralCorruption authority. This keeps unsupported grammar
+/// research separate from recovery while allowing proven prior evidence to be
+/// reused by the product path.
 pub fn open_pub_or_salvage(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
