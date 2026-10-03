@@ -324,6 +324,7 @@ pub fn build_legacy_0x22_quill_from_streams(
                         image_slot: None,
                         legacy_ole: None,
                         explicit_image_crop: None,
+                        explicit_image_cardinal_rotation_degrees: None,
                         explicit_image_recolor: None,
                         explicit_paint: PubExplicitShapePaintSource::default(),
                         effective_paint: None,
