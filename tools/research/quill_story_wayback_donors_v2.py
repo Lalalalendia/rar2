@@ -16,21 +16,24 @@ TARGETS = [
         "source_sha256": "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
         "url": "http://helenhudspith.com/resources/textiles/laura_dale/textSpec_word.pub",
         "known_timestamps": ["20090729050425"],
+        "known_duplicate_digest": "KTZERCRF3O4IBZTUJU6RUK7E7VQ27X7D",
     },
     {
         "source_sha256": "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569",
         "url": "http://helenhudspith.com/resources/graphics/fatima/0408/(1)%20One%20Point%20Perspective.pub",
         "known_timestamps": [],
+        "known_duplicate_digest": None,
     },
     {
         "source_sha256": "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff",
         "url": "http://helenhudspith.com/resources/product/roy_johnstone/Pod%20design%20ideas.pub",
         "known_timestamps": ["20170214165303"],
+        "known_duplicate_digest": "2VDENI22PM4EU6E7RWWCZAXK6DGWNHBO",
     },
 ]
 
 
-def request_bytes(url: str, timeout: int = 45, attempts: int = 4) -> bytes:
+def request_bytes(url: str, timeout: int = 20, attempts: int = 2) -> bytes:
     last = None
     for attempt in range(attempts):
         try:
@@ -56,7 +59,7 @@ def cdx_query(url: str, *, prefix: bool = False) -> list[dict[str, str]]:
     if prefix:
         params["matchType"] = "prefix"
     endpoint = "https://web.archive.org/cdx/search/cdx?" + urllib.parse.urlencode(params)
-    raw = request_bytes(endpoint, timeout=30)
+    raw = request_bytes(endpoint, timeout=12, attempts=1)
     parsed = json.loads(raw)
     if not parsed:
         return []
@@ -77,33 +80,34 @@ def discover(target: dict[str, object]) -> tuple[list[dict[str, str]], list[str]
     errors: list[str] = []
     rows: list[dict[str, str]] = []
 
-    exact_variants = {
-        url,
-        url.replace("http://", "https://", 1),
-        urllib.parse.unquote(url),
-        urllib.parse.unquote(url).replace("http://", "https://", 1),
-    }
-    for candidate in sorted(exact_variants):
+    # Keep discovery bounded. One canonical exact query normally returns every
+    # digest-collapsed capture for this URL. Retry through HTTPS only if the
+    # canonical query returns no rows or hits a transport error.
+    for candidate in (url, url.replace("http://", "https://", 1)):
         try:
-            rows.extend(cdx_query(candidate))
+            rows = cdx_query(candidate)
         except Exception as exc:
             errors.append(type(exc).__name__)
+            rows = []
+        if rows:
+            break
 
+    # Filename-preserving directory-prefix fallback is only for the unresolved
+    # URL canonicalization case (not an additional broad crawl).
     if not rows:
         split = urllib.parse.urlsplit(url)
         directory = split.path.rsplit("/", 1)[0] + "/"
-        for scheme in ("http", "https"):
-            prefix = urllib.parse.urlunsplit((scheme, split.netloc, directory, "", ""))
-            try:
-                prefix_rows = cdx_query(prefix, prefix=True)
-            except Exception as exc:
-                errors.append(type(exc).__name__)
-                continue
-            wanted = normalized_basename(url)
-            rows.extend(
-                row for row in prefix_rows
-                if normalized_basename(row.get("original", "")) == wanted
-            )
+        prefix = urllib.parse.urlunsplit(("http", split.netloc, directory, "", ""))
+        try:
+            prefix_rows = cdx_query(prefix, prefix=True)
+        except Exception as exc:
+            errors.append(type(exc).__name__)
+            prefix_rows = []
+        wanted = normalized_basename(url)
+        rows.extend(
+            row for row in prefix_rows
+            if normalized_basename(row.get("original", "")) == wanted
+        )
 
     dedup: dict[tuple[str, str], dict[str, str]] = {}
     for row in rows:
@@ -130,9 +134,20 @@ def main() -> int:
         rows, errors = discover(target)
         candidates: dict[str, dict[str, str | None]] = {}
 
+        known_duplicate_digest = target.get("known_duplicate_digest")
+        skipped_known_duplicate_captures = []
         for row in rows:
             timestamp = row.get("timestamp")
             if not timestamp:
+                continue
+            if known_duplicate_digest and row.get("digest") == known_duplicate_digest:
+                skipped_known_duplicate_captures.append(
+                    {
+                        "timestamp": timestamp,
+                        "archive_digest": row.get("digest"),
+                        "reason": "raw_sha1_equals_current_source",
+                    }
+                )
                 continue
             candidates[timestamp] = {
                 "timestamp": timestamp,
@@ -142,18 +157,6 @@ def main() -> int:
                 "discovery": "cdx",
             }
 
-        for timestamp in target["known_timestamps"]:
-            candidates.setdefault(
-                timestamp,
-                {
-                    "timestamp": timestamp,
-                    "archive_digest": None,
-                    "archive_length": None,
-                    "mimetype": None,
-                    "discovery": "prior_exact_cdx_authority",
-                },
-            )
-
         captures = []
         seen_sha: set[str] = set()
         for timestamp, meta in sorted(candidates.items()):
@@ -161,7 +164,8 @@ def main() -> int:
             try:
                 payload = request_bytes(
                     replay_url(timestamp, str(target["url"])),
-                    timeout=90,
+                    timeout=35,
+                    attempts=2,
                 )
                 if not payload.startswith(CFB_MAGIC):
                     capture["download_status"] = "not_cfb"
@@ -198,6 +202,8 @@ def main() -> int:
                 "distinct_non_source_variant_count": sum(
                     sha != source_sha for sha in seen_sha
                 ),
+                "known_duplicate_capture_count": len(skipped_known_duplicate_captures),
+                "known_duplicate_captures": skipped_known_duplicate_captures,
                 "captures": captures,
             }
         )
