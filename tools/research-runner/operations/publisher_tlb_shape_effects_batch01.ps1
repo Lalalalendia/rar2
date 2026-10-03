@@ -435,6 +435,7 @@ function Invoke-Arm {
     $slug = ($CandidateId -replace '[^A-Za-z0-9]+','-').Trim('-').ToLowerInvariant()
     $armDir = Join-Path $privateDir (Join-Path $slug $ArmName)
     New-Item -ItemType Directory -Force -Path $armDir | Out-Null
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "arm-start"
 
     $working = Join-Path $armDir "working.pub"
     $output = Join-Path $armDir "output.pub"
@@ -442,6 +443,7 @@ function Invoke-Arm {
     $semanticPath = Join-Path $armDir "semantic.json"
     $fingerprintPath = Join-Path $armDir "fingerprint.json"
     Copy-Item -LiteralPath $BaselinePath -Destination $working -Force
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "working-copy-ready"
 
     $before = $null
     $runtimeAfter = $null
@@ -453,15 +455,25 @@ function Invoke-Arm {
     $app = $null
     $doc = $null
     try {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-create-start"
         $app = New-PubPublisherApplication
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-create-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-open-start"
         $doc = $app.Open($working, $false, $false)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-open-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "read-current-start"
         $before = Get-CandidateValue -Document $doc -CandidateId $CandidateId
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "read-current-done"
 
         if ($ArmName -eq "same_value") {
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-start"
             try {
                 Set-CandidateValue -Document $doc -CandidateId $CandidateId -Value $before
                 $runtimeAfter = Get-CandidateValue -Document $doc -CandidateId $CandidateId
                 $selectedValue = $before
+                Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-done"
             }
             catch {
                 $armStatus = "setter_error"
@@ -469,6 +481,7 @@ function Invoke-Arm {
             }
         }
         elseif ($ArmName -eq "changed_value") {
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-start"
             foreach ($candidateValue in @(Get-ChangedValueCandidates -CandidateId $CandidateId -Current $before)) {
                 if (Test-EquivalentValue $candidateValue $before) { continue }
                 try {
@@ -497,12 +510,16 @@ function Invoke-Arm {
                 $armStatus = "no_changed_value"
                 $runtimeAfter = Get-CandidateValue -Document $doc -CandidateId $CandidateId
             }
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-done"
         }
         else {
             $runtimeAfter = $before
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-skipped"
         }
 
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "save-as-start"
         $doc.SaveAs($output, $PbFilePublication, $false)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "save-as-done"
     }
     catch {
         $armStatus = "arm_error"
@@ -510,8 +527,12 @@ function Invoke-Arm {
         throw
     }
     finally {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-close-start"
         Close-Document $doc
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-close-done"
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-close-start"
         Close-PubPublisherApplication $app
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-close-done"
     }
 
     $app2 = $null
@@ -519,18 +540,37 @@ function Invoke-Arm {
     $semantic = $null
     $reopenedValue = $null
     try {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-create-start"
         $app2 = New-PubPublisherApplication
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-create-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-start"
         $doc2 = $app2.Open($output, $true, $false)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-readback-start"
         $reopenedValue = Get-CandidateValue -Document $doc2 -CandidateId $CandidateId
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-readback-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "semantic-snapshot-start"
         $semantic = Get-ShapeEffectsSnapshot -Document $doc2
         Write-PubJson -Value $semantic -Path $semanticPath
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "semantic-snapshot-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "pdf-export-start"
         $doc2.ExportAsFixedFormat($PbFixedFormatTypePDF, $pdf, $PbIntentStandard)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "pdf-export-done"
     }
     finally {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-close-start"
         Close-Document $doc2
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-close-done"
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-close-start"
         Close-PubPublisherApplication $app2
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-close-done"
     }
 
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "fingerprint-start"
     $fingerprintTool = Join-Path $repoRoot "tools/pub_operation_algebra_fingerprint.py"
     & python $fingerprintTool --pub $output --pdf $pdf --out $fingerprintPath
     if ($LASTEXITCODE -ne 0) {
@@ -538,6 +578,8 @@ function Invoke-Arm {
     }
     $fingerprint = Get-Content -LiteralPath $fingerprintPath -Raw | ConvertFrom-Json
     $semanticSha = (Get-FileHash -LiteralPath $semanticPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "fingerprint-done"
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "arm-done"
 
     return [ordered]@{
         status = $armStatus
