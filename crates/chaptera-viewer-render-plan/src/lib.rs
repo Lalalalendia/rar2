@@ -1365,6 +1365,12 @@ struct AdmittedTypographyRunV1 {
 }
 
 #[derive(Debug)]
+struct PreparedTypographyRunV1 {
+    run: AdmittedTypographyRunV1,
+    advance_prefix_emu: Vec<i64>,
+}
+
+#[derive(Debug)]
 struct MixedLineCandidateV1 {
     scalar_end: u32,
     consumed_scalar_end: u32,
@@ -1431,6 +1437,116 @@ fn scalar_text_range_v1(scalars: &[char], start: u32, end: u32) -> Option<String
     let start = usize::try_from(start).ok()?;
     let end = usize::try_from(end).ok()?;
     (start <= end && end <= scalars.len()).then(|| scalars[start..end].iter().collect())
+}
+
+fn prepare_typography_run_v1(
+    run: AdmittedTypographyRunV1,
+    glyphs: &[pub_layout::BoundedShapedGlyph],
+) -> Result<PreparedTypographyRunV1, RenderTextLayoutFallbackReasonV1> {
+    let scalar_len = usize::try_from(
+        run.scalar_end
+            .checked_sub(run.scalar_start)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?,
+    )
+    .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    let mut advances = vec![0_i64; scalar_len.saturating_add(1)];
+    for glyph in glyphs {
+        if glyph.cluster < run.scalar_start || glyph.cluster >= run.scalar_end {
+            return Err(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+        }
+        let local = usize::try_from(glyph.cluster - run.scalar_start)
+            .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let slot = local
+            .checked_add(1)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        advances[slot] = advances[slot]
+            .checked_add(glyph.x_advance.get())
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    }
+    for index in 1..advances.len() {
+        advances[index] = advances[index - 1]
+            .checked_add(advances[index])
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    }
+    Ok(PreparedTypographyRunV1 {
+        run,
+        advance_prefix_emu: advances,
+    })
+}
+
+fn prepared_run_width_v1(
+    prepared: &PreparedTypographyRunV1,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Result<i64, RenderTextLayoutFallbackReasonV1> {
+    if scalar_start < prepared.run.scalar_start
+        || scalar_end > prepared.run.scalar_end
+        || scalar_start > scalar_end
+    {
+        return Err(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+    }
+    let start = usize::try_from(scalar_start - prepared.run.scalar_start)
+        .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    let end = usize::try_from(scalar_end - prepared.run.scalar_start)
+        .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    prepared.advance_prefix_emu[end]
+        .checked_sub(prepared.advance_prefix_emu[start])
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)
+}
+
+fn reuse_mixed_line_candidate_v1(
+    scalars: &[char],
+    cursor: u32,
+    consumed_scalar_end: u32,
+    prepared_runs: &[PreparedTypographyRunV1],
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Result<MixedLineCandidateV1, RenderTextLayoutFallbackReasonV1> {
+    let scalar_end = consumed_scalar_end;
+    let text = scalar_text_range_v1(scalars, cursor, scalar_end)
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    let mut spans = Vec::new();
+    let mut measured_width_emu = 0_i64;
+    let mut line_height_emu = font.default_line_height_emu;
+
+    for prepared in prepared_runs {
+        let run = prepared.run;
+        let span_start = run.scalar_start.max(cursor);
+        let span_end = run.scalar_end.min(scalar_end);
+        if span_start >= span_end {
+            continue;
+        }
+        let span_text = scalar_text_range_v1(scalars, span_start, span_end)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let Some(span_line_height_emu) = scaled_line_height_emu(
+            run.font_size_emu,
+            font.default_font_size_emu,
+            font.default_line_height_emu,
+        ) else {
+            return Err(RenderTextLayoutFallbackReasonV1::FontResourceInvalid);
+        };
+        let span_width_emu = prepared_run_width_v1(prepared, span_start, span_end)?;
+        spans.push(RenderResolvedTextSpanV1 {
+            scalar_start: span_start,
+            scalar_end: span_end,
+            text: span_text,
+            x_offset_emu: measured_width_emu,
+            measured_width_emu: span_width_emu,
+            font_size_emu: run.font_size_emu,
+        });
+        measured_width_emu = measured_width_emu
+            .checked_add(span_width_emu)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        line_height_emu = line_height_emu.max(span_line_height_emu);
+    }
+
+    Ok(MixedLineCandidateV1 {
+        scalar_end,
+        consumed_scalar_end,
+        text,
+        measured_width_emu,
+        line_height_emu,
+        spans,
+    })
 }
 
 fn shape_mixed_line_candidate_v1(
@@ -1542,6 +1658,7 @@ fn resolve_mixed_size_text_layout_v1(
     }
 
     let mut policy_glyphs = Vec::new();
+    let mut prepared_runs = Vec::with_capacity(runs.len());
     for run in &runs {
         let Some(run_text) = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)
         else {
@@ -1561,6 +1678,11 @@ fn resolve_mixed_size_text_layout_v1(
             Ok(shaped) => shaped,
             Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
         };
+        let prepared = match prepare_typography_run_v1(*run, &shaped.glyphs) {
+            Ok(prepared) => prepared,
+            Err(reason) => return fallback_layout(reason),
+        };
+        prepared_runs.push(prepared);
         policy_glyphs.extend(shaped.glyphs);
     }
     let policy = match break_policy_for_shaped_text(&fragment.text, &policy_glyphs) {
@@ -1569,6 +1691,7 @@ fn resolve_mixed_size_text_layout_v1(
     };
 
     let mut cursor = fragment.scalar_start;
+    let mut cursor_safe_without_reshaping = true;
     let mut used_height_emu = 0_i64;
     let mut line_index = 0_u32;
     let mut lines = Vec::new();
@@ -1580,31 +1703,47 @@ fn resolve_mixed_size_text_layout_v1(
             .iter()
             .filter(|candidate| candidate.scalar_boundary > cursor)
         {
-            let evaluated = match shape_mixed_line_candidate_v1(
-                &scalars,
-                cursor,
-                candidate.scalar_boundary,
-                candidate.kind,
-                &runs,
-                font,
-                fingerprint,
-            ) {
-                Ok(evaluated) => evaluated,
-                Err(reason) => return fallback_layout(reason),
+            let evaluated = if cursor_safe_without_reshaping
+                && candidate.safe_without_reshaping
+                && candidate.kind == BoundedBreakKind::Allowed
+            {
+                match reuse_mixed_line_candidate_v1(
+                    &scalars,
+                    cursor,
+                    candidate.scalar_boundary,
+                    &prepared_runs,
+                    font,
+                ) {
+                    Ok(evaluated) => evaluated,
+                    Err(reason) => return fallback_layout(reason),
+                }
+            } else {
+                match shape_mixed_line_candidate_v1(
+                    &scalars,
+                    cursor,
+                    candidate.scalar_boundary,
+                    candidate.kind,
+                    &runs,
+                    font,
+                    fingerprint,
+                ) {
+                    Ok(evaluated) => evaluated,
+                    Err(reason) => return fallback_layout(reason),
+                }
             };
             let fits_width = evaluated.measured_width_emu <= bounds.width.get();
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
                 .is_some_and(|height| height <= bounds.height.get());
             if fits_width && fits_height {
-                chosen = Some(evaluated);
+                chosen = Some((evaluated, candidate.safe_without_reshaping));
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
             }
         }
 
-        let Some(chosen) = chosen else {
+        let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
             break;
         };
         used_height_emu = match used_height_emu.checked_add(chosen.line_height_emu) {
@@ -1632,6 +1771,7 @@ fn resolve_mixed_size_text_layout_v1(
             spans: chosen.spans,
         });
         cursor = chosen.consumed_scalar_end;
+        cursor_safe_without_reshaping = chosen_boundary_safe_without_reshaping;
         line_index = match line_index.checked_add(1) {
             Some(value) => value,
             None => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
@@ -1886,6 +2026,87 @@ mod tests {
                 ),
             ],
             source_story_text_sha256: viewer_story_text_sha256(text),
+        }
+    }
+
+    #[test]
+    fn shaping_safe_mixed_candidate_reuse_matches_independent_reshape() {
+        let text = "Hello wide world";
+        let scalars = text.chars().collect::<Vec<_>>();
+        let font_bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = pub_layout::font_fingerprint_sha256(font_bytes);
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 14 * 12_700,
+            bytes: font_bytes,
+        };
+        let runs = vec![
+            AdmittedTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 6,
+                font_size_emu: 12 * 12_700,
+            },
+            AdmittedTypographyRunV1 {
+                scalar_start: 6,
+                scalar_end: 16,
+                font_size_emu: 18 * 12_700,
+            },
+        ];
+
+        let mut prepared = Vec::new();
+        let mut policy_glyphs = Vec::new();
+        for run in &runs {
+            let run_text =
+                scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end).unwrap();
+            let runtime = BoundedShapingRuntime {
+                layout: BoundedLayoutEnvironment {
+                    engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                    font_set_fingerprint: fingerprint.clone(),
+                    resource_fingerprint: font.resource_id.to_owned(),
+                },
+                face_index: font.face_index,
+                font_size_emu: LengthEmu::new(run.font_size_emu),
+                font_bytes,
+            };
+            let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).unwrap();
+            prepared.push(prepare_typography_run_v1(*run, &shaped.glyphs).unwrap());
+            policy_glyphs.extend(shaped.glyphs);
+        }
+
+        let policy = break_policy_for_shaped_text(text, &policy_glyphs).unwrap();
+        for (cursor, boundary) in [(0, 11), (6, 11)] {
+            let candidate = policy
+                .candidates
+                .iter()
+                .find(|candidate| candidate.scalar_boundary == boundary)
+                .expect("space boundary");
+            assert!(candidate.safe_without_reshaping);
+            assert!(!candidate.requires_reshaping);
+            assert_eq!(candidate.kind, BoundedBreakKind::Allowed);
+
+            let reshaped = shape_mixed_line_candidate_v1(
+                &scalars,
+                cursor,
+                boundary,
+                candidate.kind,
+                &runs,
+                &font,
+                &fingerprint,
+            )
+            .unwrap();
+            let reused =
+                reuse_mixed_line_candidate_v1(&scalars, cursor, boundary, &prepared, &font)
+                    .unwrap();
+
+            assert_eq!(reused.scalar_end, reshaped.scalar_end);
+            assert_eq!(reused.consumed_scalar_end, reshaped.consumed_scalar_end);
+            assert_eq!(reused.text, reshaped.text);
+            assert_eq!(reused.measured_width_emu, reshaped.measured_width_emu);
+            assert_eq!(reused.line_height_emu, reshaped.line_height_emu);
+            assert_eq!(reused.spans, reshaped.spans);
         }
     }
 
