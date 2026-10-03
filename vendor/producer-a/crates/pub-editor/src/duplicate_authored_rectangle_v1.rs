@@ -5,10 +5,11 @@
 //! persistence, Undo/Redo, AuthoredStack membership and replay stay owned by
 //! the existing CreateShape runtime.
 
+use crate::create_shape_runtime_v1::is_editor_created_uuid_v7_node_id;
 use crate::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
     AuthoredShapeRuntimeV1, AuthoredShapeTransformV1, EditorError, LengthEmu, NodeId, PageId,
-    RectEmu, is_editor_created_uuid_v7_node_id, validate_authored_shape_runtime_v1,
+    RectEmu, validate_authored_shape_runtime_v1,
 };
 use std::fmt;
 
