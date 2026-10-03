@@ -19,12 +19,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: carlton-heading-alignment-publisher-2019
+  group: carlton-heading-alignment-publisher-2019-v2
   cancel-in-progress: false
 
 jobs:
   contract:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     outputs:
       trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
       packet_sha256: ${{ steps.packet.outputs.packet_sha256 }}
