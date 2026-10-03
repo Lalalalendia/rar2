@@ -248,7 +248,7 @@ fn main() -> Result<()> {
         .collect::<BTreeSet<_>>();
     let projected_unknown_origin_count = projected_origin_ids
         .iter()
-        .filter(|node_id| !source.graph.nodes.contains_key(node_id))
+        .filter(|node_id| !source.graph.nodes.contains_key(*node_id))
         .count();
 
     let viewer_paint_ids = viewer
@@ -464,7 +464,7 @@ fn main() -> Result<()> {
         "viewer_scene_unknown_origin_count": unknown_scene_origin_count,
         "viewer_projected_known_source_origin_node_count": projected_origin_ids
             .iter()
-            .filter(|node_id| source.graph.nodes.contains_key(node_id))
+            .filter(|node_id| source.graph.nodes.contains_key(*node_id))
             .count(),
         "viewer_projected_unknown_origin_node_count": projected_unknown_origin_count,
         "projected_instance_count": projected_instance_count,
@@ -505,7 +505,7 @@ fn main() -> Result<()> {
             "viewer_scene_unknown_origin_count": unknown_scene_origin_count,
             "viewer_projected_known_source_origin_node_count": projected_origin_ids
                 .iter()
-                .filter(|node_id| source.graph.nodes.contains_key(node_id))
+                .filter(|node_id| source.graph.nodes.contains_key(*node_id))
                 .count(),
             "viewer_projected_unknown_origin_node_count": projected_unknown_origin_count,
             "projected_instance_count": projected_instance_count,
