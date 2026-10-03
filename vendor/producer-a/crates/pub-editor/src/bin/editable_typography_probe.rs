@@ -67,10 +67,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             .chars()
             .map(|character| {
                 if character.len_utf16() == 2 {
-                    if character == '😀' {
-                        '😃'
-                    } else {
-                        '😀'
+                    match character {
+                        '😀' => '😃',
+                        _ => '😀',
                     }
                 } else if character == 'x' {
                     'y'
