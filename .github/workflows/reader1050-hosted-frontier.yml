@@ -81,7 +81,7 @@ jobs:
             -p pub-reader \
             --lib \
             salvage::tests
-          cargo check \
+          cargo test \
             --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-viewer \
             --bin corpus-reader-salvage-acceptance
