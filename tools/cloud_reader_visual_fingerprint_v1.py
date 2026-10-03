@@ -147,6 +147,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             page_count_mismatch += 1
 
         pair_metrics = []
+        source_page_ids = None
         if not rendered:
             unsupported.append({
                 "fixture": pair["basename"],
@@ -159,6 +160,11 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             geometry = fixture.get("page_geometry", [])
             if len(shots) != candidate_pages or len(geometry) != candidate_pages:
                 raise ValueError(f"incomplete browser receipt for {pair['basename']}")
+            source_page_ids = [entry.get("page_id") for entry in geometry]
+            if any(not isinstance(page_id, str) or not page_id for page_id in source_page_ids):
+                raise ValueError(f"missing source PAGE identity for {pair['basename']}")
+            if len(set(source_page_ids)) != len(source_page_ids):
+                raise ValueError(f"duplicate source PAGE identity for {pair['basename']}")
 
             for index in range(min(candidate_pages, expected_pages)):
                 shot = shots[index]
@@ -188,6 +194,8 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
 
         pair_rows.append({
             "fixture": pair["basename"],
+            "source_sha256": pair["pub_sha256"],
+            "source_page_ids": source_page_ids,
             "reference_state": pair["reference_state"],
             "rendered": rendered,
             "candidate_pages": candidate_pages,
