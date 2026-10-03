@@ -13,11 +13,9 @@ fn effective_counts(path: &Path) -> (usize, usize, usize, usize, Vec<u8>) {
         "/Quill/QuillSub/CONTENTS",
     )
     .expect("read Quill stream");
-    let stories = parse_confirmed_story_catalog(
-        StreamPath("/Quill/QuillSub/CONTENTS".into()),
-        &quill,
-    )
-    .expect("parse Story catalog");
+    let stories =
+        parse_confirmed_story_catalog(StreamPath("/Quill/QuillSub/CONTENTS".into()), &quill)
+            .expect("parse Story catalog");
     let typography =
         parse_bounded_typography(&quill, &stories).expect("parse bounded effective typography");
 
@@ -29,7 +27,9 @@ fn effective_counts(path: &Path) -> (usize, usize, usize, usize, Vec<u8>) {
         typography.effective_inheritance_unavailable_reason,
     );
     assert!(
-        typography.effective_inheritance_unavailable_reason.is_none(),
+        typography
+            .effective_inheritance_unavailable_reason
+            .is_none(),
         "effective inheritance must be available: {:?}",
         typography.effective_inheritance_unavailable_reason
     );
@@ -63,9 +63,7 @@ fn effective_counts(path: &Path) -> (usize, usize, usize, usize, Vec<u8>) {
         .filter(|run| {
             run.uses_inheritance()
                 && run.inherited_selector_source
-                    == Some(
-                        QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
-                    )
+                    == Some(QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence)
         })
         .count();
 
@@ -93,10 +91,7 @@ fn real_pub_effective_typography_matches_product_authority_and_brochure_fence() 
 
     eprintln!(
         "SampleNewsletter effective={} explicit={} inherited_explicit_selector={} inherited_implicit_zero={}",
-        newsletter_counts.0,
-        newsletter_counts.1,
-        newsletter_counts.2,
-        newsletter_counts.3,
+        newsletter_counts.0, newsletter_counts.1, newsletter_counts.2, newsletter_counts.3,
     );
     eprintln!(
         "SampleNewsletter FDPC unknown fixed block types: {:?}",
@@ -104,10 +99,7 @@ fn real_pub_effective_typography_matches_product_authority_and_brochure_fence() 
     );
     eprintln!(
         "SampleBrochure effective={} explicit={} inherited_explicit_selector={} inherited_implicit_zero={}",
-        brochure_counts.0,
-        brochure_counts.1,
-        brochure_counts.2,
-        brochure_counts.3,
+        brochure_counts.0, brochure_counts.1, brochure_counts.2, brochure_counts.3,
     );
     eprintln!(
         "SampleBrochure FDPC unknown fixed block types: {:?}",
@@ -154,16 +146,16 @@ fn real_carlton_paragraph_alignment_receipt_is_source_safe() {
         "/Quill/QuillSub/CONTENTS",
     )
     .expect("read Carlton Quill stream");
-    let stories = parse_confirmed_story_catalog(
-        StreamPath("/Quill/QuillSub/CONTENTS".into()),
-        &quill,
-    )
-    .expect("parse Carlton Story catalog");
+    let stories =
+        parse_confirmed_story_catalog(StreamPath("/Quill/QuillSub/CONTENTS".into()), &quill)
+            .expect("parse Carlton Story catalog");
     let typography =
         parse_bounded_typography(&quill, &stories).expect("parse Carlton bounded typography");
 
     assert!(
-        typography.effective_inheritance_unavailable_reason.is_none(),
+        typography
+            .effective_inheritance_unavailable_reason
+            .is_none(),
         "Carlton paragraph inheritance must not cross an unresolved physical fence: {:?}",
         typography.effective_inheritance_unavailable_reason
     );
@@ -208,4 +200,3 @@ fn real_carlton_paragraph_alignment_receipt_is_source_safe() {
         "every admitted Carlton alignment run must retain bounded FDPP/STSH provenance"
     );
 }
-
