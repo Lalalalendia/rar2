@@ -1,0 +1,27 @@
+{
+  "schema": "chaptera.reader1050-research-ledger.v1",
+  "entries": [
+    {
+      "source_sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+      "discriminator": "typed_corruption_evidence_discovery",
+      "evidence_digest": "sha256:b814c65752ecdbfcbafcfb16b869f000313fdb7327a4a6a6ad9865fb294a4aed",
+      "state": "closed",
+      "outcome": "existing_typed_corruption_evidence"
+    },
+    {
+      "source_sha256": "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+      "discriminator": "bounded_salvage_admission_validation",
+      "evidence_digest": "sha256:b814c65752ecdbfcbafcfb16b869f000313fdb7327a4a6a6ad9865fb294a4aed",
+      "state": "handoff",
+      "receipt": {
+        "workflow_run_id": "37073787905",
+        "source_reader_run_id": "37073540373",
+        "artifact_id": "11255958770",
+        "artifact_digest": "sha256:e5e8460155ee3a1bf87d39fbb0eb1ed3ca75a33c814544612f563263ab5b0170",
+        "verdict": "salvage_path_reachable_if_typed_corruption_were_proven"
+      },
+      "outcome": "bind_existing_authority_to_forced_salvage_path",
+      "next_owner": "reader_salvage_admission"
+    }
+  ]
+}
