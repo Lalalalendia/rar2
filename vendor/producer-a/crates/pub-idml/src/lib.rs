@@ -26,6 +26,7 @@ pub use package_writer::{
 pub use semantic::{
     IDML_PACKAGING_NAMESPACE, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IdmlSemanticError, IdmlWireProfile,
     project_resolved_graph_to_idml, project_resolved_graph_to_idml_with_tables,
+    project_resolved_graph_to_idml_with_typography,
 };
 pub use table::{IdmlSimpleTable, IdmlTableCell, IdmlTableError};
 
