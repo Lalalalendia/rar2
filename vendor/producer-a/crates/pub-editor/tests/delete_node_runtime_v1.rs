@@ -402,3 +402,30 @@ fn delete_node_remains_an_explicit_native_pub_persistence_requirement() {
         "DeleteNode must not be misclassified as a Story text mutation"
     );
 }
+
+#[test]
+fn create_delete_history_roundtrips_through_full_undo_redo_stack() {
+    let mut session = EditorSession::new(graph()).expect("session");
+    let create = create_authored_rectangle(&mut session);
+    let before = session
+        .authored_shape(authored_node_id())
+        .expect("created shape")
+        .clone();
+    let delete = session
+        .delete_node(authored_node_id())
+        .expect("DeleteNode");
+
+    assert_eq!(session.undo().expect("undo delete"), &delete);
+    assert_eq!(session.authored_shape(authored_node_id()), Some(&before));
+
+    assert_eq!(session.undo().expect("undo create"), &create);
+    assert!(session.authored_shape(authored_node_id()).is_none());
+    assert!(matches!(session.undo(), Err(EditorError::NothingToUndo)));
+
+    assert_eq!(session.redo().expect("redo create"), &create);
+    assert_eq!(session.authored_shape(authored_node_id()), Some(&before));
+
+    assert_eq!(session.redo().expect("redo delete"), &delete);
+    assert!(session.authored_shape(authored_node_id()).is_none());
+    assert!(matches!(session.redo(), Err(EditorError::NothingToRedo)));
+}
