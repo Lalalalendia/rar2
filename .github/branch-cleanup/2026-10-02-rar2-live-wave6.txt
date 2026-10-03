@@ -1,0 +1,76 @@
+# Rar2 live branch GC wave 6 — 2026-10-02
+# Conservative inclusion only.
+# 69 refs: live tip exactly matches a merged PR head whose base was main.
+# Excluded: default/protected refs, open PR heads, open PR bases,
+# evidence/measurement/research/validation/control branches, and any moved tip.
+# Runtime branch-GC rechecks open heads + exact SHA before deletion.
+# Format: <branch> <expected_sha>
+ci/brochure-fill-census-01 2bf767fe5781d6dd7d5d5e939d36a0f9416bf390
+ci/cancel-guard-base-authority-01 5a5b6d031ffa388635b5ec56abefbb5f2906a24b
+ci/current-base-authority-01 2fac0bab6eddd1ebe1f08fbef435cee965b2780d
+ci/local-portable-samplenewsletter-graph-baseline-01 6bb1dcbf12bd8be374ae151c5ac06fefca90d599
+ci/product-delivery-fastpath-01 b4b265f615e0426ad222682181f47cad0ce8fde5
+ci/reader-obsolete-cancel-02-current-main 0818492f587e880f0f1f8dea990eaa0030ad5e62
+ci/source-font-visual-fanout-01 794c1bb513f9a7fda1ae6ddd407a3b58321794c1
+cloud-reader/display-parity-01f-ole-preview-proof 0932f6af09fc82808eace548c44820207f78caf5
+cloud-reader/scene-paint-scope bf0df12debde5ad8df16f74bd9ea1d83c9c4d675
+cloud/chaptera-one-command-install-01 ad2675495015fbf2d01de1085e1dd4e7d8ef216a
+cloud/cloud-reader-classifier-current-main-01 f0d7fb1d7a52e40b5ab34d5e56da8e5f6d60279a
+cloud/cloud-reader-cmo-scene-consume-01 d40c53f4b444f411b24e4ec206accc04639d99fc
+cloud/cloud-reader-configured-font-resource-02 ebb570658a7d7824a07bd28861fc093cdccaf0ae
+cloud/cloud-reader-consent-retention-01a d148602de1178e577845986a0f568d8fff0146af
+cloud/cloud-reader-contribution-ui-01 14ca4cb0e296f6be3babd2ed1457f916dd16100d
+cloud/cloud-reader-display-parity-01 3b80534c6e9abd3168c4b3bc31acfd6f55f2160a
+cloud/cloud-reader-display-parity-01b-main 94d3bcfce6e302b892bc4f7fcbae217b9e0fdf81
+cloud/cloud-reader-display-parity-01c-main c90a436ede29ab8d82b8f3841f9c34dbf14efec5
+cloud/cloud-reader-display-parity-01d-preview-scale 9279c8ee9dd26920aff1e57764ed2b9afbf21dcb
+cloud/cloud-reader-display-parity-01f-current-main ede75d82a85ceade54eb4ae46f4807702a7164df
+cloud/cloud-reader-failure-ux-01 45ea4551042a462b2c3e5141e0cb1924b72b1d68
+cloud/cloud-reader-live-https-acceptance-01 6f3fc60ff8d423fd8dee54f1b4a4153431060e09
+cloud/cloud-reader-one-binary-01 aa85e6e8a0158f58e79c8feca5252ffc90748c4b
+cloud/cloud-reader-reading-ux-01 4418835a5af6d91829cedc26ecb0356a1ff25f34
+cloud/cloud-reader-release-packet-01 aabeaf7888e2387408d2afb69388993665061332
+cloud/cloud-reader-salvage-consume-01 5f696e640224686852056a4d4ac318d85297286a
+cloud/manual-oracle-bundle-02 663bf3e3cf8fb2a18c7595c47455fc65483c812b
+cloud/scene-size-aware-image-admission-01 b49f2f918d92f10f9a4b3aa32b70492c23a20a7d
+local-web-editor/current-viewer-receipt-01 b1f46d41fbd044ce230224d0e405629cedb28cb9
+product/pub-compat-report-01 bc114050a813864f57d4a235dfbfd5c051140afd
+reader/legacy-ole-wmf-patternbrush-final-main 54eea749ff594275d8ab821f77559c3083a96e61
+reader/legacy-ole-wmf-textcolor-02-current-main e2f711562c0294c7e16a8a4c72f5736742db7c1b
+reader/legacy22-group-signed-bounds-current-main 87a64fc057003b32628e4a3c2673a955f0d87bed
+reader/legacy22-image0002-materialize-current-main-01 115911c58e2af3369e758bda399d50a10fc512d8
+reader/quill-story-fdpp-exact-01 2e64d7264858797061866b3a21504685f68626d3
+reader/reader-salvage-view-ui-01 1b4dfaf36568ad2338f93222506710fc1153bd43
+reader/salvage-fallback-core-current-main-01 6ec54790a715de2eddbb016d0467f85f65faf332
+reader/salvage-observation-bridge-01 a5deebc6660d6ac89ad2e892c032c0d39cae2a0d
+reader/wmf-ellipse-01 0339678af3d1813895166bd0bf4d8b791f4b5d05
+reader/wmf-font-compat-01 63bd5b8699978094db321939b049a991d3e67991
+reader/wmf-font-compat-rotated-current-main-01 15a95489d40861582a2541930f4ea50e7fdf15fd
+reader/wmf-palette-compat-current-main-01 2c41a275f95c43dd354bb85d6322259897305d9d
+reader/wmf-patternbrush-compact-main-02 d90d26ddd4c7e62b333c3ca216d36680bc5e0d8d
+reader/wmf-postscript-ignore-main-03 296bde5d7f9b54bbb942cc3035990352f152a9ae
+reader/wmf-srcand-main-02 0cb1473d6c68c6c7e227ba9bbff95cd18011ad14
+reader/wmf-stretchdib-srccopy-01 fbede5c8d049b9f0592ced3c1a176b18b06e501e
+security/desktop-pub-containment-launcher-01 cb0806f521cef06790cdc5cc601a8a569ed19a8e
+viewer/bounded-implicit-style-zero-01 f03eb3b1ce9322fe7e6fa45a6479167c43c646ce
+viewer/carlton-grouped-bitmap-01 7e53fee6b5aa4f26b3f71185e8e1ccd307214133
+viewer/cmo-mcld-text-inset-01 84f0d6e29adcd971c2a132a8f0a37e7d8eec4197
+viewer/cmo-text-layout-current-main 548853a1e6be1ffa6afa00dd0868b0d2d130df5f
+viewer/cmo-text-layout-real-topology 33bca03a70d5932c2b9d74acefc608f14bf8d76c
+viewer/cmo7-style0-size-consume-01 6aed1ee92c54532eec194c263bab777a8085e024
+viewer/fdpp-paragraph-align-01 8a54060b926da137116b9df779a96dabf882a8bb
+viewer/fill-boolean-use-bit-default-01 418a65a1039713f843e17291ad6040fc1bb27276
+viewer/legacy-ole-wmf-region-compat-332 d085b9004dff538fd36032432473c9d165aff40c
+viewer/mature-officeart-wmf-preview-01 b3eee861ffacf4adc3461687de4a4456962348d5
+viewer/merged-table-cells-01 b933d2ec2400c0309ec8e22dc3b11cab952d24fa
+viewer/messaging-page-role-01 18998efa3a4506e3548ace0f7920e9f6a4ec77d5
+viewer/page-role-virginia-01-current-main 8da87ce40e2356125051f07832adfc9825eaa147
+viewer/page-service-role-01 4745ea46c72cca0a9d0ae5637e86a70d4766e2f6
+viewer/publisher-sparse-fill-color-01a-white 317c109b036a236661b37732fc22882ab3a88772
+viewer/scriptfonts-effective-latin-02 a13d53a96edffd8c11f73c4f78bb50847b61a815
+viewer/source-stack-order-01 561af09e536308a7da17a32aa76cc5d030ae6315
+viewer/source-stack-order-partial-consume-01 630bd65ad6d347ecb7fda02ee389ff50107c2b1d
+viewer/standard-print-service-tail-profile-01 16996d19b4dc9e11cbab8cb99ef7cf5fd8e495a5
+viewer/text-layout-virginia-01 4e2d33b362c93178ca534a4377fcbe2cc9ef4907
+viewer/text-layout-virginia-mixed-size-01 43efdcb2ca3b3e0f4e0e4a9aa46f6e74119f5e9e
+viewer/textframe-content-vertical-align-01 ad1cba0f0f8c7e10b70cf680756894151c897a46
