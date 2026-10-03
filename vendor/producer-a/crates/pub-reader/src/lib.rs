@@ -435,6 +435,8 @@ pub struct PubPageRoleObservation {
     pub applied_master_raw_type: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pgt_type: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<PubPageFieldObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_document_entry_seq_num: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -446,6 +448,20 @@ pub struct PubPageRoleObservation {
     pub child_raw_type_counts: BTreeMap<u16, usize>,
     pub shape_child_count: usize,
     pub group_child_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubPageFieldObservation {
+    pub id: u16,
+    pub block_type: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub u16_value: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub u32_value: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_length: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1120,6 +1136,41 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             }
         }
 
+        let fields = chunk
+            .fields
+            .iter()
+            .map(|field| {
+                let (u16_value, u32_value, declared_length, container_sha256) = match &field.body {
+                    RawContentsBlockBody::Empty => (None, None, None, None),
+                    RawContentsBlockBody::U16 { value, .. } => (Some(*value), None, None, None),
+                    RawContentsBlockBody::U32 { value, .. } => (None, Some(*value), None, None),
+                    RawContentsBlockBody::Fixed8 { .. } | RawContentsBlockBody::Fixed16 { .. } => {
+                        (None, None, None, None)
+                    }
+                    RawContentsBlockBody::Container {
+                        declared_length,
+                        content_source,
+                        ..
+                    } => {
+                        let digest = if field.id == 0x05 {
+                            Some(raw_span_sha256(&contents, content_source)?)
+                        } else {
+                            None
+                        };
+                        (None, None, Some(*declared_length), digest)
+                    }
+                };
+                Ok(PubPageFieldObservation {
+                    id: field.id,
+                    block_type: field.block_type,
+                    u16_value,
+                    u32_value,
+                    declared_length,
+                    container_sha256,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let mut child_raw_type_counts = BTreeMap::<u16, usize>::new();
         for child in references.values() {
             if single_parent_seq(child) != Some(entry.handle) {
@@ -1146,6 +1197,7 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             applied_master_seq_num,
             applied_master_raw_type,
             pgt_type,
+            fields,
             previous_document_entry_seq_num: previous_document_entry
                 .map(|item| item.contents_seq_num),
             previous_document_entry_raw_type: previous_document_entry
@@ -1224,6 +1276,16 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
         pages,
         controlling,
     })
+}
+
+fn raw_span_sha256(bytes: &[u8], span: &pub_core::RawSpan) -> Result<String> {
+    let start = usize::try_from(span.offset).context("raw span offset does not fit usize")?;
+    let len = usize::try_from(span.len).context("raw span length does not fit usize")?;
+    let end = start
+        .checked_add(len)
+        .filter(|end| *end <= bytes.len())
+        .context("raw span is outside Contents")?;
+    Ok(format!("{:x}", Sha256::digest(&bytes[start..end])))
 }
 
 fn raw_span_hex(bytes: &[u8], span: &pub_core::RawSpan) -> Result<String> {
