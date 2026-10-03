@@ -30,6 +30,31 @@ FORBIDDEN = {
         'crates/pub-model/**',
         'crates/pub-presentation-profile/**',
     ),
+    '.github/workflows/editor-project-fork.yml': (
+        'vendor/producer-a/crates/pub-editor/**',
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
+    '.github/workflows/authoring-move-nodes-v1.yml': (
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
+    '.github/workflows/editor-resize-node.yml': (
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
+    '.github/workflows/resize-nodes-v1.yml': (
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
+    '.github/workflows/editor-create-textbox-rust-v1.yml': (
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
+    '.github/workflows/editor-created-story-edit-rust-v1.yml': (
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
+    '.github/workflows/authoring-create-shape-v1.yml': (
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
+    '.github/workflows/authoring-table-grid-v1.yml': (
+        'vendor/producer-a/crates/pub-editor/src/lib.rs',
+    ),
 }
 
 DIRECT_PR = re.compile(r'^  pull_request:\s*$', re.MULTILINE)
