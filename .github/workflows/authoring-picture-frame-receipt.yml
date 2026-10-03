@@ -12,6 +12,10 @@ on:
       - ".github/workflows/authoring-picture-frame-receipt.yml"
   workflow_dispatch:
 
+concurrency:
+  group: authoring-picture-frame-receipt-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
