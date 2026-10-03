@@ -1,0 +1,158 @@
+name: Batch01 029 spread composition
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/batch01-029-spread-composition.yml"
+      - "tools/research_batch01_029_spread_composition_v1.py"
+      - "vendor/producer-a/crates/pub-reader/src/bin/page-role-fingerprint-receipt.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: batch01-029-spread-composition-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/batch01-029-spread
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify corpus and materialize exact 029
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/batch01-029-spread"
+          mkdir -p "$RUNNER_TEMP/batch01-029-spread"
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified", digest)
+          PY
+          python tools/cloud_reader_visual_fingerprint_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv \
+            out/pinned1050/materialized/native \
+            "$RUNNER_TEMP/no-second-source-root" \
+            "$RUNNER_TEMP/batch01-029-spread/fixtures" \
+            "$RUNNER_TEMP/batch01-029-spread/manifest-all.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "batch01-029-spread"
+          payload = json.loads((root / "manifest-all.json").read_text())
+          rows = [row for row in payload["fixtures"] if row["name"] == "029_c0688f73b9bf8fc7"]
+          assert len(rows) == 1
+          assert rows[0]["sha256"] == "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e"
+          (root / "manifest.json").write_text(json.dumps({"schema": payload["schema"], "fixtures": rows}, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Install exact visual runtime
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+          python -m py_compile tools/research_batch01_029_spread_composition_v1.py
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Build Reader, source-role receipt, and Cloud worker
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-fingerprint-receipt --jobs 2
+          cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Resolve exact source PAGE identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/batch01-029-spread
+          "$CARGO_TARGET_DIR/debug/page-role-fingerprint-receipt" \
+            "$RUNNER_TEMP/batch01-029-spread/fixtures/029_c0688f73b9bf8fc7.pub" \
+            target/batch01-029-spread/page-role.json
+
+      - name: Render fail-open exact 029
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/batch01-029-spread/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/batch01-029-spread/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/batch01-029-spread/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "0"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Falsify adjacent half-PAGE spread composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/research_batch01_029_spread_composition_v1.py \
+            "$RUNNER_TEMP/batch01-029-spread/browser/receipt.json" \
+            target/batch01-029-spread/page-role.json \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            029_c0688f73b9bf8fc7 \
+            target/batch01-029-spread/summary.json
+
+      - name: Assert source-safe measurement boundary
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("target/batch01-029-spread/summary.json").read_text())
+          assert data["schema"] == "chaptera.batch01-029-spread-composition.v1"
+          assert data["candidate_page_count"] == 9
+          assert data["reference_page_count"] == 2
+          assert data["joined_document_ordinals"] == [0,1,2,3,4,5,6,8,9]
+          assert data["applied_pair_ordinals"] == [2,3,4,5]
+          assert data["terminal_service_ordinal"] == 6
+          assert data["claims"]["measurement_only"] is True
+          assert data["claims"]["raw_page_id_emitted"] is False
+          assert data["claims"]["source_graph_mutated"] is False
+          print("spread measurement fences verified")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: batch01-029-spread-composition
+          path: target/batch01-029-spread/summary.json
+          if-no-files-found: error
+          retention-days: 30
