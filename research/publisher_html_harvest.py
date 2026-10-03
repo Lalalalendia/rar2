@@ -6,6 +6,8 @@ import html
 import json
 import quopri
 import re
+import subprocess
+import tempfile
 import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -51,9 +53,36 @@ def decode_candidates(raw, content_type):
     if text is None:
         text = raw.decode("utf-8", "replace")
     candidates = [("plain", text)]
+    if "&lt;" in text or "&#60;" in text:
+        candidates.append(("html_unescape", html.unescape(text)))
     if "quoted-printable" in text.lower() or text.count("=3D") >= 3 or text.count("=\n") + text.count("=\r\n") >= 3:
         qp = quopri.decodestring(text.encode("latin-1", "replace")).decode("utf-8", "replace")
         candidates.append(("quoted_printable", qp))
+        if "&lt;" in qp or "&#60;" in qp:
+            candidates.append(("quoted_printable_html_unescape", html.unescape(qp)))
+    return candidates
+
+def pdf_text_candidates(raw):
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "source.pdf"
+        dst = Path(td) / "source.txt"
+        src.write_bytes(raw)
+        subprocess.run(
+            ["pdftotext", "-layout", "-enc", "UTF-8", str(src), str(dst)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+        )
+        text = dst.read_text(encoding="utf-8", errors="replace")
+    candidates = [("pdf_text", text)]
+    if "&lt;" in text or "&#60;" in text:
+        candidates.append(("pdf_text_html_unescape", html.unescape(text)))
+    if "quoted-printable" in text.lower() or text.count("=3D") >= 3:
+        qp = quopri.decodestring(text.encode("latin-1", "replace")).decode("utf-8", "replace")
+        candidates.append(("pdf_text_quoted_printable", qp))
+        if "&lt;" in qp or "&#60;" in qp:
+            candidates.append(("pdf_text_quoted_printable_html_unescape", html.unescape(qp)))
     return candidates
 
 def score_candidate(text):
@@ -208,6 +237,8 @@ def main():
         try:
             raw, receipt = fetch_source(seed["url"])
             candidates = decode_candidates(raw, receipt.get("content_type"))
+            if raw.startswith(b"%PDF") or "application/pdf" in (receipt.get("content_type") or "").lower():
+                candidates.extend(pdf_text_candidates(raw))
             mode, text = max(candidates, key=lambda item: score_candidate(item[1]))
             objects, properties = parse_publisher_xml(text, source_id)
             phash = payload_hash(objects, properties)
