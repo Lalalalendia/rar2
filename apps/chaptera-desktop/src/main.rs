@@ -32,8 +32,8 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     AuthoredPageRenderLaneV1, AuthoredPageRenderNodeV1, ExplicitRenderTextFontResourceV1,
-    PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1,
-    apply_authored_page_render_lane_v1, build_page_render_plan_with_text_layout_resolver_v1,
+    PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1, apply_authored_page_render_lane_v1,
+    build_page_render_plan_with_text_layout_resolver_v1,
     build_page_render_plan_with_text_layout_v1,
 };
 use eframe::egui;
