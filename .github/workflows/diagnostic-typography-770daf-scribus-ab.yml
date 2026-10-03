@@ -1,0 +1,175 @@
+name: Diagnostic Typography 770daf Scribus A/B
+
+on:
+  push:
+    branches:
+      - diagnostic/typography-770daf-scribus-ab-01
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  ab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      WITNESS_SHA: "770daf58c214d6f848af676b6a53c04934f7c1499e5674837a18a2f63875dc90"
+      BASE_SHA: "f692a7cdd3f3cbc8049fe0f3069f16525738863a"
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/typography-770daf-ab
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download exact corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Install Scribus consumer
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus xvfb fonts-montserrat
+
+      - name: Materialize current head
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/current"
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/current" cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor --release \
+            --bin editable_route_probe --bin editable_typography_probe
+          pub="$CORPUS_ROOT/$WITNESS_SHA.pub"
+          "$GITHUB_WORKSPACE/target/current/release/editable_route_probe" \
+            "$pub" --label "$WITNESS_SHA.pub" \
+            --materialize-dir "$EVIDENCE_ROOT/current" \
+            > "$EVIDENCE_ROOT/current/route.json"
+          "$GITHUB_WORKSPACE/target/current/release/editable_typography_probe" \
+            "$pub" > "$EVIDENCE_ROOT/current/typography.json"
+          sha256sum "$EVIDENCE_ROOT/current/output.idml" > "$EVIDENCE_ROOT/current/output.idml.sha256"
+
+      - name: Materialize exact base
+        run: |
+          set -euo pipefail
+          git checkout --detach "$BASE_SHA"
+          mkdir -p "$EVIDENCE_ROOT/base"
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/base" cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor --release \
+            --bin editable_route_probe --bin editable_typography_probe
+          pub="$CORPUS_ROOT/$WITNESS_SHA.pub"
+          "$GITHUB_WORKSPACE/target/base/release/editable_route_probe" \
+            "$pub" --label "$WITNESS_SHA.pub" \
+            --materialize-dir "$EVIDENCE_ROOT/base" \
+            > "$EVIDENCE_ROOT/base/route.json"
+          "$GITHUB_WORKSPACE/target/base/release/editable_typography_probe" \
+            "$pub" > "$EVIDENCE_ROOT/base/typography.json"
+          sha256sum "$EVIDENCE_ROOT/base/output.idml" > "$EVIDENCE_ROOT/base/output.idml.sha256"
+
+      - name: Run exact Scribus A/B
+        run: |
+          set -u
+          run_one() {
+            arm="$1"
+            idml="$EVIDENCE_ROOT/$arm/output.idml"
+            out="$EVIDENCE_ROOT/$arm/consumer.sla"
+            log="$EVIDENCE_ROOT/$arm/scribus.log"
+            rm -f "$out"
+            set +e
+            timeout 60s env CHAPTERA_SCRIBUS_SLA_OUT="$out" \
+              xvfb-run -a scribus -g -ns \
+              -py "$GITHUB_WORKSPACE/tools/ci/scribus_idml_consumer.py" -- "$idml" \
+              >"$log" 2>&1
+            rc=$?
+            set -e
+            printf '%s\n' "$rc" > "$EVIDENCE_ROOT/$arm/scribus.rc"
+            if [[ -s "$out" ]]; then
+              stat -c '%s' "$out" > "$EVIDENCE_ROOT/$arm/consumer.bytes"
+            else
+              printf '0\n' > "$EVIDENCE_ROOT/$arm/consumer.bytes"
+            fi
+          }
+          git checkout --detach "${{ github.event.before }}" >/dev/null 2>&1 || true
+          run_one current
+          run_one base
+
+      - name: Build A/B receipt
+        env:
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          def arm(name):
+              route = json.loads((root/name/"route.json").read_text())
+              typography = json.loads((root/name/"typography.json").read_text())
+              return {
+                  "route": route,
+                  "typography": {
+                      "open_state": typography.get("open_state"),
+                      "eligible_count": typography.get("eligible_count"),
+                      "families": sorted({
+                          item.get("font_family")
+                          for item in typography.get("items", [])
+                          if item.get("font_family")
+                      }),
+                      "montserrat_count": sum(
+                          item.get("font_family", "").strip() == "Montserrat"
+                          for item in typography.get("items", [])
+                      ),
+                  },
+                  "scribus_rc": int((root/name/"scribus.rc").read_text()),
+                  "consumer_bytes": int((root/name/"consumer.bytes").read_text()),
+                  "idml_sha256": (root/name/"output.idml.sha256").read_text().split()[0],
+              }
+
+          receipt = {
+              "schema": "chaptera.typography-770daf-scribus-ab.v1",
+              "witness_sha256": os.environ["WITNESS_SHA"],
+              "current_sha": os.environ["CURRENT_SHA"],
+              "base_sha": os.environ["BASE_SHA"],
+              "current": arm("current"),
+              "base": arm("base"),
+          }
+          (root/"receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True)+"\n")
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: typography-770daf-scribus-ab-${{ github.run_id }}
+          path: |
+            target/typography-770daf-ab/receipt.json
+            target/typography-770daf-ab/current/route.json
+            target/typography-770daf-ab/current/typography.json
+            target/typography-770daf-ab/current/scribus.rc
+            target/typography-770daf-ab/current/scribus.log
+            target/typography-770daf-ab/base/route.json
+            target/typography-770daf-ab/base/typography.json
+            target/typography-770daf-ab/base/scribus.rc
+            target/typography-770daf-ab/base/scribus.log
+          if-no-files-found: warn
+          retention-days: 30
