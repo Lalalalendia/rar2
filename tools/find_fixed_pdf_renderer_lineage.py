@@ -50,6 +50,17 @@ BINARY_NAMES = {
     "pub-cli.exe",
 }
 
+KNOWN_BUILD_BINARY_PATHS = (
+    "target/release/pub",
+    "target/release/pub.exe",
+    "target/release/pub-cli",
+    "target/release/pub-cli.exe",
+    "target/debug/pub",
+    "target/debug/pub.exe",
+    "target/debug/pub-cli",
+    "target/debug/pub-cli.exe",
+)
+
 ARCHIVE_SUFFIXES = (
     ".zip",
     ".tar",
@@ -264,6 +275,13 @@ def scan_roots(roots: list[pathlib.Path], config: ScanConfig) -> list[dict[str, 
                 candidate = inspect_worktree(current)
                 if candidate is not None:
                     candidates.append(candidate)
+
+            for relative in KNOWN_BUILD_BINARY_PATHS:
+                path = current / relative
+                if path in seen_files or not path.is_file():
+                    continue
+                seen_files.add(path)
+                candidates.append(inspect_binary(path))
 
             for name in files:
                 path = current / name
