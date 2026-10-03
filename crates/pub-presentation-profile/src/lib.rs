@@ -275,10 +275,8 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
 
 pub const LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1: &str =
     "chaptera.legacy22-page-list-profile-input.v1";
-pub const LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1: &str =
-    "publisher-legacy22/noquill-middle-pages/v1";
-pub const LEGACY22_QUILL_PAGE_PROFILE_ID_V1: &str =
-    "publisher-legacy22/quill-middle-pages/v1";
+pub const LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1: &str = "publisher-legacy22/noquill-middle-pages/v1";
+pub const LEGACY22_QUILL_PAGE_PROFILE_ID_V1: &str = "publisher-legacy22/quill-middle-pages/v1";
 
 const LEGACY22_PAGE_RAW_TYPE_V1: u16 = 0x0014;
 const LEGACY22_PAGE_LIST_SPECIAL_RAW_TYPE_V1: u16 = 0x0041;
@@ -977,10 +975,12 @@ mod tests {
                 .iter()
                 .copied()
                 .enumerate()
-                .map(|(document_ordinal, raw_type)| Legacy22PageListEntryEvidenceV1 {
-                    document_ordinal,
-                    raw_type,
-                })
+                .map(
+                    |(document_ordinal, raw_type)| Legacy22PageListEntryEvidenceV1 {
+                        document_ordinal,
+                        raw_type,
+                    },
+                )
                 .collect(),
         }
     }
@@ -993,10 +993,7 @@ mod tests {
             &[LEGACY22_PAGE_RAW_TYPE_V1; 4],
         ))
         .unwrap();
-        assert_eq!(
-            selection.profile_id,
-            LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1
-        );
+        assert_eq!(selection.profile_id, LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1);
         assert_eq!(selection.materialized_page_count, 4);
         assert_eq!(selection.customer_page_indices, vec![2]);
     }
