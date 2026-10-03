@@ -171,6 +171,10 @@ pub struct RenderTypographyRunV1 {
     pub text_size_emu: u32,
     pub font_inherited: bool,
     pub size_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    pub color_inherited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +182,34 @@ enum ScalarSourceFontFamilyAuthorityV1 {
     Authoritative(String),
     Absent,
     Invalid,
+}
+
+pub fn uniform_text_color_rgb_v1(fragment: &RenderTextFragmentV1) -> Option<[u8; 3]> {
+    if fragment.scalar_start >= fragment.scalar_end || fragment.typography.is_empty() {
+        return None;
+    }
+
+    let mut cursor = fragment.scalar_start;
+    let mut resolved = None;
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+        {
+            return None;
+        }
+        let color = run.color_rgb?;
+        match resolved {
+            None => resolved = Some(color),
+            Some(existing) if existing == color => {}
+            Some(_) => return None,
+        }
+        cursor = run.scalar_end;
+    }
+
+    (cursor == fragment.scalar_end)
+        .then_some(resolved)
+        .flatten()
 }
 
 fn normalize_source_font_family_v1(name: &str) -> String {
@@ -610,6 +642,8 @@ fn projected_text(
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
+                color_rgb: run.color_rgb,
+                color_inherited: run.color_inherited,
             })
         })
         .collect();
@@ -721,6 +755,8 @@ pub fn build_page_render_plan_v1(
                                 text_size_emu: run.text_size_emu,
                                 font_inherited: run.font_inherited,
                                 size_inherited: run.size_inherited,
+                                color_rgb: run.color_rgb,
+                                color_inherited: run.color_inherited,
                             })
                         })
                         .collect(),
@@ -1758,6 +1794,8 @@ mod tests {
                 text_size_emu: 24 * 12_700,
                 font_inherited: false,
                 size_inherited: true,
+                color_rgb: None,
+                color_inherited: false,
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
@@ -1940,6 +1978,50 @@ mod tests {
     }
 
     #[test]
+    fn uniform_text_color_requires_complete_uniform_coverage() {
+        let story_id = fixture().document.stories[0].id;
+        let uniform = render_fragment(
+            story_id,
+            "hello",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: Some([255, 204, 0]),
+                    color_inherited: false,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 5,
+                    source_font_name: "Arial".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: Some([255, 204, 0]),
+                    color_inherited: true,
+                },
+            ],
+        );
+        assert_eq!(uniform_text_color_rgb_v1(&uniform), Some([255, 204, 0]));
+
+        let mut mixed = uniform.clone();
+        mixed.typography[1].color_rgb = Some([0, 0, 0]);
+        assert_eq!(uniform_text_color_rgb_v1(&mixed), None);
+
+        let mut missing = uniform.clone();
+        missing.typography[1].color_rgb = None;
+        assert_eq!(uniform_text_color_rgb_v1(&missing), None);
+
+        let mut gap = uniform;
+        gap.typography[1].scalar_start = 3;
+        assert_eq!(uniform_text_color_rgb_v1(&gap), None);
+    }
+
+    #[test]
     fn effective_family_prefers_complete_scalar_typography() {
         let mut visual = fixture();
         let story_id = visual.document.stories[0].id;
@@ -1955,6 +2037,8 @@ mod tests {
                 text_size_emu: 152_400,
                 font_inherited: false,
                 size_inherited: false,
+                color_rgb: None,
+                color_inherited: false,
             }],
         );
 
@@ -2052,6 +2136,8 @@ mod tests {
                     text_size_emu: 152_400,
                     font_inherited: false,
                     size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -2060,6 +2146,8 @@ mod tests {
                     text_size_emu: 152_400,
                     font_inherited: false,
                     size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
                 },
             ],
         );
