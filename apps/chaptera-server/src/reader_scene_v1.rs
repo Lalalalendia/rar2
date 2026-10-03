@@ -17,6 +17,14 @@ const MAX_INLINE_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_SCENE_BYTES: usize = 16 * 1024 * 1024;
 const SHARED_FALLBACK_FONT_MIME: &str = "font/ttf";
 
+fn batch01_scene_phase_trace(marker: &str) {
+    eprintln!("CHAPTERA_READER_PHASE {marker}");
+}
+
+fn batch01_scene_page_phase_trace(page_index: usize, marker: &str) {
+    eprintln!("CHAPTERA_READER_PHASE scene_render_plan_page:{page_index}:{marker}");
+}
+
 #[derive(Debug, Serialize)]
 pub struct ReaderSceneV1 {
     pub protocol_version: &'static str,
@@ -418,6 +426,7 @@ pub fn from_viewer_geometry_with_fonts(
     source_page_paint_orders: &[ViewerPagePaintOrderV1],
     configured_fonts: &[ReaderConfiguredFontResourceV1],
 ) -> Result<ReaderSceneV1, String> {
+    batch01_scene_phase_trace("scene_preflight:start");
     let viewer_source_hash =
         serialized_string(&geometry.document.source.source_hash, "Viewer source hash")?;
     if viewer_source_hash != source_hash {
@@ -447,6 +456,7 @@ pub fn from_viewer_geometry_with_fonts(
         });
     }
     pages.sort_by_key(|page| page.order);
+    batch01_scene_phase_trace("scene_pages:done");
 
     let mut parent_by_node = HashMap::new();
     let mut raw_nodes = Vec::with_capacity(geometry.scene.nodes.len());
@@ -482,6 +492,7 @@ pub fn from_viewer_geometry_with_fonts(
             &mut HashSet::new(),
         )?;
     }
+    batch01_scene_phase_trace("scene_node_index:done");
 
     let mut kind_by_node = node_ids
         .iter()
@@ -649,7 +660,9 @@ pub fn from_viewer_geometry_with_fonts(
             (node_id, text)
         })
         .collect::<HashMap<_, String>>();
+    batch01_scene_phase_trace("scene_semantic_bindings:done");
 
+    batch01_scene_phase_trace("scene_render_plans:prepare");
     chaptera_desktop_fallback_font_resource::validate()
         .map_err(|error| format!("shared fallback font validation failed: {error}"))?;
     let fallback_font = shared_text_font_resource();
@@ -667,6 +680,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut projected_kind_partial = false;
     let mut text_layout_partial = false;
     for page_index in 0..geometry.document.pages.len() {
+        batch01_scene_page_phase_trace(page_index, "build:start");
         let plan = match build_page_render_plan_with_text_layout_resolver_v1(
             geometry,
             page_index,
@@ -679,8 +693,12 @@ pub fn from_viewer_geometry_with_fonts(
                     .map(|font| font.explicit_resource())
             },
         ) {
-            Ok(plan) => plan,
+            Ok(plan) => {
+                batch01_scene_page_phase_trace(page_index, "build:done");
+                plan
+            }
             Err(_) => {
+                batch01_scene_page_phase_trace(page_index, "build:error");
                 text_layout_partial = true;
                 continue;
             }
@@ -886,7 +904,9 @@ pub fn from_viewer_geometry_with_fonts(
                 return Err(format!("duplicate text layout binding for node {node_id}"));
             }
         }
+        batch01_scene_page_phase_trace(page_index, "consume:done");
     }
+    batch01_scene_phase_trace("scene_render_plans:done");
     if text_by_node.len() > text_layout_by_node.len() {
         text_layout_partial = true;
     }
@@ -922,6 +942,7 @@ pub fn from_viewer_geometry_with_fonts(
         });
     }
 
+    batch01_scene_phase_trace("scene_nodes_materialized:done");
     let mut stacking_known =
         apply_source_page_paint_order(&mut nodes, &pages, source_page_paint_orders)?;
     if !projected_nodes_by_target.is_empty() {
@@ -931,6 +952,7 @@ pub fn from_viewer_geometry_with_fonts(
         // render-plan target-frame anchor while keeping the overall claim partial.
         stacking_known = false;
     }
+    batch01_scene_phase_trace("scene_stacking:done");
 
     let stories = geometry
         .document
@@ -944,6 +966,7 @@ pub fn from_viewer_geometry_with_fonts(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    batch01_scene_phase_trace("scene_stories:done");
 
     let mut fonts = Vec::new();
     if text_layout_count > 0 {
@@ -976,6 +999,7 @@ pub fn from_viewer_geometry_with_fonts(
             });
         }
     }
+    batch01_scene_phase_trace("scene_fonts:done");
 
     let mut diagnostics = Vec::new();
     for diagnostic in &geometry.document.diagnostics {
@@ -995,6 +1019,7 @@ pub fn from_viewer_geometry_with_fonts(
         });
     }
 
+    batch01_scene_phase_trace("scene_diagnostics:done");
     let mut reasons = Vec::new();
     if !nodes.is_empty() && !stacking_known {
         reasons.push("stacking_order_unavailable");
@@ -1045,7 +1070,9 @@ pub fn from_viewer_geometry_with_fonts(
         diagnostics,
     };
 
+    batch01_scene_phase_trace("scene_inline_images:start");
     promote_inline_images_within_scene_cap(&mut scene, geometry)?;
+    batch01_scene_phase_trace("scene_inline_images:done");
     if scene
         .resources
         .iter()
@@ -1062,9 +1089,11 @@ pub fn from_viewer_geometry_with_fonts(
         "partial"
     };
 
+    batch01_scene_phase_trace("scene_serialize:start");
     let serialized_scene_bytes = serde_json::to_vec(&scene)
         .map_err(|error| format!("Reader Scene serialization failed: {error}"))?
         .len();
+    batch01_scene_phase_trace("scene_serialize:done");
     if serialized_scene_bytes > MAX_SCENE_BYTES {
         return Err(format!(
             "Reader Scene exceeds serialized byte cap: {serialized_scene_bytes} > {MAX_SCENE_BYTES}"
