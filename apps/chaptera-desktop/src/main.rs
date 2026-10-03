@@ -10206,7 +10206,10 @@ mod tests {
                 };
                 let layout = fragment.layout.as_ref();
                 let first_line = layout.and_then(|layout| layout.lines.first());
+                let layout_bounds = node.text_bounds.unwrap_or(node.bounds);
                 let frame_width_emu = node.bounds.width.get();
+                let layout_width_emu = layout_bounds.width.get();
+                let layout_height_emu = layout_bounds.height.get();
                 let measured_width_emu = first_line.map(|line| line.measured_width_emu);
                 let width_ratio_ppm = measured_width_emu.and_then(|width| {
                     (frame_width_emu > 0)
@@ -10247,13 +10250,18 @@ mod tests {
                 });
                 let fallback_capacity_rows = fallback_scaled_line_height_emu
                     .filter(|line_height| *line_height > 0)
-                    .map(|line_height| node.bounds.height.get() / line_height);
+                    .map(|line_height| layout_height_emu / line_height);
                 heading_geometry_receipts.push(serde_json::json!({
                     "target": target,
                     "page_number": page_index + 1,
                     "frame_x_emu": node.bounds.x.get(),
                     "frame_width_emu": frame_width_emu,
                     "frame_height_emu": node.bounds.height.get(),
+                    "layout_x_emu": layout_bounds.x.get(),
+                    "layout_y_emu": layout_bounds.y.get(),
+                    "layout_width_emu": layout_width_emu,
+                    "layout_height_emu": layout_height_emu,
+                    "layout_uses_text_bounds": node.text_bounds.is_some(),
                     "paragraph_alignment_run_count": fragment.paragraph_alignments.len(),
                     "typography_run_count": fragment.typography.len(),
                     "distinct_text_size_count": distinct_text_size_count,
@@ -10262,6 +10270,7 @@ mod tests {
                     "fallback_default_line_height_emu": chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
                     "fallback_scaled_line_height_emu": fallback_scaled_line_height_emu,
                     "fallback_capacity_rows": fallback_capacity_rows,
+                    "outer_minus_layout_height_emu": node.bounds.height.get() - layout_height_emu,
                     "font_inherited_any": fragment.typography.iter().any(|run| run.font_inherited),
                     "size_inherited_any": fragment.typography.iter().any(|run| run.size_inherited),
                     "backend_font_resource_present": fragment.backend_font_resource_id.is_some(),
