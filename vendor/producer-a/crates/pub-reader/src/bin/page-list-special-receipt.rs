@@ -165,9 +165,11 @@ fn main() -> Result<()> {
         .iter()
         .filter(|(_, reference)| single_raw_type(reference) == Some(RAW_TYPE_DOCUMENT))
         .collect::<Vec<_>>();
-    let [(document_seq, document_reference)] = documents.as_slice() else {
+    let [(document_seq_ref, document_reference_ref)] = documents.as_slice() else {
         bail!("expected exactly one DOCUMENT reference");
     };
+    let document_seq = **document_seq_ref;
+    let document_reference = *document_reference_ref;
     let document_chunk = chunk_for_reference(&contents, document_reference)?;
     let page_list_block = document_chunk
         .fields
@@ -177,7 +179,7 @@ fn main() -> Result<()> {
     let [page_list_block] = page_list_block.as_slice() else {
         bail!("expected exactly one DOCUMENT PageList field");
     };
-    let page_list = parse_confirmed_document_page_list(&contents, (*page_list_block).clone())
+    let page_list = parse_confirmed_document_page_list(&contents, (**page_list_block).clone())
         .context("parse DOCUMENT PageList")?;
 
     let mut page_ordinals = BTreeMap::new();
@@ -194,11 +196,13 @@ fn main() -> Result<()> {
             _ => {}
         }
     }
-    let [(special_document_ordinal, special_seq)] = specials.as_slice() else {
+    let [(special_document_ordinal_ref, special_seq_ref)] = specials.as_slice() else {
         bail!("expected exactly one raw0x59 PageList special entry");
     };
+    let special_document_ordinal = *special_document_ordinal_ref;
+    let special_seq = *special_seq_ref;
     let special_reference = references
-        .get(special_seq)
+        .get(&special_seq)
         .context("special PageList entry has no directory reference")?;
     let special_chunk = chunk_for_reference(&contents, special_reference)?;
 
@@ -213,8 +217,8 @@ fn main() -> Result<()> {
                     field,
                     &references,
                     &page_ordinals,
-                    **document_seq,
-                    *special_seq,
+                    document_seq,
+                    special_seq,
                 ),
             })
         })
