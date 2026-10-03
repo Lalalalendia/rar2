@@ -183,6 +183,7 @@ jobs:
           expected = {
               **data,
               "eligible_count_in_source": data["eligible_count"],
+              "all_items": data["items"],
               "eligible_count": 1,
               "items": [item],
               "selection_basis": "idml_bounded_montserrat_regular_transport",
@@ -214,6 +215,11 @@ jobs:
         run: |
           set -euo pipefail
           python tools/verify_editable_typography_export.py             wire             --expected "$EVIDENCE_ROOT/expected.json"             --root "$EVIDENCE_ROOT/materialized"             --receipt "$EVIDENCE_ROOT/wire.json"
+
+      - name: Verify exact scoped LossReport promotion
+        run: |
+          set -euo pipefail
+          python tools/verify_editable_typography_export.py             report             --expected "$EVIDENCE_ROOT/expected.json"             --root "$EVIDENCE_ROOT/materialized"             --receipt "$EVIDENCE_ROOT/loss-report.json"
 
       - name: Scribus import save reopen save
         run: |
@@ -270,6 +276,7 @@ jobs:
               ],
               "checks": {
                   "target_wire": json.loads((root / "wire.json").read_text()),
+                  "scoped_loss_report": json.loads((root / "loss-report.json").read_text()),
                   "scribus_save_reopen": json.loads((root / "scribus.json").read_text()),
                   "libreoffice_save_reopen": json.loads((root / "libreoffice.json").read_text()),
               },
@@ -280,7 +287,8 @@ jobs:
               "claims": {
                   "bounded_full_story_font_family_and_size_wire_survived": True,
                   "consumer_font_family_and_size_pair_survived_save_reopen": True,
-                  "loss_report_manifest_upgraded_by_this_change": False,
+                  "scoped_loss_report_upgraded_by_this_change": True,
+                  "global_manifest_upgraded_by_this_change": False,
                   "partial_or_mixed_runs_proven": False,
                   "color_or_alignment_proven": False,
               },
@@ -305,6 +313,7 @@ jobs:
             target/editable-typography-evidence/font-census.json
             target/editable-typography-evidence/route.json
             target/editable-typography-evidence/wire.json
+            target/editable-typography-evidence/loss-report.json
             target/editable-typography-evidence/scribus.json
             target/editable-typography-evidence/libreoffice.json
             target/editable-typography-evidence/receipt.json
