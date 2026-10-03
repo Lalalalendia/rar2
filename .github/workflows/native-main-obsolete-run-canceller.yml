@@ -1,0 +1,80 @@
+name: Cancel stale native main runs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/native-main-obsolete-run-canceller.yml"
+      - ".github/workflows/mature-029-native-page-spread-once.yml"
+      - "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: native-main-obsolete-run-canceller
+  cancel-in-progress: true
+
+jobs:
+  cancel-stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Keep newest active 029 native push run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_WORKFLOW_PATH: ".github/workflows/mature-029-native-page-spread-once.yml"
+        run: |
+          set -euo pipefail
+
+          runs_file="$(mktemp)"
+          trap 'rm -f "$runs_file"' EXIT
+
+          gh api --paginate --method GET "repos/$GH_REPO/actions/runs"             -f event=push -f per_page=100             --jq '.workflow_runs[]
+              | select(.path == env.TARGET_WORKFLOW_PATH)
+              | select(.status == "queued"
+                    or .status == "pending"
+                    or .status == "in_progress"
+                    or .status == "waiting"
+                    or .status == "requested")
+              | [.run_number, .id, .status, .head_sha, .created_at] | @tsv'             >"$runs_file"
+
+          if [[ ! -s "$runs_file" ]]; then
+            echo "No active native main runs."
+            exit 0
+          fi
+
+          newest_run_number="$(cut -f1 "$runs_file" | sort -nr | head -n1)"
+          echo "Newest active native run number: $newest_run_number"
+
+          cancelled=0
+          forced=0
+          preserved=0
+          while IFS=$'\t' read -r run_number id status head_sha created_at; do
+            [[ -n "$id" ]] || continue
+            if [[ "$run_number" == "$newest_run_number" ]]; then
+              echo "KEEP   run=$run_number id=$id status=$status sha=${head_sha:0:12}"
+              preserved=$((preserved + 1))
+              continue
+            fi
+
+            echo "CANCEL run=$run_number id=$id status=$status sha=${head_sha:0:12}"
+            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
+              cancelled=$((cancelled + 1))
+              continue
+            fi
+
+            echo "FORCE  run=$run_number id=$id status=$status sha=${head_sha:0:12}"
+            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/force-cancel" >/dev/null 2>&1; then
+              forced=$((forced + 1))
+            else
+              echo "::warning::Could not cancel or force-cancel run $id; it may have completed concurrently."
+            fi
+          done <"$runs_file"
+
+          echo "Preserved newest active native run(s): $preserved"
+          echo "Cancelled stale native runs: $cancelled"
+          echo "Force-cancelled stale native runs: $forced"
