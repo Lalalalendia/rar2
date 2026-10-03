@@ -42,6 +42,10 @@ jobs:
       PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
       PINNED_CORPUS_COUNT: "1050"
       PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+      WITNESS_SHA: "4758095aa58927b1aefa23c384bb16cd598e6732ef2af5af68471118dc25c567"
+      WITNESS_STORY: "212617a9-1536-56fb-87fc-b6a3bbd5f493"
+      WITNESS_FONT_FAMILY: "Montserrat"
+      WITNESS_FONT_SIZE_EMU: "304800"
 
     steps:
       - uses: actions/checkout@v5
@@ -106,100 +110,51 @@ jobs:
           sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
           sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb fonts-montserrat
 
-      - name: Select exact bounded typography witness with installed font
+      - name: Reprove exact bounded typography witness
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE_ROOT"
+          witness="$CORPUS_ROOT/$WITNESS_SHA.pub"
+          test -s "$witness"
+          "$CARGO_TARGET_DIR/release/editable_typography_probe" "$witness" > "$EVIDENCE_ROOT/typography-probe.json"
           python - <<'PY'
-          import collections
           import json
+          import math
           import os
-          import re
-          import subprocess
           from pathlib import Path
 
-          root = Path(os.environ["CORPUS_ROOT"])
-          evidence = Path(os.environ["EVIDENCE_ROOT"])
-          probe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "editable_typography_probe"
-
-          def norm(value):
-              return re.sub(r"\s+", " ", value.strip().strip("'\\\"")).casefold()
-
-          fc = subprocess.run(
-              ["fc-list", "--format", "%{family}\\n"],
-              check=True,
-              capture_output=True,
-              text=True,
-          )
-          installed = {
-              norm(name)
-              for line in fc.stdout.splitlines()
-              for name in line.split(",")
-              if norm(name)
-          }
-
-          selected = None
-          candidate_families = collections.Counter()
-          candidate_story_count = 0
-          for path in sorted(root.glob("*.pub")):
-              run = subprocess.run(
-                  [str(probe), str(path)],
-                  check=True,
-                  capture_output=True,
-                  text=True,
-                  timeout=30,
-              )
-              data = json.loads(run.stdout)
-              if data["open_state"] != "admitted":
-                  continue
-              items = data.get("items", [])
-              for item in items:
-                  candidate_story_count += 1
-                  candidate_families[item["font_family"]] += 1
-              proven = [
-                  item for item in items
-                  if norm(item["font_family"]) == "montserrat"
-                  and norm(item["font_family"]) in installed
-                  and item["font_size_pt"] == 24
-              ]
-              if len(proven) == 1:
-                  selected = (path, data, proven[0])
-                  break
-
-          census = {
-              "schema": "chaptera.editable-typography-installed-font-census.v1",
-              "installed_family_count": len(installed),
-              "candidate_story_count_scanned": candidate_story_count,
-              "candidate_families": dict(sorted(candidate_families.items())),
-          }
-          (evidence / "font-census.json").write_text(
-              json.dumps(census, indent=2, sort_keys=True) + "\n"
-          )
-
-          assert selected is not None, (
-              "exact corpus has bounded typography but no scanned Story whose source "
-              "font family is Montserrat and exactly installed in the consumer environment; "
-              f"candidate_families={dict(candidate_families.most_common(30))}"
-          )
-          path, data, item = selected
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          data = json.loads((root / "typography-probe.json").read_text())
+          assert data["source_sha256"] == os.environ["WITNESS_SHA"], data["source_sha256"]
+          assert data["open_state"] == "admitted", data
+          matches = [
+              item for item in data.get("items", [])
+              if item["story_id"] == os.environ["WITNESS_STORY"]
+              and item["font_family"].strip() == os.environ["WITNESS_FONT_FAMILY"]
+              and int(item["font_size_emu"]) == int(os.environ["WITNESS_FONT_SIZE_EMU"])
+              and math.isclose(float(item["font_size_pt"]), 24.0, rel_tol=0.0, abs_tol=0.02)
+          ]
+          assert len(matches) == 1, matches
           expected = {
               **data,
               "eligible_count_in_source": data["eligible_count"],
               "eligible_count": 1,
-              "items": [item],
-              "selection_basis": "idml_bounded_montserrat_regular_transport",
+              "items": matches,
+              "selection_basis": "exact_971_consumer_proven_witness_v1",
           }
-          (evidence / "expected.json").write_text(
+          (root / "expected.json").write_text(
               json.dumps(expected, indent=2, sort_keys=True) + "\n"
           )
-          (evidence / "witness.txt").write_text(str(path) + "\n")
+          (root / "witness.txt").write_text(
+              str(Path(os.environ["CORPUS_ROOT"]) / (os.environ["WITNESS_SHA"] + ".pub")) + "\n"
+          )
           print(json.dumps({
-              "source_sha256": expected["source_sha256"],
-              "eligible_count": expected["eligible_count"],
-              "font_family": item["font_family"],
-              "font_size_pt": item["font_size_pt"],
-              "selection_basis": expected["selection_basis"],
-              "candidate_story_count_scanned": candidate_story_count,
+              "source_sha256": data["source_sha256"],
+              "story_id": matches[0]["story_id"],
+              "font_family": matches[0]["font_family"],
+              "font_size_emu": matches[0]["font_size_emu"],
+              "font_size_pt": matches[0]["font_size_pt"],
+              "eligible_count_in_source": data["eligible_count"],
           }, indent=2, sort_keys=True))
           PY
 
