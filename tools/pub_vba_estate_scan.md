@@ -45,8 +45,11 @@ Current families:
 - `application_lifecycle`
 - `documents`
 - `pages`
+- `page_identity`
 - `page_lifecycle`
+- `scratch_area`
 - `shapes`
+- `selection`
 - `text`
 - `picture`
 - `tables`
@@ -66,7 +69,12 @@ Notable v2.2 corrections/additions:
 - both `CreateObject("Publisher.Application")` and `GetObject(, "Publisher.Application")` are recognized as application lifecycle calls;
 - `LayoutGuides`, `RulerGuides`, `Align` and `Distribute` populate `layout`;
 - `SaveAs`, `ExportEmailHTML` and `WebPagePreview` extend `output`;
-- `UpdateOLEObjects` extends `ole_links`;\n- `MasterPages` extends `pages`;\n- `PageID` and `PageNumber` populate the new `page_identity` family;\n- `ScratchArea` and `Selection` receive dedicated families rather than disappearing from the histogram;\n- `HasTextFrame` extends `text`;\n- `TargetType` and `TextToDisplay` extend `hyperlinks`.
+- `UpdateOLEObjects` extends `ole_links`;
+- `MasterPages` extends `pages`;
+- `PageID` and `PageNumber` populate the new `page_identity` family;
+- `ScratchArea` and `Selection` receive dedicated families rather than disappearing from the histogram;
+- `HasTextFrame` extends `text`;
+- `TargetType` and `TextToDisplay` extend `hyperlinks`.
 
 The scanner masks comments and ordinary string literals before classification. The deliberate exceptions are the Publisher application identity strings inside `CreateObject` and `GetObject`, because those API identities necessarily live in string literals.
 
