@@ -40,10 +40,12 @@ use pub_paint_bridge::{
 use pub_presentation_profile::STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1;
 use pub_presentation_profile::{
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
+    LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1, Legacy22PageListDialectV1,
+    Legacy22PageListEntryEvidenceV1, Legacy22PageListProfileInputV1,
     STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
     StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
     reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
-    select_reference_fixture_customer_page_seq_nums_v1,
+    select_legacy22_customer_page_indices_v1, select_reference_fixture_customer_page_seq_nums_v1,
     select_standard_print_service_tail_customer_page_seq_nums_v1,
 };
 #[cfg(test)]
@@ -64,19 +66,20 @@ pub use pub_reader::{
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
-    FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, Legacy22PageListDialectV1,
-    LegacyOleCachedPresentationScan, LegacyOleCachedPresentationSelection,
+    FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
+    LegacyOleCachedPresentationSelection,
     MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
-    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
+    build_legacy_0x22_noquill_source_graph,
     build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
     build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
     derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
     read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
-    select_legacy_0x22_page_list_presentation_v1, select_unambiguous_legacy_ole_cached_presentation,
+    select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1769,12 +1772,28 @@ fn select_legacy22_viewer_pages(
         disposition: ViewerPageSelectionDisposition::GenericNoLoss,
     };
 
-    let selection = match select_legacy_0x22_page_list_presentation_v1(
-        Cursor::new(bytes),
-        dialect,
+    let observation = match analyze_legacy_0x22_page_roles(Cursor::new(bytes)) {
+        Ok(observation) => observation,
+        Err(_) => return generic(),
+    };
+    let selection = match select_legacy22_customer_page_indices_v1(
+        Legacy22PageListProfileInputV1 {
+            schema_version: LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1.to_owned(),
+            dialect,
+            document_page_list_entry_count: observation.document_page_list_entry_count,
+            physical_page_count: observation.physical_page_count,
+            entries: observation
+                .page_list_entries
+                .into_iter()
+                .map(|entry| Legacy22PageListEntryEvidenceV1 {
+                    document_ordinal: entry.document_ordinal,
+                    raw_type: entry.raw_type,
+                })
+                .collect(),
+        },
     ) {
-        Ok(Some(selection)) => selection,
-        Ok(None) | Err(_) => return generic(),
+        Some(selection) => selection,
+        None => return generic(),
     };
     if selection.materialized_page_count != source.effective_pages.page_ids.len() {
         return generic();
@@ -1795,7 +1814,7 @@ fn select_legacy22_viewer_pages(
     ViewerPageSelection {
         page_ids,
         disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
-            profile_id: selection.profile_id.to_owned(),
+            profile_id: selection.profile_id,
             raw_page_count: selection.materialized_page_count,
             customer_page_count,
         },
