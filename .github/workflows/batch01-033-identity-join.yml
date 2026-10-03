@@ -6,6 +6,7 @@ on:
       - ".github/workflows/batch01-033-identity-join.yml"
       - "tools/research_batch01_033_identity_join_v1.py"
       - "vendor/producer-a/crates/pub-reader/src/bin/page-role-fingerprint-receipt.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/page-projection-fingerprint-receipt.rs"
   workflow_dispatch:
 
 permissions:
@@ -94,6 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-fingerprint-receipt --jobs 2
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin page-projection-fingerprint-receipt --jobs 2
           cargo build -p chaptera-server --bin chaptera --jobs 2
 
       - name: Resolve exact source PAGE identities
@@ -102,6 +104,12 @@ jobs:
           "$CARGO_TARGET_DIR/debug/page-role-fingerprint-receipt" \
             "$RUNNER_TEMP/batch01-033-identity/fixtures/033_4029d4a1bf5be89d.pub" \
             target/batch01-033-identity/page-role.json
+
+      - name: Resolve exact Viewer PAGE identities
+        run: |
+          "$CARGO_TARGET_DIR/debug/page-projection-fingerprint-receipt" \
+            "$RUNNER_TEMP/batch01-033-identity/fixtures/033_4029d4a1bf5be89d.pub" \
+            target/batch01-033-identity/viewer-pages.json
 
       - name: Render fail-open exact 033
         env:
@@ -121,6 +129,7 @@ jobs:
           python tools/research_batch01_033_identity_join_v1.py \
             "$RUNNER_TEMP/batch01-033-identity/browser/receipt.json" \
             target/batch01-033-identity/page-role.json \
+            target/batch01-033-identity/viewer-pages.json \
             033_4029d4a1bf5be89d \
             target/batch01-033-identity/summary.json
 
