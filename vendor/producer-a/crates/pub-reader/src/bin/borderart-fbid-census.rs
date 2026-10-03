@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
 use pub_contents::{
-    detect_family, parse_0x2c_header, parse_confirmed_0x2c_chunk,
-    decode_packed_field_tag, parse_confirmed_0x2c_trailer_root, parse_confirmed_block,
-    parse_confirmed_chunk_reference, ContentsCursor, ContentsFamily, RawContentsBlock,
-    RawContentsBlockBody, BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_CONTAINER_A0, BLOCK_TYPE_U16,
-    BLOCK_TYPE_U32,
+    decode_packed_field_tag, detect_family, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_block, parse_confirmed_chunk_reference,
+    ContentsCursor, ContentsFamily, RawContentsBlock, RawContentsBlockBody,
+    BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_CONTAINER_A0, BLOCK_TYPE_U16, BLOCK_TYPE_U32,
 };
 use pub_core::StreamPath;
 use serde::Serialize;
@@ -125,8 +124,7 @@ fn decode_utf16_z_field(
         .checked_add(2)
         .filter(|end| *end <= limit)
         .context("UTF-16 field tag crosses parent boundary")?;
-    let (field_id, wire_type) =
-        decode_packed_field_tag([contents[offset], contents[offset + 1]]);
+    let (field_id, wire_type) = decode_packed_field_tag([contents[offset], contents[offset + 1]]);
     if field_id != OPLFB_SZ_FBRD_NAME_FIELD || wire_type != BLOCK_TYPE_UTF16_Z {
         anyhow::bail!(
             "expected OplFb.SzFBrdName field0x{OPLFB_SZ_FBRD_NAME_FIELD:02X}/wire0x{BLOCK_TYPE_UTF16_Z:02X} at 0x{offset:X}, got field0x{field_id:02X}/wire0x{wire_type:02X}"
@@ -181,7 +179,9 @@ fn parse_oplfb_name(
     };
     let start = usize::try_from(content_source.offset).context("OplFb content start")?;
     let len = usize::try_from(content_source.len).context("OplFb content length")?;
-    let limit = start.checked_add(len).context("OplFb content end overflow")?;
+    let limit = start
+        .checked_add(len)
+        .context("OplFb content end overflow")?;
 
     let mut cursor = ContentsCursor::bounded(stream, contents, start, len)?;
     while cursor.remaining() >= 2 {
@@ -189,8 +189,7 @@ fn parse_oplfb_name(
         let (field_id, wire_type) =
             decode_packed_field_tag([contents[position], contents[position + 1]]);
         if field_id == OPLFB_SZ_FBRD_NAME_FIELD && wire_type == BLOCK_TYPE_UTF16_Z {
-            let (name, end, name_source_offset) =
-                decode_utf16_z_field(contents, position, limit)?;
+            let (name, end, name_source_offset) = decode_utf16_z_field(contents, position, limit)?;
             if end > limit {
                 anyhow::bail!("OplFb name crosses child boundary");
             }
@@ -421,7 +420,9 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
                         continue;
                     }
                     let names = parse_catalog_names(&contents, stream.clone(), field)
-                        .with_context(|| format!("parse FancyBorders catalog names seq {seq_num}"))?;
+                        .with_context(|| {
+                            format!("parse FancyBorders catalog names seq {seq_num}")
+                        })?;
                     catalog_names.extend(names);
                 }
             }
