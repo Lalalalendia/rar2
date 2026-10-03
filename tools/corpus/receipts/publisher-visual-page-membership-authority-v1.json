@@ -5,6 +5,7 @@
     "page count equality is validation only and is not customer PAGE membership authority",
     "visual fingerprints are acceptance evidence only and are not PUB semantic selector inputs",
     "raw PageId values are not retained in this registry",
-    "each authority binds exact source SHA, count transition, ordered PAGE-identity digests, selector profile, evidence issue and evidence digest"
+    "each authority binds exact source SHA, count transition, ordered PAGE-identity digests, selector profile, evidence issue and evidence digest",
+    "membership authority applies only when both baseline and current reference_surface_stage are logical_page; unknown, viewport_spread, and production_sheet fail closed"
   ]
 }
