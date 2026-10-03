@@ -48,6 +48,7 @@ use pub_presentation_profile::{
     select_legacy22_customer_page_indices_v1,
     select_mature_detached_post_special_tail_customer_page_seq_nums_v1,
     select_mature_master_bank_customer_page_seq_nums_v1,
+    select_mature_primary_secondary_applied_customer_page_seq_nums_v1,
     select_mature_terminal_service_tail_customer_page_seq_nums_v1,
     select_mature_zero_leader_detached_tail_customer_page_seq_nums_v1,
     select_reference_fixture_customer_page_seq_nums_v1,
@@ -3017,6 +3018,29 @@ fn select_viewer_pages(
         }
 
         if let Some(selection) = select_mature_master_bank_customer_page_seq_nums_v1(input.clone())
+        {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+
+        if let Some(selection) =
+            select_mature_primary_secondary_applied_customer_page_seq_nums_v1(input.clone())
         {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
