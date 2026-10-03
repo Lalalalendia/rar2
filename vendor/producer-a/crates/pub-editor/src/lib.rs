@@ -523,6 +523,13 @@ struct EditorSourceImageAsset {
     bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct EditableExportImageState<'a> {
+    replacements: &'a BTreeMap<NodeId, Sha256Digest>,
+    crop_overrides: &'a BTreeMap<NodeId, ImageCropStateV1>,
+    source_nodes: &'a BTreeMap<NodeId, ResourceId>,
+}
+
 fn source_image_context_from_bundle(
     bundle: PubAssetExportBundle,
 ) -> (
@@ -2579,12 +2586,15 @@ impl EditorSession {
     ) -> Result<(ExportReport, String, ExportPlan), EditorExportError> {
         self.validate_source_identity()
             .map_err(EditorExportError::Session)?;
+        let image_state = EditableExportImageState {
+            replacements: &self.image_replacements,
+            crop_overrides: &self.image_crop_overrides,
+            source_nodes: &self.source_image_nodes,
+        };
         let plan = editable_export_plan(
             target,
             &self.graph,
-            &self.image_replacements,
-            &self.image_crop_overrides,
-            &self.source_image_nodes,
+            image_state,
             &self.source_typography_runs,
             &self.source_typography_size_runs,
             &self.source_paragraph_alignments,
@@ -4673,9 +4683,7 @@ fn frame_from_payload(
 fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
-    image_replacements: &BTreeMap<NodeId, Sha256Digest>,
-    image_crop_overrides: &BTreeMap<NodeId, ImageCropStateV1>,
-    source_image_nodes: &BTreeMap<NodeId, ResourceId>,
+    image_state: EditableExportImageState<'_>,
     source_typography_runs: &[PubTypographyRun],
     source_typography_size_runs: &[PubTypographySizeRun],
     source_paragraph_alignments: &[PubParagraphAlignmentRun],
@@ -4836,7 +4844,7 @@ fn editable_export_plan(
                 property_path: Some("node.story_frame".into()),
                 require_preserved: true,
             });
-        } else if let Some(asset_sha) = image_replacements.get(node_id) {
+        } else if let Some(asset_sha) = image_state.replacements.get(node_id) {
             let resource_id = replacement_asset_resource_id(*asset_sha);
             requests.push(SemanticFeatureRequest {
                 feature: IMAGE_BYTES_FEATURE.into(),
@@ -4854,9 +4862,9 @@ fn editable_export_plan(
                 feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("image.content_transform".into()),
-                require_preserved: image_crop_overrides.contains_key(node_id),
+                require_preserved: image_state.crop_overrides.contains_key(node_id),
             });
-        } else if let Some(resource_id) = source_image_nodes.get(node_id) {
+        } else if let Some(resource_id) = image_state.source_nodes.get(node_id) {
             requests.push(SemanticFeatureRequest {
                 feature: IMAGE_BYTES_FEATURE.into(),
                 origin: Some(resource_id.into_canonical()),
@@ -4873,9 +4881,9 @@ fn editable_export_plan(
                 feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
                 origin: Some(node_id.into_canonical()),
                 property_path: Some("image.content_transform".into()),
-                require_preserved: image_crop_overrides.contains_key(node_id),
+                require_preserved: image_state.crop_overrides.contains_key(node_id),
             });
-        } else if image_crop_overrides.contains_key(node_id) {
+        } else if image_state.crop_overrides.contains_key(node_id) {
             requests.push(SemanticFeatureRequest {
                 feature: IMAGE_CONTENT_TRANSFORM_FEATURE.into(),
                 origin: Some(node_id.into_canonical()),
