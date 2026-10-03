@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     AuthoredStackReorderModeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_12,
-    EDITOR_PROJECT_VERSION_V0_13, EditOperation, EditorError, EditorProjectError, EditorSession,
+    EDITOR_PROJECT_VERSION_V0_13, EDITOR_PROJECT_VERSION_V0_14, EditOperation, EditorError, EditorProjectError, EditorSession,
     LengthEmu, RectEmu, Srgb8V1,
 };
 use pub_model::{
@@ -112,8 +112,8 @@ fn create_two(session: &mut EditorSession) {
 }
 
 #[test]
-fn create_delete_history_remains_v0_12_while_current_schema_advances_to_v0_13() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_13);
+fn create_delete_history_remains_v0_12_while_current_schema_advances_to_v0_14() {
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_14);
 
     let mut session = EditorSession::new(graph()).expect("session");
     create_two(&mut session);
