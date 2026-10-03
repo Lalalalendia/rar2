@@ -96,6 +96,7 @@ try {
 
     $docSummary = [ordered]@{
         pages_count = Get-Safe { [int]$doc.Pages.Count } "Document.Pages.Count"
+        print_style = Get-Safe { [int]$doc.PrintStyle } "Document.PrintStyle"
         view_two_page_spread = Get-Safe { [bool]$doc.ViewTwoPageSpread } "Document.ViewTwoPageSpread"
         page_setup = $pageSetupSummary
     }
@@ -254,6 +255,7 @@ $lines = @(
     "page_width=$($docSummary.page_setup.page_width.value)",
     "page_height=$($docSummary.page_setup.page_height.value)",
     "publication_layout=$($docSummary.page_setup.publication_layout.value)",
+    "print_style=$($docSummary.print_style.value)",
     "view_two_page_spread=$($docSummary.view_two_page_spread.value)",
     "mutation_invoked=false",
     "save_invoked=false",

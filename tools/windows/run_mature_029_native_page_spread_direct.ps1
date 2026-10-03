@@ -16,7 +16,7 @@ $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $Operation = Join-Path $RepoRoot "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
 $Runtime = Join-Path $RepoRoot "tools/windows/pub-runtime/PubRuntime.psm1"
-$ExpectedOperationBlob = "a1a1a2f601ad08e95b35e477e00bd679e8980c76"
+$ExpectedOperationBlob = "5adbaba0f1bbea56ef2b5a20bbfef3258b3b955c"
 $ExpectedRuntimeBlob = "fed4c890a34d39401d3b5848cc16d1087f862a27"
 
 Push-Location $RepoRoot
