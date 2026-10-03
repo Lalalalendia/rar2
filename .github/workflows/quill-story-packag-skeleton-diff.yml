@@ -1,0 +1,135 @@
+name: Quill same-document skeleton diff
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/quill-story-packag-skeleton-diff.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-packag-skeleton-diff.rs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quill-story-packag-skeleton-diff-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  exact-pair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout exact current source witness only
+        uses: actions/checkout@v5
+        with:
+          repository: Lalalalendia/lalamu
+          ref: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+          path: _witness/lalamu
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub
+
+      - name: Fetch exact 2009 same-document donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _witness/donor out
+          python - <<'PY'
+          import hashlib
+          import urllib.request
+          from pathlib import Path
+
+          url = "https://web.archive.org/web/20090210183325id_/http://helenhudspith.com/resources/graphics/laura_dale/packag_advDis.pub"
+          req = urllib.request.Request(
+              url,
+              headers={"User-Agent": "Chaptera-PUB-research/1.0 (+exact-public-lineage-probe)"},
+          )
+          with urllib.request.urlopen(req, timeout=90) as response:
+              payload = response.read()
+          expected = "e8c360c97f4604e60fd84fbc106f59723b03838e05c74b74f4d56aef8d40088e"
+          actual = hashlib.sha256(payload).hexdigest()
+          assert actual == expected, (actual, len(payload))
+          assert payload.startswith(bytes.fromhex("d0cf11e0a1b11ae1"))
+          Path("_witness/donor/packag_advDis-2009.pub").write_bytes(payload)
+          PY
+
+          source="_witness/lalamu/pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub"
+          echo "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a  ${source}" | sha256sum -c -
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check targeted Rust surface
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2021 --check             vendor/producer-a/crates/pub-reader/src/bin/quill-story-packag-skeleton-diff.rs
+          cargo clippy             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-packag-skeleton-diff             -- -D warnings
+
+      - name: Compare Quill outside all descriptor payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-packag-skeleton-diff --             "_witness/lalamu/pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub"             "_witness/donor/packag_advDis-2009.pub"             "out/quill-story-packag-skeleton-diff.json"
+
+      - name: Enforce source-safe decision fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("out/quill-story-packag-skeleton-diff.json")
+          report = json.loads(path.read_text())
+          assert report["schema"] == "chaptera.quill-story-same-document-skeleton-diff.v1"
+          assert report["source_sha256"] == "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a"
+          assert report["variant_sha256"] == "e8c360c97f4604e60fd84fbc106f59723b03838e05c74b74f4d56aef8d40088e"
+          assert report["descriptor_count"] > 0
+
+          decision = (
+              "all_non_payload_quill_bytes_identical"
+              if report["masked_quill_equal"] and report["descriptor_layout_equal"]
+              else "non_payload_quill_delta_present"
+          )
+          summary = {
+              "schema": "chaptera.quill-story-same-document-skeleton-diff-summary.v1",
+              "decision": decision,
+              "source_quill_len": report["source_quill_len"],
+              "variant_quill_len": report["variant_quill_len"],
+              "descriptor_count": report["descriptor_count"],
+              "descriptor_layout_equal": report["descriptor_layout_equal"],
+              "masked_quill_equal": report["masked_quill_equal"],
+              "differing_non_payload_byte_count": report["differing_non_payload_byte_count"],
+              "interpretation_fence": (
+                  "Identical masked Quill closes hidden descriptor/list/header flags for this exact pair only. "
+                  "It does not by itself authorize family-wide corruption or Reader salvage."
+              ),
+          }
+          Path("out/quill-story-packag-skeleton-diff-summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+
+          lowered = path.read_text().lower()
+          for forbidden in ("document_text", "raw_payload", "source_path", "filename"):
+              assert forbidden not in lowered
+          PY
+
+      - name: Remove PUB bytes before artifact upload
+        shell: bash
+        run: rm -rf _witness
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quill-story-packag-skeleton-diff-${{ github.run_id }}
+          path: |
+            out/quill-story-packag-skeleton-diff.json
+            out/quill-story-packag-skeleton-diff-summary.json
+          if-no-files-found: error
+          retention-days: 30
