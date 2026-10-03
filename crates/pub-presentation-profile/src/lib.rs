@@ -1269,9 +1269,9 @@ mod tests {
 
         StandardPrintServiceTailProfileInputV1 {
             schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
-            document_page_list_entry_count: pages.len() + usize::from(special),
+            document_page_list_entry_count: pages.len() + if special { 1 } else { 0 },
             confirmed_page_count: pages.len(),
-            special_entry_count: usize::from(special),
+            special_entry_count: if special { 1 } else { 0 },
             scenario_evidence_list_count: scenario_count,
             observed_scenario_page_count: scenario_count,
             pages,
