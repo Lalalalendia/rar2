@@ -7,6 +7,7 @@ on:
       - "apps/chaptera-server/src/guest_reader_worker.rs"
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/cloud-reader/real-browser.test.mjs"
+      - "crates/chaptera-viewer-render-plan/src/lib.rs"
       - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
   workflow_dispatch:
 
