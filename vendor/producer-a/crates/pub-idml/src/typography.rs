@@ -1,4 +1,6 @@
-use crate::{IdmlPackage, IdmlPartContent, IdmlPartKind};
+use crate::{
+    IDML_PACKAGING_NAMESPACE, IdmlPackage, IdmlPart, IdmlPartContent, IdmlPartKind,
+};
 use pub_export::{
     ExportPlan, FullStoryTypographyV1, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
 };
@@ -36,6 +38,10 @@ pub enum IdmlTypographyError {
         story_id: StoryId,
         scalar: u32,
     },
+    MissingDesignMap,
+    BinaryDesignMap,
+    UnexpectedDesignMapMarkup,
+    DuplicateFontsResource,
 }
 
 impl fmt::Display for IdmlTypographyError {
@@ -84,6 +90,14 @@ impl fmt::Display for IdmlTypographyError {
                 "Story {} font family contains invalid XML scalar U+{scalar:04X}",
                 story_id.as_canonical()
             ),
+            Self::MissingDesignMap => formatter.write_str("IDML package is missing designmap.xml"),
+            Self::BinaryDesignMap => formatter.write_str("IDML designmap.xml is not UTF-8 text"),
+            Self::UnexpectedDesignMapMarkup => formatter.write_str(
+                "IDML designmap.xml is outside the bounded Document-root typography wire shape",
+            ),
+            Self::DuplicateFontsResource => formatter.write_str(
+                "IDML package already contains a Fonts resource outside the bounded typography overlay",
+            ),
         }
     }
 }
@@ -103,6 +117,7 @@ pub fn add_full_story_typography_to_idml(
     ordered.sort_by_key(|item| item.story_id);
 
     let mut seen = BTreeSet::new();
+    let mut font_resources = BTreeSet::new();
     for item in ordered {
         if !seen.insert(item.story_id) {
             return Err(IdmlTypographyError::DuplicateStory {
@@ -132,15 +147,129 @@ pub fn add_full_story_typography_to_idml(
             });
         }
 
-        let font_family = escape_xml_text(item.story_id, &item.font_family)?;
         let point_size = format_emu_points(item.font_size_emu);
-        let replacement = format!(
-            "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" PointSize=\"{point_size}\">\n        <Properties>\n          <AppliedFont type=\"string\">{font_family}</AppliedFont>\n        </Properties>\n"
-        );
+        let replacement = if let Some(face) = idml_regular_face(&item.font_family) {
+            let font_family = escape_xml_text(item.story_id, &item.font_family)?;
+            font_resources.insert(face);
+            format!(
+                "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" FontStyle=\"Regular\" PointSize=\"{point_size}\">\n        <Properties>\n          <AppliedFont type=\"string\">{font_family}</AppliedFont>\n        </Properties>\n"
+            )
+        } else {
+            format!(
+                "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" PointSize=\"{point_size}\">\n"
+            )
+        };
         *xml = xml.replacen(marker, &replacement, 1);
     }
 
+    if !font_resources.is_empty() {
+        add_font_resources(package, &font_resources)?;
+    }
+
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct IdmlRegularFace {
+    family: &'static str,
+    postscript_name: &'static str,
+}
+
+fn idml_regular_face(font_family: &str) -> Option<IdmlRegularFace> {
+    match font_family.trim() {
+        "Montserrat" => Some(IdmlRegularFace {
+            family: "Montserrat",
+            postscript_name: "Montserrat-Regular",
+        }),
+        _ => None,
+    }
+}
+
+fn add_font_resources(
+    package: &mut IdmlPackage,
+    resources: &BTreeSet<IdmlRegularFace>,
+) -> Result<(), IdmlTypographyError> {
+    if package
+        .parts
+        .iter()
+        .any(|part| part.path == "Resources/Fonts.xml")
+    {
+        return Err(IdmlTypographyError::DuplicateFontsResource);
+    }
+
+    let designmap = package
+        .parts
+        .iter_mut()
+        .find(|part| part.kind == IdmlPartKind::DesignMap && part.path == "designmap.xml")
+        .ok_or(IdmlTypographyError::MissingDesignMap)?;
+    let IdmlPartContent::Text(designmap_xml) = &mut designmap.content else {
+        return Err(IdmlTypographyError::BinaryDesignMap);
+    };
+    if designmap_xml.contains("<idPkg:Fonts") {
+        return Err(IdmlTypographyError::DuplicateFontsResource);
+    }
+
+    let document_start = designmap_xml
+        .find("<Document")
+        .ok_or(IdmlTypographyError::UnexpectedDesignMapMarkup)?;
+    let open_end = designmap_xml[document_start..]
+        .find('>')
+        .map(|relative| document_start + relative)
+        .ok_or(IdmlTypographyError::UnexpectedDesignMapMarkup)?;
+    if designmap_xml[..=open_end].ends_with("/>") {
+        return Err(IdmlTypographyError::UnexpectedDesignMapMarkup);
+    }
+    designmap_xml.insert_str(
+        open_end + 1,
+        "\n  <idPkg:Fonts src=\"Resources/Fonts.xml\"/>",
+    );
+
+    let mut fonts_xml = String::new();
+    writeln!(fonts_xml, "<?xml version=\"1.0\" encoding=\"utf-8\"?>").unwrap();
+    writeln!(
+        fonts_xml,
+        "<idPkg:Fonts xmlns:idPkg=\"{IDML_PACKAGING_NAMESPACE}\" DOMVersion=\"7.0\">"
+    )
+    .unwrap();
+    for resource in resources {
+        let family = escape_xml_attr(resource.family);
+        let postscript = escape_xml_attr(resource.postscript_name);
+        writeln!(
+            fonts_xml,
+            "  <FontFamily Self=\"di$ID/{family}\" Name=\"{family}\">"
+        )
+        .unwrap();
+        writeln!(
+            fonts_xml,
+            "    <Font Self=\"di$ID/{family} Regular\" FontFamily=\"di$ID/{family}\" Name=\"Regular\" PostScriptName=\"{postscript}\" Status=\"Installed\" FontStyleName=\"Regular\" FontType=\"OpenTypeTT\" FullName=\"{family}\"/>"
+        )
+        .unwrap();
+        fonts_xml.push_str("  </FontFamily>\n");
+    }
+    fonts_xml.push_str("</idPkg:Fonts>\n");
+
+    package.parts.push(IdmlPart {
+        path: "Resources/Fonts.xml".into(),
+        kind: IdmlPartKind::Resource,
+        content: IdmlPartContent::Text(fonts_xml),
+    });
+    package.parts.sort();
+    Ok(())
+}
+
+fn escape_xml_attr(input: &str) -> String {
+    let mut output = String::new();
+    for character in input.chars() {
+        match character {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&apos;"),
+            _ => output.push(character),
+        }
+    }
+    output
 }
 
 fn validate_plan_and_value(
@@ -301,7 +430,14 @@ mod tests {
     fn package(export_plan: &ExportPlan, story_id: StoryId) -> IdmlPackage {
         let mut builder = IdmlPackageBuilder::from_export_plan(export_plan).expect("builder");
         builder
-            .add_part("designmap.xml", IdmlPartKind::DesignMap, "<Document/>")
+            .add_part(
+                "designmap.xml",
+                IdmlPartKind::DesignMap,
+                format!(
+                    "<Document xmlns:idPkg=\"{}\" DOMVersion=\"7.0\">\n</Document>\n",
+                    IDML_PACKAGING_NAMESPACE
+                ),
+            )
             .unwrap();
         builder
             .add_part(
@@ -323,7 +459,7 @@ mod tests {
         let mut package = package(&export_plan, story_id);
         let typography = FullStoryTypographyV1 {
             story_id,
-            font_family: "A&B Sans".into(),
+            font_family: "Montserrat".into(),
             font_size_emu: LengthEmu::new(12 * EMU_PER_POINT),
         };
 
@@ -341,11 +477,61 @@ mod tests {
             .and_then(|part| part.content.as_text())
             .expect("story text");
         assert!(xml.contains("PointSize=\"12\""));
-        assert!(xml.contains("<AppliedFont type=\"string\">A&amp;B Sans</AppliedFont>"));
+        assert!(xml.contains("FontStyle=\"Regular\""));
+        assert!(xml.contains("<AppliedFont type=\"string\">Montserrat</AppliedFont>"));
+        let fonts = package
+            .parts
+            .iter()
+            .find(|part| part.path == "Resources/Fonts.xml")
+            .and_then(|part| part.content.as_text())
+            .expect("fonts resource");
+        assert!(fonts.contains("PostScriptName=\"Montserrat-Regular\""));
+        let designmap = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::DesignMap)
+            .and_then(|part| part.content.as_text())
+            .expect("designmap");
+        assert!(designmap.contains("<idPkg:Fonts src=\"Resources/Fonts.xml\"/>"));
         assert!(export_plan.losses.iter().any(|loss| {
             loss.origin == Some(story_id.into_canonical())
                 && loss.feature == STORY_FONT_FAMILY_FEATURE
         }));
+    }
+
+    #[test]
+    fn unknown_family_keeps_size_wire_without_inventing_font_face() {
+        let story_id = story(3);
+        let export_plan = plan(story_id);
+        let mut package = package(&export_plan, story_id);
+        let typography = FullStoryTypographyV1 {
+            story_id,
+            font_family: "Unknown Proprietary Family".into(),
+            font_size_emu: LengthEmu::new(11 * EMU_PER_POINT),
+        };
+
+        add_full_story_typography_to_idml(
+            &export_plan,
+            &mut package,
+            std::slice::from_ref(&typography),
+        )
+        .expect("bounded size typography");
+
+        let xml = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Story)
+            .and_then(|part| part.content.as_text())
+            .expect("story text");
+        assert!(xml.contains("PointSize=\"11\""));
+        assert!(!xml.contains("AppliedFont"));
+        assert!(!xml.contains("FontStyle="));
+        assert!(
+            package
+                .parts
+                .iter()
+                .all(|part| part.path != "Resources/Fonts.xml")
+        );
     }
 
     #[test]
