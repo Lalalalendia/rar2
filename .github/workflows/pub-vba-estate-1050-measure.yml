@@ -1,0 +1,124 @@
+name: Publisher VBA estate 1050 measurement
+
+on:
+  pull_request:
+    paths:
+      - "tools/pub_vba_cfb.py"
+      - "tools/pub_vba_estate_scan.py"
+      - "tools/test_pub_vba_estate_scan.py"
+      - ".github/workflows/pub-vba-estate-1050-measure.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pub-vba-estate-1050-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PINNED_CORPUS_RUN_ID: "36573574820"
+  PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+  EXPECTED_COUNT: "1050"
+  EXPECTED_SHA_LIST_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Scanner source-free unit contract
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py
+          python tools/test_pub_vba_estate_scan.py
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: ${{ runner.temp }}/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "pinned1050" / "materialized" / "native"
+          paths = sorted(root.glob("*.pub"), key=lambda p: p.stem.casefold())
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+
+          assert len(paths) == int(os.environ["EXPECTED_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate SHA-named corpus entries"
+          assert digest == os.environ["EXPECTED_SHA_LIST_DIGEST"], (
+              digest,
+              os.environ["EXPECTED_SHA_LIST_DIGEST"],
+          )
+          print({
+              "count": len(paths),
+              "sha_list_digest": "sha256:" + digest,
+          })
+          PY
+
+      - name: Inert VBA estate scan
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-vba-1050
+          python tools/pub_vba_estate_scan.py scan \
+            --input "$RUNNER_TEMP/pinned1050/materialized/native" \
+            --recursive \
+            --output target/pub-vba-1050/receipt.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt_path = Path("target/pub-vba-1050/receipt.json")
+          data = json.loads(receipt_path.read_text(encoding="utf-8"))
+          totals = data["totals"]
+
+          assert totals["file_count"] == int("${{ env.EXPECTED_COUNT }}"), totals
+          assert totals["read_failed"] == 0, totals
+          assert data["claims"]["vba_executed"] is False
+          assert data["claims"]["ole_com_activated"] is False
+          assert data["claims"]["external_links_refreshed"] is False
+          assert data["claims"]["source_text_emitted"] is False
+          assert data["claims"]["frequency_is_market_prevalence"] is False
+
+          summary = {
+              "schema": "chaptera.pub-vba-estate-1050-summary.v1",
+              "corpus_count": totals["file_count"],
+              "corpus_sha_list_digest": "sha256:${{ env.EXPECTED_SHA_LIST_DIGEST }}",
+              "totals": totals,
+              "claims": data["claims"],
+          }
+          Path("target/pub-vba-1050/summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-estate-1050
+          path: target/pub-vba-1050/
+          if-no-files-found: error
+          retention-days: 90
