@@ -67,18 +67,17 @@ pub use pub_reader::{
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
-    LegacyOleCachedPresentationSelection,
-    MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
+    LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
     analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
-    build_legacy_0x22_noquill_source_graph,
-    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
-    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
-    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
+    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
+    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
+    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
@@ -1832,22 +1831,20 @@ fn select_legacy22_viewer_pages(
         Ok(observation) => observation,
         Err(_) => return generic(),
     };
-    let selection = match select_legacy22_customer_page_indices_v1(
-        Legacy22PageListProfileInputV1 {
-            schema_version: LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1.to_owned(),
-            dialect,
-            document_page_list_entry_count: observation.document_page_list_entry_count,
-            physical_page_count: observation.physical_page_count,
-            entries: observation
-                .page_list_entries
-                .into_iter()
-                .map(|entry| Legacy22PageListEntryEvidenceV1 {
-                    document_ordinal: entry.document_ordinal,
-                    raw_type: entry.raw_type,
-                })
-                .collect(),
-        },
-    ) {
+    let selection = match select_legacy22_customer_page_indices_v1(Legacy22PageListProfileInputV1 {
+        schema_version: LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1.to_owned(),
+        dialect,
+        document_page_list_entry_count: observation.document_page_list_entry_count,
+        physical_page_count: observation.physical_page_count,
+        entries: observation
+            .page_list_entries
+            .into_iter()
+            .map(|entry| Legacy22PageListEntryEvidenceV1 {
+                document_ordinal: entry.document_ordinal,
+                raw_type: entry.raw_type,
+            })
+            .collect(),
+    }) {
         Some(selection) => selection,
         None => return generic(),
     };
