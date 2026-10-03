@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    AuthoringTextPresetV1, EDITOR_PROJECT_VERSION_CURRENT, EditOperation, EditorError,
+    AuthoringTextPresetV1, EDITOR_PROJECT_VERSION_V0_12, EditOperation, EditorError,
     EditorSession, LengthEmu, RectEmu,
 };
 use pub_model::{
@@ -184,7 +184,7 @@ fn create_text_box_is_atomic_then_uses_existing_story_edit_history() {
     assert_eq!(session.graph().stories[&story_id()].text, "Hello");
 
     let project = session.project();
-    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_CURRENT);
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_12);
     let mut reopened = EditorSession::new(base).expect("fresh session");
     reopened.apply_project(&project).expect("project replay");
     assert_eq!(reopened.project(), project);
