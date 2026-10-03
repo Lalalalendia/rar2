@@ -5837,7 +5837,6 @@ mod asset_reachability_tests {
     }
 }
 
-
 #[cfg(test)]
 mod typography_export_tests {
     use super::*;
@@ -5877,7 +5876,11 @@ mod typography_export_tests {
                     origin,
                     "story.typography.font_family",
                 ),
-                request(STORY_FONT_SIZE_FEATURE, origin, "story.typography.font_size"),
+                request(
+                    STORY_FONT_SIZE_FEATURE,
+                    origin,
+                    "story.typography.font_size",
+                ),
                 request(STORY_TEXT_COLOR_FEATURE, origin, "story.typography.color"),
                 request(
                     STORY_PARAGRAPH_ALIGNMENT_FEATURE,
@@ -6024,19 +6027,14 @@ mod typography_export_tests {
     fn full_story_typography_requires_complete_contiguous_explicit_uniform_runs() {
         let graph = typography_graph("ABCD");
 
-        let complete = full_story_typography(
-            &graph,
-            &[typography_run(0, 2), typography_run(2, 4)],
-        );
+        let complete = full_story_typography(&graph, &[typography_run(0, 2), typography_run(2, 4)]);
         assert_eq!(complete.len(), 1);
 
         let partial = full_story_typography(&graph, &[typography_run(0, 3)]);
         assert!(partial.is_empty());
 
-        let overlapping = full_story_typography(
-            &graph,
-            &[typography_run(0, 3), typography_run(2, 4)],
-        );
+        let overlapping =
+            full_story_typography(&graph, &[typography_run(0, 3), typography_run(2, 4)]);
         assert!(overlapping.is_empty());
 
         let mut inherited = typography_run(0, 4);
@@ -6045,8 +6043,6 @@ mod typography_export_tests {
 
         let mut mixed_size = typography_run(2, 4);
         mixed_size.text_size_emu = 165_100;
-        assert!(
-            full_story_typography(&graph, &[typography_run(0, 2), mixed_size]).is_empty()
-        );
+        assert!(full_story_typography(&graph, &[typography_run(0, 2), mixed_size]).is_empty());
     }
 }
