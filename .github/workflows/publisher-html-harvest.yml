@@ -24,6 +24,10 @@ jobs:
         run: |
           command -v pdftotext || (sudo apt-get update && sudo apt-get install -y poppler-utils)
 
+      - name: Test Publisher hidden-XML inference guards
+        run: |
+          python -m unittest research/test_publisher_html_harvest.py
+
       - name: Harvest public Publisher hidden XML
         run: |
           python research/publisher_html_harvest.py \
@@ -41,7 +45,10 @@ jobs:
           keys = [
               "seed_count", "sources_ok", "sources_failed",
               "sources_with_properties", "deduplicated_payloads",
-              "object_observations", "property_observations",
+              "object_observations", "property_candidates_total",
+              "property_observations", "property_observations_explicit",
+              "property_observations_inferred", "property_observations_unresolved",
+              "ambiguous_inference_key_count",
               "registry_entries", "unique_opl_classes", "unique_property_names"
           ]
           with open(Path.home() / "summary.md", "w", encoding="utf-8") as f:
