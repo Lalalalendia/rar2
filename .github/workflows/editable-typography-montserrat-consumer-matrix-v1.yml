@@ -1,0 +1,192 @@
+name: Editable Typography Montserrat Consumer Matrix V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-typography-montserrat-consumer-matrix-v1.yml"
+      - "tools/ci/editable_typography_montserrat_consumer_matrix.py"
+      - "tools/ci/libreoffice_typography_carrier_census.py"
+      - "tools/verify_editable_typography_export.py"
+      - "tools/ci/scribus_idml_consumer.py"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: editable-typography-montserrat-consumer-matrix-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/editable-typography-montserrat-matrix
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/editable-typography-montserrat-matrix-evidence
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+      PINNED_CORPUS_COUNT: "1050"
+      PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate corpus SHA"
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          print(f"verified {len(paths)} exact PUB files; sha-list digest={digest}")
+          PY
+
+      - name: Build exact typography and route probes
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor --release \
+            --bin editable_typography_probe \
+            --bin editable_route_probe
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            scribus libreoffice-draw xvfb fonts-montserrat python3-uno
+
+      - name: Run exact three-source Montserrat consumer matrix
+        run: |
+          set -euo pipefail
+          python tools/ci/editable_typography_montserrat_consumer_matrix.py \
+            --corpus-root "$CORPUS_ROOT" \
+            --typography-probe "$CARGO_TARGET_DIR/release/editable_typography_probe" \
+            --route-probe "$CARGO_TARGET_DIR/release/editable_route_probe" \
+            --verifier tools/verify_editable_typography_export.py \
+            --scribus-helper tools/ci/scribus_idml_consumer.py \
+            --evidence-root "$EVIDENCE_ROOT" \
+            --source-sha 4758095aa58927b1aefa23c384bb16cd598e6732ef2af5af68471118dc25c567 \
+            --source-sha 770daf58c214d6f848af676b6a53c04934f7c1499e5674837a18a2f63875dc90 \
+            --source-sha f4f23d04d29f20407b9e5c1f57f8df84e71084d9e8cd4f0c1cc0064737053de7
+
+      - name: Census LibreOffice carriers through fresh UNO processes
+        run: |
+          set -euo pipefail
+          shas=(
+            4758095aa58927b1aefa23c384bb16cd598e6732ef2af5af68471118dc25c567
+            770daf58c214d6f848af676b6a53c04934f7c1499e5674837a18a2f63875dc90
+            f4f23d04d29f20407b9e5c1f57f8df84e71084d9e8cd4f0c1cc0064737053de7
+          )
+          port=20931
+          for sha in "${shas[@]}"; do
+            case_root="$EVIDENCE_ROOT/$sha"
+            profile="$case_root/lo-carrier-profile"
+            libreoffice \
+              --headless --nologo --nodefault --norestore --nolockcheck \
+              "-env:UserInstallation=file://$profile" \
+              "--accept=socket,host=127.0.0.1,port=$port;urp;StarOffice.ServiceManager" \
+              > "$case_root/lo-carrier.log" 2>&1 &
+            pid=$!
+            trap 'kill "$pid" 2>/dev/null || true' EXIT
+            timeout 90s /usr/bin/python3 tools/ci/libreoffice_typography_carrier_census.py \
+              --input "$case_root/lo2/output.odg" \
+              --expected "$case_root/expected.json" \
+              --receipt "$case_root/libreoffice-carriers.json" \
+              --port "$port"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            trap - EXIT
+            port=$((port + 1))
+          done
+
+      - name: Validate measurement receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(
+              (Path(os.environ["EVIDENCE_ROOT"]) / "receipt.json").read_text()
+          )
+          assert receipt["schema"] == "chaptera.editable-typography-montserrat-consumer-matrix.v1"
+          assert receipt["source_count"] == 3, receipt["source_count"]
+          assert receipt["bounded_montserrat_story_count"] == 60, receipt["bounded_montserrat_story_count"]
+          assert receipt["claims"] == {
+              "loss_report_or_manifest_changed": False,
+              "measurement_only": True,
+              "per_story_preserved_disposition_proven": False,
+              "story_text_recorded": False,
+          }
+          carrier_total = 0
+          for source in receipt["sources"]:
+              path = (
+                  Path(os.environ["EVIDENCE_ROOT"])
+                  / source["source_sha256"]
+                  / "libreoffice-carriers.json"
+              )
+              carrier = json.loads(path.read_text())
+              assert carrier["family_size_counts_match"] is True, carrier
+              assert carrier["expected_carrier_count"] == 20, carrier
+              assert carrier["observed_carrier_count"] == 20, carrier
+              source["libreoffice_carrier_census"] = carrier
+              carrier_total += carrier["observed_carrier_count"]
+          receipt["summary"]["all_libreoffice_carrier_counts_match"] = carrier_total == 60
+          assert receipt["summary"]["all_scribus_save_reopen_verified"] is True
+          assert receipt["summary"]["all_libreoffice_save_reopen_verified"] is True
+          assert receipt["summary"]["all_libreoffice_carrier_counts_match"] is True
+          (Path(os.environ["EVIDENCE_ROOT"]) / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(receipt["summary"], indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe Montserrat matrix
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editable-typography-montserrat-consumer-matrix-v1-${{ github.run_id }}
+          path: |
+            target/editable-typography-montserrat-matrix-evidence/receipt.json
+            target/editable-typography-montserrat-matrix-evidence/*/expected.json
+            target/editable-typography-montserrat-matrix-evidence/*/wire.json
+            target/editable-typography-montserrat-matrix-evidence/*/scribus.json
+            target/editable-typography-montserrat-matrix-evidence/*/libreoffice.json
+            target/editable-typography-montserrat-matrix-evidence/*/libreoffice-carriers.json
+          if-no-files-found: warn
+          retention-days: 90
