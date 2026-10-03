@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use pub_model::{
     NodeId, ResourceId, Sha256Digest, SourceDerivedIdInput, derive_source_canonical_id,
 };
