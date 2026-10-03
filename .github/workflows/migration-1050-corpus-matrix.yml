@@ -339,7 +339,23 @@ jobs:
           for idml in "$EVIDENCE_ROOT"/consumer/*/output.idml; do
             dir="$(dirname "$idml")"
             rm -f "$dir/consumer.sla"
-            CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla"               xvfb-run -a scribus -g -ns                 -py tools/ci/scribus_idml_consumer.py -- "$idml"
+            rm -rf "$dir/scribus-home"
+            mkdir -p \
+              "$dir/scribus-home/.config" \
+              "$dir/scribus-home/.cache" \
+              "$dir/scribus-home/.local/share" \
+              "$dir/scribus-home/runtime"
+            chmod 700 "$dir/scribus-home/runtime"
+            echo "::notice::Scribus validating $idml"
+            timeout 180s env \
+              HOME="$dir/scribus-home" \
+              XDG_CONFIG_HOME="$dir/scribus-home/.config" \
+              XDG_CACHE_HOME="$dir/scribus-home/.cache" \
+              XDG_DATA_HOME="$dir/scribus-home/.local/share" \
+              XDG_RUNTIME_DIR="$dir/scribus-home/runtime" \
+              CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla" \
+              xvfb-run -a scribus -g -ns \
+                -py tools/ci/scribus_idml_consumer.py -- "$idml"
             test -s "$dir/consumer.sla"
           done
 
