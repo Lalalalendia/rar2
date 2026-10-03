@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::iter::Peekable;
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "reader-only")]
 struct ReaderControlHooks;
@@ -79,7 +81,7 @@ impl chaptera_update_orchestrator::UpdateHooks for ReaderControlHooks {
 }
 
 #[cfg(feature = "reader-only")]
-pub(crate) fn run(request_path: &Path) -> Result<(), String> {
+fn run(request_path: &Path) -> Result<(), String> {
     let request = chaptera_update_handoff::read_control_request(request_path)
         .map_err(|error| error.to_string())?;
     let orchestrator = chaptera_update_orchestrator::UpdateOrchestrator::new(&request.install_root);
@@ -114,6 +116,92 @@ pub(crate) fn run(request_path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(feature = "reader-only"))]
-pub(crate) fn run(_request_path: &Path) -> Result<(), String> {
+fn run(_request_path: &Path) -> Result<(), String> {
     Err("update control mode is unavailable outside the Reader build".to_owned())
+}
+
+pub(crate) fn try_run_from_args<I>(
+    args: &mut Peekable<I>,
+    reader_only: bool,
+) -> Result<bool, String>
+where
+    I: Iterator<Item = OsString>,
+{
+    if args.peek().map(OsString::as_os_str)
+        != Some(OsStr::new(chaptera_update_handoff::CONTROL_MODE_ARG))
+    {
+        return Ok(false);
+    }
+    let _control_arg = args.next();
+
+    if !reader_only {
+        return Err("update control mode is reserved for the Chaptera Reader product".to_owned());
+    }
+    let request_path = args
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            "usage: chaptera-reader --chaptera-update-control HANDOFF-REQUEST.json".to_owned()
+        })?;
+    if args.next().is_some() {
+        return Err(
+            "Reader update control mode accepts exactly one handoff request".to_owned(),
+        );
+    }
+
+    run(&request_path).map_err(|error| format!("Reader update control failed: {error}"))?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Peekable<impl Iterator<Item = OsString>> {
+        values
+            .iter()
+            .map(|value| OsString::from(*value))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .peekable()
+    }
+
+    #[test]
+    fn non_control_mode_is_not_consumed() {
+        let mut input = args(&["--product-smoke-v1", "receipt.json"]);
+        assert_eq!(try_run_from_args(&mut input, true).unwrap(), false);
+        assert_eq!(input.next(), Some(OsString::from("--product-smoke-v1")));
+        assert_eq!(input.next(), Some(OsString::from("receipt.json")));
+    }
+
+    #[test]
+    fn editor_build_rejects_reader_control_mode_before_request_io() {
+        let mut input = args(&[
+            chaptera_update_handoff::CONTROL_MODE_ARG,
+            "handoff-request.json",
+        ]);
+        assert_eq!(
+            try_run_from_args(&mut input, false).unwrap_err(),
+            "update control mode is reserved for the Chaptera Reader product"
+        );
+    }
+
+    #[test]
+    fn reader_control_mode_requires_exactly_one_request_path() {
+        let mut missing = args(&[chaptera_update_handoff::CONTROL_MODE_ARG]);
+        assert_eq!(
+            try_run_from_args(&mut missing, true).unwrap_err(),
+            "usage: chaptera-reader --chaptera-update-control HANDOFF-REQUEST.json"
+        );
+
+        let mut extra = args(&[
+            chaptera_update_handoff::CONTROL_MODE_ARG,
+            "handoff-request.json",
+            "extra",
+        ]);
+        assert_eq!(
+            try_run_from_args(&mut extra, true).unwrap_err(),
+            "Reader update control mode accepts exactly one handoff request"
+        );
+    }
 }
