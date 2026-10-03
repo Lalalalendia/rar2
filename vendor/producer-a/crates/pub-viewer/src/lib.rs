@@ -42,11 +42,13 @@ use pub_presentation_profile::{
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
     LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1, Legacy22PageListDialectV1,
     Legacy22PageListEntryEvidenceV1, Legacy22PageListProfileInputV1,
+    MatureSecondaryAppliedAbDocumentEntryEvidenceV1, MatureSecondaryAppliedAbProfileInputV1,
     STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
     StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
     reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
     select_legacy22_customer_page_indices_v1,
     select_mature_detached_post_special_tail_customer_page_seq_nums_v1,
+    select_mature_secondary_applied_ab_customer_page_seq_nums_v1,
     select_mature_terminal_service_tail_customer_page_seq_nums_v1,
     select_mature_zero_leader_detached_tail_customer_page_seq_nums_v1,
     select_reference_fixture_customer_page_seq_nums_v1,
@@ -2927,6 +2929,15 @@ fn select_viewer_pages(
             Ok(receipt) => receipt,
             Err(_) => return generic(),
         };
+        let secondary_ab_document_entries = page_roles
+            .document_entries
+            .iter()
+            .map(|entry| MatureSecondaryAppliedAbDocumentEntryEvidenceV1 {
+                document_ordinal: entry.document_ordinal,
+                raw_type: entry.raw_type,
+            })
+            .collect::<Vec<_>>();
+
         let input = StandardPrintServiceTailProfileInputV1 {
             schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
             document_page_list_entry_count: page_roles.document_page_list_entry_count,
@@ -2994,6 +3005,34 @@ fn select_viewer_pages(
 
         if let Some(selection) =
             select_mature_detached_post_special_tail_customer_page_seq_nums_v1(input.clone())
+        {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+
+        if let Some(selection) =
+            select_mature_secondary_applied_ab_customer_page_seq_nums_v1(
+                MatureSecondaryAppliedAbProfileInputV1 {
+                    base: input.clone(),
+                    document_entries: secondary_ab_document_entries,
+                },
+            )
         {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
