@@ -20,7 +20,9 @@ pub use image::{
     OdgEmbeddedImagePlacement, OdgImageError, add_embedded_images_to_odg,
 };
 
-pub use semantic::{OdgSemanticError, project_resolved_graph_to_odg};
+pub use semantic::{
+    OdgSemanticError, project_resolved_graph_to_odg, project_resolved_graph_to_odg_with_typography,
+};
 
 pub const ODG_ADAPTER_VERSION_V0_1: &str = "odg-v0.1";
 pub const ODG_FORMAT_PROFILE_ID: &str = "odg-bounded-v0.1";
