@@ -136,8 +136,10 @@ jobs:
           data = json.loads(Path("target/exact-029-secondary-ab/summary.json").read_text())
           assert data["candidate_page_count"] == 2, data["candidate_page_count"]
           assert data["reference_page_count"] == 2, data["reference_page_count"]
+          assert data["schema"] == "chaptera.batch01-cross-page-matrix.v2"
           assert data["claims"]["viewer_page_selection_changed"] is False
           assert data["claims"]["fingerprint_used_as_semantic_authority"] is False
+          assert data["claims"]["foreground_metric_used_as_semantic_authority"] is False
           print("029 secondary A/B measurement fences verified")
           PY
 
