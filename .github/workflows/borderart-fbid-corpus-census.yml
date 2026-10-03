@@ -75,6 +75,44 @@ jobs:
             out/borderart-fbid-corpus-census.json \
             > out/borderart-fbid-corpus-census.stdout.json
 
+      - name: Recover positive witness provenance
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          census = json.loads(Path("out/borderart-fbid-corpus-census.json").read_text(encoding="utf-8"))
+          manifest = json.loads(Path("out/pinned1050/materialized/manifest.json").read_text(encoding="utf-8"))
+          by_sha = {row["sha256"]: row for row in manifest}
+          rows = []
+          for row in census["rows"]:
+              if not row["shape_fbid_observations"] and not row["ifbmax_observations"]:
+                  continue
+              source = by_sha[row["source_sha256"]]
+              rows.append({
+                  "sha256": row["source_sha256"],
+                  "fbid_values": [item["value"] for item in row["shape_fbid_observations"]],
+                  "ifbmax_values": [item["value"] for item in row["ifbmax_observations"]],
+                  "sources": source["sources"],
+                  "source_basenames": sorted({Path(p).name for p in source["source_paths"]}),
+                  "authority_member": source["authority_member"],
+              })
+          out = {
+              "schema": "chaptera.borderart-fbid-positive-provenance.v1",
+              "rows": rows,
+          }
+          Path("out/borderart-fbid-positive-provenance.json").write_text(
+              json.dumps(out, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          killer = next(
+              row for row in rows
+              if row["sha256"] == "3a49adaad5f701d14e16f1f901f0770c358407029040a8c18959c2abc39d88f2"
+          )
+          print(json.dumps(killer, ensure_ascii=False, indent=2))
+          PY
+
       - name: Summarize census
         run: |
           set -euo pipefail
@@ -171,5 +209,6 @@ jobs:
           path: |
             out/borderart-fbid-corpus-census.json
             out/borderart-fbid-corpus-census.stdout.json
+            out/borderart-fbid-positive-provenance.json
           if-no-files-found: error
           retention-days: 90
