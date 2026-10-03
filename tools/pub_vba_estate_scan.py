@@ -38,7 +38,7 @@ def strip_vba_comments(source: str) -> str:
     return "\n".join(lines)
 
 
-CALL_CLASSIFIER_VERSION = "v2"
+CALL_CLASSIFIER_VERSION = "v2.1"
 
 CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "application_lifecycle": [
@@ -158,6 +158,43 @@ def mask_vba_strings(source: str) -> str:
     return "".join(out)
 
 
+def _classify_contextual_table_calls(source: str) -> tuple[int, dict[str, int]]:
+    symbols: Counter[str] = Counter()
+    table_vars = {
+        match.group(1).casefold()
+        for match in re.finditer(
+            r"(?i)\b(?:dim|private|public|static)\s+([a-z_][a-z0-9_]*)\s+as\s+(?:publisher\s*\.\s*)?table\b",
+            source,
+        )
+    }
+    table_vars.update(
+        match.group(1).casefold()
+        for match in re.finditer(
+            r"(?i)\bset\s+([a-z_][a-z0-9_]*)\s*=\s*[^\r\n]*?\.\s*table\b",
+            source,
+        )
+    )
+
+    inline_table = re.compile(r"(?i)\.\s*table\b")
+    inline_count = len(inline_table.findall(source))
+    if inline_count:
+        symbols["Table"] += inline_count
+
+    for symbol in ("Rows", "Columns", "Cells"):
+        explicit = re.compile(rf"(?i)\.\s*table\s*\.\s*{symbol}\b")
+        explicit_count = len(explicit.findall(source))
+        if explicit_count:
+            symbols[symbol] += explicit_count
+
+        for var in table_vars:
+            pattern = re.compile(rf"(?i)\b{re.escape(var)}\s*\.\s*{symbol}\b")
+            count = len(pattern.findall(source))
+            if count:
+                symbols[symbol] += count
+
+    return sum(symbols.values()), dict(symbols)
+
+
 def classify_calls(source: str) -> tuple[dict[str, int], dict[str, int]]:
     cleaned = strip_vba_comments(source)
     stringless = mask_vba_strings(cleaned)
@@ -173,6 +210,13 @@ def classify_calls(source: str) -> tuple[dict[str, int], dict[str, int]]:
                 symbol_hits[symbol] = symbol_hits.get(symbol, 0) + count
         if family_total:
             family_hits[family] = family_total
+
+    contextual_table_total, contextual_table_symbols = _classify_contextual_table_calls(stringless)
+    if contextual_table_total:
+        family_hits["tables"] = family_hits.get("tables", 0) + contextual_table_total
+        for symbol, count in contextual_table_symbols.items():
+            symbol_hits[symbol] = symbol_hits.get(symbol, 0) + count
+
     return family_hits, symbol_hits
 
 
