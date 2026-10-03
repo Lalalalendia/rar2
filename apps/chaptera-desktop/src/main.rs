@@ -10235,10 +10235,9 @@ mod tests {
                     .then(|| distinct_text_sizes.iter().next().copied())
                     .flatten();
                 let fallback_scaled_line_height_emu = uniform_text_size_emu.and_then(|size| {
-                    let numerator = i128::from(size)
-                        .checked_mul(i128::from(
-                            chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
-                        ))?;
+                    let numerator = i128::from(size).checked_mul(i128::from(
+                        chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
+                    ))?;
                     let denominator =
                         i128::from(chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU);
                     let rounded = numerator
