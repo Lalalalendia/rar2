@@ -113,6 +113,45 @@ all referenced IDs exist.
 This ring is **not** the long-lived migration-evidence signing authority.
 Asymmetric long-lived issuer verification history remains a separate contract.
 
+## Cloud Reader configured source fonts
+
+The full deployment and acceptance contract is documented in `docs/cloud-reader-font-resources-v1.md`.
+
+Cloud Reader source-font bytes are explicit deployment resources, not ambient
+machine state. Chaptera never searches installed Linux fonts and never downloads
+a missing font from the network.
+
+When a licensed source font should be executable by Reader, configure it under
+`cloud_reader_guest.font_resources` with an exact source-family name, absolute
+production path, expected lowercase SHA-256, face index and `font/ttf` or
+`font/otf` MIME type. The canonical production example keeps this block
+commented because deployments must supply only font files they are licensed to
+use.
+
+The boundary is fail-closed:
+
+- unreadable configured bytes fail worker startup/admission with
+  `guest_scene_font_read_failed`;
+- bytes whose digest differs from the configured SHA-256 fail with
+  `guest_scene_font_hash_mismatch`;
+- a source typography run with no stable family identity is exposed as
+  `source_font_family_unresolved`;
+- a known source family with no configured exact resource is exposed as
+  `source_font_resource_unavailable`;
+- when an exact configured resource is actually used for layout, Scene records
+  `source_font_resource_admitted` as an informational diagnostic.
+
+The two source-availability warnings make the Reader compatibility state
+explicit instead of silently implying source-font fidelity while fallback is in
+use. They do not authorize host-font guessing or automatic acquisition.
+Configured font bytes are copied only through the existing private bounded
+manifest path and are never written into public receipts or repository
+fixtures.
+
+For documents that depend on proprietary families such as Elephant or Times New
+Roman, the operator must provide licensed local files and exact digests. The
+repository intentionally contains no such font bytes.
+
 ## Failure policy
 
 Missing, empty, oversized, over-permissive, malformed or unresolved required
