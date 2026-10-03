@@ -402,6 +402,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exact_sha_authority_evidence_name_is_stable() {
+        assert_eq!(
+            corruption_name(ReaderSalvageCorruptionEvidence::ExactShaTypedCorruptionAuthority),
+            "exact_sha_typed_corruption_authority"
+        );
+    }
+
+    #[test]
     fn unsafe_is_reserved_for_policy_or_resource_fail_closed_classes() {
         for eligibility in [
             ReaderSalvageEligibility::IneligibleArchive,
