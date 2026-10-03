@@ -1775,6 +1775,7 @@ mod tests {
                         right_q16: 57_344,
                         bottom_q16: 49_152,
                     }),
+                    content_rotation_degrees: None,
                     recolor: None,
                 }],
                 bytes: vec![0x89, b'P', b'N', b'G'],

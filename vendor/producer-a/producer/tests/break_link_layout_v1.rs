@@ -67,6 +67,7 @@ fn frame(
             image_slot: None,
             legacy_ole: None,
             explicit_image_crop: None,
+            explicit_image_cardinal_rotation_degrees: None,
             explicit_paint: PubExplicitShapePaintSource::default(),
             effective_paint: None,
             story_frame: Some(PubResolvedStoryFrame {
