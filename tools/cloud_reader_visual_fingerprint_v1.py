@@ -180,6 +180,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
                     "fixture": pair["basename"],
                     "page": index + 1,
                     "reference_state": pair["reference_state"],
+                    "candidate_page_identity_sha256": page_geometry.get("page_identity_sha256"),
                     **metrics,
                     "reference_media_extent_delta": media_delta,
                 }
@@ -259,13 +260,38 @@ def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) ->
     improved = []
     regressed = []
     unchanged = []
+    remapped = []
+    identity_unknown = []
+    stable_identity_keys = []
     for key in keys:
+        current_identity = current_pages[key].get("candidate_page_identity_sha256")
+        baseline_identity = baseline_pages[key].get("candidate_page_identity_sha256")
+        if current_identity is None or baseline_identity is None:
+            identity_unknown.append({
+                "fixture": key[0],
+                "page": key[1],
+                "baseline_page_identity_sha256": baseline_identity,
+                "current_page_identity_sha256": current_identity,
+            })
+            continue
+        if current_identity != baseline_identity:
+            remapped.append({
+                "fixture": key[0],
+                "page": key[1],
+                "baseline_page_identity_sha256": baseline_identity,
+                "current_page_identity_sha256": current_identity,
+            })
+            continue
+        stable_identity_keys.append(key)
+
+    for key in stable_identity_keys:
         now = current_pages[key]["changed_cell_fraction"]
         before = baseline_pages[key]["changed_cell_fraction"]
         delta = now - before
         row = {
             "fixture": key[0],
             "page": key[1],
+            "page_identity_sha256": current_pages[key].get("candidate_page_identity_sha256"),
             "baseline_changed_cell_fraction": before,
             "current_changed_cell_fraction": now,
             "delta": delta,
@@ -287,6 +313,9 @@ def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) ->
         "baseline_repository_commit_sha": baseline.get("repository_commit_sha"),
         "current_repository_commit_sha": current.get("repository_commit_sha"),
         "matched_page_count": len(keys),
+        "stable_identity_page_count": len(stable_identity_keys),
+        "remapped_page_count": len(remapped),
+        "identity_unknown_page_count": len(identity_unknown),
         "improved_page_count": len(improved),
         "regressed_page_count": len(regressed),
         "unchanged_page_count": len(unchanged),
@@ -309,9 +338,13 @@ def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) ->
         },
         "largest_improvements": improved[:25],
         "largest_regressions": regressed[:25],
+        "page_identity_remaps": remapped[:100],
+        "page_identity_unknown": identity_unknown[:100],
         "claims": {
             "measurement_only": True,
             "hard_regression_threshold_applied": False,
+            "visual_delta_only_compares_stable_page_identity": True,
+            "page_identity_remap_is_not_visual_regression_evidence": True,
         },
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +390,9 @@ def main() -> None:
         delta = compare_baseline(args.current, args.baseline, args.out)
         print(json.dumps({
             "matched_pages": delta["matched_page_count"],
+            "stable_identity_pages": delta["stable_identity_page_count"],
+            "remapped_pages": delta["remapped_page_count"],
+            "identity_unknown_pages": delta["identity_unknown_page_count"],
             "improved_pages": delta["improved_page_count"],
             "regressed_pages": delta["regressed_page_count"],
             "unchanged_pages": delta["unchanged_page_count"],
