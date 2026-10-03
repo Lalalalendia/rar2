@@ -255,11 +255,12 @@ doc.Pages(1).ExportEmailHTML "mail.html"
 doc.WebPagePreview
 """
     taxonomy_families, taxonomy_symbols = module.classify_calls(taxonomy_calls)
-    assert taxonomy_families["documents"] >= 5
+    assert taxonomy_families["documents"] == 3
     assert taxonomy_families["pages"] == 1
     assert taxonomy_families["layout"] == 2
     assert taxonomy_families["output"] == 3
     assert taxonomy_families["ole_links"] == 1
+    assert "tables" not in taxonomy_families
     assert taxonomy_symbols["Documents.Add"] == 1
     assert taxonomy_symbols["Documents.Open"] == 1
     assert taxonomy_symbols["LayoutGuides"] == 1
@@ -268,6 +269,32 @@ doc.WebPagePreview
     assert taxonomy_symbols["SaveAs"] == 1
     assert taxonomy_symbols["ExportEmailHTML"] == 1
     assert taxonomy_symbols["WebPagePreview"] == 1
+
+
+    table_calls = """
+Dim pubTable As Table
+Set shape = ActiveDocument.Pages(1).Shapes.AddTable(2, 2, 10, 10, 100, 100)
+Set pubTable = shape.Table
+Debug.Print pubTable.Rows.Count
+Debug.Print pubTable.Columns.Count
+Debug.Print pubTable.Cells(1, 1).TextRange.Text
+"""
+    table_families, table_symbols = module.classify_calls(table_calls)
+    assert table_families["tables"] == 5
+    assert table_symbols["AddTable"] == 1
+    assert table_symbols["Table"] == 1
+    assert table_symbols["Rows"] == 1
+    assert table_symbols["Columns"] == 1
+    assert table_symbols["Cells"] == 1
+
+    layout_not_table = """
+doc.LayoutGuides.Rows = 3
+doc.LayoutGuides.Columns = 4
+"""
+    layout_only_families, layout_only_symbols = module.classify_calls(layout_not_table)
+    assert layout_only_families == {"layout": 2}
+    assert "Rows" not in layout_only_symbols
+    assert "Columns" not in layout_only_symbols
 
     extracted_source = b'Attribute VB_Name = "Module1"\r\nSub X()\r\nActiveDocument.Pages(1).Shapes(1).TextFrame.TextRange.Text = "x"\r\nActiveDocument.ExportAsFixedFormat 2, "x.pdf"\r\nEnd Sub\r\n'
     extracted = module.inspect_pub_bytes(source_macro_cfb(extracted_source))
@@ -320,7 +347,7 @@ doc.WebPagePreview
 
     empty_receipt = module.build_receipt([], include_paths=False)
     assert empty_receipt["claims"]["source_text_emitted"] is False
-    assert empty_receipt["call_classifier_version"] == "v2"
+    assert empty_receipt["call_classifier_version"] == "v2.1"
 
     print({"tests": "ok", "macro_state": macro["vba_state"], "plain_state": plain["vba_state"]})
     return 0

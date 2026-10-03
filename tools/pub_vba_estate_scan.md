@@ -38,7 +38,7 @@ These are scanner evidence states, not claims that Publisher would execute a pro
 
 ## Current call-family taxonomy
 
-The receipt exposes `call_classifier_version`. Classifier `v2` is calibrated against the pinned public Publisher VBA tutorial source estate measured in PUB-T-900 and separates document access from page access.
+The receipt exposes `call_classifier_version`. Classifier `v2.1` is calibrated against the pinned public Publisher VBA tutorial source estate measured in PUB-T-900. It separates document access from page access and avoids treating unrelated `.Rows` / `.Columns` members such as `LayoutGuides.Rows` as table evidence.
 
 Current families:
 
@@ -58,10 +58,11 @@ Current families:
 - `metadata_selectors`
 - `ole_links`
 
-Notable v2 corrections/additions:
+Notable v2/v2.1 corrections/additions:
 
 - `ActiveDocument` / `ThisDocument` belong to `documents`, not `pages`;
-- `Documents.Add` and `Documents.Open` are document-family evidence;
+- `Documents.Add` and `Documents.Open` are document-family evidence without also incrementing the generic `Documents` symbol;
+- table `Rows` / `Columns` / `Cells` are counted only through a declared/assigned `Table` variable or an explicit `.Table.<member>` path, so `LayoutGuides.Rows` / `LayoutGuides.Columns` do not contaminate `tables`;
 - both `CreateObject("Publisher.Application")` and `GetObject(, "Publisher.Application")` are recognized as application lifecycle calls;
 - `LayoutGuides`, `RulerGuides`, `Align` and `Distribute` populate `layout`;
 - `SaveAs`, `ExportEmailHTML` and `WebPagePreview` extend `output`;
@@ -85,7 +86,7 @@ python tools/test_pub_vba_estate_scan.py
 python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py
 ```
 
-The source-free synthetic fixtures cover nested Publisher-style macro-project detection, a missing-`PROJECT` negative, storage-name collisions, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, CopyToken decoding including the power-of-two `difference=16` boundary, and classifier-v2 regressions for document-vs-page separation, late-bound Publisher acquisition, layout, output and OLE update calls.
+The source-free synthetic fixtures cover nested Publisher-style macro-project detection, a missing-`PROJECT` negative, storage-name collisions, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, CopyToken decoding including the power-of-two `difference=16` boundary, and classifier-v2.1 regressions for document-vs-page separation, non-overlapping document collection calls, context-aware table members, late-bound Publisher acquisition, layout, output and OLE update calls.
 
 ## Corpus integration
 
