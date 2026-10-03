@@ -230,33 +230,67 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
         });
     }
 
-    // Exact source-semantic shape proven by a one-page native Publisher
-    // control: PAGE master, PAGE customer, PAGE service, one raw0x59
-    // special entry, then two PAGE service records. The special record remains
-    // preserved in SourceGraph; only product PAGE presentation is narrowed.
-    if input.document_page_list_entry_count != 6
-        || input.confirmed_page_count != 5
-        || input
-            .pages
-            .iter()
-            .map(|page| page.document_ordinal)
-            .collect::<Vec<_>>()
-            != vec![0, 1, 2, 4, 5]
+    // Source-semantic interleaved standard-print shape proven first by a
+    // one-page native Publisher control and then falsified across all 55 paired
+    // Batch01 fixtures in #973:
+    //
+    //   PAGE master
+    //   K>=1 PAGE customer records
+    //   PAGE service
+    //   raw0x59 special entry
+    //   PAGE service
+    //   PAGE service
+    //
+    // The special record remains preserved in SourceGraph; only product PAGE
+    // presentation is narrowed.
+    if input.special_entry_count != 1
+        || input.document_page_list_entry_count != input.confirmed_page_count.checked_add(1)?
+        || input.confirmed_page_count < 5
     {
         return None;
     }
 
-    let customer_pages = input.pages.get(1..2)?;
-    let service_pages = input.pages.get(2..)?;
+    let customer_count = input.confirmed_page_count.checked_sub(4)?;
+    if customer_count == 0 {
+        return None;
+    }
+    let customer_end = customer_count.checked_add(1)?;
+    let service_ordinal = customer_end;
+    let special_ordinal = service_ordinal.checked_add(1)?;
+    let tail_first_ordinal = special_ordinal.checked_add(1)?;
+    let tail_second_ordinal = special_ordinal.checked_add(2)?;
+
+    let customer_pages = input.pages.get(1..customer_end)?;
+    let first_service = input.pages.get(customer_end)?;
+    let tail_pages = input.pages.get(customer_end.checked_add(1)?..)?;
+
     if !customer_pages
         .iter()
-        .all(|page| oid_is_nonzero(page) && page.applied_master_seq_num == Some(master_seq))
-        || !service_pages
+        .enumerate()
+        .all(|(offset, page)| {
+            page.document_ordinal == offset + 1
+                && oid_is_nonzero(page)
+                && page.applied_master_seq_num == Some(master_seq)
+        })
+        || first_service.document_ordinal != service_ordinal
+        || !oid_is_zero(first_service)
+        || first_service.applied_master_seq_num != Some(master_seq)
+        || tail_pages.len() != 2
+        || tail_pages
+            .iter()
+            .map(|page| page.document_ordinal)
+            .collect::<Vec<_>>()
+            != vec![tail_first_ordinal, tail_second_ordinal]
+        || !tail_pages
             .iter()
             .all(|page| oid_is_zero(page) && page.applied_master_seq_num == Some(master_seq))
     {
         return None;
     }
+
+    let mut service_page_seq_nums = Vec::with_capacity(3);
+    service_page_seq_nums.push(first_service.contents_seq_num);
+    service_page_seq_nums.extend(tail_pages.iter().map(|page| page.contents_seq_num));
 
     Some(StandardPrintServiceTailSelectionV1 {
         profile_id: STANDARD_PRINT_SERVICE_TAIL_SPECIAL_PROFILE_ID_V1.to_owned(),
@@ -266,10 +300,7 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
             .map(|page| page.contents_seq_num)
             .collect(),
         master_page_seq_num: master_seq,
-        service_page_seq_nums: service_pages
-            .iter()
-            .map(|page| page.contents_seq_num)
-            .collect(),
+        service_page_seq_nums,
     })
 }
 
