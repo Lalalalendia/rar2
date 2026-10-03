@@ -18,6 +18,7 @@ VENDOR_CRATES = (
     "pub-reader",
     "pub-layout",
     "pub-viewer",
+    "pub-editor",
 )
 UPSTREAM = {"pub-core", "pub-cfb", "pub-contents", "pub-escher", "pub-model", "pub-quill"}
 
@@ -182,6 +183,21 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
                         "--features",
                         "cmo-slot-compose",
                         "--lib",
+                    ],
+                }
+            )
+        if "pub-editor" in affected:
+            commands.append(
+                {
+                    "id": "pub-editor-integration-tests",
+                    "argv": [
+                        "cargo",
+                        "test",
+                        "--manifest-path",
+                        "vendor/producer-a/Cargo.toml",
+                        "-p",
+                        "pub-editor",
+                        "--tests",
                     ],
                 }
             )
