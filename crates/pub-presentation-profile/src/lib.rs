@@ -445,10 +445,15 @@ pub fn select_mature_secondary_applied_ab_customer_page_seq_nums_v1(
     }
 
     base.pages.sort_by_key(|page| page.document_ordinal);
-    input.document_entries.sort_by_key(|entry| entry.document_ordinal);
+    input
+        .document_entries
+        .sort_by_key(|entry| entry.document_ordinal);
 
     let mut seq_nums = BTreeSet::new();
-    if base.pages.iter().any(|page| !seq_nums.insert(page.contents_seq_num))
+    if base
+        .pages
+        .iter()
+        .any(|page| !seq_nums.insert(page.contents_seq_num))
         || input
             .document_entries
             .iter()
@@ -1752,9 +1757,7 @@ mod tests {
     fn mature_secondary_applied_ab_rejects_suffix_or_terminal_drift() {
         let mut bad_suffix = mature_secondary_applied_ab_input();
         bad_suffix.document_entries[7].raw_type = Some(MATURE_SECONDARY_AB_PAGE_RAW_TYPE_V1);
-        assert!(
-            select_mature_secondary_applied_ab_customer_page_seq_nums_v1(bad_suffix).is_none()
-        );
+        assert!(select_mature_secondary_applied_ab_customer_page_seq_nums_v1(bad_suffix).is_none());
 
         let mut bad_terminal = mature_secondary_applied_ab_input();
         bad_terminal.base.pages[6].applied_master_seq_num = Some(100);
