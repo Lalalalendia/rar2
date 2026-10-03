@@ -33,7 +33,7 @@ fn verify_report(
     report: &pub_export::ExportReport,
     node_id: NodeId,
 ) -> Result<(), Box<dyn Error>> {
-    let origin = node_id.as_canonical().to_string();
+    let origin = node_id.as_canonical();
     for feature in [
         AUTHORED_SHAPE_GEOMETRY_FEATURE,
         AUTHORED_SHAPE_FILL_FEATURE,
@@ -42,7 +42,7 @@ fn verify_report(
         let item = report
             .items
             .iter()
-            .find(|item| item.origin.as_deref() == Some(origin.as_str()) && item.feature == feature)
+            .find(|item| item.origin == Some(origin) && item.feature == feature)
             .ok_or_else(|| format!("missing {feature} report item"))?;
         if item.disposition != CapabilityLevel::Preserved {
             return Err(format!("{feature} is not preserved: {:?}", item.disposition).into());
@@ -52,7 +52,7 @@ fn verify_report(
         .items
         .iter()
         .find(|item| {
-            item.origin.as_deref() == Some(origin.as_str())
+            item.origin == Some(origin)
                 && item.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE
         })
         .ok_or("missing authored_shape.z_order report item")?;
@@ -83,7 +83,7 @@ fn export_target(
     Ok(json!({
         "bytes": export.bytes.len(),
         "blocking": export.report.counts.blocking,
-        "semantic_losses": export.report.counts.semantic,
+        "unsupported": export.report.counts.unsupported,
     }))
 }
 
