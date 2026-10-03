@@ -9,8 +9,6 @@ on:
       - "vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json"
       - "vendor/producer-a/crates/pub-reader/src/salvage.rs"
       - "vendor/producer-a/crates/pub-reader/src/salvage_authority.rs"
-      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
-      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
       - "vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-salvage-acceptance.rs"
       - "tools/research-runner/reader1050-research-ledger.json"
       - "tools/research-runner/tests/test_reader1050_frontier.py"
