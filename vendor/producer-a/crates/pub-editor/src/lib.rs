@@ -2495,7 +2495,7 @@ impl EditorSession {
 
                 match font_family {
                     None => font_family = Some(run.source_font_name.as_str()),
-                    Some(existing) if existing == run.source_font_name => {}
+                    Some(existing) if existing == run.source_font_name.as_str() => {}
                     Some(_) => {
                         valid = false;
                         break;
