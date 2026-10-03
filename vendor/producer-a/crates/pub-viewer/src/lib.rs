@@ -1046,6 +1046,62 @@ pub struct ViewerEmbeddedImage {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ViewerImagePageAdmissionStatsV1 {
+    dropped_node_uses: usize,
+    dropped_placements: usize,
+    dropped_resources: usize,
+}
+
+fn retain_viewer_image_uses_for_selected_pages_v1<F>(
+    images: &mut Vec<ViewerEmbeddedImage>,
+    selected_pages: &BTreeSet<PageId>,
+    mut page_for_node: F,
+) -> ViewerImagePageAdmissionStatsV1
+where
+    F: FnMut(NodeId) -> Option<PageId>,
+{
+    let mut stats = ViewerImagePageAdmissionStatsV1::default();
+
+    for image in images.iter_mut() {
+        let node_use_count = image.node_ids.len();
+        image.node_ids.retain(|node_id| {
+            page_for_node(*node_id).is_none_or(|page_id| selected_pages.contains(&page_id))
+        });
+        stats.dropped_node_uses += node_use_count.saturating_sub(image.node_ids.len());
+
+        let placement_count = image.placements.len();
+        image.placements.retain(|placement| {
+            page_for_node(placement.node_id).is_none_or(|page_id| selected_pages.contains(&page_id))
+        });
+        stats.dropped_placements += placement_count.saturating_sub(image.placements.len());
+    }
+
+    let resource_count = images.len();
+    images.retain(|image| !image.node_ids.is_empty() || !image.placements.is_empty());
+    stats.dropped_resources = resource_count.saturating_sub(images.len());
+    stats
+}
+
+fn resolved_page_for_node_v1(graph: &PubResolvedGraph, node_id: NodeId) -> Option<PageId> {
+    let mut current = graph.nodes.get(&node_id)?.header.parent_id;
+    let mut seen = BTreeSet::new();
+    loop {
+        if !seen.insert(current) {
+            return None;
+        }
+        let page_id = PageId::from_canonical(current);
+        if graph.pages.contains_key(&page_id) {
+            return Some(page_id);
+        }
+        current = graph
+            .nodes
+            .get(&NodeId::from_canonical(current))?
+            .header
+            .parent_id;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerSource {
     pub format: String,
@@ -2528,6 +2584,27 @@ fn open_mature_0x2c_bundle(
         &mut document.diagnostics,
     ));
 
+    let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
+    let image_admission =
+        retain_viewer_image_uses_for_selected_pages_v1(&mut images, &selected_pages, |node_id| {
+            resolved_page_for_node_v1(&pipeline.resolved.graph, node_id)
+        });
+    if image_admission.dropped_node_uses > 0
+        || image_admission.dropped_placements > 0
+        || image_admission.dropped_resources > 0
+    {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.image.page_admission_composed".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "Image projection omitted {} source use(s), {} placement metadata binding(s), and {} resource(s) whose target ancestry resolves to canonical pages already excluded by bounded page selection.",
+                image_admission.dropped_node_uses,
+                image_admission.dropped_placements,
+                image_admission.dropped_resources,
+            ),
+        });
+    }
+
     #[cfg(feature = "cmo-slot-compose")]
     let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
         Ok(instances) => {
@@ -2555,7 +2632,6 @@ fn open_mature_0x2c_bundle(
         }
     };
 
-    let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
     let source_page_paint_orders = pipeline
         .source
         .source_page_paint_orders
@@ -4137,6 +4213,99 @@ mod tests {
             LengthEmu::new(1),
         );
         assert!(legacy_noquill_structural_point_group_ids(&graph, &[page_id]).is_empty());
+    }
+
+    #[test]
+    fn image_uses_compose_only_with_known_page_exclusion() {
+        let admitted = NodeId::from_canonical(id(61));
+        let excluded = NodeId::from_canonical(id(62));
+        let excluded_only = NodeId::from_canonical(id(63));
+        let unresolved = NodeId::from_canonical(id(64));
+        let selected_page = PageId::from_canonical(id(81));
+        let excluded_page = PageId::from_canonical(id(82));
+        let first_resource = ResourceId::from_canonical(id(71));
+        let second_resource = ResourceId::from_canonical(id(72));
+        let third_resource = ResourceId::from_canonical(id(73));
+        let mut images = vec![
+            ViewerEmbeddedImage {
+                resource_id: first_resource,
+                mime: "image/png".to_owned(),
+                node_ids: vec![admitted, excluded],
+                placements: vec![
+                    ViewerImagePlacementV1 {
+                        node_id: admitted,
+                        source_window: None,
+                        content_rotation_degrees: Some(90),
+                        recolor: None,
+                    },
+                    ViewerImagePlacementV1 {
+                        node_id: excluded,
+                        source_window: None,
+                        content_rotation_degrees: None,
+                        recolor: Some(ViewerImageRecolorV1 {
+                            target_rgb: [1, 2, 3],
+                            preserve_grays: false,
+                        }),
+                    },
+                ],
+                bytes: vec![1, 2, 3],
+            },
+            ViewerEmbeddedImage {
+                resource_id: second_resource,
+                mime: "image/jpeg".to_owned(),
+                node_ids: vec![excluded_only],
+                placements: vec![ViewerImagePlacementV1 {
+                    node_id: excluded_only,
+                    source_window: None,
+                    content_rotation_degrees: None,
+                    recolor: None,
+                }],
+                bytes: vec![4, 5, 6],
+            },
+            ViewerEmbeddedImage {
+                resource_id: third_resource,
+                mime: "image/png".to_owned(),
+                node_ids: vec![unresolved],
+                placements: vec![ViewerImagePlacementV1 {
+                    node_id: unresolved,
+                    source_window: None,
+                    content_rotation_degrees: None,
+                    recolor: None,
+                }],
+                bytes: vec![7, 8, 9],
+            },
+        ];
+        let selected_pages = BTreeSet::from([selected_page]);
+        let page_by_node = BTreeMap::from([
+            (admitted, selected_page),
+            (excluded, excluded_page),
+            (excluded_only, excluded_page),
+        ]);
+
+        let stats = retain_viewer_image_uses_for_selected_pages_v1(
+            &mut images,
+            &selected_pages,
+            |node_id| page_by_node.get(&node_id).copied(),
+        );
+
+        assert_eq!(
+            stats,
+            ViewerImagePageAdmissionStatsV1 {
+                dropped_node_uses: 2,
+                dropped_placements: 2,
+                dropped_resources: 1,
+            }
+        );
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].resource_id, first_resource);
+        assert_eq!(images[0].node_ids, vec![admitted]);
+        assert_eq!(images[0].placements.len(), 1);
+        assert_eq!(images[0].placements[0].node_id, admitted);
+        assert_eq!(images[0].bytes, vec![1, 2, 3]);
+        assert_eq!(images[1].resource_id, third_resource);
+        assert_eq!(images[1].node_ids, vec![unresolved]);
+        assert_eq!(images[1].placements.len(), 1);
+        assert_eq!(images[1].placements[0].node_id, unresolved);
     }
 
     #[test]
