@@ -1780,9 +1780,10 @@ fn select_legacy22_viewer_pages(
         return generic();
     }
 
-    let mut page_ids = Vec::with_capacity(selection.customer_page_indices.len());
-    for index in selection.customer_page_indices {
-        let Some(page_id) = source.effective_pages.page_ids.get(index).copied() else {
+    let customer_page_count = selection.customer_page_indices.len();
+    let mut page_ids = Vec::with_capacity(customer_page_count);
+    for index in &selection.customer_page_indices {
+        let Some(page_id) = source.effective_pages.page_ids.get(*index).copied() else {
             return generic();
         };
         page_ids.push(page_id);
@@ -1796,7 +1797,7 @@ fn select_legacy22_viewer_pages(
         disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
             profile_id: selection.profile_id.to_owned(),
             raw_page_count: selection.materialized_page_count,
-            customer_page_count: selection.customer_page_indices.len(),
+            customer_page_count,
         },
     }
 }
