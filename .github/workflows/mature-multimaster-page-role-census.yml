@@ -160,14 +160,19 @@ jobs:
                   if isinstance(page.get("contents_seq_num"), int)
               }
               tokens = []
+              fan_in = collections.Counter()
+              external_master_ref_count = 0
               for page in pages:
                   master = page.get("applied_master_seq_num")
                   if master is None:
                       master_relation = "none"
                   elif master == page.get("contents_seq_num"):
                       master_relation = "self"
+                      fan_in[page["document_ordinal"]] += 1
                   elif master in seq_to_ordinal:
-                      master_relation = f"page_ordinal:{seq_to_ordinal[master]}"
+                      target_ordinal = seq_to_ordinal[master]
+                      master_relation = f"page_ordinal:{target_ordinal}"
+                      fan_in[target_ordinal] += 1
                   else:
                       raw_type = page.get("applied_master_raw_type")
                       master_relation = (
@@ -175,10 +180,12 @@ jobs:
                           if raw_type is not None
                           else "external_unknown"
                       )
+                      external_master_ref_count += 1
                   tokens.append({
                       "document_ordinal": page["document_ordinal"],
                       "oid_class": oid_class(page),
                       "master_relation": master_relation,
+                      "master_out_degree": 0 if master is None else 1,
                       "applied_master_raw_type": page.get("applied_master_raw_type"),
                       "pgt_type": page.get("pgt_type"),
                       "previous_raw_type": page.get("previous_document_entry_raw_type"),
@@ -186,6 +193,9 @@ jobs:
                       "shape_child_count": page.get("shape_child_count", 0),
                       "group_child_count": page.get("group_child_count", 0),
                   })
+
+              for token in tokens:
+                  token["master_in_degree"] = fan_in[token["document_ordinal"]]
 
               document_type_sequence = [
                   entry.get("raw_type")
@@ -197,6 +207,7 @@ jobs:
               signature_basis = {
                   "special_entry_count": raw.get("special_entry_count"),
                   "document_type_sequence": document_type_sequence,
+                  "external_master_ref_count": external_master_ref_count,
                   "pages": tokens,
               }
               signature_json = json.dumps(
@@ -281,6 +292,7 @@ jobs:
                   "source_seq_nums_emitted": False,
                   "source_oid_values_emitted": False,
                   "relation_targets_normalized_to_page_ordinals_or_external_raw_type": True,
+                  "master_relation_fan_in_out_emitted": True,
                   "raw_pub_bytes_emitted": False,
                   "story_text_emitted": False,
               },
