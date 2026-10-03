@@ -226,13 +226,23 @@ export function resolvedTextLinePaintPlan(node) {
       const spanWidth = safeInteger(span.measured_width_emu, "text.span.measured_width_emu");
       const spanFontSize = safeInteger(span.font_size_emu, "text.span.font_size_emu");
       if (scalarEnd <= scalarStart || xOffset < 0 || spanWidth < 0 || spanFontSize <= 0) return null;
+      const spanFontResourceId = typeof span.font_resource_id === "string" && span.font_resource_id.length
+        ? span.font_resource_id
+        : null;
+      const spanFontFingerprint = typeof span.font_fingerprint_sha256 === "string"
+        && span.font_fingerprint_sha256.length
+        ? span.font_fingerprint_sha256
+        : null;
+      if ((spanFontResourceId === null) !== (spanFontFingerprint === null)) return null;
       spans.push(Object.freeze({
         scalar_start: scalarStart,
         scalar_end: scalarEnd,
         text: String(span.text ?? ""),
         x_offset_emu: xOffset,
         measured_width_emu: spanWidth,
-        font_size_emu: spanFontSize
+        font_size_emu: spanFontSize,
+        font_resource_id: spanFontResourceId,
+        font_fingerprint_sha256: spanFontFingerprint
       }));
     }
 
@@ -281,6 +291,20 @@ function appendText(group, defs, node, fonts, index) {
     return;
   }
 
+  const spanFonts = new Map();
+  for (const line of plan.lines) {
+    for (const span of line.spans) {
+      if (!span.font_resource_id) continue;
+      const spanInstalled = fonts.get(span.font_resource_id) ?? null;
+      if (!spanInstalled
+          || spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
+        appendPreviewText(group, node, plan);
+        return;
+      }
+      spanFonts.set(span.font_resource_id, spanInstalled);
+    }
+  }
+
   const clipId = "chaptera-reader-text-clip-" + index;
   const clipPath = svgNode("clipPath", { id: clipId });
   clipPath.appendChild(svgNode("rect", {
@@ -316,12 +340,17 @@ function appendText(group, defs, node, fonts, index) {
     text.setAttribute("xml:space", "preserve");
     if (line.spans.length) {
       for (const span of line.spans) {
+        const spanInstalled = span.font_resource_id
+          ? spanFonts.get(span.font_resource_id) ?? null
+          : null;
         const tspan = svgNode("tspan", {
           x: (line.x + span.x_offset_emu - plan.bounds.x) / EMU_PER_CSS_PX,
+          "font-family": spanInstalled?.family ?? installed.family,
           "font-size": span.font_size_emu / EMU_PER_CSS_PX,
           "data-text-span-start": span.scalar_start,
           "data-text-span-end": span.scalar_end,
-          "data-measured-width-emu": span.measured_width_emu
+          "data-measured-width-emu": span.measured_width_emu,
+          "data-font-resource-id": span.font_resource_id
         });
         tspan.setAttribute("xml:space", "preserve");
         tspan.textContent = span.text;
