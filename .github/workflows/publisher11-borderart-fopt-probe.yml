@@ -1,0 +1,106 @@
+name: Publisher 11 BorderArt FOPT Probe
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/bin/escher_fopt_census.rs"
+      - "research/publisher11_borderart_fopt_probe.py"
+      - ".github/workflows/publisher11-borderart-fopt-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publisher11-borderart-fopt-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Acquire exact public Publisher 11 help.pub
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          curl -L --fail --retry 3 \
+            -o /tmp/help.pub \
+            "https://raw.githubusercontent.com/Planet-Source-Code/hartoto-flexible-phoone-book__1-69597/1400f033db5f4a57cca6d5392f551943271b7f72/help.pub"
+          actual="$(sha256sum /tmp/help.pub | awk '{print $1}')"
+          expected="1e7f38b3ce1d0d956815992b15d361c405fc4bbdced5cdabb3c4581327cc183e"
+          test "$actual" = "$expected"
+          printf '{"source_sha256":"%s","source_size":%s}\n' \
+            "$actual" "$(stat -c %s /tmp/help.pub)" > out/source-receipt.json
+
+      - name: Build and run exact FOPT census
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd vendor/producer-a
+          cargo run --quiet -p pub-reader --bin escher_fopt_census -- \
+            /tmp/help.pub \
+            "$GITHUB_WORKSPACE/out/escher-fopt-census.json"
+
+      - name: Analyze Shape.ID 358 against same-file controls
+        run: |
+          python research/publisher11_borderart_fopt_probe.py \
+            --census out/escher-fopt-census.json \
+            --out out/publisher11-borderart-fopt-probe.json
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f out/publisher11-borderart-fopt-probe.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher11-borderart-fopt-probe.json").read_text())
+          t = d["target"]
+          c = d["candidate_summary"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("## Publisher 11 BorderArt FOPT probe\n\n")
+              f.write(f"- target Shape.ID: `{d['target_shape_id']}`\n")
+              f.write(f"- SPID: `{t['officeart_spid']}`\n")
+              f.write(f"- shape type: `{t['officeart_shape_type']}`\n")
+              f.write(f"- FOPT properties: `{t['property_count']}`\n")
+              f.write(f"- fBid properties: `{t['f_bid_property_count']}`\n")
+              f.write(f"- fComplex properties: `{t['f_complex_property_count']}`\n")
+              f.write(f"- BLIP-id properties: `{t['blip_id_property_count']}`\n")
+              f.write(f"- target-unique property IDs: `{c['target_unique_property_ids']}`\n")
+              f.write(f"- target-unique exact signatures: `{c['target_unique_exact_signatures']}`\n")
+              f.write(f"- target fBid IDs: `{c['target_f_bid_property_ids']}`\n")
+              f.write(f"- target complex IDs: `{c['target_complex_property_ids']}`\n")
+              f.write(f"- target BLIP-id IDs: `{c['target_blip_id_property_ids']}`\n")
+          PY
+          fi
+
+      - name: Guard source-free evidence boundary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find out -type f \( -iname '*.pub' -o -iname '*.gif' -o -iname '*.png' -o -iname '*.jpg' -o -iname '*.wmf' -o -iname '*.emf' \) | grep -q .; then
+            echo "source/binary media escaped into artifact paths" >&2
+            exit 1
+          fi
+
+      - name: Upload derived metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher11-borderart-fopt-${{ github.run_id }}
+          path: |
+            out/source-receipt.json
+            out/escher-fopt-census.json
+            out/publisher11-borderart-fopt-probe.json
+          if-no-files-found: error
+          retention-days: 30
