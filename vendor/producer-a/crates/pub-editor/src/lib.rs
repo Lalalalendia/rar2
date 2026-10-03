@@ -4430,6 +4430,7 @@ fn frame_from_payload(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
