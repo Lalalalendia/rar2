@@ -1712,7 +1712,6 @@ fn resolve_mixed_size_text_layout_v1(
     }
 }
 
-
 #[derive(Debug, Clone)]
 struct ResolvedFamilyTypographyRunV1<'a> {
     scalar_start: u32,
