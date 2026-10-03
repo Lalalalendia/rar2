@@ -582,9 +582,8 @@ pub fn from_viewer_geometry_with_fonts(
     let mut source_window_by_node = HashMap::new();
     let mut image_content_rotation_by_node = HashMap::new();
     let mut recolor_by_node = HashMap::new();
-    let mut resources = Vec::with_capacity(
-        geometry.images.len() + geometry.decorative_border_resources.len(),
-    );
+    let mut resources =
+        Vec::with_capacity(geometry.images.len() + geometry.decorative_border_resources.len());
     let mut resource_ids = HashSet::new();
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
@@ -967,8 +966,7 @@ pub fn from_viewer_geometry_with_fonts(
                     (None, None)
                 };
 
-                let decorative_border =
-                    reader_decorative_border_from_render(&node, &resource_ids)?;
+                let decorative_border = reader_decorative_border_from_render(&node, &resource_ids)?;
                 let paint = if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
                     Some(ReaderPaintV1 {
                         preset_shape: None,
@@ -1010,8 +1008,7 @@ pub fn from_viewer_geometry_with_fonts(
             }
 
             let node_id = serialized_string(&node.node_id, "direct render-plan node id")?;
-            if let Some(mapped_border) =
-                reader_decorative_border_from_render(&node, &resource_ids)?
+            if let Some(mapped_border) = reader_decorative_border_from_render(&node, &resource_ids)?
                 && decorative_border_by_node
                     .insert(node_id.clone(), mapped_border)
                     .is_some()
