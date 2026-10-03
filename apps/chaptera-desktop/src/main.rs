@@ -4631,6 +4631,27 @@ impl ViewerApp {
         self.canvas_resize = None;
     }
 
+    fn process_global_history_shortcuts(&mut self, ctx: &egui::Context) {
+        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let (undo_pressed, redo_pressed) = ctx.input(|input| {
+            let command = input.modifiers.ctrl || input.modifiers.command;
+            let unmodified_command = command && !input.modifiers.alt && !input.modifiers.shift;
+            (
+                unmodified_command && input.key_pressed(egui::Key::Z),
+                unmodified_command && input.key_pressed(egui::Key::Y),
+            )
+        });
+
+        if undo_pressed {
+            self.apply_undo();
+        } else if redo_pressed {
+            self.apply_redo();
+        }
+    }
+
     fn process_canvas_object_keyboard(&mut self, ctx: &egui::Context) {
         if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
             return;
@@ -5975,6 +5996,7 @@ impl eframe::App for ViewerApp {
         let text_keyboard_owned = self.process_canvas_text_input(ctx);
         if !text_keyboard_owned {
             self.process_canvas_object_keyboard(ctx);
+            self.process_global_history_shortcuts(ctx);
         }
 
         debug_assert_eq!(
@@ -8111,6 +8133,67 @@ mod tests {
                 .bounds,
             after_move,
             "GUI Redo must restore exact moved geometry"
+        );
+
+        let history_operation_count = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::Z);
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&moved_node_id]
+                .header
+                .bounds,
+            before_move,
+            "Ctrl+Z must route to the same canonical Undo state"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            history_operation_count,
+            "Ctrl+Z must not append a new authoring operation"
+        );
+
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::Y);
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&moved_node_id]
+                .header
+                .bounds,
+            after_move,
+            "Ctrl+Y must route to the same canonical Redo state"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            history_operation_count,
+            "Ctrl+Y must not append a new authoring operation"
         );
 
         harness.get_by_label("Save Project").click();
