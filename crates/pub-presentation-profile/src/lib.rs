@@ -1420,6 +1420,33 @@ mod tests {
     }
 
     #[test]
+    fn mature_detached_post_special_profile_selects_customer_block() {
+        let mut input = mature_terminal_service_input(2, true, 0);
+        let len = input.pages.len();
+        input.pages[len - 2].applied_master_seq_num = None;
+        input.pages[len - 1].applied_master_seq_num = None;
+
+        let selection =
+            select_mature_detached_post_special_tail_customer_page_seq_nums_v1(input).unwrap();
+        assert_eq!(
+            selection.profile_id,
+            MATURE_DETACHED_POST_SPECIAL_TAIL_PROFILE_ID_V1
+        );
+        assert_eq!(selection.customer_page_seq_nums, vec![600, 601]);
+        assert_eq!(selection.service_page_seq_nums, vec![700, 701, 702]);
+    }
+
+    #[test]
+    fn mature_detached_post_special_profile_fails_open_when_tail_is_still_applied() {
+        let mut input = mature_terminal_service_input(2, true, 0);
+        let len = input.pages.len();
+        input.pages[len - 1].applied_master_seq_num = None;
+        assert!(
+            select_mature_detached_post_special_tail_customer_page_seq_nums_v1(input).is_none()
+        );
+    }
+
+    #[test]
     fn mature_terminal_service_profile_accepts_all_page_suffix() {
         let selection = select_mature_terminal_service_tail_customer_page_seq_nums_v1(
             mature_terminal_service_input(2, false, 0),
