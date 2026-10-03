@@ -588,9 +588,9 @@ pub fn select_mature_primary_secondary_customer_page_seq_nums_v1(
     let roots = base.pages.get(0..2)?;
     if roots[0].document_ordinal != 0
         || roots[1].document_ordinal != 1
-        || roots.iter().any(|page| {
-            !oid_is_nonzero(page) || page.applied_master_seq_num.is_some()
-        })
+        || roots
+            .iter()
+            .any(|page| !oid_is_nonzero(page) || page.applied_master_seq_num.is_some())
     {
         return None;
     }
@@ -1814,15 +1814,11 @@ mod tests {
 
     #[test]
     fn mature_primary_secondary_profile_selects_primary_root_customers() {
-        let selection =
-            select_mature_primary_secondary_customer_page_seq_nums_v1(
-                mature_primary_secondary_input(),
-            )
-            .unwrap();
-        assert_eq!(
-            selection.profile_id,
-            MATURE_PRIMARY_SECONDARY_PROFILE_ID_V1
-        );
+        let selection = select_mature_primary_secondary_customer_page_seq_nums_v1(
+            mature_primary_secondary_input(),
+        )
+        .unwrap();
+        assert_eq!(selection.profile_id, MATURE_PRIMARY_SECONDARY_PROFILE_ID_V1);
         assert_eq!(selection.customer_page_seq_nums, vec![200, 202]);
         assert_eq!(selection.master_page_seq_num, 100);
         assert_eq!(selection.service_page_seq_nums, vec![201, 203, 300, 301]);
@@ -1832,9 +1828,7 @@ mod tests {
     fn mature_primary_secondary_profile_requires_exact_special_suffix_and_secondary_termination() {
         let mut bad_special = mature_primary_secondary_input();
         bad_special.document_entries[6].raw_type = Some(MATURE_PAGE_LIST_PAGE_RAW_TYPE_V1);
-        assert!(
-            select_mature_primary_secondary_customer_page_seq_nums_v1(bad_special).is_none()
-        );
+        assert!(select_mature_primary_secondary_customer_page_seq_nums_v1(bad_special).is_none());
 
         let mut bad_termination = mature_primary_secondary_input();
         bad_termination.base.pages[5].applied_master_seq_num = Some(100);
