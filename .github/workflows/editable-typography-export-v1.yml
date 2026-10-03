@@ -155,7 +155,10 @@ jobs:
               for item in data.get("items", []):
                   candidate_story_count += 1
                   candidate_families[item["font_family"]] += 1
-                  if norm(item["font_family"]) in installed:
+                  if (
+                      norm(item["font_family"]) == "montserrat"
+                      and norm(item["font_family"]) in installed
+                  ):
                       selected = (path, data, item)
                       break
               if selected is not None:
@@ -173,7 +176,7 @@ jobs:
 
           assert selected is not None, (
               "exact corpus has bounded typography but no scanned Story whose source "
-              "font family is exactly installed in the consumer environment; "
+              "font family is Montserrat and exactly installed in the consumer environment; "
               f"candidate_families={dict(candidate_families.most_common(30))}"
           )
           path, data, item = selected
@@ -182,7 +185,7 @@ jobs:
               "eligible_count_in_source": data["eligible_count"],
               "eligible_count": 1,
               "items": [item],
-              "selection_basis": "exact_installed_font_family",
+              "selection_basis": "idml_bounded_montserrat_regular_transport",
           }
           (evidence / "expected.json").write_text(
               json.dumps(expected, indent=2, sort_keys=True) + "\n"
