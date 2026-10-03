@@ -81,5 +81,8 @@ jobs:
       - name: Prove canvas keyboard restore on real PUB
         run: cargo test -p chaptera-desktop gui_canvas_keyboard_nudge_select_all_escape_and_delete_fail_closed_on_real_pub -- --ignored --nocapture
 
+      - name: Prove Escape gesture precedence on real PUB
+        run: cargo test -p chaptera-desktop gui_escape_cancels_active_object_gesture_before_clearing_selection_on_real_pub -- --ignored --nocapture
+
       - name: Prove Story focus and Alt Arrow on real PUB
         run: cargo test -p chaptera-desktop gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub -- --ignored --nocapture
