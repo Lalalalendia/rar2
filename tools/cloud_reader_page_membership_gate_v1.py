@@ -10,6 +10,8 @@ SUMMARY_SCHEMA = "chaptera.publisher-visual-fingerprint-compare.v1"
 AUTHORITY_SCHEMA = "chaptera.publisher-page-membership-authority.v1"
 GATE_SCHEMA = "chaptera.publisher-page-membership-gate.v1"
 WARNING_STATE = "warning_membership_unknown"
+LOGICAL_STAGE = "logical_page"
+VALID_STAGES = {"logical_page", "viewport_spread", "production_sheet", "unknown"}
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SOURCE_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -61,6 +63,10 @@ def membership_transitions(current: dict, baseline: dict) -> tuple[list[dict], l
         if not isinstance(source_sha, str) or not SOURCE_SHA_RE.fullmatch(source_sha):
             raise ValueError(f"missing source SHA authority for {fixture}")
 
+        before_stage = before.get("reference_surface_stage", "unknown")
+        now_stage = now.get("reference_surface_stage", "unknown")
+        if before_stage not in VALID_STAGES or now_stage not in VALID_STAGES:
+            raise ValueError(f"unsupported reference surface stage for {fixture}")
         before_count = before.get("candidate_pages")
         now_count = now.get("candidate_pages")
         count_changed = before_count != now_count
@@ -75,6 +81,8 @@ def membership_transitions(current: dict, baseline: dict) -> tuple[list[dict], l
                 transitions.append({
                     "fixture": fixture,
                     "source_sha256": source_sha,
+                    "baseline_reference_surface_stage": before_stage,
+                    "current_reference_surface_stage": now_stage,
                     "baseline_candidate_pages": before_count,
                     "current_candidate_pages": now_count,
                     "baseline_page_identity_order_sha256": None,
@@ -87,6 +95,7 @@ def membership_transitions(current: dict, baseline: dict) -> tuple[list[dict], l
                 bootstrap.append({
                     "fixture": fixture,
                     "source_sha256": source_sha,
+                    "reference_surface_stage": now_stage,
                     "candidate_pages": now_count,
                     "current_page_identity_order_sha256": now_digest,
                     "reason": "baseline_predates_page_identity_digest",
@@ -99,6 +108,8 @@ def membership_transitions(current: dict, baseline: dict) -> tuple[list[dict], l
         transitions.append({
             "fixture": fixture,
             "source_sha256": source_sha,
+            "baseline_reference_surface_stage": before_stage,
+            "current_reference_surface_stage": now_stage,
             "baseline_candidate_pages": before_count,
             "current_candidate_pages": now_count,
             "baseline_page_identity_order_sha256": before_digest,
@@ -124,6 +135,8 @@ def load_authorities(payload: dict) -> list[dict]:
             raise ValueError("authority fixture must be non-empty")
         if not isinstance(row.get("source_sha256"), str) or not SOURCE_SHA_RE.fullmatch(row["source_sha256"]):
             raise ValueError("authority source_sha256 must be canonical")
+        if row.get("reference_surface_stage") != LOGICAL_STAGE:
+            raise ValueError("PAGE membership authority reference_surface_stage must be logical_page")
         if not isinstance(row.get("selector_profile_id"), str) or not row["selector_profile_id"]:
             raise ValueError("authority selector_profile_id must be non-empty")
         if not isinstance(row.get("evidence_issue"), int) or row["evidence_issue"] <= 0:
@@ -154,6 +167,8 @@ def authority_matches(transition: dict, authority: dict) -> bool:
     keys = (
         "fixture",
         "source_sha256",
+        "baseline_reference_surface_stage",
+        "current_reference_surface_stage",
         "baseline_candidate_pages",
         "current_candidate_pages",
         "baseline_page_identity_order_sha256",
@@ -168,6 +183,12 @@ def evaluate(current: dict, baseline: dict, authority_payload: dict) -> dict:
     accepted = []
     blocked = []
     for transition in transitions:
+        if (
+            transition["baseline_reference_surface_stage"] != LOGICAL_STAGE
+            or transition["current_reference_surface_stage"] != LOGICAL_STAGE
+        ):
+            blocked.append({**transition, "reason": "reference_surface_stage_not_logical_page"})
+            continue
         if not transition["identity_comparison_available"]:
             blocked.append({**transition, "reason": "baseline_page_identity_unavailable"})
             continue
@@ -185,6 +206,7 @@ def evaluate(current: dict, baseline: dict, authority_payload: dict) -> dict:
         authority = matches[0]
         accepted.append({
             **transition,
+            "reference_surface_stage": authority["reference_surface_stage"],
             "selector_profile_id": authority["selector_profile_id"],
             "evidence_issue": authority["evidence_issue"],
             "evidence_digest": authority["evidence_digest"],
@@ -208,6 +230,7 @@ def evaluate(current: dict, baseline: dict, authority_payload: dict) -> dict:
             "raw_page_id_emitted": False,
             "ordered_page_identity_transition_is_exactly_bound": True,
             "unproven_membership_transition_fails_closed": True,
+            "membership_authority_requires_logical_page_reference_stage": True,
         },
     }
 
@@ -217,7 +240,7 @@ def self_test() -> None:
     old_digest = "sha256:" + "1" * 64
     new_digest = "sha256:" + "2" * 64
 
-    def summary(commit: str, count: int, digest: str | None) -> dict:
+    def summary(commit: str, count: int, digest: str | None, stage: str = LOGICAL_STAGE) -> dict:
         return {
             "schema": SUMMARY_SCHEMA,
             "batch_id": "batch01",
@@ -227,6 +250,7 @@ def self_test() -> None:
                 "source_sha256": source_sha,
                 "candidate_page_identity_order_sha256": digest,
                 "reference_state": WARNING_STATE,
+                "reference_surface_stage": stage,
                 "rendered": True,
                 "candidate_pages": count,
                 "reference_pages": 2,
@@ -245,6 +269,9 @@ def self_test() -> None:
         "authorities": [{
             "fixture": "029_test",
             "source_sha256": source_sha,
+            "reference_surface_stage": LOGICAL_STAGE,
+            "baseline_reference_surface_stage": LOGICAL_STAGE,
+            "current_reference_surface_stage": LOGICAL_STAGE,
             "baseline_candidate_pages": 9,
             "current_candidate_pages": 2,
             "baseline_page_identity_order_sha256": old_digest,
@@ -257,6 +284,16 @@ def self_test() -> None:
     passed = evaluate(current, baseline, authority)
     assert passed["status"] == "pass"
     assert passed["accepted_transition_count"] == 1
+
+    unknown = evaluate(summary("head", 2, new_digest, "unknown"), baseline, authority)
+    assert unknown["status"] == "blocked"
+    assert unknown["blocked_transitions"][0]["reason"] == "reference_surface_stage_not_logical_page"
+
+    production = evaluate(
+        summary("head", 2, new_digest, "production_sheet"), baseline, authority
+    )
+    assert production["status"] == "blocked"
+    assert production["blocked_transitions"][0]["reason"] == "reference_surface_stage_not_logical_page"
 
     bootstrap = evaluate(
         summary("head", 9, new_digest),
