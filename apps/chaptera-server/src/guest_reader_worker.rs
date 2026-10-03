@@ -525,14 +525,14 @@ pub fn run_guest_scene_worker(
                 Err(_) => {
                     batch01_worker_phase_trace("guest_scene_projection:error");
                     (
-                    "unsupported".to_owned(),
-                    Some("reader_scene_projection_failed".to_owned()),
-                    None,
-                    None,
-                    structural_scan_duration_us,
-                    Some(duration_us(scene_started.elapsed())),
+                        "unsupported".to_owned(),
+                        Some("reader_scene_projection_failed".to_owned()),
+                        None,
+                        None,
+                        structural_scan_duration_us,
+                        Some(duration_us(scene_started.elapsed())),
                     )
-                },
+                }
             }
         }
         Err(_) => {
