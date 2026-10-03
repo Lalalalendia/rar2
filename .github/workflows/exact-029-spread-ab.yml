@@ -1,0 +1,157 @@
+name: Exact 029 spread A-B
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/exact-029-spread-ab.yml"
+      - "crates/pub-presentation-profile/src/lib.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/lib.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: exact-029-spread-ab-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/exact-029-spread-ab
+
+jobs:
+  exact-029:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified", digest)
+          PY
+
+      - name: Install visual dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+
+      - name: Materialize exact 029 fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/exact-029-spread"
+          mkdir -p "$RUNNER_TEMP/exact-029-spread"
+          python tools/cloud_reader_visual_fingerprint_v1.py prepare             tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv             out/pinned1050/materialized/native             "$RUNNER_TEMP/no-second-source-root"             "$RUNNER_TEMP/exact-029-spread/fixtures"             "$RUNNER_TEMP/exact-029-spread/manifest-all.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "exact-029-spread"
+          src = json.loads((root / "manifest-all.json").read_text())
+          rows = [row for row in src["fixtures"] if row["name"] == "029_c0688f73b9bf8fc7"]
+          assert len(rows) == 1, len(rows)
+          assert rows[0]["sha256"] == "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e"
+          (root / "manifest.json").write_text(
+              json.dumps({"schema": src["schema"], "fixtures": rows}, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - name: Build canonical Cloud Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Restore pinned Playwright Chromium cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: publisher-visual-batch01-${{ runner.os }}-playwright-1.55.0-chromium
+
+      - name: Install pinned browser acceptance runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Render exact 029 spread candidate
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/exact-029-spread-ab/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/exact-029-spread/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/exact-029-spread/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "0"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Compare exact 029 against Publisher fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/exact-029-spread-ab
+          python tools/cloud_reader_visual_fingerprint_v1.py compare             "$RUNNER_TEMP/exact-029-spread/browser/receipt.json"             tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json             target/exact-029-spread-ab/summary.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("target/exact-029-spread-ab/summary.json").read_text())
+          rows = [row for row in data["pairs"] if row["fixture"] == "029_c0688f73b9bf8fc7"]
+          assert len(rows) == 1, len(rows)
+          row = rows[0]
+          assert row["rendered"] is True
+          assert row["candidate_pages"] == 2, row["candidate_pages"]
+          assert row["reference_pages"] == 2, row["reference_pages"]
+          pages = row["pages"]
+          assert len(pages) == 2
+          print(json.dumps({
+              "candidate_pages": row["candidate_pages"],
+              "reference_pages": row["reference_pages"],
+              "pages": [{
+                  "page": p["page"],
+                  "changed_cell_fraction": p["changed_cell_fraction"],
+                  "mean_abs_channel_delta": p["mean_abs_channel_delta"],
+                  "max_channel_delta": p["max_channel_delta"],
+                  "reference_media_extent_delta": p["reference_media_extent_delta"],
+              } for p in pages],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exact-029-spread-ab-receipt
+          path: target/exact-029-spread-ab/summary.json
+          if-no-files-found: error
+          retention-days: 30
