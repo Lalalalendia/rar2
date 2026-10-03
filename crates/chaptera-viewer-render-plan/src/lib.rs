@@ -1567,6 +1567,10 @@ fn resolve_mixed_size_text_layout_v1(
         Ok(policy) => policy,
         Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
     };
+    eprintln!(
+        "CHAPTERA_READER_PERF mixed_layout:policy_candidates:{}",
+        policy.candidates.len()
+    );
 
     let mut cursor = fragment.scalar_start;
     let mut used_height_emu = 0_i64;
@@ -1575,11 +1579,15 @@ fn resolve_mixed_size_text_layout_v1(
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
+        let mut candidate_ordinal = 0_usize;
         for candidate in policy
             .candidates
             .iter()
             .filter(|candidate| candidate.scalar_boundary > cursor)
         {
+            eprintln!(
+                "CHAPTERA_READER_PERF mixed_layout:line:{line_index}:candidate:{candidate_ordinal}:start"
+            );
             let evaluated = match shape_mixed_line_candidate_v1(
                 &scalars,
                 cursor,
@@ -1599,6 +1607,10 @@ fn resolve_mixed_size_text_layout_v1(
             if fits_width && fits_height {
                 chosen = Some(evaluated);
             }
+            eprintln!(
+                "CHAPTERA_READER_PERF mixed_layout:line:{line_index}:candidate:{candidate_ordinal}:done"
+            );
+            candidate_ordinal += 1;
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
             }
