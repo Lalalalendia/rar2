@@ -28,6 +28,7 @@ use pub_viewer::{
     ViewerStoryFrame, ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fmt;
 
 pub const PAGE_RENDER_PLAN_SCHEMA_V1: &str = "chaptera.page-render-plan.v1";
@@ -65,6 +66,23 @@ pub struct NodeRenderPlanV1 {
     pub text: Option<RenderTextFragmentV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table: Option<RenderTableV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthoredPageRenderNodeV1 {
+    pub node_id: NodeId,
+    pub bounds: RectEmu,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid_fill_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid_line: Option<RenderSolidLineV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthoredPageRenderLaneV1 {
+    pub page_id: PageId,
+    /// Exact authored back/bottom -> front/top order.
+    pub nodes: Vec<AuthoredPageRenderNodeV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -494,6 +512,16 @@ pub enum RenderPlanErrorV1 {
     ProjectedKindUnsupported {
         instance_id: String,
     },
+    AuthoredLanePageMismatch {
+        plan_page_id: PageId,
+        lane_page_id: PageId,
+    },
+    AuthoredLaneDuplicateNode {
+        node_id: NodeId,
+    },
+    AuthoredLaneBaseCollision {
+        node_id: NodeId,
+    },
 }
 
 impl fmt::Display for RenderPlanErrorV1 {
@@ -519,6 +547,20 @@ impl fmt::Display for RenderPlanErrorV1 {
                     "projected instance {instance_id} has unsupported projection kind"
                 )
             }
+            Self::AuthoredLanePageMismatch {
+                plan_page_id,
+                lane_page_id,
+            } => write!(
+                formatter,
+                "authored render lane page {lane_page_id:?} does not match render-plan page {plan_page_id:?}"
+            ),
+            Self::AuthoredLaneDuplicateNode { node_id } => {
+                write!(formatter, "authored render lane contains duplicate node {node_id:?}")
+            }
+            Self::AuthoredLaneBaseCollision { node_id } => write!(
+                formatter,
+                "authored render lane node {node_id:?} collides with the existing base render lane"
+            ),
         }
     }
 }
@@ -699,6 +741,58 @@ fn resolved_vertical_offset_emu_v1(
         Some(ViewerTextVerticalAlignment::Bottom) => remaining,
         Some(ViewerTextVerticalAlignment::Top) | None => 0,
     }
+}
+
+/// Append the authoritative Chaptera-authored lane after the existing base/imported
+/// lane without changing either lane's internal order.
+///
+/// The caller owns provenance admission and converts its authored runtime state
+/// into this source-neutral render shape. This function owns only the effective
+/// paint-order composition law shared by every render-plan consumer.
+pub fn apply_authored_page_render_lane_v1(
+    plan: &mut PageRenderPlanV1,
+    lane: &AuthoredPageRenderLaneV1,
+) -> Result<(), RenderPlanErrorV1> {
+    if plan.page_id != lane.page_id {
+        return Err(RenderPlanErrorV1::AuthoredLanePageMismatch {
+            plan_page_id: plan.page_id,
+            lane_page_id: lane.page_id,
+        });
+    }
+
+    let base_ids = plan
+        .nodes
+        .iter()
+        .map(|node| node.node_id)
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for authored in &lane.nodes {
+        if !seen.insert(authored.node_id) {
+            return Err(RenderPlanErrorV1::AuthoredLaneDuplicateNode {
+                node_id: authored.node_id,
+            });
+        }
+        if base_ids.contains(&authored.node_id) {
+            return Err(RenderPlanErrorV1::AuthoredLaneBaseCollision {
+                node_id: authored.node_id,
+            });
+        }
+    }
+
+    plan.nodes.extend(lane.nodes.iter().map(|authored| NodeRenderPlanV1 {
+        node_id: authored.node_id,
+        #[cfg(feature = "projected-scene-instances")]
+        projected_scene_instance: None,
+        bounds: authored.bounds,
+        text_bounds: None,
+        transform: Affine2D::identity(),
+        solid_fill_rgb: authored.solid_fill_rgb,
+        solid_line: authored.solid_line.clone(),
+        image: None,
+        text: None,
+        table: None,
+    }));
+    Ok(())
 }
 
 pub fn build_page_render_plan_v1(
@@ -3379,6 +3473,122 @@ mod tests {
         }
         assert!(json.contains("image/png"));
         assert!(json.contains("hello"));
+    }
+
+    #[test]
+    fn authored_lane_appends_after_base_in_exact_back_to_front_order() {
+        let mut plan = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
+        let base_len = plan.nodes.len();
+        let page_id = plan.page_id;
+        let back: NodeId =
+            serde_json::from_str("\"01890f47-0d10-7abc-8def-0123456789ab\"")
+                .expect("authored NodeId");
+        let front: NodeId =
+            serde_json::from_str("\"01890f47-0d11-7abc-8def-0123456789ab\"")
+                .expect("authored NodeId");
+        let lane = AuthoredPageRenderLaneV1 {
+            page_id,
+            nodes: vec![
+                AuthoredPageRenderNodeV1 {
+                    node_id: back,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(10),
+                        LengthEmu::new(20),
+                        LengthEmu::new(300),
+                        LengthEmu::new(400),
+                    ),
+                    solid_fill_rgb: Some([1, 2, 3]),
+                    solid_line: None,
+                },
+                AuthoredPageRenderNodeV1 {
+                    node_id: front,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(30),
+                        LengthEmu::new(40),
+                        LengthEmu::new(300),
+                        LengthEmu::new(400),
+                    ),
+                    solid_fill_rgb: Some([4, 5, 6]),
+                    solid_line: Some(RenderSolidLineV1 {
+                        rgb: [7, 8, 9],
+                        width_emu: 12_700,
+                    }),
+                },
+            ],
+        };
+
+        apply_authored_page_render_lane_v1(&mut plan, &lane).expect("authored lane projection");
+        assert_eq!(plan.nodes.len(), base_len + 2);
+        assert_eq!(plan.nodes[base_len].node_id, back);
+        assert_eq!(plan.nodes[base_len + 1].node_id, front);
+        assert_eq!(plan.nodes[base_len].solid_fill_rgb, Some([1, 2, 3]));
+        assert_eq!(
+            plan.nodes[base_len + 1].solid_line.as_ref().map(|line| line.rgb),
+            Some([7, 8, 9])
+        );
+    }
+
+    #[test]
+    fn authored_lane_rejects_duplicate_and_base_collision_without_partial_append() {
+        let mut plan = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
+        let original = plan.clone();
+        let base_node = plan.nodes[0].node_id;
+        let duplicate: NodeId =
+            serde_json::from_str("\"01890f47-0d12-7abc-8def-0123456789ab\"")
+                .expect("authored NodeId");
+
+        let duplicate_lane = AuthoredPageRenderLaneV1 {
+            page_id: plan.page_id,
+            nodes: vec![
+                AuthoredPageRenderNodeV1 {
+                    node_id: duplicate,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(0),
+                        LengthEmu::new(0),
+                        LengthEmu::new(10),
+                        LengthEmu::new(10),
+                    ),
+                    solid_fill_rgb: None,
+                    solid_line: None,
+                },
+                AuthoredPageRenderNodeV1 {
+                    node_id: duplicate,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(0),
+                        LengthEmu::new(0),
+                        LengthEmu::new(10),
+                        LengthEmu::new(10),
+                    ),
+                    solid_fill_rgb: None,
+                    solid_line: None,
+                },
+            ],
+        };
+        assert!(matches!(
+            apply_authored_page_render_lane_v1(&mut plan, &duplicate_lane),
+            Err(RenderPlanErrorV1::AuthoredLaneDuplicateNode { .. })
+        ));
+        assert_eq!(plan, original);
+
+        let collision_lane = AuthoredPageRenderLaneV1 {
+            page_id: plan.page_id,
+            nodes: vec![AuthoredPageRenderNodeV1 {
+                node_id: base_node,
+                bounds: RectEmu::new(
+                    LengthEmu::new(0),
+                    LengthEmu::new(0),
+                    LengthEmu::new(10),
+                    LengthEmu::new(10),
+                ),
+                solid_fill_rgb: None,
+                solid_line: None,
+            }],
+        };
+        assert!(matches!(
+            apply_authored_page_render_lane_v1(&mut plan, &collision_lane),
+            Err(RenderPlanErrorV1::AuthoredLaneBaseCollision { .. })
+        ));
+        assert_eq!(plan, original);
     }
 
     #[test]
