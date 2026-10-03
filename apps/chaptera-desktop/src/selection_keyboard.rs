@@ -91,9 +91,7 @@ pub fn route_arrow_v1(
     }
 
     let admitted = match focus {
-        FocusOwnerV1::Canvas => {
-            !modifiers.alt && selected_count == 1 && selected_object_movable
-        }
+        FocusOwnerV1::Canvas => !modifiers.alt && selected_count == 1 && selected_object_movable,
         FocusOwnerV1::StoryText => {
             modifiers.alt
                 && selected_count == 1
