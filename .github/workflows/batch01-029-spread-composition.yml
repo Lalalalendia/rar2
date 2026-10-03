@@ -6,6 +6,7 @@ on:
       - ".github/workflows/batch01-029-spread-composition.yml"
       - "tools/research_batch01_029_spread_composition_v1.py"
       - "vendor/producer-a/crates/pub-reader/src/bin/page-role-fingerprint-receipt.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/page-projection-fingerprint-receipt.rs"
   workflow_dispatch:
 
 permissions:
@@ -95,6 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-fingerprint-receipt --jobs 2
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin page-projection-fingerprint-receipt --jobs 2
           cargo build -p chaptera-server --bin chaptera --jobs 2
 
       - name: Resolve exact source PAGE identities
@@ -105,6 +107,14 @@ jobs:
           "$CARGO_TARGET_DIR/debug/page-role-fingerprint-receipt" \
             "$RUNNER_TEMP/batch01-029-spread/fixtures/029_c0688f73b9bf8fc7.pub" \
             target/batch01-029-spread/page-role.json
+
+      - name: Resolve exact Viewer PAGE identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CARGO_TARGET_DIR/debug/page-projection-fingerprint-receipt" \
+            "$RUNNER_TEMP/batch01-029-spread/fixtures/029_c0688f73b9bf8fc7.pub" \
+            target/batch01-029-spread/viewer-pages.json
 
       - name: Render fail-open exact 029
         env:
@@ -126,6 +136,7 @@ jobs:
           python tools/research_batch01_029_spread_composition_v1.py \
             "$RUNNER_TEMP/batch01-029-spread/browser/receipt.json" \
             target/batch01-029-spread/page-role.json \
+            target/batch01-029-spread/viewer-pages.json \
             tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
             029_c0688f73b9bf8fc7 \
             target/batch01-029-spread/summary.json
