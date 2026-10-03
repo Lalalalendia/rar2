@@ -1842,7 +1842,10 @@ mod tests {
         );
         assert_eq!(selection.customer_page_seq_nums, vec![201, 203]);
         assert_eq!(selection.master_page_seq_num, 100);
-        assert_eq!(selection.service_page_seq_nums, vec![200, 202, 204, 300, 301]);
+        assert_eq!(
+            selection.service_page_seq_nums,
+            vec![200, 202, 204, 300, 301]
+        );
     }
 
     #[test]
