@@ -93,7 +93,7 @@ jobs:
       - name: Build source-safe 0x8A receipt
         run: |
           set -euo pipefail
-          cargo fmt --manifest-path vendor/producer-a/Cargo.toml --check
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --check
           cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin imposition8a-signature-receipt --jobs 2
 
       - name: Inspect recurrence and Batch01 controls
