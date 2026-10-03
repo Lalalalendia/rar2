@@ -69,6 +69,28 @@ def verify_wire(root: Path, items: list[dict]) -> dict:
 
     idml_pairs: set[tuple[str, float]] = set()
     with zipfile.ZipFile(idml) as archive:
+        designmap = ET.fromstring(archive.read("designmap.xml"))
+        font_refs = [
+            node.attrib.get("src")
+            for node in designmap.iter()
+            if local(node.tag) == "Fonts"
+        ]
+        if font_refs != ["Resources/Fonts.xml"]:
+            raise AssertionError(f"IDML typography wire has unexpected Fonts refs: {font_refs!r}")
+
+        fonts_root = ET.fromstring(archive.read("Resources/Fonts.xml"))
+        font_faces = {
+            (
+                family.attrib.get("Name"),
+                face.attrib.get("FontStyleName"),
+                face.attrib.get("PostScriptName"),
+            )
+            for family in fonts_root.iter()
+            if local(family.tag) == "FontFamily"
+            for face in list(family)
+            if local(face.tag) == "Font"
+        }
+
         for item in items:
             story_hex = item["story_id"].replace("-", "").lower()
             path = f"Stories/Story_us{story_hex}.xml"
@@ -92,6 +114,13 @@ def verify_wire(root: Path, items: list[dict]) -> dict:
                 float(item["font_size_pt"]),
                 f"IDML Story {item['story_id']}",
             )
+            if norm_family(item["font_family"]) == "montserrat":
+                expected_face = ("Montserrat", "Regular", "Montserrat-Regular")
+                if expected_face not in font_faces:
+                    raise AssertionError(
+                        f"IDML Fonts.xml missing bounded face {expected_face!r}; "
+                        f"observed={sorted(font_faces)!r}"
+                    )
             idml_pairs.update(pairs)
 
     with zipfile.ZipFile(odg) as archive:
