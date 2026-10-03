@@ -34,6 +34,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.94.1"
+          components: rustfmt
 
       - name: Download pinned exact 1050 materialization
         uses: actions/download-artifact@v4
