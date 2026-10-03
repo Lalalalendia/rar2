@@ -1,0 +1,138 @@
+name: BorderArt Native One-Shot
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/borderart-native-once.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: borderart-native-once-publisher-2019
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Trust exact main push
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.ref }}" -ne "refs/heads/main") {
+            throw "Expected refs/heads/main, got ${{ github.ref }}"
+          }
+          "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate fixed BorderArt packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/research-runner/validate_packet.py `
+            --packet tools/research-runner/experiments/borderart-auth-01.packet.json `
+            --expected-environment publisher-2019
+
+      - name: Verify direct-run blob gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packet = (git hash-object -- tools/research-runner/experiments/borderart-auth-01.packet.json).Trim()
+          $operation = (git hash-object -- tools/research-runner/operations/publisher_borderart_auth_01.ps1).Trim()
+          $runner = Get-Content tools/windows/run_borderart_auth_direct.ps1 -Raw
+          if ($packet -ne "234d200ccadeedbc1ed12b2d43cbc15e853ca1fc") {
+            throw "Unexpected BorderArt packet blob: $packet"
+          }
+          if ($operation -ne "4aa9406bab8f18004b70421c8efbb304fdbb4a6e") {
+            throw "Unexpected BorderArt operation blob: $operation"
+          }
+          if ($runner -notmatch [regex]::Escape($packet)) {
+            throw "Direct runner does not pin packet blob $packet"
+          }
+          if ($runner -notmatch [regex]::Escape($operation)) {
+            throw "Direct runner does not pin operation blob $operation"
+          }
+
+  native:
+    needs: validate
+    environment: pub-native-lab
+    runs-on:
+      - self-hosted
+      - Windows
+      - pub-research
+      - publisher-2019
+    timeout-minutes: 45
+    env:
+      PUB_RESEARCH_PROFILE_ID: publisher-2019
+      BORDERART_OUTPUT: ${{ github.workspace }}\out\pub-research\borderart-native-once-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.trusted_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact trusted checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actual = (git rev-parse HEAD).Trim()
+          $expected = "${{ needs.validate.outputs.trusted_sha }}"
+          if ($actual -ne $expected) {
+            throw "Trusted checkout mismatch: expected $expected got $actual"
+          }
+
+      - name: Run BorderArt native discriminator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          pwsh -NoProfile -File tools/windows/run_borderart_auth_direct.ps1 `
+            -OutputRoot "$env:BORDERART_OUTPUT"
+
+      - name: Publish verdict
+        if: always()
+        shell: pwsh
+        run: |
+          $analysis = Join-Path $env:BORDERART_OUTPUT "analysis\borderart-auth-01.json"
+          $log = Join-Path $env:BORDERART_OUTPUT "logs\borderart-auth-01.txt"
+          "## BORDERART-AUTH-01" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- trusted SHA: ${{ needs.validate.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
+          "- runner labels: self-hosted / Windows / pub-research / publisher-2019" >> $env:GITHUB_STEP_SUMMARY
+          if (Test-Path -LiteralPath $analysis) {
+            $doc = Get-Content -LiteralPath $analysis -Raw | ConvertFrom-Json
+            "- classification: $($doc.classification)" >> $env:GITHUB_STEP_SUMMARY
+            "- physical authority signal: $($doc.physical_projection.authority_signal)" >> $env:GITHUB_STEP_SUMMARY
+            "- applied Fbid: $(@($doc.physical_projection.applied_fbid_values) -join ',')" >> $env:GITHUB_STEP_SUMMARY
+            "- deleted Fbid: $(@($doc.physical_projection.deleted_fbid_values) -join ',')" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "- analysis receipt missing" >> $env:GITHUB_STEP_SUMMARY
+          }
+          if (Test-Path -LiteralPath $log) {
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "### operation log" >> $env:GITHUB_STEP_SUMMARY
+            Get-Content -LiteralPath $log | Add-Content $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload source-free evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: borderart-native-once-${{ github.run_id }}
+          path: |
+            out/pub-research/borderart-native-once-${{ github.run_id }}/environment.json
+            out/pub-research/borderart-native-once-${{ github.run_id }}/evidence-manifest.json
+            out/pub-research/borderart-native-once-${{ github.run_id }}/logs/**
+            out/pub-research/borderart-native-once-${{ github.run_id }}/analysis/**
+          if-no-files-found: warn
+          retention-days: 30
