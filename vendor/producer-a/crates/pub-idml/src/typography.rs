@@ -145,18 +145,15 @@ pub fn add_full_story_typography_to_idml(
             });
         }
 
-        let point_size = format_emu_points(item.font_size_emu);
-        let replacement = if let Some(face) = idml_regular_face(&item.font_family) {
-            let font_family = escape_xml_text(item.story_id, &item.font_family)?;
-            font_resources.insert(face);
-            format!(
-                "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" FontStyle=\"Regular\" PointSize=\"{point_size}\">\n        <Properties>\n          <AppliedFont type=\"string\">{font_family}</AppliedFont>\n        </Properties>\n"
-            )
-        } else {
-            format!(
-                "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" PointSize=\"{point_size}\">\n"
-            )
+        let Some(face) = idml_regular_face(&item.font_family) else {
+            continue;
         };
+        let point_size = format_emu_points(item.font_size_emu);
+        let font_family = escape_xml_text(item.story_id, &item.font_family)?;
+        font_resources.insert(face);
+        let replacement = format!(
+            "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" FontStyle=\"Regular\" PointSize=\"{point_size}\">\n        <Properties>\n          <AppliedFont type=\"string\">{font_family}</AppliedFont>\n        </Properties>\n"
+        );
         *xml = xml.replacen(marker, &replacement, 1);
     }
 
@@ -498,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_family_keeps_size_wire_without_inventing_font_face() {
+    fn unknown_family_is_left_unmodified_until_family_transport_is_proven() {
         let story_id = story(3);
         let export_plan = plan(story_id);
         let mut package = package(&export_plan, story_id);
@@ -513,7 +510,7 @@ mod tests {
             &mut package,
             std::slice::from_ref(&typography),
         )
-        .expect("bounded size typography");
+        .expect("unsupported family remains an explicit loss");
 
         let xml = package
             .parts
@@ -521,7 +518,7 @@ mod tests {
             .find(|part| part.kind == IdmlPartKind::Story)
             .and_then(|part| part.content.as_text())
             .expect("story text");
-        assert!(xml.contains("PointSize=\"11\""));
+        assert!(!xml.contains("PointSize=\"11\""));
         assert!(!xml.contains("AppliedFont"));
         assert!(!xml.contains("FontStyle="));
         assert!(
