@@ -63,7 +63,7 @@ jobs:
           repository: Lalalalendia/rar2
           run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
 
-      - name: Select exact profile from pinned 1050
+      - name: Materialize exact profile by corpus stratum
         env:
           PROFILE: ${{ matrix.profile }}
           EXPECTED_PROFILE_COUNT: ${{ matrix.expected }}
@@ -72,9 +72,10 @@ jobs:
           python - <<'PY'
           import hashlib
           import importlib.util
+          import io
           import json
           import os
-          import shutil
+          import zipfile
           from collections import Counter
           from pathlib import Path
 
@@ -104,44 +105,77 @@ jobs:
           native = out / "native"
           native.mkdir(parents=True, exist_ok=True)
           rows = []
-          missing = []
+          zip_cache = {}
 
           for entry in entries:
               sha = entry["sha256"].casefold()
-              source = root / f"{sha}.pub"
-              if not source.is_file():
-                  missing.append(sha)
-                  continue
-              data = source.read_bytes()
+              retained = root / f"{sha}.pub"
+
+              if retained.is_file():
+                  data = retained.read_bytes()
+                  transport = "pinned1050_retained"
+              elif entry["stratum"] == "apache_poi":
+                  # The POI URL is commit-pinned by reader_corpus_manifest_v1.json.
+                  data = module.fetch_bytes(entry["url"])
+                  transport = "apache_poi_commit_pinned"
+              elif entry["stratum"].startswith("microsoft_press_"):
+                  # Raw PUB bytes were deliberately not retained in the public evidence
+                  # artifacts. Rehydrate the official package, then fail closed unless
+                  # the exact admitted member SHA-256 and byte length still match.
+                  archive = zip_cache.get(entry["url"])
+                  if archive is None:
+                      archive = module.fetch_bytes(entry["url"], timeout=180)
+                      zip_cache[entry["url"]] = archive
+                  with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+                      data = zf.read(entry["member"])
+                  transport = "microsoft_press_rehydrated_sha_verified"
+              else:
+                  raise RuntimeError(
+                      "no exact-byte transport for corpus member "
+                      f"{sha} stratum={entry['stratum']}; "
+                      "mutable Lalamu URLs must not be re-fetched"
+                  )
+
               actual = hashlib.sha256(data).hexdigest()
-              assert actual == sha, (entry["name"], actual, sha)
+              assert actual == sha, (entry["name"], actual, sha, transport)
               assert len(data) == entry["byte_len"], (
                   entry["name"],
                   len(data),
                   entry["byte_len"],
+                  transport,
               )
-              shutil.copyfile(source, native / f"{sha}.pub")
+              (native / f"{sha}.pub").write_bytes(data)
               rows.append({
                   "sha256": sha,
                   "byte_len": len(data),
                   "stratum": entry["stratum"],
                   "family": entry["family"],
+                  "transport": transport,
               })
 
-          assert not missing, {
-              "profile": profile,
-              "missing_count": len(missing),
-              "missing_sha256": missing,
-          }
           assert len(rows) == expected
+          transport_counts = Counter(row["transport"] for row in rows)
+          expected_retained = 14 if profile == "core65" else 35
+          assert transport_counts == Counter({
+              "pinned1050_retained": expected_retained,
+              "apache_poi_commit_pinned": 22,
+              "microsoft_press_rehydrated_sha_verified": 29,
+          }), dict(transport_counts)
 
           receipt = {
-              "schema": "chaptera.pub-vba-profile-from-pinned1050.v1",
+              "schema": "chaptera.pub-vba-profile-exact-transport.v2",
               "profile": profile,
               "profile_count": len(rows),
               "pinned_1050_count": len(paths),
               "pinned_1050_sha_list_digest": "sha256:" + digest,
               "stratum_counts": dict(sorted(Counter(row["stratum"] for row in rows).items())),
+              "transport_counts": dict(sorted(transport_counts.items())),
+              "claims": {
+                  "lalamu_live_urls_refetched": False,
+                  "apache_poi_commit_pinned": True,
+                  "microsoft_press_raw_pub_retained": False,
+                  "microsoft_press_rehydration_requires_exact_sha_and_size": True,
+              },
               "entries": sorted(rows, key=lambda row: row["sha256"]),
           }
           (out / "materialization.json").write_text(
@@ -154,6 +188,7 @@ jobs:
               "pinned_1050_count": len(paths),
               "pinned_1050_sha_list_digest": "sha256:" + digest,
               "stratum_counts": receipt["stratum_counts"],
+              "transport_counts": receipt["transport_counts"],
           }, indent=2, sort_keys=True))
           PY
 
