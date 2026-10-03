@@ -87,10 +87,15 @@ def collection_year(row: dict) -> int:
     return int(match.group(0)) if match else 9999
 
 
-def parent_prefix(url: str) -> str:
+def parent_prefix_variants(url: str) -> list[str]:
     split = urllib.parse.urlsplit(url)
+    host = split.netloc.removeprefix("www.")
     path = split.path.rsplit("/", 1)[0] + "/"
-    return urllib.parse.urlunsplit(("", split.netloc.removeprefix("www."), path, "", ""))
+    return [
+        urllib.parse.urlunsplit((scheme, candidate_host, path, "", ""))
+        for scheme in ("http", "https")
+        for candidate_host in (host, "www." + host)
+    ]
 
 
 def wanted_basename(url: str) -> str:
@@ -117,7 +122,7 @@ def main() -> int:
 
     target_reports = []
     for target in TARGETS:
-        prefix = parent_prefix(target["url"])
+        prefixes = parent_prefix_variants(target["url"])
         wanted = wanted_basename(target["url"])
         index_rows = []
         errors = []
@@ -125,42 +130,44 @@ def main() -> int:
 
         for crawl in crawls:
             endpoint = str(crawl["cdx-api"])
-            params = {
-                "url": prefix,
-                "matchType": "prefix",
-                "output": "json",
-                "filter": "status:200",
-                "collapse": "digest",
-                "limit": str(MAX_INDEX_ROWS_PER_CRAWL),
-            }
-            query = endpoint + "?" + urllib.parse.urlencode(params)
-            try:
-                rows = request_json_lines(query, timeout=15)
-            except Exception as exc:
-                errors.append(type(exc).__name__)
-                continue
-            for row in rows:
-                url = str(row.get("url", ""))
-                if pubish_href(url):
+            for prefix in prefixes:
+                params = {
+                    "url": prefix,
+                    "matchType": "prefix",
+                    "output": "json",
+                    "filter": "status:200",
+                    "collapse": "digest",
+                    "limit": str(MAX_INDEX_ROWS_PER_CRAWL),
+                }
+                query = endpoint + "?" + urllib.parse.urlencode(params)
+                try:
+                    rows = request_json_lines(query, timeout=15)
+                except Exception as exc:
+                    errors.append(type(exc).__name__)
                     continue
-                key = (
-                    str(row.get("digest", "")),
-                    str(row.get("filename", "")),
-                    str(row.get("offset", "")),
-                )
-                if key in seen_index:
-                    continue
-                seen_index.add(key)
-                index_rows.append(
-                    {
-                        "crawl": str(crawl.get("id", "")),
-                        "url": url,
-                        "filename": str(row.get("filename", "")),
-                        "offset": str(row.get("offset", "")),
-                        "length": str(row.get("length", "")),
-                        "timestamp": str(row.get("timestamp", "")),
-                    }
-                )
+                for row in rows:
+                    url = str(row.get("url", ""))
+                    if pubish_href(url):
+                        continue
+                    key = (
+                        str(row.get("digest", "")),
+                        str(row.get("filename", "")),
+                        str(row.get("offset", "")),
+                    )
+                    if key in seen_index:
+                        continue
+                    seen_index.add(key)
+                    index_rows.append(
+                        {
+                            "crawl": str(crawl.get("id", "")),
+                            "query_prefix": prefix,
+                            "url": url,
+                            "filename": str(row.get("filename", "")),
+                            "offset": str(row.get("offset", "")),
+                            "length": str(row.get("length", "")),
+                            "timestamp": str(row.get("timestamp", "")),
+                        }
+                    )
 
         # Prefer captures whose URL is closest to the target parent directory and
         # cap range fetches so this remains a bounded archaeology probe.
@@ -248,7 +255,7 @@ def main() -> int:
         target_reports.append(
             {
                 "source_sha256": target["source_sha256"],
-                "parent_prefix": prefix,
+                "parent_prefix_variants": prefixes,
                 "collections_queried": len(crawls),
                 "indexed_parent_html_candidates": len(index_rows),
                 "fetched_html_count": fetched_html,
@@ -267,7 +274,7 @@ def main() -> int:
         "target_count": len(TARGETS),
         "targets": target_reports,
         "evidence_boundary": (
-            "exact two remaining target parent directories only; Common Crawl historical "
+            "exact two remaining target parent directories only, queried as explicit http/https and www/non-www prefix variants; Common Crawl historical "
             "HTML captures through 2017 are sampled with bounded fetch count; receipt retains "
             "only public URLs, anchor samples, capture counts/timestamps and aggregate errors; "
             "no document text or PUB bytes are retained"
