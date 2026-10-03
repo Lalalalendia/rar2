@@ -69,6 +69,26 @@ temp_root = "/var/lib/chaptera/source-scan-tmp"
 upload_ttl_seconds = 1800
 direct_grant_ttl_seconds = 300
 
+[cloud_reader_guest]
+# Guest Reader policy. Font bytes are operator-provided and must be licensed for
+# this deployment. Chaptera never downloads or discovers ambient host fonts.
+session_ttl_seconds = 1800
+max_file_bytes = 268435456
+max_concurrent_uploads = 2
+max_reserved_bytes = 536870912
+rate_subject_secret = { source = "systemd", name = "cloud_reader_rate_subject_secret" }
+
+# Add one entry per exact source family that the deployment is licensed to
+# execute. Paths must be absolute in production and expected_sha256 must match
+# the exact file bytes; mismatches fail closed before Reader Scene production.
+#
+# [[cloud_reader_guest.font_resources]]
+# source_family = "Example Licensed Family"
+# path = "/var/lib/chaptera/fonts/example-family.ttf"
+# expected_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+# face_index = 0
+# mime = "font/ttf"
+
 [source_ingress.baseline]
 # Project creation derives the canonical baseline from the validated immutable
 # source in a bounded isolated child.
