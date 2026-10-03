@@ -44,6 +44,7 @@ jobs:
           test "$(git -C hsvba rev-parse HEAD)" = "e539218175ab04820b65bad3d13aa4da14030e49"
 
           python - <<'PY'
+          import hashlib
           import json
           import os
           import subprocess
@@ -62,7 +63,7 @@ jobs:
               assert path.stat().st_size == expected_size, (rel, path.stat().st_size, expected_size)
               blob = subprocess.check_output(["git", "-C", "hsvba", "hash-object", rel], text=True).strip()
               assert blob == expected_blob, (rel, blob, expected_blob)
-              out.append({"path": rel, "git_blob_sha": blob, "byte_len": expected_size})
+              out.append({"path": rel, "git_blob_sha": blob, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "byte_len": expected_size})
 
           target = Path("rar2/target/pub-vba-hsvba-positive")
           target.mkdir(parents=True, exist_ok=True)
@@ -221,6 +222,7 @@ jobs:
               "project_count": sum(r["project_count"] for r in rows),
               "module_count": sum(r["module_count"] for r in rows),
               "risk_totals": receipt["risk_totals"],
+              "files": receipt["files"],
           }, indent=2, sort_keys=True))
           PY
 
