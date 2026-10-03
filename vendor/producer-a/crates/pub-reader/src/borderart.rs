@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use pub_contents::{
-    BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_CONTAINER_A0, BLOCK_TYPE_U16, BLOCK_TYPE_U32,
+    BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_CONTAINER_A0, BLOCK_TYPE_EMPTY, BLOCK_TYPE_U16,
+    BLOCK_TYPE_U32,
     Contents0x2cChunkReference, ContentsCursor, RawContentsBlock, RawContentsBlockBody,
     decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_block, parse_confirmed_chunk_reference,
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 const CONTENTS_STREAM_PATH: &str = "/Contents";
 const RAW_TYPE_SHAPE: u16 = 0x01;
 const RAW_TYPE_FANCY_BORDERS: u16 = 0x46;
+const OPLPO_DONT_STRETCH_BORDERART_FIELD: u16 = 0x07;
 const OPLPO_FBID_FIELD: u16 = 0x09;
 const OPLPLBFB_IFBMAX_FIELD: u16 = 0x01;
 const OPLPLBFB_RGFB_FIELD: u16 = 0x02;
@@ -37,6 +39,8 @@ pub struct PubBorderArtShapeUseV1 {
     pub contents_seq_num: u32,
     pub fbid: u16,
     pub source: RawSpan,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stretch_pictures: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_name: Option<String>,
 }
@@ -277,6 +281,58 @@ fn parse_catalog_candidate(
     })
 }
 
+fn decode_shape_borderart_stretch_pictures(
+    fields: &[RawContentsBlock],
+    seq_num: u32,
+    diagnostics: &mut Vec<PubBorderArtCatalogDiagnosticV1>,
+) -> Option<bool> {
+    let markers = fields
+        .iter()
+        .filter(|field| field.id == OPLPO_DONT_STRETCH_BORDERART_FIELD)
+        .collect::<Vec<_>>();
+    if markers.is_empty() {
+        // Pinned libmspub independently names field0x07 SHAPE_DONT_STRETCH_BA
+        // and defaults the shape to stretched BorderArt when the marker is absent.
+        // Exact-1050 census: 79/82 Fbid shape uses omit field0x07.
+        return Some(true);
+    }
+    if markers.len() != 1 {
+        diagnostics.push(PubBorderArtCatalogDiagnosticV1 {
+            code: "borderart_shape_stretch_marker_ambiguous".into(),
+            contents_seq_num: Some(seq_num),
+            detail: format!(
+                "shape exposes {} field0x07 BorderArt stretch markers",
+                markers.len()
+            ),
+        });
+        return None;
+    }
+
+    let marker = markers[0];
+    if marker.block_type != BLOCK_TYPE_EMPTY {
+        diagnostics.push(PubBorderArtCatalogDiagnosticV1 {
+            code: "borderart_shape_stretch_marker_wrong_wire".into(),
+            contents_seq_num: Some(seq_num),
+            detail: format!(
+                "shape field0x07 uses wire0x{:02X}, expected exact Empty wire0x{BLOCK_TYPE_EMPTY:02X}",
+                marker.block_type
+            ),
+        });
+        return None;
+    }
+    if !matches!(marker.body, RawContentsBlockBody::Empty) {
+        diagnostics.push(PubBorderArtCatalogDiagnosticV1 {
+            code: "borderart_shape_stretch_marker_wrong_body".into(),
+            contents_seq_num: Some(seq_num),
+            detail: "shape field0x07 Empty marker has a non-empty body".into(),
+        });
+        return None;
+    }
+
+    // Exact-1050 census: all three observed field0x07 markers are wire0x08/Empty.
+    Some(false)
+}
+
 fn parse_shape_fbid(
     chunk: &pub_contents::Contents0x2cChunk,
     seq_num: u32,
@@ -324,10 +380,14 @@ fn parse_shape_fbid(
         return None;
     };
 
+    let stretch_pictures =
+        decode_shape_borderart_stretch_pictures(&chunk.fields, seq_num, diagnostics);
+
     Some(PubBorderArtShapeUseV1 {
         contents_seq_num: seq_num,
         fbid: *value,
         source: value_source.clone(),
+        stretch_pictures,
         catalog_name: None,
     })
 }
@@ -492,6 +552,47 @@ mod tests {
         bytes.extend_from_slice(&declared.to_le_bytes());
         bytes.extend_from_slice(&content);
         bytes
+    }
+
+    fn raw_fields(bytes: &[u8]) -> Vec<RawContentsBlock> {
+        let mut cursor = ContentsCursor::new(StreamPath(CONTENTS_STREAM_PATH.into()), bytes);
+        let mut fields = Vec::new();
+        while cursor.remaining() > 0 {
+            fields.push(parse_confirmed_block(&mut cursor).expect("test block"));
+        }
+        fields
+    }
+
+    #[test]
+    fn borderart_stretch_defaults_true_when_marker_is_absent() {
+        let mut diagnostics = Vec::new();
+        assert_eq!(
+            decode_shape_borderart_stretch_pictures(&[], 7, &mut diagnostics),
+            Some(true)
+        );
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn borderart_empty_field07_means_do_not_stretch() {
+        let fields = raw_fields(&[0x07, BLOCK_TYPE_EMPTY]);
+        let mut diagnostics = Vec::new();
+        assert_eq!(
+            decode_shape_borderart_stretch_pictures(&fields, 7, &mut diagnostics),
+            Some(false)
+        );
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn borderart_nonempty_field07_fails_closed() {
+        let fields = raw_fields(&[0x07, BLOCK_TYPE_U16, 0x01, 0x00]);
+        let mut diagnostics = Vec::new();
+        assert_eq!(
+            decode_shape_borderart_stretch_pictures(&fields, 7, &mut diagnostics),
+            None
+        );
+        assert_eq!(diagnostics[0].code, "borderart_shape_stretch_marker_wrong_wire");
     }
 
     #[test]
