@@ -69,8 +69,8 @@ jobs:
               ("064", "fb2927045c23292717df0a67ccb1e879d526a4ad8a6bb3c1046c72119fba3910", 750080),
           ]
 
-          policy_re = re.compile(r"^CHAPTERA_READER_PERF mixed_layout:policy_candidates:(\\d+)$")
-          candidate_re = re.compile(r"^CHAPTERA_READER_PERF mixed_layout:line:(\\d+):candidate:(\\d+):(start|done)$")
+          policy_re = re.compile(r"^CHAPTERA_READER_PERF mixed_layout:policy_candidates:(\d+)$")
+          candidate_re = re.compile(r"^CHAPTERA_READER_PERF mixed_layout:line:(\d+):candidate:(\d+):(start|done)$")
 
           rows = []
           for index, (fixture_id, sha, byte_len) in enumerate(fixtures, 1):
