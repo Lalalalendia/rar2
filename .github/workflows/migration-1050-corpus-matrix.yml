@@ -11,6 +11,7 @@ on:
       - "vendor/producer-a/crates/pub-odg/**"
       - "vendor/producer-a/crates/pub-reader/**"
       - "tools/ci/scribus_idml_consumer.py"
+      - "tools/ci/validate_editable_typography_roundtrip.py"
   push:
     branches:
       - validation/migration-corpus-1050-01
@@ -21,6 +22,7 @@ on:
       - "vendor/producer-a/crates/pub-idml/**"
       - "vendor/producer-a/crates/pub-odg/**"
       - "vendor/producer-a/crates/pub-reader/**"
+      - "tools/ci/validate_editable_typography_roundtrip.py"
   schedule:
     - cron: "17 3 * * 0"
   workflow_dispatch:
@@ -354,6 +356,26 @@ jobs:
             test -s "$dir/libreoffice/output.fodg"
           done
 
+      - name: Validate preserved typography after consumer roundtrip
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for route in "$EVIDENCE_ROOT"/consumer/*/route.json; do
+            dir="$(dirname "$route")"
+            args=(--receipt "$dir/typography-roundtrip.json")
+            if [[ -f "$dir/output.idml" ]]; then
+              args+=(--idml "$dir/output.idml")
+              args+=(--idml-report "$dir/idml.report.json")
+              args+=(--sla "$dir/consumer.sla")
+            fi
+            if [[ -f "$dir/output.odg" ]]; then
+              args+=(--odg "$dir/output.odg")
+              args+=(--odg-report "$dir/odg.report.json")
+              args+=(--fodg "$dir/libreoffice/output.fodg")
+            fi
+            python tools/ci/validate_editable_typography_roundtrip.py "${args[@]}"
+          done
+
       - name: Finalize migration corpus receipt
         env:
           REPO_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -374,6 +396,12 @@ jobs:
               directory = route_path.parent
               idml_materialized = (directory / "output.idml").is_file()
               odg_materialized = (directory / "output.odg").is_file()
+              typography_path = directory / "typography-roundtrip.json"
+              typography = (
+                  json.loads(typography_path.read_text())
+                  if typography_path.is_file()
+                  else {}
+              )
               row = {
                   "source_sha256": sha,
                   "idml_materialized": idml_materialized,
@@ -385,6 +413,18 @@ jobs:
                   "odg_consumer_opened": (
                       (directory / "libreoffice" / "output.fodg").is_file()
                       if odg_materialized else None
+                  ),
+                  "idml_typography_preserved_story_count": (
+                      typography.get("idml", {}).get("preserved_story_count", 0)
+                  ),
+                  "idml_typography_roundtrip_passed": (
+                      typography.get("idml", {}).get("passed")
+                  ),
+                  "odg_typography_preserved_story_count": (
+                      typography.get("odg", {}).get("preserved_story_count", 0)
+                  ),
+                  "odg_typography_roundtrip_passed": (
+                      typography.get("odg", {}).get("passed")
                   ),
               }
               if idml_materialized:
@@ -411,6 +451,22 @@ jobs:
           )
           summary["odg_consumer_opened_count"] = sum(
               row["odg_consumer_opened"] is True for row in consumer_rows
+          )
+          summary["idml_typography_preserved_story_count"] = sum(
+              row["idml_typography_preserved_story_count"] for row in consumer_rows
+          )
+          summary["odg_typography_preserved_story_count"] = sum(
+              row["odg_typography_preserved_story_count"] for row in consumer_rows
+          )
+          summary["idml_typography_roundtrip_validated_files"] = sum(
+              row["idml_typography_roundtrip_passed"] is True
+              and row["idml_typography_preserved_story_count"] > 0
+              for row in consumer_rows
+          )
+          summary["odg_typography_roundtrip_validated_files"] = sum(
+              row["odg_typography_roundtrip_passed"] is True
+              and row["odg_typography_preserved_story_count"] > 0
+              for row in consumer_rows
           )
           summary["claims"] = {
               "universal_pub_editable_export": False,
@@ -447,6 +503,12 @@ jobs:
               fh.write(
                   f"- ODG consumer survival: **{summary['odg_consumer_opened_count']}/{summary['odg_materialized_count']}**\n"
               )
+              fh.write(
+                  f"- IDML typography roundtrip: **{summary['idml_typography_preserved_story_count']} preserved Story semantics across {summary['idml_typography_roundtrip_validated_files']} files**\n"
+              )
+              fh.write(
+                  f"- ODG typography roundtrip: **{summary['odg_typography_preserved_story_count']} preserved Story semantics across {summary['odg_typography_roundtrip_validated_files']} files**\n"
+              )
           PY
 
       - name: Upload source-safe migration corpus receipt
@@ -461,5 +523,6 @@ jobs:
             target/migration-1050-corpus/consumer/**/route.json
             target/migration-1050-corpus/consumer/**/*.report.json
             target/migration-1050-corpus/consumer/**/*.report.txt
+            target/migration-1050-corpus/consumer/**/typography-roundtrip.json
           if-no-files-found: error
           retention-days: 90
