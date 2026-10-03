@@ -1771,9 +1771,7 @@ mod tests {
     fn mature_multi_root_profile_fails_open_for_external_master_target() {
         let mut input = mature_multi_root_input();
         input.pages[2].applied_master_seq_num = Some(999);
-        assert!(
-            select_mature_multi_referenced_root_customer_page_seq_nums_v1(input).is_none()
-        );
+        assert!(select_mature_multi_referenced_root_customer_page_seq_nums_v1(input).is_none());
     }
 
     #[test]
