@@ -1,0 +1,107 @@
+name: Batch01 Scene source-link discriminator
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/batch01-scene-source-links-probe.yml"
+      - "tools/batch01_scene_source_links_probe.py"
+      - "tools/test_batch01_scene_source_links_probe.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SOURCE_COMMIT_SHA: 3a1604911618a6ed4b19cf6cd48b850d3c6a066f
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact probe head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Check diagnostic privacy and attribution contract
+        run: python -m unittest discover -s tools -p test_batch01_scene_source_links_probe.py -v
+
+      - name: Create disposable exact-source worktree and instrument
+        env:
+          PROBE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/scene-projection-source" "$SOURCE_COMMIT_SHA"
+          mkdir -p out/scene-projection
+          python tools/batch01_scene_source_links_probe.py instrument \
+            --source-root "$RUNNER_TEMP/scene-projection-source" \
+            --output out/scene-projection/instrumentation.json \
+            --probe-commit "$PROBE_COMMIT_SHA"
+
+      - name: Download canonical exact 1050 input corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify corpus identity
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          shas = sorted(p.stem.casefold() for p in Path("out/pinned1050/materialized/native").glob("*.pub"))
+          assert len(shas) == 1050
+          digest = hashlib.sha256("".join(s + "\n" for s in shas).encode("ascii")).hexdigest()
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          print("Exact 1050 corpus identity verified.")
+          PY
+
+      - name: Build instrumented canonical worker
+        working-directory: ${{ runner.temp }}/scene-projection-source
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/scene-projection-source/target/scene-projection-probe
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Replay three failures and healthy control in original isolation envelope
+        env:
+          PROBE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python tools/batch01_scene_source_links_probe.py observe \
+            --source-root "$RUNNER_TEMP/scene-projection-source" \
+            --corpus "$GITHUB_WORKSPACE/out/pinned1050/materialized/native" \
+            --output out/scene-projection/summary.json \
+            --probe-commit "$PROBE_COMMIT_SHA"
+
+      - name: Upload finite source-neutral diagnostic receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch01-scene-source-links-probe
+          path: |
+            out/scene-projection/instrumentation.json
+            out/scene-projection/summary.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove disposable instrumented worktree
+        if: always()
+        run: git worktree remove --force "$RUNNER_TEMP/scene-projection-source"
+
