@@ -2640,10 +2640,7 @@ mod tests {
             &visual,
             RenderTextLayoutTargetV1 {
                 page_id,
-                page_size: Size2D::new(
-                    LengthEmu::new(10_000_000),
-                    LengthEmu::new(10_000_000),
-                ),
+                page_size: Size2D::new(LengthEmu::new(10_000_000), LengthEmu::new(10_000_000)),
                 node_id,
                 projected_target_frame_node_id: None,
                 vertical_alignment: None,
