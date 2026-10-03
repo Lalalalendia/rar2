@@ -133,21 +133,21 @@ jobs:
 
           patterns = {
               "autoexec_or_document_event": re.compile(
-                  r"(?i)\\b(?:auto_open|autoopen|auto_close|autoclose|document_open|document_beforeclose|document_close)\\b"
+                  r"(?i)\b(?:auto_open|autoopen|auto_close|autoclose|document_open|document_beforeclose|document_close)\b"
               ),
               "process_or_shell": re.compile(
-                  r"(?i)\\b(?:shell|shellexecute|winexec|createprocess)\\b|wscript\\.shell"
+                  r"(?i)\b(?:shell|shellexecute|winexec|createprocess)\b|wscript\.shell"
               ),
               "network": re.compile(
-                  r"(?i)\\b(?:xmlhttp|winhttp|urldownloadtofile|internetopen|internetreadfile|serverxmlhttp)\\b"
+                  r"(?i)\b(?:xmlhttp|winhttp|urldownloadtofile|internetopen|internetreadfile|serverxmlhttp)\b"
               ),
               "registry": re.compile(
-                  r"(?i)\\b(?:regwrite|regread|regdelete|savesetting|deletesetting)\\b"
+                  r"(?i)\b(?:regwrite|regread|regdelete|savesetting|deletesetting)\b"
               ),
-              "external_automation": re.compile(r"(?i)\\b(?:createobject|getobject)\\s*\\("),
-              "native_api_declare": re.compile(r"(?i)\\bdeclare\\s+(?:ptrsafe\\s+)?(?:sub|function)\\b"),
+              "external_automation": re.compile(r"(?i)\b(?:createobject|getobject)\s*\("),
+              "native_api_declare": re.compile(r"(?i)\bdeclare\s+(?:ptrsafe\s+)?(?:sub|function)\b"),
               "filesystem_write": re.compile(
-                  r"(?i)\\b(?:filecopy|kill|mkdir|rmdir)\\b|\\bopen\\b[^\\r\\n]*\\bfor\\s+(?:output|append|binary|random)\\b"
+                  r"(?i)\b(?:filecopy|kill|mkdir|rmdir)\b|\bopen\b[^\r\n]*\bfor\s+(?:output|append|binary|random)\b"
               ),
           }
 
