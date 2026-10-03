@@ -87,7 +87,7 @@ jobs:
 
           path = Path("out/quill-story-packag-skeleton-diff.json")
           report = json.loads(path.read_text())
-          assert report["schema"] == "chaptera.quill-story-same-document-skeleton-diff.v1"
+          assert report["schema"] == "chaptera.quill-story-same-document-skeleton-diff.v2"
           assert report["source_sha256"] == "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a"
           assert report["variant_sha256"] == "e8c360c97f4604e60fd84fbc106f59723b03838e05c74b74f4d56aef8d40088e"
           assert report["descriptor_count"] > 0
@@ -106,6 +106,17 @@ jobs:
               "descriptor_layout_equal": report["descriptor_layout_equal"],
               "masked_quill_equal": report["masked_quill_equal"],
               "differing_non_payload_byte_count": report["differing_non_payload_byte_count"],
+              "differing_node_header_byte_count": report["differing_node_header_byte_count"],
+              "differing_descriptor_metadata_byte_count": report["differing_descriptor_metadata_byte_count"],
+              "differing_interstitial_byte_count": report["differing_interstitial_byte_count"],
+              "descriptor_opt_a_diff_count": report["descriptor_opt_a_diff_count"],
+              "descriptor_opt_b_diff_count": report["descriptor_opt_b_diff_count"],
+              "descriptor_opt_c_diff_count": report["descriptor_opt_c_diff_count"],
+              "descriptor_bit_type_diff_count": report["descriptor_bit_type_diff_count"],
+              "changed_descriptor_metadata_names": report["changed_descriptor_metadata_names"],
+              "node_prefix_u16_diff_count": report["node_prefix_u16_diff_count"],
+              "node_count_diff_count": report["node_count_diff_count"],
+              "node_next_diff_count": report["node_next_diff_count"],
               "interpretation_fence": (
                   "Identical masked Quill closes hidden descriptor/list/header flags for this exact pair only. "
                   "It does not by itself authorize family-wide corruption or Reader salvage."
