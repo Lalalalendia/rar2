@@ -1,0 +1,244 @@
+name: Carlton heading alignment native one-shot
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/carlton-heading-alignment-native-once.yml"
+      - "tools/research-runner/experiments/carlton-heading-alignment-readonly-01.packet.json"
+      - "tools/research-runner/operations/carlton_heading_alignment_readonly_01.ps1"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/carlton-heading-alignment-native-once.yml"
+      - "tools/research-runner/experiments/carlton-heading-alignment-readonly-01.packet.json"
+      - "tools/research-runner/operations/carlton_heading_alignment_readonly_01.ps1"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: carlton-heading-alignment-publisher-2019
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+      packet_sha256: ${{ steps.packet.outputs.packet_sha256 }}
+    steps:
+      - name: Bind checkout
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.event_name }}" -eq "push") {
+            if ("${{ github.ref }}" -ne "refs/heads/main") {
+              throw "Native Carlton one-shot push must be refs/heads/main."
+            }
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Parse read-only probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/research-runner/operations/carlton_heading_alignment_readonly_01.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected Carlton read-only probe."
+          }
+
+      - name: Enforce exact read-only contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/research-runner/operations/carlton_heading_alignment_readonly_01.ps1"
+          $text = Get-Content -LiteralPath $path -Raw
+          foreach ($forbidden in @(
+            ".Save(",
+            ".SaveAs(",
+            ".ExportAsFixedFormat(",
+            ".PrintOut("
+          )) {
+            if ($text.Contains($forbidden)) {
+              throw "Forbidden mutation/output token in Carlton read-only probe: $forbidden"
+            }
+          }
+          if ($text -notmatch [regex]::Escape('$doc = $app.Open($env:PUB_RESEARCH_FIXTURE, $true, $false)')) {
+            throw "Carlton probe must open the exact source read-only."
+          }
+          if ($text -notmatch "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") {
+            throw "Carlton probe must bind the exact source SHA."
+          }
+          if ($text -notmatch "fixtureHashAfter") {
+            throw "Carlton probe must verify the source hash after COM observation."
+          }
+
+      - name: Bind validated packet hash
+        id: packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packet = "tools/research-runner/experiments/carlton-heading-alignment-readonly-01.packet.json"
+          $sha = (Get-FileHash -LiteralPath $packet -Algorithm SHA256).Hash.ToLowerInvariant()
+          "packet_sha256=$sha" >> $env:GITHUB_OUTPUT
+
+  native:
+    needs: contract
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: pub-native-lab
+    runs-on:
+      - self-hosted
+      - Windows
+      - pub-research
+      - publisher-2019
+    timeout-minutes: 30
+    env:
+      TARGET_SHA256: bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3
+      TARGET_SIZE: "9580032"
+      PUB_RESEARCH_PACKET_SHA256: ${{ needs.contract.outputs.packet_sha256 }}
+      PUB_RESEARCH_PROFILE_ID: publisher-2019
+      OUTPUT_ROOT: ${{ github.workspace }}\out\pub-research\carlton-heading-alignment-readonly-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.contract.outputs.trusted_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact trusted checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne "${{ needs.contract.outputs.trusted_sha }}") {
+            throw "Trusted checkout mismatch: $actual"
+          }
+
+      - name: Locate exact Carlton source locally
+        id: fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $roots = New-Object System.Collections.Generic.List[string]
+          foreach ($candidate in @(
+            $env:PUB_RESEARCH_FIXTURE_ROOT,
+            $env:CHAPTERA_CORPUS_ROOT,
+            (Join-Path $env:USERPROFILE "rar2")
+          )) {
+            if ([string]::IsNullOrWhiteSpace([string]$candidate)) { continue }
+            if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { continue }
+            $full = [IO.Path]::GetFullPath([string]$candidate)
+            if (-not ($roots | Where-Object {
+              [string]::Equals($_, $full, [StringComparison]::OrdinalIgnoreCase)
+            })) {
+              $roots.Add($full)
+            }
+          }
+
+          $match = $null
+          $candidateCount = 0
+          foreach ($root in $roots) {
+            foreach ($file in Get-ChildItem -LiteralPath $root -Filter "*.pub" -File -Recurse -ErrorAction SilentlyContinue) {
+              if ([int64]$file.Length -ne [int64]$env:TARGET_SIZE) { continue }
+              $candidateCount += 1
+              if ($candidateCount -gt 512) {
+                throw "Carlton local fixture search exceeded the bounded 512 size-matched candidate ceiling."
+              }
+              $sha = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($sha -eq $env:TARGET_SHA256) {
+                $match = $file
+                break
+              }
+            }
+            if ($null -ne $match) { break }
+          }
+
+          "searched_roots=$($roots.Count)" >> $env:GITHUB_OUTPUT
+          "size_matched_candidates=$candidateCount" >> $env:GITHUB_OUTPUT
+          if ($null -eq $match) {
+            "found=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Exact Carlton source is not present in the bounded local project/corpus roots; native probe will skip."
+            exit 0
+          }
+
+          "found=true" >> $env:GITHUB_OUTPUT
+          "PUB_RESEARCH_FIXTURE=$($match.FullName)" >> $env:GITHUB_ENV
+          Write-Host "Exact Carlton source matched by size + SHA in the local native lab."
+
+      - name: Run read-only Publisher Carlton alignment oracle
+        if: steps.fixture.outputs.found == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packet = Join-Path "${{ github.workspace }}" "tools\research-runner\experiments\carlton-heading-alignment-readonly-01.packet.json"
+          $prepare = Join-Path "${{ github.workspace }}" "tools\research-runner\prepare_native_run.ps1"
+          $operation = Join-Path "${{ github.workspace }}" "tools\research-runner\operations\carlton_heading_alignment_readonly_01.ps1"
+          $finalize = Join-Path "${{ github.workspace }}" "tools\research-runner\finalize_native_run.ps1"
+
+          New-Item -ItemType Directory -Force -Path $env:OUTPUT_ROOT | Out-Null
+          & $prepare -PacketPath $packet -OutputRoot $env:OUTPUT_ROOT
+          & $operation -PacketPath $packet -OutputRoot $env:OUTPUT_ROOT
+          & $finalize -PacketPath $packet -OutputRoot $env:OUTPUT_ROOT
+
+      - name: Publish native verdict
+        if: always()
+        shell: pwsh
+        run: |
+          "## CARLTON-HEADING-ALIGNMENT-READONLY-01" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- trusted SHA: ${{ needs.contract.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
+          "- searched local roots: ${{ steps.fixture.outputs.searched_roots }}" >> $env:GITHUB_STEP_SUMMARY
+          "- size-matched candidates checked: ${{ steps.fixture.outputs.size_matched_candidates }}" >> $env:GITHUB_STEP_SUMMARY
+          "- exact fixture found: ${{ steps.fixture.outputs.found }}" >> $env:GITHUB_STEP_SUMMARY
+
+          if ("${{ steps.fixture.outputs.found }}" -ne "true") {
+            "- verdict: SKIPPED_LOCAL_FIXTURE_ABSENT" >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          $analysis = Join-Path $env:OUTPUT_ROOT "analysis\carlton-heading-alignment-readonly-01.json"
+          if (-not (Test-Path -LiteralPath $analysis -PathType Leaf)) {
+            "- verdict: analysis receipt missing" >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $doc = Get-Content -LiteralPath $analysis -Raw | ConvertFrom-Json
+          foreach ($target in @($doc.targets)) {
+            $alignment = if ($target.effective_alignment.state -eq "value") {
+              $target.effective_alignment.value
+            } else {
+              $target.effective_alignment.state
+            }
+            "- $($target.target): alignment=$alignment; page=$($target.page_index); width_pt=$($target.shape_width_points.value)" >> $env:GITHUB_STEP_SUMMARY
+          }
+          "- source unchanged: $($doc.fixture.source_unchanged)" >> $env:GITHUB_STEP_SUMMARY
+          "- verdict: $($doc.verdict)" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload source-free native evidence
+        if: always() && steps.fixture.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: carlton-heading-alignment-readonly-${{ github.run_id }}
+          path: |
+            out/pub-research/carlton-heading-alignment-readonly-${{ github.run_id }}/environment.json
+            out/pub-research/carlton-heading-alignment-readonly-${{ github.run_id }}/analysis/**
+            out/pub-research/carlton-heading-alignment-readonly-${{ github.run_id }}/logs/**
+          if-no-files-found: error
+          retention-days: 30
