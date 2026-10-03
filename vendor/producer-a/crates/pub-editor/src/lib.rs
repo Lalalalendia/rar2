@@ -36,17 +36,18 @@ pub use writer_assessment::{
 
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, LossItem, LossKind, LossSeverity, PersistenceCompatibilityAssessment,
-    PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
-    PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
-    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
+    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
+    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
+    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
+    SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
     assess_persistence_compatibility, build_export_report, plan_export, render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
-    IdmlWireProfile, add_embedded_images_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
+    IdmlWireProfile, add_embedded_images_to_idml, project_resolved_graph_to_idml_with_typography,
+    write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
@@ -56,7 +57,7 @@ use pub_model::{
 pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
-    add_embedded_images_to_odg, project_resolved_graph_to_odg, write_odg,
+    add_embedded_images_to_odg, project_resolved_graph_to_odg_with_typography, write_odg,
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
@@ -2361,17 +2362,19 @@ impl EditorSession {
     ) -> Result<EditorEditableExportPreview, EditorExportError> {
         let (report, human_summary, plan) =
             self.build_editable_export_plan(target, source_label.into())?;
+        let typography = full_story_typography(&self.graph, &self.source_typography_runs);
 
         if report.can_serialize {
             match target {
                 EditorEditableTarget::Idml => {
                     let projection_plan =
                         idml_base_projection_plan(&plan, self.externally_projected_image_nodes());
-                    let mut package = project_resolved_graph_to_idml(
+                    let mut package = project_resolved_graph_to_idml_with_typography(
                         &projection_plan,
                         &self.graph,
                         &IdmlWireProfile::legacy_dom_7(),
                         frame_from_payload,
+                        &typography,
                     )
                     .map_err(|error| EditorExportError::Projection {
                         target,
@@ -2386,12 +2389,16 @@ impl EditorSession {
                     )?;
                 }
                 EditorEditableTarget::Odg => {
-                    let mut package =
-                        project_resolved_graph_to_odg(&plan, &self.graph, frame_from_payload)
-                            .map_err(|error| EditorExportError::Projection {
-                                target,
-                                message: error.to_string(),
-                            })?;
+                    let mut package = project_resolved_graph_to_odg_with_typography(
+                        &plan,
+                        &self.graph,
+                        frame_from_payload,
+                        &typography,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                     let placements = self.odg_image_placements()?;
                     add_embedded_images_to_odg(&plan, &mut package, &placements).map_err(
                         |error| EditorExportError::Projection {
@@ -2423,16 +2430,18 @@ impl EditorSession {
                 blockers: report.counts.blocking,
             });
         }
+        let typography = full_story_typography(&self.graph, &self.source_typography_runs);
 
         let bytes = match target {
             EditorEditableTarget::Idml => {
                 let projection_plan =
                     idml_base_projection_plan(&plan, self.externally_projected_image_nodes());
-                let mut package = project_resolved_graph_to_idml(
+                let mut package = project_resolved_graph_to_idml_with_typography(
                     &projection_plan,
                     &self.graph,
                     &IdmlWireProfile::legacy_dom_7(),
                     frame_from_payload,
+                    &typography,
                 )
                 .map_err(|error| EditorExportError::Projection {
                     target,
@@ -2451,13 +2460,16 @@ impl EditorSession {
                 })?
             }
             EditorEditableTarget::Odg => {
-                let mut package =
-                    project_resolved_graph_to_odg(&plan, &self.graph, frame_from_payload).map_err(
-                        |error| EditorExportError::Projection {
-                            target,
-                            message: error.to_string(),
-                        },
-                    )?;
+                let mut package = project_resolved_graph_to_odg_with_typography(
+                    &plan,
+                    &self.graph,
+                    frame_from_payload,
+                    &typography,
+                )
+                .map_err(|error| EditorExportError::Projection {
+                    target,
+                    message: error.to_string(),
+                })?;
                 let placements = self.odg_image_placements()?;
                 add_embedded_images_to_odg(&plan, &mut package, &placements).map_err(|error| {
                     EditorExportError::Projection {
@@ -4696,7 +4708,119 @@ fn editable_export_plan(
         }
     }
 
-    plan_export(&manifest, requests)
+    let mut plan = plan_export(&manifest, requests);
+    let typography = full_story_typography(graph, source_typography_runs);
+    promote_full_story_typography(&mut plan, typography.keys().copied());
+    plan
+}
+
+fn full_story_typography(
+    graph: &PubResolvedGraph,
+    source_typography_runs: &[PubTypographyRun],
+) -> BTreeMap<pub_model::CanonicalId, FullStoryTypographyV1> {
+    let mut by_story = BTreeMap::<StoryId, Vec<&PubTypographyRun>>::new();
+    for run in source_typography_runs {
+        if graph.stories.contains_key(&run.story_id) {
+            by_story.entry(run.story_id).or_default().push(run);
+        }
+    }
+
+    let mut result = BTreeMap::new();
+    for (story_id, mut runs) in by_story {
+        let Some(story) = graph.stories.get(&story_id) else {
+            continue;
+        };
+        let Ok(story_len) = u32::try_from(story.text.chars().count()) else {
+            continue;
+        };
+        if story_len == 0 {
+            continue;
+        }
+
+        runs.sort_by_key(|run| (run.story_scalar_start, run.story_scalar_end));
+        let first = runs[0];
+        if first.story_scalar_start != 0
+            || first.font_inherited
+            || first.size_inherited
+            || first.source_font_name.trim().is_empty()
+            || first.text_size_emu == 0
+            || !first.source_font_name.chars().all(|ch| {
+                matches!(
+                    u32::from(ch),
+                    0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
+                )
+            })
+        {
+            continue;
+        }
+
+        let family = first.source_font_name.clone();
+        let size = first.text_size_emu;
+        let mut cursor = 0_u32;
+        let mut valid = true;
+        for run in runs {
+            if run.story_scalar_start != cursor
+                || run.story_scalar_end <= run.story_scalar_start
+                || run.story_scalar_end > story_len
+                || run.font_inherited
+                || run.size_inherited
+                || run.source_font_name != family
+                || run.text_size_emu != size
+            {
+                valid = false;
+                break;
+            }
+            cursor = run.story_scalar_end;
+        }
+        if !valid || cursor != story_len {
+            continue;
+        }
+
+        let canonical = story_id.into_canonical();
+        result.insert(
+            canonical,
+            FullStoryTypographyV1 {
+                story_id: canonical,
+                font_family: family,
+                font_size_emu: size,
+            },
+        );
+    }
+    result
+}
+
+fn promote_full_story_typography(
+    plan: &mut ExportPlan,
+    stories: impl IntoIterator<Item = pub_model::CanonicalId>,
+) {
+    let stories = stories.into_iter().collect::<BTreeSet<_>>();
+    for planned in &mut plan.features {
+        if planned
+            .request
+            .origin
+            .is_some_and(|origin| stories.contains(&origin))
+            && matches!(
+                planned.request.feature.as_str(),
+                STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
+            )
+        {
+            planned.disposition = CapabilityLevel::Preserved;
+        }
+    }
+    plan.losses.retain(|loss| {
+        !(loss.origin.is_some_and(|origin| stories.contains(&origin))
+            && matches!(
+                loss.feature.as_str(),
+                STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
+            ))
+    });
+    plan.blockers.retain(|loss| {
+        !(loss.origin.is_some_and(|origin| stories.contains(&origin))
+            && matches!(
+                loss.feature.as_str(),
+                STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
+            ))
+    });
 }
 
 fn replacement_asset_resource_id(sha256: Sha256Digest) -> ResourceId {
@@ -5710,5 +5834,219 @@ mod asset_reachability_tests {
             ),
         };
         assert!(operation.durable_editor_asset_refs_v1().is_empty());
+    }
+}
+
+
+#[cfg(test)]
+mod typography_export_tests {
+    use super::*;
+
+    fn canonical_id(byte: u8) -> pub_model::CanonicalId {
+        pub_model::CanonicalId::from_bytes([byte; 16])
+    }
+
+    fn story_id(byte: u8) -> StoryId {
+        StoryId::from_canonical(canonical_id(byte))
+    }
+
+    #[test]
+    fn full_story_typography_promotion_is_exact_origin_and_feature_scoped() {
+        let origin = canonical_id(0x31);
+        let other = canonical_id(0x32);
+        let manifest = TargetCapabilityManifest {
+            target: TargetProfile {
+                format: "idml".into(),
+                adapter_version: IDML_ADAPTER_VERSION_V0_1.into(),
+                profile: "bounded-editable".into(),
+                schema_fence: Some(IDML_SCHEMA_FENCE_LEGACY_DOM_7.into()),
+            },
+            features: BTreeMap::new(),
+        };
+        let request = |feature: &str, origin, property_path: &str| SemanticFeatureRequest {
+            feature: feature.into(),
+            origin: Some(origin),
+            property_path: Some(property_path.into()),
+            require_preserved: false,
+        };
+        let mut plan = plan_export(
+            &manifest,
+            vec![
+                request(
+                    STORY_FONT_FAMILY_FEATURE,
+                    origin,
+                    "story.typography.font_family",
+                ),
+                request(STORY_FONT_SIZE_FEATURE, origin, "story.typography.font_size"),
+                request(STORY_TEXT_COLOR_FEATURE, origin, "story.typography.color"),
+                request(
+                    STORY_PARAGRAPH_ALIGNMENT_FEATURE,
+                    origin,
+                    "story.paragraph_alignment",
+                ),
+                request(
+                    STORY_FONT_FAMILY_FEATURE,
+                    other,
+                    "story.typography.font_family",
+                ),
+                request("node.unsupported", other, "node"),
+            ],
+        );
+
+        promote_full_story_typography(&mut plan, [origin]);
+
+        let disposition = |feature: &str, request_origin| {
+            plan.features
+                .iter()
+                .find(|planned| {
+                    planned.request.feature == feature
+                        && planned.request.origin == Some(request_origin)
+                })
+                .map(|planned| planned.disposition)
+                .expect("planned feature")
+        };
+
+        assert_eq!(
+            disposition(STORY_FONT_FAMILY_FEATURE, origin),
+            CapabilityLevel::Preserved
+        );
+        assert_eq!(
+            disposition(STORY_FONT_SIZE_FEATURE, origin),
+            CapabilityLevel::Preserved
+        );
+        assert_eq!(
+            disposition(STORY_TEXT_COLOR_FEATURE, origin),
+            CapabilityLevel::Unsupported
+        );
+        assert_eq!(
+            disposition(STORY_PARAGRAPH_ALIGNMENT_FEATURE, origin),
+            CapabilityLevel::Unsupported
+        );
+        assert_eq!(
+            disposition(STORY_FONT_FAMILY_FEATURE, other),
+            CapabilityLevel::Unsupported
+        );
+        assert_eq!(
+            disposition("node.unsupported", other),
+            CapabilityLevel::Unsupported
+        );
+
+        assert!(!plan.losses.iter().any(|loss| {
+            loss.origin == Some(origin)
+                && matches!(
+                    loss.feature.as_str(),
+                    STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
+                )
+        }));
+        assert!(plan.losses.iter().any(|loss| {
+            loss.origin == Some(origin) && loss.feature == STORY_TEXT_COLOR_FEATURE
+        }));
+        assert!(plan.losses.iter().any(|loss| {
+            loss.origin == Some(origin) && loss.feature == STORY_PARAGRAPH_ALIGNMENT_FEATURE
+        }));
+        assert!(plan.losses.iter().any(|loss| {
+            loss.origin == Some(other) && loss.feature == STORY_FONT_FAMILY_FEATURE
+        }));
+
+        build_export_report(
+            &plan,
+            ExportReportSource {
+                label: "typography-scope.pub".into(),
+                source_hash: None,
+            },
+        )
+        .expect("promotion must keep ExportPlan loss accounting internally consistent");
+    }
+
+    fn typography_graph(text: &str) -> PubResolvedGraph {
+        let source_hash = Sha256Digest::from_bytes([0x41; 32]);
+        let story_id = story_id(0x42);
+        let mut stories = BTreeMap::new();
+        stories.insert(
+            story_id,
+            Story {
+                id: story_id,
+                text: text.into(),
+                paragraphs: Vec::new(),
+                runs: Vec::new(),
+                fields: Vec::new(),
+                hyperlinks: Vec::new(),
+                source_refs: Vec::new(),
+            },
+        );
+
+        PubResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: "test".into(),
+            source: pub_model::SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "test".into(),
+                source_hash,
+            },
+            document: pub_model::Document {
+                id: pub_model::DocumentId::from_canonical(canonical_id(0x43)),
+                format_origin: "pub".into(),
+                source_hash,
+                pages: Vec::new(),
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages: BTreeMap::new(),
+            nodes: BTreeMap::new(),
+            stories,
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    fn typography_run(start: u32, end: u32) -> PubTypographyRun {
+        PubTypographyRun {
+            story_id: story_id(0x42),
+            story_utf16_start: start,
+            story_utf16_end: end,
+            story_scalar_start: start,
+            story_scalar_end: end,
+            source_font_index: 1,
+            source_font_name: "Arial".into(),
+            text_size_emu: 152_400,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb: None,
+            color_inherited: false,
+        }
+    }
+
+    #[test]
+    fn full_story_typography_requires_complete_contiguous_explicit_uniform_runs() {
+        let graph = typography_graph("ABCD");
+
+        let complete = full_story_typography(
+            &graph,
+            &[typography_run(0, 2), typography_run(2, 4)],
+        );
+        assert_eq!(complete.len(), 1);
+
+        let partial = full_story_typography(&graph, &[typography_run(0, 3)]);
+        assert!(partial.is_empty());
+
+        let overlapping = full_story_typography(
+            &graph,
+            &[typography_run(0, 3), typography_run(2, 4)],
+        );
+        assert!(overlapping.is_empty());
+
+        let mut inherited = typography_run(0, 4);
+        inherited.font_inherited = true;
+        assert!(full_story_typography(&graph, &[inherited]).is_empty());
+
+        let mut mixed_size = typography_run(2, 4);
+        mixed_size.text_size_emu = 165_100;
+        assert!(
+            full_story_typography(&graph, &[typography_run(0, 2), mixed_size]).is_empty()
+        );
     }
 }
