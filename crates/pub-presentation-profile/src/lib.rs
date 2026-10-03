@@ -315,8 +315,7 @@ pub fn select_mature_detached_post_special_tail_customer_page_seq_nums_v1(
     if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
         || input.confirmed_page_count != input.pages.len()
         || input.special_entry_count != 1
-        || input.document_page_list_entry_count
-            != input.confirmed_page_count.checked_add(1)?
+        || input.document_page_list_entry_count != input.confirmed_page_count.checked_add(1)?
     {
         return None;
     }
@@ -357,9 +356,7 @@ pub fn select_mature_detached_post_special_tail_customer_page_seq_nums_v1(
         if !oid_is_nonzero(page) {
             break;
         }
-        if page.document_ordinal != nonzero_end
-            || page.applied_master_seq_num != Some(leader_seq)
-        {
+        if page.document_ordinal != nonzero_end || page.applied_master_seq_num != Some(leader_seq) {
             return None;
         }
         nonzero_end = nonzero_end.checked_add(1)?;
