@@ -1,0 +1,362 @@
+name: Recover wild Publisher VBA archive leads
+
+on:
+  push:
+    branches:
+      - "research/vba-wild-archive-recovery-01"
+  workflow_dispatch:
+
+concurrency:
+  group: vba-wild-archive-recovery-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Recover exact archival attachment leads
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/vba-wild-archive/private target/vba-wild-archive/public
+
+          python - <<'PY'
+          from __future__ import annotations
+          import hashlib
+          import html
+          import io
+          import json
+          import re
+          import urllib.parse
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          OUT = Path("target/vba-wild-archive")
+          PRIVATE = OUT / "private"
+          PUBLIC = OUT / "public"
+          UA = "chaptera-pub-archive-recovery/1.0"
+
+          targets = [
+              {
+                  "id": "stackoverflow-pageandbookmarklinks",
+                  "kind": "filedropper",
+                  "queries": [
+                      "filedropper.com/showdownload.php/pageandbookmarklinks",
+                      "www.filedropper.com/showdownload.php/pageandbookmarklinks",
+                      "filedropper.com/*pageandbookmarklinks*",
+                      "www.filedropper.com/*pageandbookmarklinks*",
+                  ],
+              },
+              {
+                  "id": "coutty-office-live-business-cards",
+                  "kind": "office-live",
+                  "queries": [
+                      "cid-267b2c102c663aa4.office.live.com/*",
+                      "cid-267b2c102c663aa4.office.live.com/*attachment*",
+                  ],
+              },
+          ]
+
+          def fetch(url: str, timeout: int = 25) -> tuple[bytes, dict[str, str], int]:
+              req = urllib.request.Request(url, headers={"User-Agent": UA})
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  headers = {k.lower(): v for k, v in resp.headers.items()}
+                  return resp.read(), headers, int(getattr(resp, "status", 200))
+
+          def cdx(query: str) -> list[dict]:
+              params = urllib.parse.urlencode([
+                  ("url", query),
+                  ("output", "json"),
+                  ("fl", "timestamp,original,statuscode,mimetype,digest,length"),
+                  ("filter", "statuscode:200"),
+                  ("collapse", "digest"),
+                  ("limit", "100"),
+              ])
+              url = "https://web.archive.org/cdx/search/cdx?" + params
+              try:
+                  raw, _, _ = fetch(url)
+                  rows = json.loads(raw.decode("utf-8", "replace"))
+              except Exception as exc:
+                  return [{"_error": type(exc).__name__ + ": " + str(exc), "_query": query}]
+              if not rows:
+                  return []
+              header, *body = rows
+              return [dict(zip(header, row)) for row in body]
+
+          def wayback_url(timestamp: str, original: str) -> str:
+              return f"https://web.archive.org/web/{timestamp}id_/{original}"
+
+          href_re = re.compile(r"""(?:href|src)\s*=\s*["']([^"']+)["']""", re.I)
+
+          def html_links(blob: bytes, base: str) -> list[str]:
+              text = blob.decode("utf-8", "replace")
+              out = []
+              for m in href_re.finditer(text):
+                  value = html.unescape(m.group(1)).strip()
+                  if not value or value.startswith(("javascript:", "mailto:", "#")):
+                      continue
+                  out.append(urllib.parse.urljoin(base, value))
+              return out
+
+          recovered = []
+          cdx_receipts = {}
+          seen_capture = set()
+          discovered_urls = set()
+
+          def admit_bytes(source_id: str, origin_url: str, data: bytes, headers: dict[str, str]):
+              sha = hashlib.sha256(data).hexdigest()
+              ctype = headers.get("content-type", "").split(";")[0].strip().lower()
+              kind = None
+              if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+                  kind = "cfb"
+                  path = PRIVATE / f"{source_id}-{sha[:16]}.pub"
+                  path.write_bytes(data)
+                  recovered.append({
+                      "source_id": source_id,
+                      "origin_url": origin_url,
+                      "sha256": sha,
+                      "byte_len": len(data),
+                      "content_type": ctype,
+                      "container": "raw-cfb",
+                      "leaf": path.name,
+                  })
+                  return
+
+              if data.startswith(b"PK\x03\x04"):
+                  kind = "zip"
+                  zpath = PRIVATE / f"{source_id}-{sha[:16]}.zip"
+                  zpath.write_bytes(data)
+                  try:
+                      with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                          for zi in zf.infolist():
+                              if zi.is_dir() or zi.file_size > 40 * 1024 * 1024:
+                                  continue
+                              leaf = Path(zi.filename).name
+                              if not leaf:
+                                  continue
+                              child = zf.read(zi)
+                              child_sha = hashlib.sha256(child).hexdigest()
+                              if child.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") or leaf.lower().endswith(".pub"):
+                                  p = PRIVATE / f"{source_id}-{child_sha[:16]}-{leaf}"
+                                  p.write_bytes(child)
+                                  recovered.append({
+                                      "source_id": source_id,
+                                      "origin_url": origin_url,
+                                      "archive_sha256": sha,
+                                      "archive_byte_len": len(data),
+                                      "sha256": child_sha,
+                                      "byte_len": len(child),
+                                      "content_type": ctype,
+                                      "container": "zip-member",
+                                      "member": zi.filename,
+                                      "leaf": p.name,
+                                  })
+                  except zipfile.BadZipFile:
+                      pass
+
+          for target in targets:
+              source_id = target["id"]
+              rows = []
+              for query in target["queries"]:
+                  result = cdx(query)
+                  rows.extend(result)
+              # Deterministic dedupe.
+              uniq = {}
+              for row in rows:
+                  if "_error" in row:
+                      uniq["error:" + row.get("_query", "")] = row
+                      continue
+                  key = (row.get("timestamp"), row.get("original"), row.get("digest"))
+                  uniq[str(key)] = row
+              rows = list(uniq.values())
+              rows.sort(key=lambda r: (r.get("timestamp", ""), r.get("original", "")))
+              cdx_receipts[source_id] = rows
+
+              # First pass: fetch up to 30 unique archived captures.
+              for row in rows[:30]:
+                  if "_error" in row:
+                      continue
+                  ts = row.get("timestamp")
+                  original = row.get("original")
+                  if not ts or not original:
+                      continue
+                  cap_key = (ts, original)
+                  if cap_key in seen_capture:
+                      continue
+                  seen_capture.add(cap_key)
+                  wb = wayback_url(ts, original)
+                  try:
+                      data, headers, _ = fetch(wb)
+                  except Exception:
+                      continue
+                  admit_bytes(source_id, wb, data, headers)
+                  ctype = headers.get("content-type", "").lower()
+                  if "html" in ctype or data.lstrip().startswith((b"<", b"<!")):
+                      for link in html_links(data, original):
+                          low = link.lower()
+                          if (
+                              "pageandbookmarklinks" in low
+                              or ".pub" in low
+                              or ".zip" in low
+                              or "attachment" in low
+                              or "download" in low
+                          ):
+                              discovered_urls.add((source_id, link))
+
+          # Second pass: resolve URLs discovered inside archived landing pages.
+          discovered_receipts = []
+          for source_id, url in sorted(discovered_urls):
+              rows = cdx(url)
+              discovered_receipts.append({"source_id": source_id, "url": url, "captures": rows})
+              for row in rows[:20]:
+                  if "_error" in row:
+                      continue
+                  ts = row.get("timestamp")
+                  original = row.get("original")
+                  if not ts or not original:
+                      continue
+                  wb = wayback_url(ts, original)
+                  try:
+                      data, headers, _ = fetch(wb)
+                  except Exception:
+                      continue
+                  admit_bytes(source_id, wb, data, headers)
+
+          # Dedupe recovered PUB candidates by content hash.
+          by_sha = {}
+          for item in recovered:
+              by_sha.setdefault(item["sha256"], item)
+          recovered = sorted(by_sha.values(), key=lambda x: (x["source_id"], x["sha256"]))
+
+          (PUBLIC / "cdx-records.json").write_text(
+              json.dumps(cdx_receipts, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          (PUBLIC / "discovered-url-records.json").write_text(
+              json.dumps(discovered_receipts, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          summary = {
+              "schema": "chaptera.pub-vba-wild-archive-recovery.v1",
+              "claims": {
+                  "vba_executed": False,
+                  "ole_com_activated": False,
+                  "binary_bytes_uploaded": False,
+                  "source_text_emitted": False,
+              },
+              "target_ids": [x["id"] for x in targets],
+              "recovered_pub_count": len(recovered),
+              "recovered": recovered,
+              "discovered_url_count": len(discovered_urls),
+          }
+          (PUBLIC / "recovery-summary.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "recovered_pub_count": len(recovered),
+              "discovered_url_count": len(discovered_urls),
+              "recovered": [
+                  {
+                      "source_id": x["source_id"],
+                      "sha256": x["sha256"],
+                      "byte_len": x["byte_len"],
+                      "container": x["container"],
+                      "member": x.get("member"),
+                  }
+                  for x in recovered
+              ],
+          }, ensure_ascii=False, indent=2, sort_keys=True))
+          PY
+
+      - name: Inert-scan any recovered PUB bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=$(find target/vba-wild-archive/private -type f -iname '*.pub' | wc -l | tr -d ' ')
+          if [ "$count" = "0" ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("target/vba-wild-archive/public/scanner-receipt.json")
+          p.write_text(json.dumps({
+              "schema": "chaptera.pub-vba-wild-archive-empty-scan.v1",
+              "file_count": 0,
+              "reason": "no_pub_bytes_recovered",
+              "claims": {
+                  "vba_executed": False,
+                  "ole_com_activated": False,
+                  "source_text_emitted": False,
+              },
+          }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+            exit 0
+          fi
+
+          python tools/pub_vba_estate_scan.py scan \
+            --input target/vba-wild-archive/private \
+            --recursive \
+            --output target/vba-wild-archive/public/scanner-receipt.json
+
+      - name: Emit bounded source-free receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("target/vba-wild-archive/public")
+          recovery = json.loads((root / "recovery-summary.json").read_text(encoding="utf-8"))
+          scan = json.loads((root / "scanner-receipt.json").read_text(encoding="utf-8"))
+
+          receipt = {
+              "schema": "chaptera.pub-vba-wild-archive-recovery-receipt.v1",
+              "recovery": recovery,
+              "scanner": {
+                  "call_classifier_version": scan.get("call_classifier_version"),
+                  "totals": scan.get("totals"),
+                  "file_count": scan.get("file_count", scan.get("totals", {}).get("file_count")),
+                  "reason": scan.get("reason"),
+              },
+              "claims": {
+                  "vba_executed": False,
+                  "ole_com_activated": False,
+                  "binary_bytes_uploaded": False,
+                  "source_text_emitted": False,
+              },
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt["scanner"], indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-wild-archive-recovery-receipts
+          path: |
+            target/vba-wild-archive/public/recovery-summary.json
+            target/vba-wild-archive/public/cdx-records.json
+            target/vba-wild-archive/public/discovered-url-records.json
+            target/vba-wild-archive/public/scanner-receipt.json
+            target/vba-wild-archive/public/receipt.json
+          if-no-files-found: error
+          retention-days: 90
