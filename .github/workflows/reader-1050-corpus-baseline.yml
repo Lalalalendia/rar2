@@ -2,6 +2,11 @@ name: Reader 1050 corpus baseline
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/reader-1050-corpus-baseline.yml'
+      - 'vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json'
+      - 'vendor/producer-a/crates/pub-reader/src/salvage_authority.rs'
   push:
     branches:
       - main
@@ -317,26 +322,26 @@ jobs:
           assert payload["corpus_file_count"] == 1050, payload["corpus_file_count"]
           assert payload["outcome_counts"] == {
               "normal_open": 1041,
-              "salvage_open": 4,
-              "unsupported": 5,
+              "salvage_open": 5,
+              "unsupported": 4,
           }, payload["outcome_counts"]
           assert payload["salvage_eligibility_counts"] == {
-              "awaiting_typed_corruption_evidence": 5,
+              "awaiting_typed_corruption_evidence": 4,
               "eligible_damaged_publisher": 1,
-              "eligible_known_publisher_corruption": 3,
+              "eligible_known_publisher_corruption": 4,
           }, payload["salvage_eligibility_counts"]
 
           forced = payload["forced_trigger_summary"]
-          assert forced["attempted_count"] == 5, forced
-          assert 0 <= forced["cfb_inventory_available_count"] <= 5, forced
-          assert 0 <= forced["surviving_evidence_count"] <= 5, forced
-          assert 0 <= forced["partial_graph_constructed_count"] <= 5, forced
+          assert forced["attempted_count"] == 4, forced
+          assert 0 <= forced["cfb_inventory_available_count"] <= 4, forced
+          assert 0 <= forced["surviving_evidence_count"] <= 4, forced
+          assert 0 <= forced["partial_graph_constructed_count"] <= 4, forced
 
           awaiting_rows = [
               row for row in payload["rows"]
               if row.get("salvage_eligibility") == "awaiting_typed_corruption_evidence"
           ]
-          assert len(awaiting_rows) == 5, len(awaiting_rows)
+          assert len(awaiting_rows) == 4, len(awaiting_rows)
           for row in awaiting_rows:
               forced_probe = row.get("forced_trigger_probe")
               forced_graph = row.get("forced_partial_graph")
@@ -386,16 +391,29 @@ jobs:
           assert opnhous["salvage_gap_count"] == 3, opnhous
           assert opnhous["source_modified"] is False, opnhous
 
-          next_unresolved = rows[
+          trophy = rows[
               "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027"
           ]
-          assert next_unresolved["outcome"] == "unsupported", next_unresolved
-          assert next_unresolved["salvage_eligibility"] == (
-              "awaiting_typed_corruption_evidence"
-          ), next_unresolved
+          assert trophy["outcome"] == "salvage_open", trophy
+          assert trophy["salvage_eligibility"] == "eligible_known_publisher_corruption", trophy
+          assert trophy["corruption_evidence"] == "exact_sha_typed_corruption_authority", trophy
+          assert trophy["authority_task_id"] == "READER1050-TROPHY-QUILL-CENSUS-01", trophy
+          assert trophy["authority_run_id"] == 37125662981, trophy
+          assert trophy["authority_artifact_id"] == 11275135765, trophy
+          assert trophy["authority_evidence_digest"] == (
+              "sha256:cc3655207b887ccf55b20494b066c5af394ddc1d0ef579cb9cf0a48bc751fe63"
+          ), trophy
+          assert trophy["authority_classification"] == (
+              "quill_descriptor_tail_overwritten_or_malformed"
+          ), trophy
+          assert trophy["has_surviving_evidence"] is True, trophy
+          assert trophy["cfb_inventory_available"] is True, trophy
+          assert trophy["contents_family"] == "0x2c", trophy
+          assert trophy["salvage_gap_count"] == 2, trophy
+          assert trophy["source_modified"] is False, trophy
 
           assert payload["corruption_evidence_counts"] == {
-              "exact_sha_typed_corruption_authority": 1,
+              "exact_sha_typed_corruption_authority": 2,
               "quill_descriptor_node_truncated": 1,
               "quill_strs_service_span_out_of_bounds": 1,
           }, payload["corruption_evidence_counts"]
@@ -410,7 +428,11 @@ jobs:
                       "salvage_eligibility": rows[sha].get("salvage_eligibility"),
                       "corruption_evidence": rows[sha].get("corruption_evidence"),
                   }
-                  for sha in [*expected_corrupt, "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e"]
+                  for sha in [
+                      *expected_corrupt,
+                      "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e",
+                      "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
+                  ]
               },
           }, indent=2, sort_keys=True))
           PY
