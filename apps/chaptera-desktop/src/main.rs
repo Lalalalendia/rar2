@@ -10186,11 +10186,71 @@ mod tests {
         );
 
         let mut page_receipts = Vec::new();
+        let mut heading_geometry_receipts = Vec::new();
         for (page_index, expected_projected_node_count) in
             projected_page_counts.iter().copied().enumerate()
         {
             let plan = build_desktop_page_render_plan(&visual, page_index)
                 .expect("current Reader page render plan");
+            for node in &plan.nodes {
+                let Some(fragment) = node.text.as_ref() else {
+                    continue;
+                };
+                let target = match fragment.text.as_str() {
+                    "Year 1\r" => Some("year1_heading"),
+                    "Year 2\r" => Some("year2_heading"),
+                    _ => None,
+                };
+                let Some(target) = target else {
+                    continue;
+                };
+                let layout = fragment.layout.as_ref();
+                let first_line = layout.and_then(|layout| layout.lines.first());
+                let frame_width_emu = node.bounds.width.get();
+                let measured_width_emu = first_line.map(|line| line.measured_width_emu);
+                let width_ratio_ppm = measured_width_emu.and_then(|width| {
+                    (frame_width_emu > 0)
+                        .then_some(width.saturating_mul(1_000_000) / frame_width_emu)
+                });
+                let (layout_kind, fallback_reason) = match layout.map(|layout| &layout.disposition) {
+                    Some(
+                        chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved {
+                            ..
+                        },
+                    ) => ("shared_resolved", None),
+                    Some(
+                        chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback {
+                            reason,
+                        },
+                    ) => ("backend_fallback", Some(reason.code())),
+                    None => ("absent", None),
+                };
+                let distinct_text_size_count = fragment
+                    .typography
+                    .iter()
+                    .map(|run| run.text_size_emu)
+                    .collect::<BTreeSet<_>>()
+                    .len();
+                heading_geometry_receipts.push(serde_json::json!({
+                    "target": target,
+                    "page_number": page_index + 1,
+                    "frame_x_emu": node.bounds.x.get(),
+                    "frame_width_emu": frame_width_emu,
+                    "paragraph_alignment_run_count": fragment.paragraph_alignments.len(),
+                    "typography_run_count": fragment.typography.len(),
+                    "distinct_text_size_count": distinct_text_size_count,
+                    "font_inherited_any": fragment.typography.iter().any(|run| run.font_inherited),
+                    "size_inherited_any": fragment.typography.iter().any(|run| run.size_inherited),
+                    "backend_font_resource_present": fragment.backend_font_resource_id.is_some(),
+                    "layout_kind": layout_kind,
+                    "fallback_reason": fallback_reason,
+                    "resolved_line_count": layout.map_or(0, |layout| layout.lines.len()),
+                    "first_line_measured_width_emu": measured_width_emu,
+                    "first_line_x_offset_emu": first_line.map(|line| line.x_offset_emu),
+                    "line_to_frame_width_ratio_ppm": width_ratio_ppm,
+                }));
+            }
+
             let projected_node_count = plan
                 .nodes
                 .iter()
@@ -10336,6 +10396,13 @@ mod tests {
             }));
         }
 
+        heading_geometry_receipts.sort_by(|a, b| a["target"].as_str().cmp(&b["target"].as_str()));
+        assert_eq!(
+            heading_geometry_receipts.len(),
+            2,
+            "exact Carlton must expose exactly the two bounded Year heading frames"
+        );
+
         let receipt = serde_json::json!({
             "schema": "chaptera.reader-golden-carlton-march.v1",
             "source_sha256": source_sha256,
@@ -10358,6 +10425,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             "projected_scene_instance_ids": projected_instance_ids,
             "projected_page_counts": projected_page_counts,
+            "heading_geometry": heading_geometry_receipts,
             "pages": page_receipts,
         });
         fs::write(
