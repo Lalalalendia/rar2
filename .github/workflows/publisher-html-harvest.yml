@@ -1,0 +1,70 @@
+name: Publisher HTML Metadata Harvest
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: publisher-html-harvest-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Ensure PDF text extraction
+        run: |
+          command -v pdftotext || (sudo apt-get update && sudo apt-get install -y poppler-utils)
+
+      - name: Harvest public Publisher hidden XML
+        run: |
+          python research/publisher_html_harvest.py \
+            --seeds research/publisher_html_seed_urls.json \
+            --out out/publisher-html-harvest
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f out/publisher-html-harvest/harvest.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/harvest.json").read_text(encoding="utf-8"))
+          keys = [
+              "seed_count", "sources_ok", "sources_failed",
+              "sources_with_properties", "deduplicated_payloads",
+              "object_observations", "property_observations",
+              "registry_entries", "unique_opl_classes", "unique_property_names"
+          ]
+          with open(Path.home() / "summary.md", "w", encoding="utf-8") as f:
+              f.write("## Publisher HTML harvest\n\n")
+              for key in keys:
+                  f.write(f"- {key}: \`{d.get(key)}\`\n")
+              f.write("\n### OPL classes\n\n")
+              for value in d.get("classes", []):
+                  f.write(f"- \`{value}\`\n")
+          PY
+            cat "$HOME/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload derived corpus metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publisher-html-harvest
+          path: |
+            out/publisher-html-harvest/harvest.json
+            out/publisher-html-harvest/objects.json
+            out/publisher-html-harvest/properties.json
+            out/publisher-html-harvest/properties.tsv
+            out/publisher-html-harvest/registry.tsv
+          if-no-files-found: error
+          retention-days: 30
