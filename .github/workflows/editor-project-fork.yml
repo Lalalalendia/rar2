@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - "vendor/producer-a/Cargo.toml"
-      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-editor/Cargo.toml"
+      - "vendor/producer-a/crates/pub-editor/tests/project_fork_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/asset_reachability_v1.rs"
       - ".github/workflows/editor-project-fork.yml"
   workflow_dispatch:
 

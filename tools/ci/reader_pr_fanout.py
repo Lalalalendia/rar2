@@ -30,6 +30,9 @@ SCOPES = (
     "reader_windows",
     "editor_windows",
     "visual_oracle",
+    "cloud_reference",
+    "virginia_page_role",
+    "visual_batch01",
     "typography_golden",
     "android_core",
     "android",
@@ -224,6 +227,47 @@ VISUAL_ORACLE = (
     ".github/workflows/carlton-reader-visual-oracle.yml",
 )
 
+CLOUD_REFERENCE = (
+    "apps/cloud-reader/**",
+    "apps/chaptera-server/src/reader_scene_v1.rs",
+    "apps/chaptera-server/src/guest_reader_worker.rs",
+    "crates/chaptera-viewer-render-plan/**",
+    "vendor/producer-a/crates/pub-viewer/**",
+    "vendor/producer-a/crates/pub-reader/src/lib.rs",
+    "vendor/producer-a/crates/pub-reader/src/bin/reference_fill_state_census.rs",
+    "vendor/producer-a/crates/pub-reader/tests/table_cell_paint_join_probe.rs",
+    "tools/acquire_carlton_march_pair.py",
+    "tools/acquire_virginia_pub_pdf_pairs.py",
+    "tools/cloud_reader_reference_pdf_raster_v1.py",
+    "tools/cloud_reader_manual_oracle_bundle_v1.py",
+    "tools/test_cloud_reader_manual_oracle_bundle_v1.py",
+    "tools/pdf_reference_diff_v1.py",
+    "tools/census_embedded_eot.py",
+    ".github/workflows/cloud-reader-reference-pairs.yml",
+)
+
+VIRGINIA_PAGE_ROLE = (
+    "vendor/producer-a/crates/pub-reader/**",
+    "vendor/producer-a/crates/pub-viewer/**",
+    "crates/pub-presentation-profile/**",
+    "tools/acquire_virginia_pub_pdf_pairs.py",
+    "tools/validate_virginia_page_roles.py",
+    ".github/workflows/viewer-page-role-virginia.yml",
+)
+
+VISUAL_BATCH01 = (
+    ".github/workflows/publisher-visual-golden-batch01.yml",
+    "tools/cloud_reader_visual_fingerprint_v1.py",
+    "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json",
+    "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv",
+    "apps/cloud-reader/**",
+    "apps/chaptera-server/src/reader_scene_v1.rs",
+    "apps/chaptera-server/src/guest_reader_worker.rs",
+    "crates/chaptera-viewer-render-plan/**",
+    "vendor/producer-a/crates/pub-viewer/**",
+    "vendor/producer-a/crates/pub-reader/src/lib.rs",
+)
+
 TYPOGRAPHY_GOLDEN = (
     "vendor/producer-a/crates/pub-quill/**",
     "vendor/producer-a/crates/pub-reader/**",
@@ -331,6 +375,9 @@ def classify(
         "reader_windows": READER_WINDOWS,
         "editor_windows": EDITOR_WINDOWS,
         "visual_oracle": VISUAL_ORACLE,
+        "cloud_reference": CLOUD_REFERENCE,
+        "virginia_page_role": VIRGINIA_PAGE_ROLE,
+        "visual_batch01": VISUAL_BATCH01,
         "typography_golden": TYPOGRAPHY_GOLDEN,
         "android_core": ANDROID_CORE,
         "android": ANDROID,
@@ -344,6 +391,17 @@ def classify(
         scope: any(matches(path, patterns) for path in semantic_paths)
         for scope, patterns in mapping.items()
     }
+    # The historical Virginia gate explicitly excluded probe-only binaries.
+    # Preserve that boundary after routing it through the central PR DAG.
+    virginia_paths = [
+        path
+        for path in semantic_paths
+        if not path.startswith("vendor/producer-a/crates/pub-reader/src/bin/")
+        and not path.startswith("vendor/producer-a/crates/pub-viewer/src/bin/")
+    ]
+    result["virginia_page_role"] = any(
+        matches(path, VIRGINIA_PAGE_ROLE) for path in virginia_paths
+    )
     # Full Reader Windows product/package acceptance supersedes the bounded
     # shared-core smoke when both surfaces are touched.
     if result["reader_windows"]:

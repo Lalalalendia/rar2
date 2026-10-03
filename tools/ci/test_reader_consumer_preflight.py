@@ -71,6 +71,39 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("--all-targets", vendor_clippy["argv"])
         self.assertEqual(vendor_clippy["argv"][-2:], ["-D", "warnings"])
 
+    def test_pub_editor_change_runs_one_shared_core_gate(self) -> None:
+        plan = MODULE.build_plan(
+            ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
+            "BASE",
+            "HEAD",
+        )
+        self.assertEqual(plan["direct_vendor_packages"], ["pub-editor"])
+        self.assertEqual(plan["affected_vendor_packages"], ["pub-editor"])
+        ids = {command["id"] for command in plan["commands"]}
+        self.assertIn("vendor-clippy", ids)
+        self.assertIn("vendor-source-free-tests", ids)
+        self.assertIn("pub-editor-integration-tests", ids)
+        self.assertIn("desktop-reader-check", ids)
+        self.assertIn("desktop-editor-check", ids)
+        self.assertNotIn("mobile-reader-core-check", ids)
+        integration = next(
+            command
+            for command in plan["commands"]
+            if command["id"] == "pub-editor-integration-tests"
+        )
+        self.assertEqual(
+            integration["argv"],
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                "vendor/producer-a/Cargo.toml",
+                "-p",
+                "pub-editor",
+                "--tests",
+            ],
+        )
+
     def test_render_plan_uses_clippy_as_compile_gate(self) -> None:
         plan = MODULE.build_plan(
             ["crates/chaptera-viewer-render-plan/src/lib.rs"],

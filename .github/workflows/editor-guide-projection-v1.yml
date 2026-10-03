@@ -6,7 +6,6 @@ on:
       - "vendor/producer-a/crates/pub-model/src/guides.rs"
       - "vendor/producer-a/crates/pub-model/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/guide_bridge.rs"
-      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/tests/guide_bridge.rs"
       - "vendor/producer-a/crates/pub-layout/src/lib.rs"
       - ".github/workflows/editor-guide-projection-v1.yml"
