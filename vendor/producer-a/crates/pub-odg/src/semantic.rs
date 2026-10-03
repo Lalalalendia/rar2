@@ -2,7 +2,10 @@ use crate::{
     IMAGE_FRAME_GEOMETRY_FEATURE, ODG_CONTENT_PATH, ODG_SCHEMA_FENCE_ODF_1_4, OdgPackage,
     OdgPackageBuilder, OdgPackageError, OdgPartKind,
 };
-use pub_export::{CapabilityLevel, ExportPlan, LossKind};
+use pub_export::{
+    CapabilityLevel, ExportPlan, FullStoryTypographyV1, LossKind, STORY_FONT_FAMILY_FEATURE,
+    STORY_FONT_SIZE_FEATURE,
+};
 use pub_model::{
     CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, PageId, ResolvedGraph, Story, StoryFlowError,
     StoryFrame, StoryId, validate_story_frames,
@@ -40,6 +43,9 @@ pub enum OdgSemanticError {
     },
     UnplannedStoryText {
         story_id: StoryId,
+    },
+    UnplannedStoryTypography {
+        origin: CanonicalId,
     },
     UnplannedFrameFlow {
         node_id: NodeId,
@@ -106,6 +112,10 @@ impl fmt::Display for OdgSemanticError {
                 formatter,
                 "Story {} has no preserved story.text in ExportPlan",
                 story_id.as_canonical()
+            ),
+            Self::UnplannedStoryTypography { origin } => write!(
+                formatter,
+                "Story {origin} typography supplied without exact preserved font-family + font-size plan"
             ),
             Self::UnplannedFrameFlow { node_id } => write!(
                 formatter,
@@ -195,7 +205,36 @@ pub fn project_resolved_graph_to_odg<
         ParagraphProperties,
         RunProperties,
     >,
+    frame_for: FrameExtractor,
+) -> Result<OdgPackage, OdgSemanticError>
+where
+    FrameExtractor: FnMut(NodeId, &NodePayload) -> Option<StoryFrame<StoryId, NodeId>>,
+{
+    project_resolved_graph_to_odg_with_typography(plan, graph, frame_for, &BTreeMap::new())
+}
+
+pub fn project_resolved_graph_to_odg_with_typography<
+    NodePayload,
+    Resource,
+    StyleKind,
+    StyleProperties,
+    ExtensionStorage,
+    ParagraphProperties,
+    RunProperties,
+    FrameExtractor,
+>(
+    plan: &ExportPlan,
+    graph: &ResolvedGraph<
+        NodePayload,
+        Resource,
+        StyleKind,
+        StyleProperties,
+        ExtensionStorage,
+        ParagraphProperties,
+        RunProperties,
+    >,
     mut frame_for: FrameExtractor,
+    typography: &BTreeMap<CanonicalId, FullStoryTypographyV1>,
 ) -> Result<OdgPackage, OdgSemanticError>
 where
     FrameExtractor: FnMut(NodeId, &NodePayload) -> Option<StoryFrame<StoryId, NodeId>>,
@@ -207,6 +246,14 @@ where
     }
 
     let mut builder = OdgPackageBuilder::from_export_plan(plan)?;
+    for (origin, style) in typography {
+        if *origin != style.story_id
+            || !has_preserved_feature(plan, *origin, STORY_FONT_FAMILY_FEATURE)
+            || !has_preserved_feature(plan, *origin, STORY_FONT_SIZE_FEATURE)
+        {
+            return Err(OdgSemanticError::UnplannedStoryTypography { origin: *origin });
+        }
+    }
     let mut frames = Vec::new();
 
     for page_id in &graph.document.pages {
@@ -309,7 +356,7 @@ where
         }
     }
 
-    let content = content_xml(graph, &frames)?;
+    let content = content_xml(graph, &frames, typography)?;
     builder.add_xml_part(ODG_CONTENT_PATH, OdgPartKind::Content, content)?;
     builder.add_xml_part("styles.xml", OdgPartKind::Styles, styles_xml(graph))?;
     builder.finish().map_err(Into::into)
@@ -417,15 +464,27 @@ fn content_xml<
         RunProperties,
     >,
     frames: &[FrameProjection],
+    typography: &BTreeMap<CanonicalId, FullStoryTypographyV1>,
 ) -> Result<String, OdgSemanticError> {
     let mut xml = String::new();
     writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
     writeln!(
         xml,
-        "<office:document-content xmlns:office=\"{OFFICE_NS}\" xmlns:draw=\"{DRAW_NS}\" xmlns:text=\"{TEXT_NS}\" xmlns:style=\"{STYLE_NS}\" xmlns:svg=\"{SVG_NS}\" xmlns:xlink=\"{XLINK_NS}\" office:version=\"1.4\">"
+        "<office:document-content xmlns:office=\"{OFFICE_NS}\" xmlns:draw=\"{DRAW_NS}\" xmlns:text=\"{TEXT_NS}\" xmlns:style=\"{STYLE_NS}\" xmlns:svg=\"{SVG_NS}\" xmlns:fo=\"{FO_NS}\" xmlns:xlink=\"{XLINK_NS}\" office:version=\"1.4\">"
     )
     .unwrap();
-    xml.push_str("  <office:automatic-styles/>\n");
+    xml.push_str("  <office:automatic-styles>\n");
+    for style in typography.values() {
+        let family = escape_xml_attribute(&style.font_family);
+        writeln!(
+            xml,
+            "    <style:style style:name=\"{}\" style:family=\"text\"><style:text-properties fo:font-family=\"{family}\" fo:font-size=\"{}pt\"/></style:style>",
+            typography_style_name(style.story_id),
+            format_u32_emu_points(style.font_size_emu)
+        )
+        .unwrap();
+    }
+    xml.push_str("  </office:automatic-styles>\n");
     xml.push_str("  <office:body>\n");
     xml.push_str("    <office:drawing>\n");
 
@@ -449,7 +508,12 @@ fn content_xml<
                     story_id: projection.frame.story_id,
                 },
             )?;
-            write_frame(&mut xml, projection, story)?;
+            write_frame(
+                &mut xml,
+                projection,
+                story,
+                typography.get(&story.id.into_canonical()),
+            )?;
         }
 
         xml.push_str("      </draw:page>\n");
@@ -530,6 +594,7 @@ fn write_frame(
     xml: &mut String,
     projection: &FrameProjection,
     story: &Story,
+    typography: Option<&FullStoryTypographyV1>,
 ) -> Result<(), OdgSemanticError> {
     let name = frame_name(projection.frame.frame_id);
     let chain = projection
@@ -552,7 +617,7 @@ fn write_frame(
 
     if projection.frame.previous.is_none() {
         xml.push_str("          <draw:text-box>\n");
-        write_story_paragraphs(xml, story)?;
+        write_story_paragraphs(xml, story, typography)?;
         xml.push_str("          </draw:text-box>\n");
     } else {
         xml.push_str("          <draw:text-box/>\n");
@@ -562,11 +627,26 @@ fn write_frame(
     Ok(())
 }
 
-fn write_story_paragraphs(xml: &mut String, story: &Story) -> Result<(), OdgSemanticError> {
+fn write_story_paragraphs(
+    xml: &mut String,
+    story: &Story,
+    typography: Option<&FullStoryTypographyV1>,
+) -> Result<(), OdgSemanticError> {
     let paragraphs = story.text.split('\r').collect::<Vec<_>>();
     for paragraph in paragraphs {
         xml.push_str("            <text:p>");
+        if let Some(style) = typography {
+            write!(
+                xml,
+                "<text:span text:style-name=\"{}\">",
+                typography_style_name(style.story_id)
+            )
+            .unwrap();
+        }
         xml.push_str(&escape_odf_text(story.id, paragraph)?);
+        if typography.is_some() {
+            xml.push_str("</text:span>");
+        }
         xml.push_str("</text:p>\n");
     }
     Ok(())
@@ -631,6 +711,55 @@ fn is_xml_10_scalar(value: u32) -> bool {
         value,
         0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
     )
+}
+
+fn typography_style_name(id: CanonicalId) -> String {
+    stable_name("TextStyle", id)
+}
+
+fn escape_xml_attribute(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    for character in input.chars() {
+        match character {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&apos;"),
+            _ => output.push(character),
+        }
+    }
+    output
+}
+
+fn format_u32_emu_points(value: u32) -> String {
+    let numerator = i128::from(value);
+    let denominator = i128::from(EMU_PER_POINT);
+    let whole = numerator / denominator;
+    let mut remainder = numerator % denominator;
+    let mut result = whole.to_string();
+    if remainder == 0 {
+        return result;
+    }
+    result.push('.');
+    for _ in 0..15 {
+        remainder *= 10;
+        let digit = remainder / denominator;
+        result.push(char::from(
+            b'0' + u8::try_from(digit).expect("decimal digit"),
+        ));
+        remainder %= denominator;
+        if remainder == 0 {
+            break;
+        }
+    }
+    while result.ends_with('0') {
+        result.pop();
+    }
+    if result.ends_with('.') {
+        result.pop();
+    }
+    result
 }
 
 fn frame_name(id: NodeId) -> String {
