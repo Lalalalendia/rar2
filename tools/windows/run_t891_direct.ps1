@@ -17,7 +17,7 @@ $expectedBlobs = @(
     [pscustomobject]@{ Path = $operation; Sha = "c14c2cccb28cbe467a44c6d1b39c233f56e78aee" }
     [pscustomobject]@{ Path = $prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
-    [pscustomobject]@{ Path = $classifier; Sha = "fb11a18592bdfda47d9429f29fe644018ea66f81" }
+    [pscustomobject]@{ Path = $classifier; Sha = "864e53715ee4e5298f103995ba9c1a6d2314a166" }
 )
 
 Push-Location $repoRoot
