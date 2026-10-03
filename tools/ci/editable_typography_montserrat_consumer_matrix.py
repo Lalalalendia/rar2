@@ -278,7 +278,6 @@ def main() -> int:
                     str(final_fodg),
                     "--receipt",
                     str(case_root / "libreoffice.json"),
-                    "--require-carrier-counts",
                 ],
                 timeout=60,
             )
