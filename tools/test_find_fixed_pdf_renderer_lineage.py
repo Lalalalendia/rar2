@@ -55,6 +55,19 @@ class FixedPdfRendererRecoveryPreflightTests(unittest.TestCase):
             ["crates/pub-cli/Cargo.toml", "crates/pub-pdf/Cargo.toml"],
         )
 
+    def test_known_target_release_binary_is_hashed_without_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            repo = root / "old-yab"
+            binary = repo / "target" / "release" / "pub.exe"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"MZ-not-executed-renderer-candidate")
+            candidates = scan_roots([root], ScanConfig(max_depth=3))
+        binaries = [c for c in candidates if c["kind"] == "unbound_binary_candidate"]
+        self.assertEqual(len(binaries), 1)
+        self.assertFalse(binaries[0]["executed"])
+        self.assertEqual(binaries[0]["file_name"], "pub.exe")
+
     def test_authoritative_empty_roots_emit_terminal_typed_blocker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
