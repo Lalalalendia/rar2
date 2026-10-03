@@ -2294,7 +2294,7 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
-                    let typography = self.full_story_typography_v1();
+                    let typography = self.consumer_proven_full_story_typography_v1();
                     add_full_story_typography_to_idml(&plan, &mut package, &typography).map_err(
                         |error| EditorExportError::Projection {
                             target,
@@ -2316,7 +2316,7 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
-                    let typography = self.full_story_typography_v1();
+                    let typography = self.consumer_proven_full_story_typography_v1();
                     let typography_placements =
                         self.odg_full_story_typography_placements_v1(&typography);
                     add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
@@ -2370,7 +2370,7 @@ impl EditorSession {
                         message: error.to_string(),
                     }
                 })?;
-                let typography = self.full_story_typography_v1();
+                let typography = self.consumer_proven_full_story_typography_v1();
                 add_full_story_typography_to_idml(&plan, &mut package, &typography).map_err(
                     |error| EditorExportError::Projection {
                         target,
@@ -2397,7 +2397,7 @@ impl EditorSession {
                         message: error.to_string(),
                     }
                 })?;
-                let typography = self.full_story_typography_v1();
+                let typography = self.consumer_proven_full_story_typography_v1();
                 let typography_placements =
                     self.odg_full_story_typography_placements_v1(&typography);
                 add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
@@ -2569,6 +2569,26 @@ impl EditorSession {
 
         result.sort_by_key(|item| item.story_id);
         result
+    }
+
+    fn consumer_proven_full_story_typography_v1(&self) -> Vec<FullStoryTypographyV1> {
+        // #971/#999 prove exactly one ordinary Montserrat Regular 24pt Story
+        // through target consumer save/reopen/edit lifecycle. Do not widen
+        // writer or LossReport authority to multi-Story documents or other
+        // sizes merely because the target wire can encode them.
+        let mut proven = self
+            .full_story_typography_v1()
+            .into_iter()
+            .filter(|item| {
+                item.font_family.trim() == "Montserrat"
+                    && item.font_size_emu.get() == 24 * pub_model::EMU_PER_POINT
+            })
+            .collect::<Vec<_>>();
+        if proven.len() == 1 {
+            proven
+        } else {
+            Vec::new()
+        }
     }
 
     fn odg_full_story_typography_placements_v1(
