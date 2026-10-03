@@ -11,20 +11,20 @@ $operation = Join-Path $repoRoot "tools/research-runner/operations/publisher_tlb
 $prepare = Join-Path $repoRoot "tools/research-runner/prepare_native_run.ps1"
 $finalize = Join-Path $repoRoot "tools/research-runner/finalize_native_run.ps1"
 
-$expectedBlobs = [ordered]@{
-    $packet = "572dd8dcd68f26e553b89ad5a142238ecd8ca25d"
-    $operation = "c14c2cccb28cbe467a44c6d1b39c233f56e78aee"
-    $prepare = "0848e8e147dff5dab68065c37d2d73f72f09eb45"
-    $finalize = "2a97d6f2c8be1265010a744c015ce8d288eb7e75"
-}
+$expectedBlobs = @(
+    [pscustomobject]@{ Path = $packet; Sha = "572dd8dcd68f26e553b89ad5a142238ecd8ca25d" }
+    [pscustomobject]@{ Path = $operation; Sha = "c14c2cccb28cbe467a44c6d1b39c233f56e78aee" }
+    [pscustomobject]@{ Path = $prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
+    [pscustomobject]@{ Path = $finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
+)
 
 Push-Location $repoRoot
 try {
-    foreach ($entry in $expectedBlobs.GetEnumerator()) {
-        if (-not (Test-Path -LiteralPath $entry.Key -PathType Leaf)) { throw "Required file missing: $($entry.Key)" }
-        $actual = (& git hash-object -- $entry.Key).Trim()
-        if ($LASTEXITCODE -ne 0) { throw "git hash-object failed for $($entry.Key)" }
-        if ($actual -ne [string]$entry.Value) { throw "Pinned file drift: $($entry.Key) expected $($entry.Value) got $actual" }
+    foreach ($entry in $expectedBlobs) {
+        if (-not (Test-Path -LiteralPath $entry.Path -PathType Leaf)) { throw "Required file missing: $($entry.Path)" }
+        $actual = (& git hash-object -- $entry.Path).Trim()
+        if ($LASTEXITCODE -ne 0) { throw "git hash-object failed for $($entry.Path)" }
+        if ($actual -ne [string]$entry.Sha) { throw "Pinned file drift: $($entry.Path) expected $($entry.Sha) got $actual" }
     }
 
     $validation = & python tools/research-runner/validate_packet.py --packet $packet --expected-environment publisher-2019 2>&1
