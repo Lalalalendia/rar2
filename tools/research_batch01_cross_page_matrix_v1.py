@@ -8,7 +8,49 @@ from pathlib import Path
 
 from cloud_reader_visual_fingerprint_v1 import compare_grid, image_grid, reference_grid, sha256
 
-SCHEMA = "chaptera.batch01-cross-page-matrix.v1"
+SCHEMA = "chaptera.batch01-cross-page-matrix.v2"
+FOREGROUND_THRESHOLDS = (12, 24, 48)
+
+
+def foreground_metrics(candidate: bytes, reference: bytes, threshold: int) -> dict:
+    if len(candidate) != len(reference):
+        raise ValueError("grid length mismatch")
+    cell_count = len(candidate) // 3
+    ref_count = 0
+    candidate_count = 0
+    intersection = 0
+    for cell in range(cell_count):
+        base = cell * 3
+        ref_fg = max(255 - reference[base + channel] for channel in range(3)) >= threshold
+        candidate_fg = max(255 - candidate[base + channel] for channel in range(3)) >= threshold
+        ref_count += int(ref_fg)
+        candidate_count += int(candidate_fg)
+        intersection += int(ref_fg and candidate_fg)
+    union = ref_count + candidate_count - intersection
+    recall = intersection / ref_count if ref_count else 1.0
+    precision = intersection / candidate_count if candidate_count else (1.0 if ref_count == 0 else 0.0)
+    f1 = (
+        2.0 * precision * recall / (precision + recall)
+        if precision + recall > 0
+        else 0.0
+    )
+    missing_reference_fraction = 1.0 - recall if ref_count else 0.0
+    extra_candidate_fraction = (
+        (candidate_count - intersection) / candidate_count if candidate_count else 0.0
+    )
+    return {
+        "threshold": threshold,
+        "reference_foreground_cells": ref_count,
+        "candidate_foreground_cells": candidate_count,
+        "intersection_foreground_cells": intersection,
+        "union_foreground_cells": union,
+        "foreground_recall": recall,
+        "foreground_precision": precision,
+        "foreground_f1": f1,
+        "missing_reference_foreground_fraction": missing_reference_fraction,
+        "extra_candidate_foreground_fraction": extra_candidate_fraction,
+        "foreground_loss": missing_reference_fraction + extra_candidate_fraction,
+    }
 
 
 def main() -> None:
@@ -53,10 +95,17 @@ def main() -> None:
     for candidate_index, candidate in enumerate(candidate_grids, start=1):
         for reference_index, ref in enumerate(reference_grids, start=1):
             metrics = compare_grid(candidate, ref)
+            foreground = {
+                str(threshold): foreground_metrics(candidate, ref, threshold)
+                for threshold in FOREGROUND_THRESHOLDS
+            }
             row = {
                 "candidate_page": candidate_index,
                 "reference_page": reference_index,
                 **metrics,
+                "foreground": foreground,
+                "foreground_loss_24": foreground["24"]["foreground_loss"],
+                "foreground_f1_24": foreground["24"]["foreground_f1"],
             }
             matrix.append(row)
             by_pair[(candidate_index, reference_index)] = row
@@ -64,38 +113,49 @@ def main() -> None:
     best_per_reference = []
     for reference_index in range(1, reference_pages + 1):
         rows = [row for row in matrix if row["reference_page"] == reference_index]
-        rows.sort(key=lambda row: (row["changed_cell_fraction"], row["mean_abs_channel_delta"], row["candidate_page"]))
+        rows.sort(
+            key=lambda row: (
+                row["foreground_loss_24"],
+                -row["foreground_f1_24"],
+                row["changed_cell_fraction"],
+                row["mean_abs_channel_delta"],
+                row["candidate_page"],
+            )
+        )
         best_per_reference.append({
             "reference_page": reference_index,
             "best_candidates": rows[:5],
         })
 
-    def assignment_score(candidate_indices: tuple[int, ...]) -> tuple[float, float]:
+    def assignment_score(candidate_indices: tuple[int, ...]) -> tuple[float, float, float, tuple[int, ...]]:
         rows = [
             by_pair[(candidate_page, reference_index)]
             for reference_index, candidate_page in enumerate(candidate_indices, start=1)
         ]
         return (
+            sum(row["foreground_loss_24"] for row in rows) / len(rows),
             sum(row["changed_cell_fraction"] for row in rows) / len(rows),
             sum(row["mean_abs_channel_delta"] for row in rows) / len(rows),
+            candidate_indices,
         )
 
-    monotonic = []
-    for combo in itertools.combinations(range(1, candidate_pages + 1), reference_pages):
-        changed, mean_abs = assignment_score(combo)
-        monotonic.append((changed, mean_abs, combo))
+    monotonic = [
+        assignment_score(combo)
+        for combo in itertools.combinations(range(1, candidate_pages + 1), reference_pages)
+    ]
     monotonic.sort()
 
-    unconstrained = []
-    for perm in itertools.permutations(range(1, candidate_pages + 1), reference_pages):
-        changed, mean_abs = assignment_score(perm)
-        unconstrained.append((changed, mean_abs, perm))
+    unconstrained = [
+        assignment_score(perm)
+        for perm in itertools.permutations(range(1, candidate_pages + 1), reference_pages)
+    ]
     unconstrained.sort()
 
-    def assignment_row(item: tuple[float, float, tuple[int, ...]]) -> dict:
-        changed, mean_abs, candidate_indices = item
+    def assignment_row(item: tuple[float, float, float, tuple[int, ...]]) -> dict:
+        foreground_loss, changed, mean_abs, candidate_indices = item
         return {
             "candidate_pages_by_reference": list(candidate_indices),
+            "mean_foreground_loss_24": foreground_loss,
             "mean_changed_cell_fraction": changed,
             "mean_abs_channel_delta": mean_abs,
             "pages": [
@@ -117,6 +177,7 @@ def main() -> None:
         "claims": {
             "measurement_only": True,
             "fingerprint_used_as_semantic_authority": False,
+            "foreground_metric_used_as_semantic_authority": False,
             "pdf_used_as_visual_validation_only": True,
             "viewer_page_selection_changed": False,
             "raw_pub_bytes_emitted": False,
