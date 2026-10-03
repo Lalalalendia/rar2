@@ -348,3 +348,169 @@ fn format_ratio(numerator: i128, denominator: i128, precision: usize) -> String 
     }
     result
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{IDML_ADAPTER_VERSION_V0_1, IdmlPackageBuilder};
+    use pub_export::{
+        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
+        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE,
+        ExportSolidPaintV1, ExportSolidStrokeV1, SemanticFeatureRequest,
+        TargetCapabilityManifest, TargetProfile, plan_export,
+    };
+    use pub_model::{CanonicalId, RectEmu, Size2D};
+    use std::collections::BTreeMap;
+
+    fn id(byte: u8) -> CanonicalId {
+        CanonicalId::from_bytes([byte; 16])
+    }
+
+    fn rectangle() -> AuthoredRectangleExportV1 {
+        AuthoredRectangleExportV1 {
+            node_id: NodeId::from_canonical(id(2)),
+            page_id: PageId::from_canonical(id(1)),
+            page_size: Size2D::new(LengthEmu::new(7_620_000), LengthEmu::new(9_906_000)),
+            bounds: RectEmu::new(
+                LengthEmu::new(1_270_000),
+                LengthEmu::new(2_540_000),
+                LengthEmu::new(2_540_000),
+                LengthEmu::new(1_270_000),
+            ),
+            fill: ExportSolidPaintV1 {
+                visible: true,
+                color: ExportSrgb8V1 { r: 0x12, g: 0x34, b: 0x56 },
+            },
+            stroke: ExportSolidStrokeV1 {
+                visible: true,
+                color: ExportSrgb8V1 { r: 0xAA, g: 0xBB, b: 0xCC },
+                width_emu: LengthEmu::new(12_700),
+            },
+        }
+    }
+
+    fn plan(item: &AuthoredRectangleExportV1) -> ExportPlan {
+        let mut features = BTreeMap::new();
+        for feature in [
+            AUTHORED_SHAPE_GEOMETRY_FEATURE,
+            AUTHORED_SHAPE_FILL_FEATURE,
+            AUTHORED_SHAPE_STROKE_FEATURE,
+        ] {
+            features.insert(feature.into(), CapabilityLevel::Preserved);
+        }
+        let manifest = TargetCapabilityManifest {
+            target: TargetProfile {
+                format: "idml".into(),
+                adapter_version: IDML_ADAPTER_VERSION_V0_1.into(),
+                profile: "bounded-editable".into(),
+                schema_fence: Some("legacy-spec-8.02/dom-7.0".into()),
+            },
+            features,
+        };
+        let request = |feature: &str, required| SemanticFeatureRequest {
+            feature: feature.into(),
+            origin: Some(item.node_id.into_canonical()),
+            property_path: None,
+            require_preserved: required,
+        };
+        plan_export(
+            &manifest,
+            vec![
+                request(AUTHORED_SHAPE_GEOMETRY_FEATURE, true),
+                request(AUTHORED_SHAPE_FILL_FEATURE, true),
+                request(AUTHORED_SHAPE_STROKE_FEATURE, true),
+                request(AUTHORED_SHAPE_Z_ORDER_FEATURE, false),
+            ],
+        )
+    }
+
+    fn package(item: &AuthoredRectangleExportV1, plan: &ExportPlan) -> IdmlPackage {
+        let mut builder = IdmlPackageBuilder::from_export_plan(plan).unwrap();
+        builder
+            .add_part(
+                "designmap.xml",
+                IdmlPartKind::DesignMap,
+                format!(
+                    "<Document xmlns:idPkg=\"{}\" DOMVersion=\"7.0\">\n</Document>\n",
+                    IDML_PACKAGING_NAMESPACE
+                ),
+            )
+            .unwrap();
+        builder
+            .add_part(
+                spread_path(item.page_id),
+                IdmlPartKind::Spread,
+                format!(
+                    "<idPkg:Spread xmlns:idPkg=\"{}\"><Spread Self=\"x\">\n  </Spread></idPkg:Spread>\n",
+                    IDML_PACKAGING_NAMESPACE
+                ),
+            )
+            .unwrap();
+        builder.finish().unwrap()
+    }
+
+    #[test]
+    fn writes_rgb_resources_rectangle_geometry_and_explicit_z_order_loss() {
+        let item = rectangle();
+        let plan = plan(&item);
+        assert!(plan.losses.iter().any(|loss| {
+            loss.origin == Some(item.node_id.into_canonical())
+                && loss.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE
+        }));
+        let mut package = package(&item, &plan);
+        add_authored_rectangles_to_idml(&plan, &mut package, std::slice::from_ref(&item))
+            .expect("authored rectangle");
+
+        let designmap = package
+            .parts
+            .iter()
+            .find(|part| part.path == "designmap.xml")
+            .and_then(|part| part.content.as_text())
+            .unwrap();
+        assert!(designmap.contains("<idPkg:Graphic src=\"Resources/Graphic.xml\"/>"));
+
+        let graphic = package
+            .parts
+            .iter()
+            .find(|part| part.path == "Resources/Graphic.xml")
+            .and_then(|part| part.content.as_text())
+            .unwrap();
+        assert!(graphic.contains("Space=\"RGB\" ColorValue=\"18 52 86\""));
+        assert!(graphic.contains("Space=\"RGB\" ColorValue=\"170 187 204\""));
+
+        let spread = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Spread)
+            .and_then(|part| part.content.as_text())
+            .unwrap();
+        assert!(spread.contains("<Rectangle Self=\"uar"));
+        assert!(spread.contains("FillColor=\"Color/Chaptera-123456\""));
+        assert!(spread.contains("StrokeColor=\"Color/Chaptera-AABBCC\""));
+        assert!(spread.contains("StrokeWeight=\"1\""));
+        assert!(spread.contains("Anchor=\"100 200\""));
+        assert!(spread.contains("Anchor=\"300 300\""));
+    }
+
+    #[test]
+    fn invisible_paint_uses_none_without_fake_color_resource() {
+        let mut item = rectangle();
+        item.fill.visible = false;
+        item.stroke.visible = false;
+        let plan = plan(&item);
+        let mut package = package(&item, &plan);
+        add_authored_rectangles_to_idml(&plan, &mut package, std::slice::from_ref(&item))
+            .expect("authored rectangle");
+        assert!(package.parts.iter().all(|part| part.path != "Resources/Graphic.xml"));
+        let spread = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Spread)
+            .and_then(|part| part.content.as_text())
+            .unwrap();
+        assert!(spread.contains("FillColor=\"Swatch/None\""));
+        assert!(spread.contains("StrokeColor=\"Swatch/None\""));
+        assert!(spread.contains("StrokeWeight=\"0\""));
+    }
+}
