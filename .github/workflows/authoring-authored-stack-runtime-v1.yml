@@ -1,0 +1,61 @@
+name: Authoring AuthoredStack Runtime V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/src/authored_stack_lifecycle_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/authored_stack_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/authored_stack_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
+      - "apps/chaptera-server/src/revision_materializer.rs"
+      - "apps/chaptera-desktop/src/agent.rs"
+      - ".github/workflows/authoring-authored-stack-runtime-v1.yml"
+  push:
+    branches:
+      - authoring-authored-stack-runtime-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check pub-editor formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Check pub-editor
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
+
+      - name: Lint pub-editor
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Prove AuthoredStack runtime
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test authored_stack_runtime_v1 -- --nocapture
+
+      - name: Re-run lifecycle CreateShape and DeleteNode
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+          --test authored_stack_lifecycle_v1
+          --test create_shape_runtime_v1
+          --test delete_node_runtime_v1
+
+      - name: Check server exhaustive consumer
+        run: cargo check -p chaptera-server
+
+      - name: Check desktop exhaustive consumer
+        run: cargo check -p chaptera-desktop
