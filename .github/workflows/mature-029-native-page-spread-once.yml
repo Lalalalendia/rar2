@@ -18,7 +18,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: mature-029-native-page-spread-publisher-2019
+  group: mature-029-native-page-spread-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
   cancel-in-progress: false
 
 jobs:
