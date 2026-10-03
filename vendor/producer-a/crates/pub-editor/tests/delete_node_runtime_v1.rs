@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1,
-    AuthoredSolidStrokeV1, EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_11,
-    EDITOR_PROJECT_VERSION_V0_12, EditOperation, EditorError, EditorProjectError, EditorSession,
-    LengthEmu, RectEmu, Srgb8V1, authored_shape_state_id_v1,
+    AuthoredEntityProvenanceV1, AuthoredShapePaintV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
+    EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_12,
+    EditOperation, EditorError, EditorProjectError, EditorSession, LengthEmu, RectEmu, Srgb8V1,
+    authored_shape_state_id_v1,
 };
 use pub_model::{
     Affine2D, Document, DocumentId, Node, NodeHeader, NodeId, NodeKind, Page, PageId,
@@ -172,7 +172,10 @@ fn delete_node_is_one_v0_12_history_unit_with_exact_undo_redo_and_replay() {
     let mut session = EditorSession::new(base.clone()).expect("session");
     let create = create_authored_rectangle(&mut session);
     let node_id = authored_node_id();
-    let before = session.authored_shape(node_id).expect("authored shape").clone();
+    let before = session
+        .authored_shape(node_id)
+        .expect("authored shape")
+        .clone();
 
     let delete = session.delete_node(node_id).expect("DeleteNode");
     let EditOperation::DeleteNode {
@@ -190,7 +193,11 @@ fn delete_node_is_one_v0_12_history_unit_with_exact_undo_redo_and_replay() {
     assert_eq!(before_state_id, &authored_shape_state_id_v1(&before));
 
     assert!(session.authored_shape(node_id).is_none());
-    assert_eq!(session.graph(), &base, "DeleteNode must not mutate source graph");
+    assert_eq!(
+        session.graph(),
+        &base,
+        "DeleteNode must not mutate source graph"
+    );
     assert_eq!(session.operations(), &[create.clone(), delete.clone()]);
 
     let project = session.project();
@@ -221,9 +228,7 @@ fn delete_node_wire_carries_exact_full_before_entity_and_state_identity() {
         .authored_shape(authored_node_id())
         .expect("authored shape")
         .clone();
-    let operation = session
-        .delete_node(authored_node_id())
-        .expect("DeleteNode");
+    let operation = session.delete_node(authored_node_id()).expect("DeleteNode");
     let value = serde_json::to_value(operation).expect("wire");
 
     assert_eq!(value["kind"], "delete_node");
@@ -343,11 +348,11 @@ fn undo_restores_same_uuidv7_entity_not_a_reconstructed_new_identity() {
         .expect("authored")
         .clone();
 
-    session
-        .delete_node(authored_node_id())
-        .expect("DeleteNode");
+    session.delete_node(authored_node_id()).expect("DeleteNode");
     session.undo().expect("undo");
-    let restored = session.authored_shape(authored_node_id()).expect("restored");
+    let restored = session
+        .authored_shape(authored_node_id())
+        .expect("restored");
 
     assert_eq!(restored, &before);
     assert_eq!(restored.node_id, authored_node_id());
@@ -411,9 +416,7 @@ fn create_delete_history_roundtrips_through_full_undo_redo_stack() {
         .authored_shape(authored_node_id())
         .expect("created shape")
         .clone();
-    let delete = session
-        .delete_node(authored_node_id())
-        .expect("DeleteNode");
+    let delete = session.delete_node(authored_node_id()).expect("DeleteNode");
 
     assert_eq!(session.undo().expect("undo delete"), &delete);
     assert_eq!(session.authored_shape(authored_node_id()), Some(&before));
