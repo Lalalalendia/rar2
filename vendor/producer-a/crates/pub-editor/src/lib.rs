@@ -35,8 +35,9 @@ use pub_export::{
     PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
     STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
     ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest, assess_persistence_compatibility,
-    build_export_report, plan_export_with_scoped_capabilities, render_human_summary,
+    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
+    render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
@@ -5605,8 +5606,7 @@ mod asset_reachability_tests {
     fn consumer_proven_typography_override_is_montserrat_only() {
         let montserrat_story =
             StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x31; 16]));
-        let arial_story =
-            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x32; 16]));
+        let arial_story = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x32; 16]));
         let typography = vec![
             FullStoryTypographyV1 {
                 story_id: montserrat_story,
@@ -5631,9 +5631,11 @@ mod asset_reachability_tests {
                     )
                     && item.disposition == CapabilityLevel::Preserved
             }));
-            assert!(overrides.iter().all(|item| {
-                item.origin != arial_story.into_canonical()
-            }));
+            assert!(
+                overrides
+                    .iter()
+                    .all(|item| { item.origin != arial_story.into_canonical() })
+            );
         }
     }
 
