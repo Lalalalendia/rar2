@@ -1398,7 +1398,9 @@ mod tests {
     };
 
     use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
+        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+        build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
+        uniform_text_color_rgb_v1,
     };
     use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
     use sha2::{Digest, Sha256};
