@@ -963,6 +963,120 @@ mod tests {
         }
     }
 
+    fn legacy22_input(
+        dialect: Legacy22PageListDialectV1,
+        physical_page_count: usize,
+        raw_types: &[u16],
+    ) -> Legacy22PageListProfileInputV1 {
+        Legacy22PageListProfileInputV1 {
+            schema_version: LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1.to_owned(),
+            dialect,
+            document_page_list_entry_count: raw_types.len(),
+            physical_page_count,
+            entries: raw_types
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(document_ordinal, raw_type)| Legacy22PageListEntryEvidenceV1 {
+                    document_ordinal,
+                    raw_type,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn legacy22_noquill_profile_selects_only_middle_pages() {
+        let selection = select_legacy22_customer_page_indices_v1(legacy22_input(
+            Legacy22PageListDialectV1::NoQuill,
+            5,
+            &[LEGACY22_PAGE_RAW_TYPE_V1; 4],
+        ))
+        .unwrap();
+        assert_eq!(
+            selection.profile_id,
+            LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1
+        );
+        assert_eq!(selection.materialized_page_count, 4);
+        assert_eq!(selection.customer_page_indices, vec![2]);
+    }
+
+    #[test]
+    fn legacy22_noquill_profile_fails_open_on_physical_page_drift() {
+        assert!(
+            select_legacy22_customer_page_indices_v1(legacy22_input(
+                Legacy22PageListDialectV1::NoQuill,
+                4,
+                &[LEGACY22_PAGE_RAW_TYPE_V1; 4],
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn legacy22_quill_profile_accepts_current_special_tail() {
+        let selection = select_legacy22_customer_page_indices_v1(legacy22_input(
+            Legacy22PageListDialectV1::Quill,
+            6,
+            &[
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_LIST_SPECIAL_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+            ],
+        ))
+        .unwrap();
+        assert_eq!(selection.profile_id, LEGACY22_QUILL_PAGE_PROFILE_ID_V1);
+        assert_eq!(selection.materialized_page_count, 5);
+        assert_eq!(selection.customer_page_indices, vec![2]);
+    }
+
+    #[test]
+    fn legacy22_quill_profile_accepts_historical_all_page_tail() {
+        let selection = select_legacy22_customer_page_indices_v1(legacy22_input(
+            Legacy22PageListDialectV1::Quill,
+            8,
+            &[
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+            ],
+        ))
+        .unwrap();
+        assert_eq!(selection.customer_page_indices, vec![2, 3]);
+    }
+
+    #[test]
+    fn legacy22_quill_profile_rejects_unproven_tail_or_ordinal_drift() {
+        let bad_tail = legacy22_input(
+            Legacy22PageListDialectV1::Quill,
+            6,
+            &[
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_LIST_SPECIAL_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+            ],
+        );
+        assert!(select_legacy22_customer_page_indices_v1(bad_tail).is_none());
+
+        let mut bad_ordinal = legacy22_input(
+            Legacy22PageListDialectV1::NoQuill,
+            5,
+            &[LEGACY22_PAGE_RAW_TYPE_V1; 4],
+        );
+        bad_ordinal.entries[2].document_ordinal = 7;
+        assert!(select_legacy22_customer_page_indices_v1(bad_ordinal).is_none());
+    }
+
     #[test]
     fn standard_print_profile_selects_virginia_style_customer_middle() {
         let input = standard_print_input(&[266, 301, 312, 323, 336, 339]);
