@@ -18,7 +18,7 @@ use pub_layout::{
     BoundedAuthoringSlice, BoundedLayoutProjection, BoundedNodeGeometryInput, BoundedTableInput,
     BoundedTextFlowEnvironment, BoundedTextMetrics, BoundedUniformTableMetrics,
     ProjectedStoryFrame, ProjectionDiagnostic, ResolveDiagnostic, ResolvedPhysicalNode,
-    project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow,
+    ResolvedSurface, project_bounded, resolve_bounded_geometry, resolve_bounded_text_flow,
     resolve_bounded_uniform_table_cells,
 };
 pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
@@ -26,7 +26,7 @@ pub use pub_layout::{BoundedLayoutEnvironment, BoundedResolvedScene};
 use pub_model::CanonicalId;
 use pub_model::{
     Affine2D, AuthorityClass, LengthEmu, Node, NodeId, NodeKind, PageId, ReadConfidence, RectEmu,
-    ResourceId, Sha256Digest, SourceDerivedIdInput, SourceRole, StoryFrame, StoryId,
+    ResourceId, Sha256Digest, Size2D, SourceDerivedIdInput, SourceRole, StoryFrame, StoryId,
     TableCellAddress, TableCellId, derive_source_canonical_id,
 };
 use pub_paint_bridge::{
@@ -42,11 +42,14 @@ use pub_presentation_profile::{
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
     LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1, Legacy22PageListDialectV1,
     Legacy22PageListEntryEvidenceV1, Legacy22PageListProfileInputV1,
-    STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
+    MATURE_SPREAD_PAIR_AB_PROFILE_ID_V1, MatureSpreadPairDocumentEntryEvidenceV1,
+    MatureSpreadPairProfileInputV1, STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1,
+    StandardPrintServiceTailPageEvidenceV1,
     StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
     reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
     select_legacy22_customer_page_indices_v1,
     select_mature_detached_post_special_tail_customer_page_seq_nums_v1,
+    select_mature_spread_pair_half_page_seq_nums_ab_v1,
     select_mature_terminal_service_tail_customer_page_seq_nums_v1,
     select_mature_zero_leader_detached_tail_customer_page_seq_nums_v1,
     select_reference_fixture_customer_page_seq_nums_v1,
@@ -2314,6 +2317,195 @@ pub fn open_mature_0x2c_geometry(
     Ok(open_mature_0x2c_bundle(bytes, environment)?.geometry)
 }
 
+fn translate_rect_x_for_spread_ab_v1(rect: RectEmu, dx: LengthEmu) -> Result<RectEmu> {
+    let x = rect
+        .x
+        .checked_add(dx)
+        .context("spread A/B x translation overflow")?;
+    Ok(RectEmu::new(x, rect.y, rect.width, rect.height))
+}
+
+fn derive_spread_surface_id_ab_v1(
+    source_hash: &Sha256Digest,
+    pair_index: usize,
+    left_page_id: PageId,
+    right_page_id: PageId,
+) -> Result<PageId> {
+    let source_object_key = format!(
+        "presentation/spread-ab/pair-{pair_index}/{}/{}",
+        left_page_id.as_canonical(),
+        right_page_id.as_canonical()
+    );
+    let canonical = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash,
+        adapter_id: "pub-viewer",
+        source_object_key: &source_object_key,
+        semantic_role: "viewer.presentation-spread-ab-v1",
+    })
+    .map_err(|error| anyhow!("derive spread A/B presentation identity: {error:?}"))?;
+    Ok(PageId::from_canonical(canonical))
+}
+
+/// Research-only #1057 presentation compositor.
+///
+/// The canonical source graph is already resolved before this function runs.
+/// This rewrites only the Viewer presentation surface: adjacent admitted
+/// half-PAGEs become one wider synthetic surface, while canonical NodeId,
+/// StoryId, image resources and table identities remain unchanged.
+fn compose_mature_spread_pairs_secondary_left_ab_v1(
+    visual: &mut ViewerGeometryDocument,
+) -> Result<()> {
+    let source_pages = visual.document.pages.clone();
+    if source_pages.is_empty() || source_pages.len() % 2 != 0 {
+        return Err(anyhow!(
+            "spread A/B requires a non-empty even number of admitted half-PAGEs"
+        ));
+    }
+
+    let surface_by_page = visual
+        .scene
+        .surfaces
+        .iter()
+        .cloned()
+        .map(|surface| (surface.origin, surface))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut spread_pages = Vec::with_capacity(source_pages.len() / 2);
+    let mut spread_surfaces = Vec::with_capacity(source_pages.len() / 2);
+    let mut parent_projection = BTreeMap::new();
+
+    for (pair_index, pair) in source_pages.chunks_exact(2).enumerate() {
+        let left = &pair[0];
+        let right = &pair[1];
+        if left.height_emu != right.height_emu || left.width_emu != right.width_emu {
+            return Err(anyhow!("spread A/B half-PAGE geometry drift"));
+        }
+        let left_surface = surface_by_page
+            .get(&left.id)
+            .with_context(|| format!("spread A/B missing left surface {}", left.id.as_canonical()))?;
+        let right_surface = surface_by_page
+            .get(&right.id)
+            .with_context(|| format!("spread A/B missing right surface {}", right.id.as_canonical()))?;
+        if left_surface.size != right_surface.size {
+            return Err(anyhow!("spread A/B source surfaces have different sizes"));
+        }
+
+        let width_emu = left
+            .width_emu
+            .checked_add(right.width_emu)
+            .context("spread A/B width overflow")?;
+        let spread_id = derive_spread_surface_id_ab_v1(
+            &visual.document.source.source_hash,
+            pair_index,
+            left.id,
+            right.id,
+        )?;
+        let index = u32::try_from(pair_index + 1).context("spread A/B page index exceeds u32")?;
+
+        spread_pages.push(ViewerPage {
+            index,
+            id: spread_id,
+            width_emu,
+            height_emu: left.height_emu,
+        });
+        spread_surfaces.push(ResolvedSurface {
+            origin: spread_id,
+            size: Size2D::new(LengthEmu::new(width_emu), LengthEmu::new(left.height_emu)),
+            bleed: None,
+            margins: None,
+        });
+
+        parent_projection.insert(
+            left.id.into_canonical(),
+            (spread_id.into_canonical(), LengthEmu::ZERO),
+        );
+        parent_projection.insert(
+            right.id.into_canonical(),
+            (
+                spread_id.into_canonical(),
+                LengthEmu::new(left.width_emu),
+            ),
+        );
+    }
+
+    let mut node_x_offsets = BTreeMap::<NodeId, LengthEmu>::new();
+    for node in &mut visual.scene.nodes {
+        let Some((spread_parent, dx)) = parent_projection.get(&node.parent_origin).copied() else {
+            continue;
+        };
+        node.parent_origin = spread_parent;
+        if dx != LengthEmu::ZERO {
+            node.bounds = translate_rect_x_for_spread_ab_v1(node.bounds, dx)?;
+        }
+        node_x_offsets.insert(node.origin, dx);
+    }
+
+    for frame in &mut visual.story_frames {
+        let Some(dx) = node_x_offsets.get(&frame.frame_id).copied() else {
+            continue;
+        };
+        if dx != LengthEmu::ZERO {
+            frame.text_content_bounds = frame
+                .text_content_bounds
+                .map(|bounds| translate_rect_x_for_spread_ab_v1(bounds, dx))
+                .transpose()?;
+        }
+    }
+
+    for table in &mut visual.tables {
+        let Some(dx) = node_x_offsets.get(&table.node_id).copied() else {
+            continue;
+        };
+        if dx == LengthEmu::ZERO {
+            continue;
+        }
+        for cell in &mut table.cells {
+            cell.bounds = cell
+                .bounds
+                .map(|bounds| translate_rect_x_for_spread_ab_v1(bounds, dx))
+                .transpose()?;
+        }
+        for border in &mut table.borders {
+            border.x1_emu = border
+                .x1_emu
+                .checked_add(dx.get())
+                .context("spread A/B table border x1 overflow")?;
+            border.x2_emu = border
+                .x2_emu
+                .checked_add(dx.get())
+                .context("spread A/B table border x2 overflow")?;
+        }
+    }
+
+    #[cfg(feature = "cmo-slot-compose")]
+    for projected in &mut visual.projected_instances {
+        for (source_parent, (spread_parent, dx)) in &parent_projection {
+            if projected.scene_instance.target_page_id != source_parent.to_string() {
+                continue;
+            }
+            projected.scene_instance.target_page_id = spread_parent.to_string();
+            if *dx != LengthEmu::ZERO {
+                projected.bounds = translate_rect_x_for_spread_ab_v1(projected.bounds, *dx)?;
+                projected.text_content_bounds = projected
+                    .text_content_bounds
+                    .map(|bounds| translate_rect_x_for_spread_ab_v1(bounds, *dx))
+                    .transpose()?;
+            }
+            break;
+        }
+    }
+
+    visual.document.pages = spread_pages;
+    visual.scene.surfaces = spread_surfaces;
+    visual.document.diagnostics.push(ViewerDiagnostic {
+        code: "viewer.page_projection.spread_ab_applied".to_owned(),
+        severity: ViewerDiagnosticSeverity::Info,
+        message: "Research-only #1057 spread A/B composed adjacent secondary|primary half-PAGE pairs into wider Viewer presentation surfaces; canonical source PAGE/Node identities remain unchanged upstream.".to_owned(),
+    });
+    normalize_diagnostics(&mut visual.document.diagnostics);
+    Ok(())
+}
+
 fn open_mature_0x2c_bundle(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
@@ -2725,7 +2917,7 @@ fn open_mature_0x2c_bundle(
     }
     normalize_diagnostics(&mut document.diagnostics);
 
-    let geometry = ViewerGeometryDocument {
+    let mut geometry = ViewerGeometryDocument {
         schema_version: VIEWER_GEOMETRY_SCHEMA_V0_1.to_owned(),
         document,
         scene,
@@ -2740,6 +2932,13 @@ fn open_mature_0x2c_bundle(
         projected_instances,
         images,
     };
+    if matches!(
+        &pipeline.page_selection.disposition,
+        ViewerPageSelectionDisposition::FamilyProfileApplied { profile_id, .. }
+            if profile_id == MATURE_SPREAD_PAIR_AB_PROFILE_ID_V1
+    ) {
+        compose_mature_spread_pairs_secondary_left_ab_v1(&mut geometry)?;
+    }
     Ok(ViewerOpenBundle {
         geometry,
         resolved_graph: pipeline.resolved.graph,
@@ -2927,6 +3126,15 @@ fn select_viewer_pages(
             Ok(receipt) => receipt,
             Err(_) => return generic(),
         };
+        let spread_document_entries = page_roles
+            .document_entries
+            .iter()
+            .map(|entry| MatureSpreadPairDocumentEntryEvidenceV1 {
+                document_ordinal: entry.document_ordinal,
+                raw_type: entry.raw_type,
+            })
+            .collect::<Vec<_>>();
+
         let input = StandardPrintServiceTailProfileInputV1 {
             schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
             document_page_list_entry_count: page_roles.document_page_list_entry_count,
@@ -2995,6 +3203,32 @@ fn select_viewer_pages(
         if let Some(selection) =
             select_mature_detached_post_special_tail_customer_page_seq_nums_v1(input.clone())
         {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+
+        if let Some(selection) = select_mature_spread_pair_half_page_seq_nums_ab_v1(
+            MatureSpreadPairProfileInputV1 {
+                base: input.clone(),
+                document_entries: spread_document_entries,
+            },
+        ) {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
                 let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
