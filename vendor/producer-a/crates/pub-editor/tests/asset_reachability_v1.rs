@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    EDITOR_PROJECT_VERSION_V0_11, EditOperation, EditorProjectAsset, EditorProjectError,
+    EDITOR_PROJECT_VERSION_CURRENT, EditOperation, EditorProjectAsset, EditorProjectError,
     EditorSession, Sha256Digest,
 };
 use pub_model::{Document, DocumentId, NodeId, ResolvedGraph, SourceDescriptor};
@@ -62,7 +62,7 @@ fn unused_runtime_import_is_not_durable_project_truth() {
     );
 
     let project = session.try_project().expect("project materialization");
-    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_V0_11);
+    assert_eq!(project.schema_version, EDITOR_PROJECT_VERSION_CURRENT);
     assert!(
         project.assets.is_empty(),
         "runtime cache membership alone must not become durable project metadata"
