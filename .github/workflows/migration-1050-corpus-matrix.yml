@@ -339,7 +339,8 @@ jobs:
           for idml in "$EVIDENCE_ROOT"/consumer/*/output.idml; do
             dir="$(dirname "$idml")"
             rm -f "$dir/consumer.sla"
-            CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla"               xvfb-run -a scribus -g -ns                 -py tools/ci/scribus_idml_consumer.py -- "$idml"
+            echo "::notice::Scribus validating $idml"
+            timeout 180s env CHAPTERA_SCRIBUS_SLA_OUT="$dir/consumer.sla"               xvfb-run -a scribus -g -ns                 -py tools/ci/scribus_idml_consumer.py -- "$idml"
             test -s "$dir/consumer.sla"
           done
 
