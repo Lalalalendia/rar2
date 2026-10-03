@@ -1594,7 +1594,10 @@ fn resolve_mixed_size_text_layout_v1(
             .filter(|candidate| candidate.scalar_boundary > cursor)
         {
             eprintln!(
-                "CHAPTERA_READER_PERF mixed_layout:line:{line_index}:candidate:{candidate_ordinal}:reshape:{}:start",
+                "CHAPTERA_READER_PERF mixed_layout:line:{line_index}:candidate:{candidate_ordinal}:total:{}:safe:{}:reshape_total:{}:requires_reshape:{}:start",
+                policy.candidates.len(),
+                safe_candidate_count,
+                reshape_candidate_count,
                 u8::from(candidate.requires_reshaping)
             );
             let evaluated = match shape_mixed_line_candidate_v1(
@@ -1617,7 +1620,10 @@ fn resolve_mixed_size_text_layout_v1(
                 chosen = Some(evaluated);
             }
             eprintln!(
-                "CHAPTERA_READER_PERF mixed_layout:line:{line_index}:candidate:{candidate_ordinal}:reshape:{}:done",
+                "CHAPTERA_READER_PERF mixed_layout:line:{line_index}:candidate:{candidate_ordinal}:total:{}:safe:{}:reshape_total:{}:requires_reshape:{}:done",
+                policy.candidates.len(),
+                safe_candidate_count,
+                reshape_candidate_count,
                 u8::from(candidate.requires_reshaping)
             );
             candidate_ordinal += 1;
