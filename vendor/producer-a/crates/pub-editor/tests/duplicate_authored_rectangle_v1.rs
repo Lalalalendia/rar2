@@ -366,12 +366,7 @@ fn source_backed_and_offset_overflow_fail_before_commit() {
     ));
 
     source.provenance = AuthoredEntityProvenanceV1::AuthorCreated;
-    source.bounds = rect(
-        9_007_199_254_640_991,
-        200,
-        50_000,
-        400,
-    );
+    source.bounds = rect(9_007_199_254_640_991, 200, 50_000, 400);
     assert!(matches!(
         plan_duplicate_authored_rectangle_v1(
             &source,
