@@ -164,7 +164,7 @@ try {
             $actualOrdinals = @($rows[0].terminal_fdpp_ordinals_zero_based | ForEach-Object { [int]$_ })
             $expectedOrdinals = @($crossChecks[$sourceSha])
             if (($actualOrdinals -join ",") -ne ($expectedOrdinals -join ",")) {
-                throw "Historical donor cross-check mismatch for $sourceSha: $($actualOrdinals -join ',')"
+                throw "Historical donor cross-check mismatch for ${sourceSha}: $($actualOrdinals -join ',')"
             }
         }
     }
