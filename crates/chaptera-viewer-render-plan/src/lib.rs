@@ -941,14 +941,20 @@ pub fn build_page_render_plan_with_text_layout_resolver_v1<'a, F>(
 where
     F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
 {
+    eprintln!("CHAPTERA_READER_PHASE render_plan_base:{page_index}:start");
     let mut plan = build_page_render_plan_v1(visual, page_index)?;
+    eprintln!("CHAPTERA_READER_PHASE render_plan_base:{page_index}:done");
     let page_id = plan.page_id;
     let page_size = plan.page_size;
+    let mut text_node_ordinal = 0_usize;
 
     for node in &mut plan.nodes {
         let Some(fragment) = node.text.as_mut() else {
             continue;
         };
+        eprintln!(
+            "CHAPTERA_READER_PHASE render_plan_text:{page_index}:{text_node_ordinal}:start"
+        );
         let projected_target_frame_node_id = {
             #[cfg(feature = "projected-scene-instances")]
             {
@@ -988,8 +994,13 @@ where
             .map(|font| font.resource_id.to_owned());
         let font = resolved_font.as_ref().unwrap_or(fallback_font);
         fragment.layout = Some(resolve_text_layout_v1(visual, target, fragment, font));
+        eprintln!(
+            "CHAPTERA_READER_PHASE render_plan_text:{page_index}:{text_node_ordinal}:done"
+        );
+        text_node_ordinal += 1;
     }
 
+    eprintln!("CHAPTERA_READER_PHASE render_plan_layout:{page_index}:done");
     Ok(plan)
 }
 
