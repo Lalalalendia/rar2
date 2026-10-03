@@ -1,10 +1,8 @@
-use crate::{
-    IDML_PACKAGING_NAMESPACE, IdmlPackage, IdmlPart, IdmlPartContent, IdmlPartKind,
-};
+use crate::{IDML_PACKAGING_NAMESPACE, IdmlPackage, IdmlPart, IdmlPartContent, IdmlPartKind};
 use pub_export::{
-    AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
-    AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1,
-    CapabilityLevel, ExportPlan, ExportSrgb8V1,
+    AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
+    AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1, CapabilityLevel, ExportPlan,
+    ExportSrgb8V1,
 };
 use pub_model::{CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, PageId};
 use std::collections::BTreeSet;
@@ -14,15 +12,34 @@ use std::fmt::Write as _;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdmlAuthoredShapeError {
     NonIdmlPackage,
-    DuplicateRectangle { node_id: NodeId },
-    InvalidPageSize { page_id: PageId },
-    InvalidBounds { node_id: NodeId },
-    InvalidStroke { node_id: NodeId },
-    MissingPreservedFeature { node_id: NodeId, feature: &'static str },
-    MissingZOrderLoss { node_id: NodeId },
-    MissingSpread { page_id: PageId },
-    BinarySpread { page_id: PageId },
-    InvalidSpreadXml { page_id: PageId },
+    DuplicateRectangle {
+        node_id: NodeId,
+    },
+    InvalidPageSize {
+        page_id: PageId,
+    },
+    InvalidBounds {
+        node_id: NodeId,
+    },
+    InvalidStroke {
+        node_id: NodeId,
+    },
+    MissingPreservedFeature {
+        node_id: NodeId,
+        feature: &'static str,
+    },
+    MissingZOrderLoss {
+        node_id: NodeId,
+    },
+    MissingSpread {
+        page_id: PageId,
+    },
+    BinarySpread {
+        page_id: PageId,
+    },
+    InvalidSpreadXml {
+        page_id: PageId,
+    },
     MissingDesignMap,
     BinaryDesignMap,
     UnexpectedDesignMapMarkup,
@@ -33,10 +50,18 @@ impl fmt::Display for IdmlAuthoredShapeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NonIdmlPackage => f.write_str("authored rectangle projection requires IDML"),
-            Self::DuplicateRectangle { node_id } => write!(f, "duplicate authored rectangle {node_id}"),
-            Self::InvalidPageSize { page_id } => write!(f, "authored rectangle page {page_id} has invalid size"),
-            Self::InvalidBounds { node_id } => write!(f, "authored rectangle {node_id} has invalid bounds"),
-            Self::InvalidStroke { node_id } => write!(f, "authored rectangle {node_id} has invalid stroke"),
+            Self::DuplicateRectangle { node_id } => {
+                write!(f, "duplicate authored rectangle {node_id}")
+            }
+            Self::InvalidPageSize { page_id } => {
+                write!(f, "authored rectangle page {page_id} has invalid size")
+            }
+            Self::InvalidBounds { node_id } => {
+                write!(f, "authored rectangle {node_id} has invalid bounds")
+            }
+            Self::InvalidStroke { node_id } => {
+                write!(f, "authored rectangle {node_id} has invalid stroke")
+            }
             Self::MissingPreservedFeature { node_id, feature } => write!(
                 f,
                 "authored rectangle {node_id} lacks preserved {feature} in ExportPlan"
@@ -47,11 +72,18 @@ impl fmt::Display for IdmlAuthoredShapeError {
             ),
             Self::MissingSpread { page_id } => write!(f, "IDML spread missing for page {page_id}"),
             Self::BinarySpread { page_id } => write!(f, "IDML spread for page {page_id} is binary"),
-            Self::InvalidSpreadXml { page_id } => write!(f, "IDML spread for page {page_id} is not overlay-compatible"),
+            Self::InvalidSpreadXml { page_id } => write!(
+                f,
+                "IDML spread for page {page_id} is not overlay-compatible"
+            ),
             Self::MissingDesignMap => f.write_str("IDML designmap.xml missing"),
             Self::BinaryDesignMap => f.write_str("IDML designmap.xml is binary"),
-            Self::UnexpectedDesignMapMarkup => f.write_str("IDML designmap Document root is not overlay-compatible"),
-            Self::DuplicateGraphicResource => f.write_str("IDML already carries Resources/Graphic.xml outside authored-shape overlay"),
+            Self::UnexpectedDesignMapMarkup => {
+                f.write_str("IDML designmap Document root is not overlay-compatible")
+            }
+            Self::DuplicateGraphicResource => f.write_str(
+                "IDML already carries Resources/Graphic.xml outside authored-shape overlay",
+            ),
         }
     }
 }
@@ -74,7 +106,9 @@ pub fn add_authored_rectangles_to_idml(
 
     for item in &ordered {
         if !seen.insert(item.node_id) {
-            return Err(IdmlAuthoredShapeError::DuplicateRectangle { node_id: item.node_id });
+            return Err(IdmlAuthoredShapeError::DuplicateRectangle {
+                node_id: item.node_id,
+            });
         }
         validate(plan, item)?;
         if item.fill.visible {
@@ -95,32 +129,47 @@ pub fn add_authored_rectangles_to_idml(
             .parts
             .iter_mut()
             .find(|part| part.kind == IdmlPartKind::Spread && part.path == spread_path)
-            .ok_or(IdmlAuthoredShapeError::MissingSpread { page_id: item.page_id })?;
+            .ok_or(IdmlAuthoredShapeError::MissingSpread {
+                page_id: item.page_id,
+            })?;
         let IdmlPartContent::Text(xml) = &mut spread.content else {
-            return Err(IdmlAuthoredShapeError::BinarySpread { page_id: item.page_id });
+            return Err(IdmlAuthoredShapeError::BinarySpread {
+                page_id: item.page_id,
+            });
         };
         let marker = "  </Spread>";
         let Some(insert_at) = xml.rfind(marker) else {
-            return Err(IdmlAuthoredShapeError::InvalidSpreadXml { page_id: item.page_id });
+            return Err(IdmlAuthoredShapeError::InvalidSpreadXml {
+                page_id: item.page_id,
+            });
         };
         xml.insert_str(insert_at, &rectangle_xml(item)?);
     }
     Ok(())
 }
 
-fn validate(plan: &ExportPlan, item: &AuthoredRectangleExportV1) -> Result<(), IdmlAuthoredShapeError> {
+fn validate(
+    plan: &ExportPlan,
+    item: &AuthoredRectangleExportV1,
+) -> Result<(), IdmlAuthoredShapeError> {
     if !item.page_size.is_positive() {
-        return Err(IdmlAuthoredShapeError::InvalidPageSize { page_id: item.page_id });
+        return Err(IdmlAuthoredShapeError::InvalidPageSize {
+            page_id: item.page_id,
+        });
     }
     if item.bounds.width.get() <= 0
         || item.bounds.height.get() <= 0
         || item.bounds.right().is_none()
         || item.bounds.bottom().is_none()
     {
-        return Err(IdmlAuthoredShapeError::InvalidBounds { node_id: item.node_id });
+        return Err(IdmlAuthoredShapeError::InvalidBounds {
+            node_id: item.node_id,
+        });
     }
     if item.stroke.width_emu.get() <= 0 {
-        return Err(IdmlAuthoredShapeError::InvalidStroke { node_id: item.node_id });
+        return Err(IdmlAuthoredShapeError::InvalidStroke {
+            node_id: item.node_id,
+        });
     }
     for feature in [
         AUTHORED_SHAPE_GEOMETRY_FEATURE,
@@ -134,8 +183,14 @@ fn validate(plan: &ExportPlan, item: &AuthoredRectangleExportV1) -> Result<(), I
             });
         }
     }
-    if !has_reported_loss(plan, item.node_id.into_canonical(), AUTHORED_SHAPE_Z_ORDER_FEATURE) {
-        return Err(IdmlAuthoredShapeError::MissingZOrderLoss { node_id: item.node_id });
+    if !has_reported_loss(
+        plan,
+        item.node_id.into_canonical(),
+        AUTHORED_SHAPE_Z_ORDER_FEATURE,
+    ) {
+        return Err(IdmlAuthoredShapeError::MissingZOrderLoss {
+            node_id: item.node_id,
+        });
     }
     Ok(())
 }
@@ -158,7 +213,11 @@ fn add_graphic_resource(
     package: &mut IdmlPackage,
     colors: &BTreeSet<ExportSrgb8V1>,
 ) -> Result<(), IdmlAuthoredShapeError> {
-    if package.parts.iter().any(|part| part.path == "Resources/Graphic.xml") {
+    if package
+        .parts
+        .iter()
+        .any(|part| part.path == "Resources/Graphic.xml")
+    {
         return Err(IdmlAuthoredShapeError::DuplicateGraphicResource);
     }
     let designmap = package
@@ -221,11 +280,15 @@ fn rectangle_xml(item: &AuthoredRectangleExportV1) -> Result<String, IdmlAuthore
     let right = item
         .bounds
         .right()
-        .ok_or(IdmlAuthoredShapeError::InvalidBounds { node_id: item.node_id })?;
+        .ok_or(IdmlAuthoredShapeError::InvalidBounds {
+            node_id: item.node_id,
+        })?;
     let bottom = item
         .bounds
         .bottom()
-        .ok_or(IdmlAuthoredShapeError::InvalidBounds { node_id: item.node_id })?;
+        .ok_or(IdmlAuthoredShapeError::InvalidBounds {
+            node_id: item.node_id,
+        })?;
 
     let x = format_emu_points(item.bounds.x);
     let y = format_emu_points(item.bounds.y);
@@ -297,7 +360,10 @@ fn write_path_point(xml: &mut String, x: &str, y: &str) {
 }
 
 fn spread_path(page_id: PageId) -> String {
-    format!("Spreads/Spread_{}.xml", idml_self("usp", page_id.into_canonical()))
+    format!(
+        "Spreads/Spread_{}.xml",
+        idml_self("usp", page_id.into_canonical())
+    )
 }
 
 fn idml_self(prefix: &str, id: CanonicalId) -> String {
@@ -334,7 +400,9 @@ fn format_ratio(numerator: i128, denominator: i128, precision: usize) -> String 
     for _ in 0..precision {
         remainder *= 10;
         let digit = remainder / denominator;
-        result.push(char::from(b'0' + u8::try_from(digit).expect("decimal digit")));
+        result.push(char::from(
+            b'0' + u8::try_from(digit).expect("decimal digit"),
+        ));
         remainder %= denominator;
         if remainder == 0 {
             break;
@@ -349,16 +417,15 @@ fn format_ratio(numerator: i128, denominator: i128, precision: usize) -> String 
     result
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{IDML_ADAPTER_VERSION_V0_1, IdmlPackageBuilder};
     use pub_export::{
         AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
-        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE,
-        ExportSolidPaintV1, ExportSolidStrokeV1, SemanticFeatureRequest,
-        TargetCapabilityManifest, TargetProfile, plan_export,
+        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, ExportSolidPaintV1,
+        ExportSolidStrokeV1, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
+        plan_export,
     };
     use pub_model::{CanonicalId, RectEmu, Size2D};
     use std::collections::BTreeMap;
@@ -380,11 +447,19 @@ mod tests {
             ),
             fill: ExportSolidPaintV1 {
                 visible: true,
-                color: ExportSrgb8V1 { r: 0x12, g: 0x34, b: 0x56 },
+                color: ExportSrgb8V1 {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                },
             },
             stroke: ExportSolidStrokeV1 {
                 visible: true,
-                color: ExportSrgb8V1 { r: 0xAA, g: 0xBB, b: 0xCC },
+                color: ExportSrgb8V1 {
+                    r: 0xAA,
+                    g: 0xBB,
+                    b: 0xCC,
+                },
                 width_emu: LengthEmu::new(12_700),
             },
         }
@@ -502,7 +577,12 @@ mod tests {
         let mut package = package(&item, &plan);
         add_authored_rectangles_to_idml(&plan, &mut package, std::slice::from_ref(&item))
             .expect("authored rectangle");
-        assert!(package.parts.iter().all(|part| part.path != "Resources/Graphic.xml"));
+        assert!(
+            package
+                .parts
+                .iter()
+                .all(|part| part.path != "Resources/Graphic.xml")
+        );
         let spread = package
             .parts
             .iter()

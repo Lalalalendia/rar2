@@ -32,8 +32,8 @@ use pub_export::{
     AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
     AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1, CapabilityLevel, ExportPlan,
     ExportReport, ExportReportSource, ExportSolidPaintV1, ExportSolidStrokeV1, ExportSrgb8V1,
-    FormatCompatibilityManifest, FormatRepresentability, FullStoryTypographyV1, LossItem,
-    LossKind, LossSeverity, PersistenceCompatibilityAssessment, PersistenceCompatibilityError,
+    FormatCompatibilityManifest, FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind,
+    LossSeverity, PersistenceCompatibilityAssessment, PersistenceCompatibilityError,
     PersistenceRequirement, PersistenceRequirements, PersistenceTargetProfile,
     STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE,
     STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError, ScopedCapabilityOverride,
@@ -2332,9 +2332,9 @@ impl EditorSession {
                         self.odg_full_story_typography_placements_v1(&typography);
                     add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
                         .map_err(|error| EditorExportError::Projection {
-                            target,
-                            message: error.to_string(),
-                        })?;
+                        target,
+                        message: error.to_string(),
+                    })?;
                     let rectangles = self.authored_rectangle_exports_v1(target)?;
                     add_authored_rectangles_to_odg(&plan, &mut package, &rectangles).map_err(
                         |error| EditorExportError::Projection {

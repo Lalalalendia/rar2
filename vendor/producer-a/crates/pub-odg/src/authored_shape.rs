@@ -1,8 +1,8 @@
 use crate::{ODG_CONTENT_PATH, OdgPackage, OdgPartKind};
 use pub_export::{
-    AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
-    AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1,
-    CapabilityLevel, ExportPlan, ExportSrgb8V1,
+    AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
+    AUTHORED_SHAPE_Z_ORDER_FEATURE, AuthoredRectangleExportV1, CapabilityLevel, ExportPlan,
+    ExportSrgb8V1,
 };
 use pub_model::{CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, PageId};
 use std::collections::BTreeSet;
@@ -14,13 +14,26 @@ pub enum OdgAuthoredShapeError {
     NonOdgPackage,
     MissingContent,
     InvalidContentUtf8,
-    DuplicateRectangle { node_id: NodeId },
-    InvalidBounds { node_id: NodeId },
-    InvalidStroke { node_id: NodeId },
-    MissingPreservedFeature { node_id: NodeId, feature: &'static str },
-    MissingZOrderLoss { node_id: NodeId },
+    DuplicateRectangle {
+        node_id: NodeId,
+    },
+    InvalidBounds {
+        node_id: NodeId,
+    },
+    InvalidStroke {
+        node_id: NodeId,
+    },
+    MissingPreservedFeature {
+        node_id: NodeId,
+        feature: &'static str,
+    },
+    MissingZOrderLoss {
+        node_id: NodeId,
+    },
     MissingAutomaticStyles,
-    MissingPage { page_id: PageId },
+    MissingPage {
+        page_id: PageId,
+    },
 }
 
 impl fmt::Display for OdgAuthoredShapeError {
@@ -29,9 +42,15 @@ impl fmt::Display for OdgAuthoredShapeError {
             Self::NonOdgPackage => f.write_str("authored rectangle projection requires ODG"),
             Self::MissingContent => f.write_str("ODG content.xml missing"),
             Self::InvalidContentUtf8 => f.write_str("ODG content.xml is not UTF-8"),
-            Self::DuplicateRectangle { node_id } => write!(f, "duplicate authored rectangle {node_id}"),
-            Self::InvalidBounds { node_id } => write!(f, "authored rectangle {node_id} has invalid bounds"),
-            Self::InvalidStroke { node_id } => write!(f, "authored rectangle {node_id} has invalid stroke"),
+            Self::DuplicateRectangle { node_id } => {
+                write!(f, "duplicate authored rectangle {node_id}")
+            }
+            Self::InvalidBounds { node_id } => {
+                write!(f, "authored rectangle {node_id} has invalid bounds")
+            }
+            Self::InvalidStroke { node_id } => {
+                write!(f, "authored rectangle {node_id} has invalid stroke")
+            }
             Self::MissingPreservedFeature { node_id, feature } => write!(
                 f,
                 "authored rectangle {node_id} lacks preserved {feature} in ExportPlan"
@@ -69,7 +88,9 @@ pub fn add_authored_rectangles_to_odg(
     let mut seen = BTreeSet::new();
     for item in &ordered {
         if !seen.insert(item.node_id) {
-            return Err(OdgAuthoredShapeError::DuplicateRectangle { node_id: item.node_id });
+            return Err(OdgAuthoredShapeError::DuplicateRectangle {
+                node_id: item.node_id,
+            });
         }
         validate(plan, item)?;
     }
@@ -114,11 +135,15 @@ pub fn add_authored_rectangles_to_odg(
     for item in ordered {
         let page_marker = format!("<draw:page draw:name=\"{}\"", page_name(item.page_id));
         let Some(page_start) = xml.find(&page_marker) else {
-            return Err(OdgAuthoredShapeError::MissingPage { page_id: item.page_id });
+            return Err(OdgAuthoredShapeError::MissingPage {
+                page_id: item.page_id,
+            });
         };
         let close = "      </draw:page>";
         let Some(relative_close) = xml[page_start..].find(close) else {
-            return Err(OdgAuthoredShapeError::MissingPage { page_id: item.page_id });
+            return Err(OdgAuthoredShapeError::MissingPage {
+                page_id: item.page_id,
+            });
         };
         let insert_at = page_start + relative_close;
         let fragment = format!(
@@ -137,16 +162,23 @@ pub fn add_authored_rectangles_to_odg(
     Ok(())
 }
 
-fn validate(plan: &ExportPlan, item: &AuthoredRectangleExportV1) -> Result<(), OdgAuthoredShapeError> {
+fn validate(
+    plan: &ExportPlan,
+    item: &AuthoredRectangleExportV1,
+) -> Result<(), OdgAuthoredShapeError> {
     if item.bounds.width.get() <= 0
         || item.bounds.height.get() <= 0
         || item.bounds.right().is_none()
         || item.bounds.bottom().is_none()
     {
-        return Err(OdgAuthoredShapeError::InvalidBounds { node_id: item.node_id });
+        return Err(OdgAuthoredShapeError::InvalidBounds {
+            node_id: item.node_id,
+        });
     }
     if item.stroke.width_emu.get() <= 0 {
-        return Err(OdgAuthoredShapeError::InvalidStroke { node_id: item.node_id });
+        return Err(OdgAuthoredShapeError::InvalidStroke {
+            node_id: item.node_id,
+        });
     }
     for feature in [
         AUTHORED_SHAPE_GEOMETRY_FEATURE,
@@ -160,8 +192,14 @@ fn validate(plan: &ExportPlan, item: &AuthoredRectangleExportV1) -> Result<(), O
             });
         }
     }
-    if !has_reported_loss(plan, item.node_id.into_canonical(), AUTHORED_SHAPE_Z_ORDER_FEATURE) {
-        return Err(OdgAuthoredShapeError::MissingZOrderLoss { node_id: item.node_id });
+    if !has_reported_loss(
+        plan,
+        item.node_id.into_canonical(),
+        AUTHORED_SHAPE_Z_ORDER_FEATURE,
+    ) {
+        return Err(OdgAuthoredShapeError::MissingZOrderLoss {
+            node_id: item.node_id,
+        });
     }
     Ok(())
 }
@@ -169,9 +207,8 @@ fn validate(plan: &ExportPlan, item: &AuthoredRectangleExportV1) -> Result<(), O
 fn insert_automatic_styles(xml: &mut String, styles: &str) -> Result<(), OdgAuthoredShapeError> {
     let empty = "  <office:automatic-styles/>\n";
     if xml.matches(empty).count() == 1 {
-        let replacement = format!(
-            "  <office:automatic-styles>\n{styles}  </office:automatic-styles>\n"
-        );
+        let replacement =
+            format!("  <office:automatic-styles>\n{styles}  </office:automatic-styles>\n");
         *xml = xml.replacen(empty, &replacement, 1);
         return Ok(());
     }
@@ -242,7 +279,9 @@ fn format_emu_points(value: LengthEmu) -> String {
     for _ in 0..15 {
         remainder *= 10;
         let digit = remainder / denominator;
-        result.push(char::from(b'0' + u8::try_from(digit).expect("decimal digit")));
+        result.push(char::from(
+            b'0' + u8::try_from(digit).expect("decimal digit"),
+        ));
         remainder %= denominator;
         if remainder == 0 {
             break;
@@ -257,16 +296,15 @@ fn format_emu_points(value: LengthEmu) -> String {
     result
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgPart};
     use pub_export::{
         AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
-        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE,
-        ExportSolidPaintV1, ExportSolidStrokeV1, SemanticFeatureRequest,
-        TargetCapabilityManifest, TargetProfile, plan_export,
+        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, ExportSolidPaintV1,
+        ExportSolidStrokeV1, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
+        plan_export,
     };
     use pub_model::{CanonicalId, RectEmu, Size2D};
     use std::collections::BTreeMap;
@@ -288,11 +326,19 @@ mod tests {
             ),
             fill: ExportSolidPaintV1 {
                 visible: true,
-                color: ExportSrgb8V1 { r: 0x12, g: 0x34, b: 0x56 },
+                color: ExportSrgb8V1 {
+                    r: 0x12,
+                    g: 0x34,
+                    b: 0x56,
+                },
             },
             stroke: ExportSolidStrokeV1 {
                 visible: true,
-                color: ExportSrgb8V1 { r: 0xAA, g: 0xBB, b: 0xCC },
+                color: ExportSrgb8V1 {
+                    r: 0xAA,
+                    g: 0xBB,
+                    b: 0xCC,
+                },
                 width_emu: LengthEmu::new(12_700),
             },
         }
@@ -364,9 +410,15 @@ mod tests {
         let xml = std::str::from_utf8(&package.parts[0].content).unwrap();
         assert!(xml.contains("style:family=\"graphic\""));
         assert!(xml.contains("draw:fill=\"solid\" draw:fill-color=\"#123456\""));
-        assert!(xml.contains("draw:stroke=\"solid\" svg:stroke-color=\"#AABBCC\" svg:stroke-width=\"1pt\""));
+        assert!(xml.contains(
+            "draw:stroke=\"solid\" svg:stroke-color=\"#AABBCC\" svg:stroke-width=\"1pt\""
+        ));
         assert!(xml.contains("<draw:rect draw:name=\"AuthoredRect_"));
-        assert!(xml.contains("svg:x=\"100pt\" svg:y=\"200pt\" svg:width=\"200pt\" svg:height=\"100pt\""));
+        assert!(
+            xml.contains(
+                "svg:x=\"100pt\" svg:y=\"200pt\" svg:width=\"200pt\" svg:height=\"100pt\""
+            )
+        );
         assert!(!xml.contains("draw:z-index="));
     }
 
