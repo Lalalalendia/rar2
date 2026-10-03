@@ -67,3 +67,93 @@ jobs:
           path: target/pub-vba-estate/receipt.json
           if-no-files-found: error
           retention-days: 90
+
+
+  aspose_preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Materialize exact MIT-licensed Aspose PUB fixtures
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/aspose-pub" target/pub-vba-aspose
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import urllib.request
+          from pathlib import Path
+
+          rows = [
+              ["aspose-pub/Aspose.PUB-for-.NET","beee619f9a4b7e2c8908e0fa132f4f4650b08975","Examples/Data/christmas.pub","1937aff3a70588c8fde65184301c2b48d6c521c3"],
+              ["aspose-pub/Aspose.PUB-for-.NET","beee619f9a4b7e2c8908e0fa132f4f4650b08975","Examples/Data/computer-classes-flyer.pub","1cfc2eec25c83da8a16de876551f68dae3053801"],
+              ["aspose-pub/Aspose.PUB-for-.NET","beee619f9a4b7e2c8908e0fa132f4f4650b08975","Examples/Data/easter-egg-hunt-flyer.pub","64398ae3652926d2a02dd68b142e267e363ca2bd"],
+              ["aspose-pub/Aspose.PUB-for-.NET","beee619f9a4b7e2c8908e0fa132f4f4650b08975","Examples/Data/florist-flyer.pub","3ed00dde59acd0930ba1d75b3df28328ddc79e4e"],
+              ["aspose-pub/Aspose.PUB-for-.NET","beee619f9a4b7e2c8908e0fa132f4f4650b08975","Examples/Data/halloween-flyer.pub","6610c53ff345d4e11e03b7fffd1cd128b3ae4052"],
+              ["aspose-pub/Aspose.PUB-for-C","cad609c01b8a6201392391244df18a7b2caa215d","Examples/Data/1.pub","fdb6e7a69fef4cb0edef8c072db103de3b568d7e"],
+              ["aspose-pub/Aspose.PUB-for-C","cad609c01b8a6201392391244df18a7b2caa215d","Examples/Data/christmasBottom.pub","d71554e0ecd75c4e709a9374972cd17d2896999c"],
+          ]
+          root = Path(os.environ["RUNNER_TEMP"]) / "aspose-pub"
+          receipt = []
+          for idx, (repo, ref, path, expected_blob) in enumerate(rows, 1):
+              url = f"https://raw.githubusercontent.com/{repo}/{ref}/{path}"
+              data = urllib.request.urlopen(url, timeout=120).read()
+              dst = root / f"{idx:02d}__{Path(path).name}"
+              dst.write_bytes(data)
+              actual_blob = subprocess.check_output(["git","hash-object",str(dst)], text=True).strip()
+              assert actual_blob == expected_blob, (repo, path, actual_blob, expected_blob)
+              receipt.append({
+                  "repo": repo,
+                  "ref": ref,
+                  "path": path,
+                  "git_blob_sha": expected_blob,
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "byte_len": len(data),
+                  "license": "MIT",
+              })
+          assert len(receipt) == 7
+          assert len({x["sha256"] for x in receipt}) == 7
+          Path("target/pub-vba-aspose/materialization.json").write_text(
+              json.dumps({
+                  "schema":"chaptera.pub-vba-aspose-preflight-materialization.v1",
+                  "purpose":"preflight_only_not_T899_admission_before_PUB_T_898",
+                  "files":receipt,
+              }, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+      - name: Inert Aspose scan
+        run: |
+          set -euo pipefail
+          python tools/pub_vba_estate_scan.py scan \
+            --input "$RUNNER_TEMP/aspose-pub" \
+            --recursive \
+            --output target/pub-vba-aspose/scan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          scan=json.loads(Path("target/pub-vba-aspose/scan.json").read_text())
+          assert scan["totals"]["file_count"] == 7, scan["totals"]
+          assert scan["totals"]["read_failed"] == 0, scan["totals"]
+          assert scan["claims"]["vba_executed"] is False
+          assert scan["claims"]["ole_com_activated"] is False
+          assert scan["claims"]["source_text_emitted"] is False
+          print(json.dumps(scan["totals"], indent=2, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-aspose-preflight
+          path: |
+            target/pub-vba-aspose/materialization.json
+            target/pub-vba-aspose/scan.json
+          if-no-files-found: error
+          retention-days: 30
