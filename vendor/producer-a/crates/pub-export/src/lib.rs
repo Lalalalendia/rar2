@@ -36,6 +36,16 @@ pub const STORY_FONT_SIZE_FEATURE: &str = "story.typography.font_size";
 pub const STORY_TEXT_COLOR_FEATURE: &str = "story.typography.color";
 pub const STORY_PARAGRAPH_ALIGNMENT_FEATURE: &str = "story.paragraph_alignment";
 
+/// Target-neutral typography authority for the deliberately narrow first
+/// editable-export preservation slice: one font family + one point size cover
+/// the complete Story scalar range with no inherited or ambiguous segments.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FullStoryTypographyV1 {
+    pub story_id: CanonicalId,
+    pub font_family: String,
+    pub font_size_emu: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TargetProfile {
     pub format: String,
