@@ -7,6 +7,13 @@
 //! CFB, Contents, Quill, Escher, byte offsets, and writer mutation state are not
 //! part of the Viewer contract.
 
+mod borderart;
+
+pub use borderart::{
+    ViewerDecorativeBorderResourceV1, ViewerDecorativeBorderSlotRefV1,
+    ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
+};
+
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "cmo-slot-compose")]
 use chaptera_layout_projection::{
@@ -47,6 +54,7 @@ use pub_presentation_profile::{
     reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
     select_legacy22_customer_page_indices_v1,
     select_mature_detached_post_special_tail_customer_page_seq_nums_v1,
+    select_mature_master_bank_customer_page_seq_nums_v1,
     select_mature_terminal_service_tail_customer_page_seq_nums_v1,
     select_mature_zero_leader_detached_tail_customer_page_seq_nums_v1,
     select_reference_fixture_customer_page_seq_nums_v1,
@@ -253,6 +261,8 @@ pub struct ViewerGeometryDocument {
     pub projected_instances: Vec<ViewerProjectedSceneInstanceV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ViewerEmbeddedImage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decorative_borders: Vec<ViewerDecorativeBorderV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2166,6 +2176,7 @@ fn open_legacy_0x22_noquill_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2293,6 +2304,7 @@ fn open_legacy_0x22_quill_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2715,6 +2727,14 @@ fn open_mature_0x2c_bundle(
         });
     }
 
+    let (decorative_borders, borderart_diagnostics) =
+        borderart::viewer_decorative_borders_v1(
+            bytes,
+            &pipeline.source_hash,
+            &pipeline.resolved.graph,
+        );
+    document.diagnostics.extend(borderart_diagnostics);
+
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
@@ -2739,6 +2759,7 @@ fn open_mature_0x2c_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances,
         images,
+        decorative_borders,
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2994,6 +3015,28 @@ fn select_viewer_pages(
 
         if let Some(selection) =
             select_mature_detached_post_special_tail_customer_page_seq_nums_v1(input.clone())
+        {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+
+        if let Some(selection) = select_mature_master_bank_customer_page_seq_nums_v1(input.clone())
         {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
@@ -5061,6 +5104,7 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         let page_id = graph.document.pages[0];
@@ -5218,6 +5262,7 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.scene.nodes.clone();
 
@@ -5672,6 +5717,7 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5781,6 +5827,7 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5849,6 +5896,7 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.clone();
         visual.document.source.source_hash = Sha256Digest::from_bytes([0xCD; 32]);
