@@ -4,6 +4,14 @@ import json
 from pathlib import Path
 
 TARGETS = {
+    "publisher11-help-paired": {
+        "name": "Basic...Wide Inline",
+        "dzl_corner": 76200,
+        "dxl_horiz": 335280,
+        "dyl_vert": 441960,
+        "offsets": [108, 318, 508, 718, 908, 1118, 1308, 1518],
+        "blob_sizes": [210, 190, 210, 190, 210, 190, 210, 190],
+    },
     "publisher11-northpark-white-dashes": {
         "name": "Basic...White Dashes",
         "dzl_corner": 76200,
@@ -414,10 +422,10 @@ def analyze_source(source_id, expected, objects, properties):
             "byte_length": sum(blob_sizes),
         },
         "wmf_program_classes": {
-            "even_slots": sorted(next(iter(even_signatures))) if len(even_signatures) == 1 else None,
-            "odd_slots": sorted(next(iter(odd_signatures))) if len(odd_signatures) == 1 else None,
-            "even_slots_hex": list(next(iter(even_signatures))) if len(even_signatures) == 1 else None,
-            "odd_slots_hex": list(next(iter(odd_signatures))) if len(odd_signatures) == 1 else None,
+            "corner_class_slots": [0, 2, 4, 6],
+            "edge_class_slots": [1, 3, 5, 7],
+            "corner_class_signature": list(next(iter(even_signatures))) if len(even_signatures) == 1 else None,
+            "edge_class_signature": list(next(iter(odd_signatures))) if len(odd_signatures) == 1 else None,
         },
         "blob_rows": blob_rows,
         "checks": checks,
@@ -469,7 +477,7 @@ def main():
         },
         "interpretation": {
             "closed": (
-                "Publisher 10 and Publisher 11 independently expose the same OplFb "
+                "Three independently hosted Publisher 10/11 styles expose the same OplFb "
                 "materialization layout: three geometry scalars, CMeta=8, eight cumulative "
                 "metadata offsets, CFbmd=8 and eight ordered RgbMeta payloads. Every RgbMeta "
                 "decodes to a complete standard WMF METAHEADER/record stream whose declared "
