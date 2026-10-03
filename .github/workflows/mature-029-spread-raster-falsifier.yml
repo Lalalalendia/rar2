@@ -1,0 +1,236 @@
+name: Mature 029 spread raster falsifier
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-029-spread-raster-falsifier.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-029-spread-raster-falsifier-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-029-spread-raster
+
+jobs:
+  falsify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Prepare exact 029 fixture
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+
+          sha = "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e"
+          source = Path("out/pinned1050/materialized/native") / f"{sha}.pub"
+          data = source.read_bytes()
+          assert hashlib.sha256(data).hexdigest() == sha
+          assert len(data) == 496640
+
+          out = Path("target/mature-029-spread-raster")
+          out.mkdir(parents=True, exist_ok=True)
+          fixture = out / "029_c0688f73b9bf8fc7.pub"
+          fixture.write_bytes(data)
+          manifest = {
+              "schema": "chaptera.cloud-reader-real-fixtures.v1",
+              "fixtures": [{
+                  "name": "029_c0688f73b9bf8fc7",
+                  "sha256": sha,
+                  "bytes": len(data),
+                  "require_render": True,
+                  "require_shared_text": False,
+                  "source_path": str(fixture.resolve()),
+              }],
+          }
+          (out / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Install visual dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Build canonical Cloud Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Render exact 029 raw PAGEs at reference DPI
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/mature-029-spread-raster/debug/chaptera
+          READER_REAL_MANIFEST: ${{ github.workspace }}/target/mature-029-spread-raster/manifest.json
+          READER_REAL_OUTPUT: ${{ github.workspace }}/target/mature-029-spread-raster/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Compose and compare both spread orientations
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, importlib.util, json, sys
+          from pathlib import Path
+          from PIL import Image
+
+          root = Path("target/mature-029-spread-raster")
+          browser = root / "browser"
+          receipt = json.loads((browser / "receipt.json").read_text())
+          assert len(receipt["results"]) == 1
+          fixture = receipt["results"][0]
+          assert fixture["fixture"] == "029_c0688f73b9bf8fc7"
+          assert fixture["rendered"] is True
+          assert fixture["pages"] == 9, fixture["pages"]
+
+          # Raw viewer page order follows confirmed PAGE order:
+          # viewer1..9 = ord0,1,2,3,4,5,6,8,9.
+          page_path = lambda viewer_index: browser / f"029_c0688f73b9bf8fc7-page-{viewer_index}.png"
+
+          for i in range(1, 10):
+              assert page_path(i).is_file(), i
+
+          geometry = fixture["page_geometry"]
+          for i in [2, 3, 4, 5]:
+              assert geometry[i]["width_emu"] == geometry[2]["width_emu"]
+              assert geometry[i]["height_emu"] == geometry[2]["height_emu"]
+
+          spec = importlib.util.spec_from_file_location(
+              "fingerprint", Path("tools/cloud_reader_visual_fingerprint_v1.py")
+          )
+          fp = importlib.util.module_from_spec(spec)
+          sys.modules["fingerprint"] = fp
+          spec.loader.exec_module(fp)
+
+          reference = json.loads(
+              Path("tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json").read_text()
+          )
+          pair = next(p for p in reference["pairs"] if p["basename"] == "029_c0688f73b9bf8fc7")
+          assert pair["reference_pages"] == 2
+
+          def metrics(path, ref_index):
+              return fp.compare_grid(fp.image_grid(path), fp.reference_grid(pair["pages"][ref_index]))
+
+          def compose(left_index, right_index, out_path):
+              with Image.open(page_path(left_index)).convert("RGB") as left, Image.open(page_path(right_index)).convert("RGB") as right:
+                  assert left.height == right.height
+                  canvas = Image.new("RGB", (left.width + right.width, left.height), (255,255,255))
+                  canvas.paste(left, (0,0))
+                  canvas.paste(right, (left.width,0))
+                  canvas.save(out_path)
+
+          candidates = {
+              "fail_open_first_two": [(1, None), (2, None)],
+              "secondary_only": [(3, None), (5, None)],
+              "primary_only": [(4, None), (6, None)],
+              "spread_secondary_primary": [(3,4), (5,6)],
+              "spread_primary_secondary": [(4,3), (6,5)],
+          }
+
+          result = {
+              "schema": "chaptera.mature-029-spread-raster-falsifier.v1",
+              "source_sha256": fixture["source_sha256"],
+              "source_raw_page_count": fixture["pages"],
+              "source_half_width_emu": geometry[2]["width_emu"],
+              "source_height_emu": geometry[2]["height_emu"],
+              "spread_width_emu": geometry[2]["width_emu"] * 2,
+              "reference_pages": 2,
+              "candidates": {},
+              "claims": {
+                  "measurement_only": True,
+                  "product_selector_changed": False,
+                  "source_graph_changed": False,
+                  "candidate_spreads_are_png_side_by_side_page_local_translations": True,
+                  "pdf_fingerprint_used_only_as_visual_validation_authority": True,
+              },
+          }
+
+          for name, pages in candidates.items():
+              rows = []
+              for ref_index, (left, right) in enumerate(pages):
+                  if right is None:
+                      path = page_path(left)
+                      width_emu = geometry[left-1]["width_emu"]
+                      height_emu = geometry[left-1]["height_emu"]
+                  else:
+                      path = root / f"{name}-page-{ref_index+1}.png"
+                      compose(left, right, path)
+                      width_emu = geometry[left-1]["width_emu"] + geometry[right-1]["width_emu"]
+                      height_emu = geometry[left-1]["height_emu"]
+                  row = metrics(path, ref_index)
+                  ref_page = pair["pages"][ref_index]
+                  row["page"] = ref_index + 1
+                  row["candidate_png"] = path.name
+                  row["candidate_width_pt"] = width_emu / fp.EMU_PER_POINT
+                  row["candidate_height_pt"] = height_emu / fp.EMU_PER_POINT
+                  row["reference_media_extent_delta"] = {
+                      "width_pt": round(row["candidate_width_pt"] - ref_page["media_width_pt"], 6),
+                      "height_pt": round(row["candidate_height_pt"] - ref_page["media_height_pt"], 6),
+                  }
+                  rows.append(row)
+              result["candidates"][name] = {
+                  "pages": rows,
+                  "mean_changed_cell_fraction": sum(r["changed_cell_fraction"] for r in rows) / len(rows),
+                  "max_changed_cell_fraction": max(r["changed_cell_fraction"] for r in rows),
+              }
+
+          ranked = sorted(
+              result["candidates"].items(),
+              key=lambda item: (item[1]["mean_changed_cell_fraction"], item[1]["max_changed_cell_fraction"])
+          )
+          result["ranking"] = [
+              {
+                  "candidate": name,
+                  "mean_changed_cell_fraction": data["mean_changed_cell_fraction"],
+                  "max_changed_cell_fraction": data["max_changed_cell_fraction"],
+              }
+              for name, data in ranked
+          ]
+          (root / "summary.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload 029 spread evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-029-spread-raster-falsifier
+          path: |
+            target/mature-029-spread-raster/summary.json
+            target/mature-029-spread-raster/spread-*.png
+          if-no-files-found: error
+          retention-days: 30
