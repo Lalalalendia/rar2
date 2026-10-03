@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Rar-owned local/native closure runner for FIXED-PDF-SHAPED-FLOW-01.
 
-This launcher keeps the active workspace boundary in HeisLuka/rar while allowing
+This launcher keeps the active workspace boundary in Lalalalendia/rar2 while allowing
 an authorized local/native fixed-PDF engine to remain private. It does not parse
 PUB, shape text, or serialize PDF itself.
 
 The engine command must:
 - consume the verified pinned PUB fixture;
 - write a PDF to {pdf};
-- consume an explicit fallback font from {font};
+- consume the resolved fallback font from {font}; by default the runner materializes
+  the exact pinned Chaptera Desktop fallback resource, while --fallback-font remains
+  available for an explicitly authorized override;
 - print exactly one conversion-report JSON object to stdout.
 
 The report must carry typography.fixed_flow_receipt matching the admitted
@@ -25,6 +27,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import tempfile
 from typing import Any, Iterable
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -36,6 +39,8 @@ from validate_fixed_pdf_shaped_flow_receipt import validate_schema, validate_sem
 
 SAMPLE_SOURCE_HASH = "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf"
 SAMPLE_SOURCE_BYTE_LEN = 291840
+PINNED_FALLBACK_FONT_SHA256 = "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70"
+PINNED_FALLBACK_FONT_BYTE_LEN = 361676
 FORMER_MULTILINE_STORY_IDS = frozenset(
     {
         "a216335c-5e39-52a5-85f0-8a1abeb1819b",
@@ -90,6 +95,53 @@ def bind_fixture(
     if actual_hash != expected_hash:
         raise LocalFixedPdfProducerError(
             f"fixture SHA-256 mismatch: expected={expected_hash} actual={actual_hash}"
+        )
+    return path
+
+
+def materialize_chaptera_fallback_font(output: pathlib.Path) -> pathlib.Path:
+    output = output.expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists():
+        output.unlink()
+
+    completed = subprocess.run(
+        [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "chaptera-desktop-fallback-font-resource",
+            "--bin",
+            "materialize-fallback-font",
+            "--",
+            str(output),
+        ],
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise LocalFixedPdfProducerError(
+            "failed to materialize pinned Chaptera fallback font"
+            + (f": {detail}" if detail else "")
+        )
+
+    path = bind_file(output, label="pinned Chaptera fallback font")
+    actual_len = path.stat().st_size
+    if actual_len != PINNED_FALLBACK_FONT_BYTE_LEN:
+        raise LocalFixedPdfProducerError(
+            "pinned Chaptera fallback font byte length mismatch: "
+            f"expected={PINNED_FALLBACK_FONT_BYTE_LEN} actual={actual_len}"
+        )
+    actual_hash = sha256_file(path)
+    if actual_hash != PINNED_FALLBACK_FONT_SHA256:
+        raise LocalFixedPdfProducerError(
+            "pinned Chaptera fallback font SHA-256 mismatch: "
+            f"expected={PINNED_FALLBACK_FONT_SHA256} actual={actual_hash}"
         )
     return path
 
@@ -321,7 +373,14 @@ def main() -> int:
         )
     )
     parser.add_argument("--fixture", required=True, type=pathlib.Path)
-    parser.add_argument("--fallback-font", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--fallback-font",
+        type=pathlib.Path,
+        help=(
+            "explicit authorized fallback font override; when omitted, use the "
+            "pinned Chaptera Desktop Ubuntu Light resource"
+        ),
+    )
     parser.add_argument("--pdf-output", required=True, type=pathlib.Path)
     parser.add_argument("--receipt-output", required=True, type=pathlib.Path)
     parser.add_argument("fixed_pdf_command", nargs=argparse.REMAINDER)
@@ -332,13 +391,28 @@ def main() -> int:
         command = command[1:]
 
     try:
-        summary = run_local_fixed_pdf(
-            fixture=args.fixture,
-            fallback_font=args.fallback_font,
-            pdf_output=args.pdf_output,
-            receipt_output=args.receipt_output,
-            command_template=command,
-        )
+        if args.fallback_font is not None:
+            summary = run_local_fixed_pdf(
+                fixture=args.fixture,
+                fallback_font=args.fallback_font,
+                pdf_output=args.pdf_output,
+                receipt_output=args.receipt_output,
+                command_template=command,
+            )
+        else:
+            with tempfile.TemporaryDirectory(
+                prefix="chaptera-fixed-pdf-fallback-font-"
+            ) as tmp:
+                fallback_font = materialize_chaptera_fallback_font(
+                    pathlib.Path(tmp) / "Ubuntu-Light.ttf"
+                )
+                summary = run_local_fixed_pdf(
+                    fixture=args.fixture,
+                    fallback_font=fallback_font,
+                    pdf_output=args.pdf_output,
+                    receipt_output=args.receipt_output,
+                    command_template=command,
+                )
     except (LocalFixedPdfProducerError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2
