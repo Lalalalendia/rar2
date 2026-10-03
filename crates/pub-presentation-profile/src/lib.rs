@@ -300,6 +300,100 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     })
 }
 
+pub const MATURE_ONE_TO_ONE_MASTER_BANK_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/one-to-one-master-bank/v1";
+
+/// Admits the mature one-to-one master-bank topology isolated by #986.
+///
+/// For M>=2, the PAGE list is exactly:
+/// - M zero-OID no-master master/prototype PAGEs;
+/// - M nonzero customer PAGEs paired one-to-one with those masters in order;
+/// - M zero-OID service PAGEs applying the primary master.
+///
+/// The selector uses only source PAGE order, OID class, and applied-master
+/// relations. Structural drift returns `None`.
+pub fn select_mature_one_to_one_master_bank_customer_page_seq_nums_v1(
+    mut input: StandardPrintServiceTailProfileInputV1,
+) -> Option<StandardPrintServiceTailSelectionV1> {
+    if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
+        || input.confirmed_page_count != input.pages.len()
+        || input.special_entry_count != 0
+        || input.document_page_list_entry_count != input.confirmed_page_count
+        || input.pages.len() < 6
+        || input.pages.len() % 3 != 0
+    {
+        return None;
+    }
+
+    input.pages.sort_by_key(|page| page.document_ordinal);
+    let mut ordinals = BTreeSet::new();
+    let mut seq_nums = BTreeSet::new();
+    for (expected_ordinal, page) in input.pages.iter().enumerate() {
+        if page.document_ordinal != expected_ordinal
+            || !ordinals.insert(page.document_ordinal)
+            || !seq_nums.insert(page.contents_seq_num)
+        {
+            return None;
+        }
+    }
+
+    let oid_is_zero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        page.oid_dword0 == Some(0) && page.oid_dword1 == Some(0)
+    };
+    let oid_is_nonzero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        matches!(
+            (page.oid_dword0, page.oid_dword1),
+            (Some(d0), Some(d1)) if d0 != 0 || d1 != 0
+        )
+    };
+
+    let bank_len = input.pages.len() / 3;
+    if bank_len < 2 {
+        return None;
+    }
+    let master_bank = input.pages.get(..bank_len)?;
+    let customer_pages = input.pages.get(bank_len..bank_len.checked_mul(2)?)?;
+    let service_tail = input.pages.get(bank_len.checked_mul(2)?..)?;
+    if master_bank.len() != bank_len
+        || customer_pages.len() != bank_len
+        || service_tail.len() != bank_len
+        || !master_bank
+            .iter()
+            .all(|page| oid_is_zero(page) && page.applied_master_seq_num.is_none())
+        || !customer_pages.iter().enumerate().all(|(index, page)| {
+            oid_is_nonzero(page)
+                && page.applied_master_seq_num
+                    == master_bank.get(index).map(|master| master.contents_seq_num)
+        })
+    {
+        return None;
+    }
+
+    let primary_master = master_bank.first()?.contents_seq_num;
+    if !service_tail
+        .iter()
+        .all(|page| oid_is_zero(page) && page.applied_master_seq_num == Some(primary_master))
+    {
+        return None;
+    }
+
+    let mut service_page_seq_nums =
+        Vec::with_capacity(master_bank.len().checked_add(service_tail.len())?);
+    service_page_seq_nums.extend(master_bank.iter().map(|page| page.contents_seq_num));
+    service_page_seq_nums.extend(service_tail.iter().map(|page| page.contents_seq_num));
+
+    Some(StandardPrintServiceTailSelectionV1 {
+        profile_id: MATURE_ONE_TO_ONE_MASTER_BANK_PROFILE_ID_V1.to_owned(),
+        raw_page_count: input.pages.len(),
+        customer_page_seq_nums: customer_pages
+            .iter()
+            .map(|page| page.contents_seq_num)
+            .collect(),
+        master_page_seq_num: primary_master,
+        service_page_seq_nums,
+    })
+}
+
 pub const MATURE_ZERO_LEADER_DETACHED_TAIL_PROFILE_ID_V1: &str =
     "publisher-mature-0x2c/zero-leader-detached-post-special-tail/v1";
 
