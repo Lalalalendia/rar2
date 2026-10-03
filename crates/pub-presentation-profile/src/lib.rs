@@ -1280,11 +1280,10 @@ mod tests {
 
     #[test]
     fn mature_terminal_service_profile_accepts_all_page_suffix() {
-        let selection =
-            select_mature_terminal_service_tail_customer_page_seq_nums_v1(
-                mature_terminal_service_input(2, false, 0),
-            )
-            .unwrap();
+        let selection = select_mature_terminal_service_tail_customer_page_seq_nums_v1(
+            mature_terminal_service_input(2, false, 0),
+        )
+        .unwrap();
         assert_eq!(
             selection.profile_id,
             MATURE_TERMINAL_SERVICE_TAIL_PROFILE_ID_V1
@@ -1295,11 +1294,10 @@ mod tests {
 
     #[test]
     fn mature_terminal_service_profile_accepts_special_suffix_and_scenario_evidence() {
-        let selection =
-            select_mature_terminal_service_tail_customer_page_seq_nums_v1(
-                mature_terminal_service_input(3, true, 13),
-            )
-            .unwrap();
+        let selection = select_mature_terminal_service_tail_customer_page_seq_nums_v1(
+            mature_terminal_service_input(3, true, 13),
+        )
+        .unwrap();
         assert_eq!(selection.customer_page_seq_nums, vec![600, 601, 602]);
         assert_eq!(selection.service_page_seq_nums, vec![700, 701, 702]);
     }
