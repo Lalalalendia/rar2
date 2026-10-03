@@ -31,6 +31,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const EXPORT_PLAN_SCHEMA_V0_1: &str = "0.1";
+pub const STORY_FONT_FAMILY_FEATURE: &str = "story.typography.font_family";
+pub const STORY_FONT_SIZE_FEATURE: &str = "story.typography.font_size";
+pub const STORY_TEXT_COLOR_FEATURE: &str = "story.typography.color";
+pub const STORY_PARAGRAPH_ALIGNMENT_FEATURE: &str = "story.paragraph_alignment";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TargetProfile {
