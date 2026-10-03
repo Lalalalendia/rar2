@@ -26,8 +26,8 @@ const BARE_COLOR_INDEX_ID: u16 = 0x002E;
 const BARE_COLOR_INDEX_EXTENDED_ID: u16 = 0x022E;
 const COLOR_INDEX_CONTAINER_ID: u16 = 0x0044;
 const COLOR_INDEX_CONTAINER_EXTENDED_ID: u16 = 0x0244;
-const COLOR_INDEX_ID: u16 = 0x0000;
-const PL_COLOR_REFERENCE_ID: u16 = 0x0001;
+const COLOR_INDEX_ID: u16 = 0x0200;
+const PL_COLOR_REFERENCE_ID: u16 = 0x0201;
 const PARAGRAPH_ALIGNMENT_ID: u16 = 0x0204;
 const PARAGRAPH_DEFAULT_CHAR_STYLE_ID: u16 = 0x0219;
 
@@ -2851,6 +2851,15 @@ mod tests {
         assert_eq!(runs[0].story_end_utf16, 10);
         assert_eq!(runs[0].alignment, QuillParagraphAlignment::Right);
         assert_eq!(runs[0].source_value, 2);
+    }
+
+    #[test]
+    fn quill_text_color_carrier_tags_decode_to_extended_0x2xx_fields() {
+        assert_eq!(decode_quill_style_tag([0x00, 0x22]), (COLOR_INDEX_ID, 0x20));
+        assert_eq!(
+            decode_quill_style_tag([0x01, 0x22]),
+            (PL_COLOR_REFERENCE_ID, 0x20)
+        );
     }
 
     #[test]
