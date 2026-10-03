@@ -159,7 +159,7 @@ fn decode_utf16_z_field(
     if units.last() == Some(&0) {
         units.pop();
     }
-    if units.iter().any(|unit| *unit == 0) {
+    if units.contains(&0) {
         anyhow::bail!("embedded NUL in OplFb.SzFBrdName at 0x{offset:X}");
     }
     let name = String::from_utf16(&units).context("decode OplFb.SzFBrdName UTF-16")?;
