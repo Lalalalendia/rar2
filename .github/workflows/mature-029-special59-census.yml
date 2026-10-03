@@ -1,0 +1,132 @@
+name: Mature 029 raw0x59 special census
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-029-special59-census.yml"
+      - "tools/research_mature_029_special59_census_v1.py"
+      - "vendor/producer-a/crates/pub-reader/src/bin/page-list-special-receipt.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-029-special59-census-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-029-special59
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned exact-1050 verified", digest)
+          PY
+
+      - name: Verify six exact 029-family inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected = [
+              "273d283c93fafb0f14b772ba8475a6b48db0a4f9c1a0789605ce26ea811996d3",
+              "5eb5055bc75918ca8dbc7093fa267a3365f25129fd2c3dc88c7be3540f44e4cd",
+              "7c630704ce369f775fe7a24ec180f5c7997eb779f28bd57ab8c7dda66297a17c",
+              "9915c5612d7d8ce49fc733bbbe748c80325fb0094af0ba0d42a2b15fc648e5bd",
+              "a8c8a3c36a925fdc9de7c4f5e43e014a606751b2d09635cbc1b04f50ccb7fcea",
+              "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e",
+          ]
+          root = Path("out/pinned1050/materialized/native")
+          for sha in expected:
+              path = root / f"{sha}.pub"
+              assert path.exists(), path
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == sha, sha
+          print("six exact 029-family inputs verified")
+          PY
+
+      - name: Build source-safe raw0x59 receipt
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-list-special-receipt --jobs 2
+
+      - name: Inspect six raw0x59 special objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/mature-029-special59/receipts
+          for sha in             273d283c93fafb0f14b772ba8475a6b48db0a4f9c1a0789605ce26ea811996d3             5eb5055bc75918ca8dbc7093fa267a3365f25129fd2c3dc88c7be3540f44e4cd             7c630704ce369f775fe7a24ec180f5c7997eb779f28bd57ab8c7dda66297a17c             9915c5612d7d8ce49fc733bbbe748c80325fb0094af0ba0d42a2b15fc648e5bd             a8c8a3c36a925fdc9de7c4f5e43e014a606751b2d09635cbc1b04f50ccb7fcea             c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e
+          do
+            "$CARGO_TARGET_DIR/debug/page-list-special-receipt"               "out/pinned1050/materialized/native/$sha.pub"               "target/mature-029-special59/receipts/$sha.json"
+          done
+
+      - name: Census signatures and relation classes
+        run: |
+          set -euo pipefail
+          python tools/research_mature_029_special59_census_v1.py             target/mature-029-special59/receipts             target/mature-029-special59/summary.json
+
+      - name: Assert source-only authority fences
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("target/mature-029-special59/summary.json").read_text())
+          assert data["schema"] == "chaptera.mature-029-special59-census.v1"
+          assert data["fixture_count"] == 6
+          assert data["claims"]["measurement_only"] is True
+          assert data["claims"]["publisher_or_pdf_reference_used"] is False
+          assert data["claims"]["raster_reference_used"] is False
+          assert data["claims"]["raw_values_retained"] is False
+          assert data["claims"]["raw_seq_nums_retained"] is False
+          assert data["claims"]["source_graph_mutated"] is False
+          assert data["claims"]["viewer_semantics_changed"] is False
+          print("raw0x59 census fences verified")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-029-special59-census
+          path: target/mature-029-special59/summary.json
+          if-no-files-found: error
+          retention-days: 30
