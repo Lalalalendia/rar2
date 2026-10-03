@@ -1,0 +1,70 @@
+name: BorderArt Viewer raster census
+on:
+  pull_request:
+    branches: [viewer/borderart-dto-v1]
+    paths:
+      - ".github/workflows/borderart-viewer-raster-census.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/borderart-viewer-raster-census.rs"
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: borderart-viewer-raster-census-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+      - name: Verify exact corpus
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          s=[x.stem.casefold() for x in p]
+          d=hashlib.sha256("".join(x+"\n" for x in s).encode("ascii")).hexdigest()
+          assert len(s)==1050
+          assert d=="21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          PY
+      - name: Build and run
+        run: |
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --release --bin borderart-viewer-raster-census
+          "${CARGO_TARGET_DIR}/release/borderart-viewer-raster-census" out/pinned1050/materialized/native out/borderart-viewer-raster-census.json
+      - name: Gate joins and summarize raster coverage
+        run: |
+          python - <<'PY'
+          import json, os
+          d=json.load(open("out/borderart-viewer-raster-census.json"))
+          assert d["corpus_file_count"]==1050
+          assert d["mature_0x2c_file_count"]==396
+          assert d["files_with_shape_uses"]==20
+          assert d["shape_use_count"]==82
+          assert d["resolved_shape_use_count"]==82
+          assert d["unresolved_shape_use_count"]==0
+          keys=["complete_rasterizable_shape_use_count","selected_resource_count","rasterizable_resource_count","nonrasterizable_resource_count","files_with_nonrasterizable_selected_resource"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:
+              f.write("## BorderArt selected-resource raster coverage\n\n")
+              for k in keys: f.write(f"- {k}: `{d[k]}`\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: borderart-viewer-raster-census
+          path: out/borderart-viewer-raster-census.json
+          if-no-files-found: error
+          retention-days: 90
