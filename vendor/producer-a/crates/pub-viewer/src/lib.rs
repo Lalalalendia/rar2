@@ -2431,10 +2431,22 @@ fn compose_mature_spread_pairs_secondary_left_ab_v1(
         );
     }
 
+    if visual
+        .scene
+        .nodes
+        .iter()
+        .any(|node| !parent_projection.contains_key(&node.parent_origin))
+    {
+        return Err(anyhow!(
+            "spread A/B admits direct half-PAGE Scene nodes only; nested parentage is unsupported"
+        ));
+    }
+
     for node in &mut visual.scene.nodes {
-        let Some((spread_parent, dx)) = parent_projection.get(&node.parent_origin).copied() else {
-            continue;
-        };
+        let (spread_parent, dx) = parent_projection
+            .get(&node.parent_origin)
+            .copied()
+            .context("spread A/B direct node parent must be admitted")?;
         node.parent_origin = spread_parent;
         if dx != LengthEmu::ZERO {
             translate_transform_x_for_spread_ab_v1(&mut node.transform, dx)?;
