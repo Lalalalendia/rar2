@@ -1745,24 +1745,26 @@ mod tests {
 
     #[test]
     fn mature_multi_root_profile_selects_referenced_prefix_roots() {
-        let selection =
-            select_mature_multi_referenced_root_customer_page_seq_nums_v1(mature_multi_root_input())
-                .unwrap();
+        let selection = select_mature_multi_referenced_root_customer_page_seq_nums_v1(
+            mature_multi_root_input(),
+        )
+        .unwrap();
         assert_eq!(
             selection.profile_id,
             MATURE_MULTI_REFERENCED_ROOT_PROFILE_ID_V1
         );
         assert_eq!(selection.customer_page_seq_nums, vec![100, 101]);
-        assert_eq!(selection.non_customer_page_seq_nums, vec![200, 201, 300, 301]);
+        assert_eq!(
+            selection.non_customer_page_seq_nums,
+            vec![200, 201, 300, 301]
+        );
     }
 
     #[test]
     fn mature_multi_root_profile_fails_open_for_single_root() {
         let mut input = mature_multi_root_input();
         input.pages[3].applied_master_seq_num = Some(100);
-        assert!(
-            select_mature_multi_referenced_root_customer_page_seq_nums_v1(input).is_none()
-        );
+        assert!(select_mature_multi_referenced_root_customer_page_seq_nums_v1(input).is_none());
     }
 
     #[test]
