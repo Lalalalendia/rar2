@@ -1,0 +1,27 @@
+name: Fixed PDF renderer recovery preflight
+
+on:
+  pull_request:
+    paths:
+      - "tools/find_fixed_pdf_renderer_lineage.py"
+      - "tools/test_find_fixed_pdf_renderer_lineage.py"
+      - ".github/workflows/fixed-pdf-renderer-recovery-preflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixed-pdf-renderer-recovery-preflight-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test bounded local provenance preflight
+        run: python tools/test_find_fixed_pdf_renderer_lineage.py -v
