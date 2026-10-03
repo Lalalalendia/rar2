@@ -576,6 +576,10 @@ pub struct PubTypographyRun {
     pub text_size_emu: u32,
     pub font_inherited: bool,
     pub size_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    pub color_inherited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2840,6 +2844,8 @@ pub fn build_mature_0x2c_from_streams(
                     font_inherited: run.font_source == QuillTypographyValueSource::InheritedStsh1,
                     size_inherited: run.text_size_source
                         == QuillTypographyValueSource::InheritedStsh1,
+                    color_rgb: run.color_rgb,
+                    color_inherited: run.color_inherited,
                 });
             }
         } else {
@@ -2881,6 +2887,8 @@ pub fn build_mature_0x2c_from_streams(
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: false,
+                    color_rgb: run.color_rgb,
+                    color_inherited: run.color_inherited,
                 });
             }
         }

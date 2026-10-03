@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
     RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
-    effective_source_font_family_v1,
+    effective_source_font_family_v1, uniform_text_color_rgb_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
@@ -165,6 +165,8 @@ pub struct ReaderTextLayoutV1 {
     pub font_fingerprint_sha256: String,
     pub font_size_emu: i64,
     pub line_height_emu: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
     #[serde(skip_serializing_if = "is_zero_i64")]
     pub vertical_offset_emu: i64,
     pub lines: Vec<ReaderTextLineV1>,
@@ -325,6 +327,7 @@ fn reader_text_layout_from_render_text(
         font_fingerprint_sha256: font_fingerprint_sha256.clone(),
         font_size_emu: *font_size_emu,
         line_height_emu: *line_height_emu,
+        color_rgb: uniform_text_color_rgb_v1(text),
         vertical_offset_emu: layout.vertical_offset_emu,
         lines: layout
             .lines
@@ -1415,7 +1418,9 @@ mod tests {
     };
 
     use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
+        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+        build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
+        uniform_text_color_rgb_v1,
     };
     use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
     use sha2::{Digest, Sha256};
@@ -1943,6 +1948,52 @@ mod tests {
                 mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
                 bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
             };
+            let viewer_direct_yellow_runs = bundle
+                .geometry
+                .typography_runs
+                .iter()
+                .filter(|run| run.color_rgb == Some([255, 255, 0]))
+                .count();
+            let fallback_font = shared_text_font_resource();
+            let mut render_direct_yellow_runs = 0_usize;
+            let mut render_uniform_yellow_fragments = 0_usize;
+            let mut render_text_fragments = 0_usize;
+            for page_index in 0..bundle.geometry.document.pages.len() {
+                let plan = build_page_render_plan_with_text_layout_resolver_v1(
+                    &bundle.geometry,
+                    page_index,
+                    &fallback_font,
+                    |fragment| {
+                        let source_family =
+                            effective_source_font_family_v1(&bundle.geometry, fragment)?;
+                        (source_family.trim().eq_ignore_ascii_case("Arial"))
+                            .then(|| configured.explicit_resource())
+                    },
+                )
+                .expect("exact Carlton diagnostic render plan must build");
+                for node in &plan.nodes {
+                    let Some(text) = node.text.as_ref() else {
+                        continue;
+                    };
+                    render_text_fragments += 1;
+                    render_direct_yellow_runs += text
+                        .typography
+                        .iter()
+                        .filter(|run| run.color_rgb == Some([255, 255, 0]))
+                        .count();
+                    if uniform_text_color_rgb_v1(text) == Some([255, 255, 0]) {
+                        render_uniform_yellow_fragments += 1;
+                    }
+                }
+            }
+            println!(
+                "CLOUD_READER_TEXT_COLOR_HOP_PROBE viewer_yellow_runs={} render_text_fragments={} render_yellow_runs={} render_uniform_yellow_fragments={}",
+                viewer_direct_yellow_runs,
+                render_text_fragments,
+                render_direct_yellow_runs,
+                render_uniform_yellow_fragments,
+            );
+
             let configured_scene = from_viewer_geometry_with_fonts(
                 "probe:configured-font".to_owned(),
                 actual_sha256.clone(),
@@ -1964,6 +2015,16 @@ mod tests {
                 projected_configured_layouts >= 3,
                 "the three exact Carlton source-typography-complete carriers must consume the configured resource"
             );
+            let projected_direct_yellow_layouts = configured_scene
+                .nodes
+                .iter()
+                .filter_map(|node| node.text_layout.as_ref())
+                .filter(|layout| layout.color_rgb == Some([255, 255, 0]))
+                .count();
+            assert!(
+                projected_direct_yellow_layouts >= 1,
+                "exact Carlton direct Quill text color #FFFF00 must survive through the shared Reader Scene layout contract"
+            );
             let scene_font = configured_scene
                 .fonts
                 .iter()
@@ -1981,8 +2042,11 @@ mod tests {
                 "browser font bytes must use the same configured resource"
             );
             println!(
-                "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} resource_id={} sha256={}",
-                projected_configured_layouts, configured_resource_id, scene_font.expected_sha256
+                "CLOUD_READER_CONFIGURED_FONT_CONSUMER_PROBE configured_projected_layouts={} direct_yellow_layouts={} resource_id={} sha256={}",
+                projected_configured_layouts,
+                projected_direct_yellow_layouts,
+                configured_resource_id,
+                scene_font.expected_sha256
             );
         }
 
