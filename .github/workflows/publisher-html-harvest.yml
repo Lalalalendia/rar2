@@ -16,6 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Ensure PDF text extraction
+        run: |
+          command -v pdftotext || (sudo apt-get update && sudo apt-get install -y poppler-utils)
+
       - name: Harvest public Publisher hidden XML
         run: |
           python research/publisher_html_harvest.py \
