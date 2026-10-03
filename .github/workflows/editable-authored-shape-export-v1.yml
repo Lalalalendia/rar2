@@ -1,0 +1,44 @@
+name: Editable Authored Shape Export V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - ".github/workflows/editable-authored-shape-export-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editable-authored-shape-export-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt,clippy
+      - name: Rust formatting
+        run: |
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-export -p pub-editor -p pub-idml -p pub-odg -- --check
+      - name: Authored rectangle adapter tests
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-idml authored_shape
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-odg authored_shape
+      - name: Editor compile and lint
+        run: |
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+          cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --lib -- -D warnings
+      - name: Build authored shape end-to-end probe
+        run: |
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin authored_shape_export_probe
