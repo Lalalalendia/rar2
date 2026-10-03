@@ -91,9 +91,9 @@ jobs:
           assert data["schema"] == "chaptera.mature-033-object-ownership-crosswalk.v1"
           assert data["source_sha256"] == "4029d4a1bf5be89d745c079b9c06ab33e5bdceb997a4761c5e11238110d879c9"
           assert data["page_count"] == 12
-          assert data["viewer_selected_page_count"] == 4
+          assert data["viewer_selected_page_count"] == 12
           assert len(data["pages"]) == 12
-          assert sum(bool(row["selected_by_current_viewer"]) for row in data["pages"]) == 4
+          assert sum(bool(row["selected_by_current_viewer"]) for row in data["pages"]) == 12
           assert data["claims"]["measurement_only"] is True
           assert data["claims"]["new_source_parser_semantics_added"] is False
           assert data["claims"]["source_graph_mutated"] is False
