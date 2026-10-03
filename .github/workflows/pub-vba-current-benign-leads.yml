@@ -40,7 +40,7 @@ jobs:
           # Publisher-to-PDF macro used on ~2000 PUB files. Keep downloaded
           # bytes private to the runner.
           set +e
-          gdown --fuzzy             "https://drive.google.com/file/d/1FVy_PX7vm5c1eV2kl11A4J40SlexMVND/view?usp=sharing"             -O target/vba-current/private/bill-stuart-drive.bin             > target/vba-current/public/bill-gdown.log 2>&1
+          gdown "1FVy_PX7vm5c1eV2kl11A4J40SlexMVND" -O target/vba-current/private/bill-stuart-drive.bin > target/vba-current/public/bill-gdown.log 2>&1
           echo "$?" > target/vba-current/public/bill-gdown-exit.txt
           set -e
 
