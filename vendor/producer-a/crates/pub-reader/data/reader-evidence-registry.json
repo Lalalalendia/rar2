@@ -58,6 +58,20 @@
         "classification": "malformed-or-stale-publisher97-media-variant"
       },
       "disposition": "existing_typed_corruption_evidence"
+    },
+    {
+      "source_sha256": "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027",
+      "owner": "READER1050-TROPHY-QUILL-CENSUS-01 / PR #931",
+      "evidence_class": "typed_corruption",
+      "authority_receipt": {
+        "kind": "closed_discriminator",
+        "task_id": "READER1050-TROPHY-QUILL-CENSUS-01",
+        "run_id": 37125662981,
+        "artifact_id": 11275135765,
+        "evidence_digest": "sha256:cc3655207b887ccf55b20494b066c5af394ddc1d0ef579cb9cf0a48bc751fe63",
+        "classification": "quill_descriptor_tail_overwritten_or_malformed"
+      },
+      "disposition": "existing_typed_corruption_evidence"
     }
   ]
 }
