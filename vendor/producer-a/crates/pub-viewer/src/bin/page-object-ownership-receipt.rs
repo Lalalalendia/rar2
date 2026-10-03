@@ -215,6 +215,42 @@ fn main() -> Result<()> {
         .iter()
         .map(|node| node.origin)
         .collect::<BTreeSet<_>>();
+
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut projected_instance_counts_by_origin = BTreeMap::<NodeId, usize>::new();
+    #[cfg(feature = "cmo-slot-compose")]
+    let mut inherited_instance_counts_by_origin = BTreeMap::<NodeId, usize>::new();
+    #[cfg(feature = "cmo-slot-compose")]
+    for instance in &viewer.projected_instances {
+        let canonical: CanonicalId = instance
+            .scene_instance
+            .origin_node_id
+            .parse()
+            .context("parse projected SceneInstance origin_node_id")?;
+        let origin_node_id = NodeId::from_canonical(canonical);
+        *projected_instance_counts_by_origin
+            .entry(origin_node_id)
+            .or_insert(0) += 1;
+        if instance.scene_instance.projection_kind == SceneProjectionKindV1::InheritedMaster {
+            *inherited_instance_counts_by_origin
+                .entry(origin_node_id)
+                .or_insert(0) += 1;
+        }
+    }
+    #[cfg(not(feature = "cmo-slot-compose"))]
+    let projected_instance_counts_by_origin = BTreeMap::<NodeId, usize>::new();
+    #[cfg(not(feature = "cmo-slot-compose"))]
+    let inherited_instance_counts_by_origin = BTreeMap::<NodeId, usize>::new();
+
+    let projected_origin_ids = projected_instance_counts_by_origin
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let projected_unknown_origin_count = projected_origin_ids
+        .iter()
+        .filter(|node_id| !source.graph.nodes.contains_key(node_id))
+        .count();
+
     let viewer_paint_ids = viewer
         .paints
         .iter()
@@ -323,10 +359,37 @@ fn main() -> Result<()> {
             .copied()
             .filter(|node_id| scene_node_ids.contains(node_id))
             .collect::<BTreeSet<_>>();
-        let source_only_ids = source_ids
-            .difference(&scene_ids)
+        let projected_origin_ids_for_page = source_ids
+            .iter()
+            .copied()
+            .filter(|node_id| projected_origin_ids.contains(node_id))
+            .collect::<BTreeSet<_>>();
+        let represented_source_ids = scene_ids
+            .union(&projected_origin_ids_for_page)
             .copied()
             .collect::<BTreeSet<_>>();
+        let unrepresented_source_ids = source_ids
+            .difference(&represented_source_ids)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let projected_instance_count_from_source_page = source_ids
+            .iter()
+            .map(|node_id| {
+                projected_instance_counts_by_origin
+                    .get(node_id)
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .sum::<usize>();
+        let inherited_instance_count_from_source_page = source_ids
+            .iter()
+            .map(|node_id| {
+                inherited_instance_counts_by_origin
+                    .get(node_id)
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .sum::<usize>();
 
         let scene_kind_counts = scene_ids
             .iter()
@@ -361,8 +424,12 @@ fn main() -> Result<()> {
                 "paint_order_node_count": paint_order_counts.get(&ordinal).copied().unwrap_or(0),
             },
             "viewer_projection": {
-                "scene_node_count": scene_ids.len(),
-                "source_only_node_count": source_only_ids.len(),
+                "canonical_scene_node_count": scene_ids.len(),
+                "projected_origin_node_count": projected_origin_ids_for_page.len(),
+                "projected_instance_count_from_source_page": projected_instance_count_from_source_page,
+                "inherited_master_instance_count_from_source_page": inherited_instance_count_from_source_page,
+                "represented_source_node_count": represented_source_ids.len(),
+                "unrepresented_source_node_count": unrepresented_source_ids.len(),
                 "scene_node_kind_counts": scene_kind_counts,
                 "paint_node_count": count_ids(&viewer_paint_ids),
                 "story_frame_node_count": count_ids(&viewer_story_frame_ids),
@@ -395,6 +462,11 @@ fn main() -> Result<()> {
         "viewer_scene_total_node_count": viewer.scene.nodes.len(),
         "viewer_scene_known_source_node_count": total_source_scene_nodes,
         "viewer_scene_unknown_origin_count": unknown_scene_origin_count,
+        "viewer_projected_known_source_origin_node_count": projected_origin_ids
+            .iter()
+            .filter(|node_id| source.graph.nodes.contains_key(node_id))
+            .count(),
+        "viewer_projected_unknown_origin_node_count": projected_unknown_origin_count,
         "projected_instance_count": projected_instance_count,
         "inherited_master_projected_instance_count": inherited_master_projected_instance_count,
         "pages": page_rows,
@@ -411,6 +483,7 @@ fn main() -> Result<()> {
             "story_text_emitted": false,
             "page_and_node_identity_join_uses_canonical_ids_in_memory_only": true,
             "source_page_universe_is_not_collapsed_to_current_viewer_selection": true,
+            "source_node_representation_checks_canonical_and_projected_instances": true,
         },
     });
 
@@ -430,6 +503,11 @@ fn main() -> Result<()> {
             "viewer_scene_total_node_count": viewer.scene.nodes.len(),
             "viewer_scene_known_source_node_count": total_source_scene_nodes,
             "viewer_scene_unknown_origin_count": unknown_scene_origin_count,
+            "viewer_projected_known_source_origin_node_count": projected_origin_ids
+                .iter()
+                .filter(|node_id| source.graph.nodes.contains_key(node_id))
+                .count(),
+            "viewer_projected_unknown_origin_node_count": projected_unknown_origin_count,
             "projected_instance_count": projected_instance_count,
             "inherited_master_projected_instance_count": inherited_master_projected_instance_count,
             "pages": receipt["pages"],
