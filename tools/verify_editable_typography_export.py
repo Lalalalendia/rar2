@@ -196,15 +196,33 @@ def scribus_pairs(path: Path) -> set[tuple[str, float]]:
     return pairs
 
 
+def scribus_family_name(value: str) -> str:
+    normalized = norm_family(value)
+    # Scribus SLA stores the installed regular face as a full face name
+    # ("Family Regular"), while Publisher/our source authority stores the
+    # family name. Only canonicalize the exact Regular suffix; do not collapse
+    # Bold/Italic/etc. into the family because those faces are not proven here.
+    suffix = " regular"
+    if normalized.endswith(suffix):
+        return normalized[: -len(suffix)]
+    return normalized
+
+
 def verify_scribus(path: Path, items: list[dict]) -> dict:
     pairs = scribus_pairs(path)
     for item in items:
-        assert_pair(
-            pairs,
-            item["font_family"],
-            float(item["font_size_pt"]),
-            "Scribus save/reopen",
-        )
+        wanted_family = norm_family(item["font_family"])
+        wanted_size = float(item["font_size_pt"])
+        if not any(
+            scribus_family_name(actual_family) == wanted_family
+            and math.isclose(actual_size, wanted_size, rel_tol=0.0, abs_tol=0.02)
+            for actual_family, actual_size in pairs
+        ):
+            raise AssertionError(
+                "Scribus save/reopen: missing regular-face font/size pair "
+                f"family={item['font_family']!r} size={wanted_size}; "
+                f"observed={sorted(pairs)[:80]!r}"
+            )
     return {"scribus_pair_count": len(pairs)}
 
 
