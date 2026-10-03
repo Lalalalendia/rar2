@@ -218,6 +218,59 @@ class DesktopVerticalRunnerTests(unittest.TestCase):
         self.assertEqual(receipt, saved)
         self.assertEqual(saved["project"]["schema_version"], "pub-editor-v0.11")
 
+    def test_v0_14_identity_project_is_accepted(self):
+        identity = '''"identity": {
+        "project_id": "018f0000-0000-7000-8000-000000000001",
+        "document_id": "018f0000-0000-7000-8000-000000000002",
+        "history_id": "018f0000-0000-7000-8000-000000000003",
+        "genesis_revision_id": "018f0000-0000-7000-8000-000000000004"
+    },'''
+        engine = FAKE_ENGINE.replace(
+            '"schema_version": "pub-editor-v0.4",',
+            '"schema_version": "pub-editor-v0.14",\n    ' + identity,
+            1,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture, project, export, receipt_path, command = self.make_files(tmp, engine)
+            receipt = run_local_desktop_vertical(
+                fixture=fixture,
+                project_output=project,
+                export_output=export,
+                receipt_output=receipt_path,
+                command_template=command,
+                expected_hash=SOURCE_HASH,
+                expected_len=len(SOURCE_BYTES),
+                rar_commit=RAR_COMMIT,
+            )
+            saved = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+        validate_schema(saved)
+        self.assertEqual(receipt, saved)
+        self.assertEqual(saved["project"]["schema_version"], "pub-editor-v0.14")
+
+    def test_v0_14_without_durable_identity_is_rejected(self):
+        engine = FAKE_ENGINE.replace(
+            '"schema_version": "pub-editor-v0.4",',
+            '"schema_version": "pub-editor-v0.14",',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture, project, export, receipt_path, command = self.make_files(tmp, engine)
+            with self.assertRaisesRegex(
+                DesktopVerticalError,
+                "durable EditorProject schema must carry durable identity",
+            ):
+                run_local_desktop_vertical(
+                    fixture=fixture,
+                    project_output=project,
+                    export_output=export,
+                    receipt_output=receipt_path,
+                    command_template=command,
+                    expected_hash=SOURCE_HASH,
+                    expected_len=len(SOURCE_BYTES),
+                    rar_commit=RAR_COMMIT,
+                )
+
     def test_project_move_must_match_observation(self):
         broken = FAKE_ENGINE.replace(
             '"node_id": node,\n            "before": before,',
