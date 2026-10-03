@@ -548,7 +548,7 @@ impl EditorProject {
         });
 
         Ok(Self {
-            schema_version: EDITOR_PROJECT_VERSION_V0_11.into(),
+            schema_version: EDITOR_PROJECT_VERSION_CURRENT.into(),
             source_hash: self.source_hash,
             identity: Some(identity),
             assets: self.assets.clone(),
