@@ -13,6 +13,11 @@ const DESCRIPTOR_END: u32 = 0xffff_ffff;
 const DESCRIPTOR_SIZE: usize = 24;
 const DESCRIPTOR_PRESENT: u16 = 0x0018;
 
+const REGION_INTERSTITIAL: u8 = 0;
+const REGION_NODE_HEADER: u8 = 1;
+const REGION_DESCRIPTOR_METADATA: u8 = 2;
+const REGION_PAYLOAD: u8 = 3;
+
 const EXPECTED_SOURCE_SHA256: &str =
     "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a";
 const EXPECTED_VARIANT_SHA256: &str =
@@ -20,9 +25,16 @@ const EXPECTED_VARIANT_SHA256: &str =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Descriptor {
+    entry_offset: usize,
     name: [u8; 4],
     data_offset: u32,
     data_length: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Directory {
+    node_starts: Vec<usize>,
+    descriptors: Vec<Descriptor>,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,10 +46,26 @@ struct Report {
     variant_quill_len: usize,
     descriptor_count: usize,
     descriptor_layout_equal: bool,
+    region_layout_equal: bool,
     masked_quill_equal: bool,
     source_masked_quill_sha256: String,
     variant_masked_quill_sha256: String,
     differing_non_payload_byte_count: usize,
+    differing_node_header_byte_count: usize,
+    differing_descriptor_metadata_byte_count: usize,
+    differing_interstitial_byte_count: usize,
+    descriptor_presence_diff_count: usize,
+    descriptor_name_diff_count: usize,
+    descriptor_opt_a_diff_count: usize,
+    descriptor_opt_b_diff_count: usize,
+    descriptor_opt_c_diff_count: usize,
+    descriptor_bit_type_diff_count: usize,
+    descriptor_data_offset_diff_count: usize,
+    descriptor_data_length_diff_count: usize,
+    node_prefix_u16_diff_count: usize,
+    node_count_diff_count: usize,
+    node_next_diff_count: usize,
+    changed_descriptor_metadata_names: Vec<String>,
     evidence_boundary: String,
 }
 
@@ -58,10 +86,15 @@ fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]))
 }
 
-fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
+fn descriptor_name(name: &[u8; 4]) -> String {
+    String::from_utf8_lossy(name).trim_end().to_owned()
+}
+
+fn parse_descriptor_directory(bytes: &[u8]) -> Result<Directory> {
     let mut current = DESCRIPTOR_ROOT;
     let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
+    let mut node_starts = Vec::new();
+    let mut descriptors = Vec::new();
 
     while current != DESCRIPTOR_END {
         if !seen.insert(current) {
@@ -84,6 +117,7 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
             bail!("descriptor array outside Quill");
         }
 
+        node_starts.push(start);
         for index in 0..count {
             let offset = array_start + index * DESCRIPTOR_SIZE;
             if u16_at(bytes, offset) != Some(DESCRIPTOR_PRESENT) {
@@ -96,7 +130,8 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
                 u32_at(bytes, offset + 16).context("descriptor data offset truncated")?;
             let data_length =
                 u32_at(bytes, offset + 20).context("descriptor data length truncated")?;
-            out.push(Descriptor {
+            descriptors.push(Descriptor {
+                entry_offset: offset,
                 name: [name_raw[0], name_raw[1], name_raw[2], name_raw[3]],
                 data_offset,
                 data_length,
@@ -106,24 +141,76 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
         current = next;
     }
 
-    Ok(out)
+    Ok(Directory {
+        node_starts,
+        descriptors,
+    })
 }
 
-fn mask_payloads(bytes: &[u8], descriptors: &[Descriptor]) -> Result<Vec<u8>> {
-    let mut masked = bytes.to_vec();
-    for descriptor in descriptors {
-        let start =
-            usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
-        let len = usize::try_from(descriptor.data_length).context("descriptor length too large")?;
-        let end = start
-            .checked_add(len)
-            .context("descriptor payload range overflow")?;
-        let range = masked
-            .get_mut(start..end)
-            .context("descriptor payload outside Quill")?;
-        range.fill(0);
+fn mark_range(regions: &mut [u8], start: usize, len: usize, kind: u8) -> Result<()> {
+    let end = start.checked_add(len).context("region range overflow")?;
+    let range = regions.get_mut(start..end).context("region outside Quill")?;
+    for byte in range {
+        if *byte != REGION_INTERSTITIAL && *byte != kind {
+            bail!("overlapping Quill structural regions");
+        }
+        *byte = kind;
     }
-    Ok(masked)
+    Ok(())
+}
+
+fn region_map(bytes: &[u8], directory: &Directory) -> Result<Vec<u8>> {
+    let mut regions = vec![REGION_INTERSTITIAL; bytes.len()];
+
+    for start in &directory.node_starts {
+        mark_range(&mut regions, *start, 8, REGION_NODE_HEADER)?;
+    }
+    for descriptor in &directory.descriptors {
+        mark_range(
+            &mut regions,
+            descriptor.entry_offset,
+            DESCRIPTOR_SIZE,
+            REGION_DESCRIPTOR_METADATA,
+        )?;
+        let payload_start =
+            usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
+        let payload_len =
+            usize::try_from(descriptor.data_length).context("descriptor length too large")?;
+        mark_range(&mut regions, payload_start, payload_len, REGION_PAYLOAD)?;
+    }
+
+    Ok(regions)
+}
+
+fn mask_payloads(bytes: &[u8], regions: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .zip(regions)
+        .map(|(byte, region)| {
+            if *region == REGION_PAYLOAD {
+                0
+            } else {
+                *byte
+            }
+        })
+        .collect()
+}
+
+fn field_diff(
+    source: &[u8],
+    variant: &[u8],
+    source_offset: usize,
+    variant_offset: usize,
+    relative: usize,
+    len: usize,
+) -> Result<bool> {
+    let source_range = source
+        .get(source_offset + relative..source_offset + relative + len)
+        .context("source metadata field outside Quill")?;
+    let variant_range = variant
+        .get(variant_offset + relative..variant_offset + relative + len)
+        .context("variant metadata field outside Quill")?;
+    Ok(source_range != variant_range)
 }
 
 fn main() -> Result<()> {
@@ -151,36 +238,149 @@ fn main() -> Result<()> {
 
     let source_quill = pub_cfb::read_stream_reader(Cursor::new(&source), QUILL_STREAM)?;
     let variant_quill = pub_cfb::read_stream_reader(Cursor::new(&variant), QUILL_STREAM)?;
-    let source_descriptors = parse_descriptor_directory(&source_quill)?;
-    let variant_descriptors = parse_descriptor_directory(&variant_quill)?;
+    let source_directory = parse_descriptor_directory(&source_quill)?;
+    let variant_directory = parse_descriptor_directory(&variant_quill)?;
+    let source_regions = region_map(&source_quill, &source_directory)?;
+    let variant_regions = region_map(&variant_quill, &variant_directory)?;
 
-    let descriptor_layout_equal = source_descriptors == variant_descriptors;
-    let source_masked = mask_payloads(&source_quill, &source_descriptors)?;
-    let variant_masked = mask_payloads(&variant_quill, &variant_descriptors)?;
+    let descriptor_layout_equal = source_directory == variant_directory;
+    let region_layout_equal = source_regions == variant_regions;
+    let source_masked = mask_payloads(&source_quill, &source_regions);
+    let variant_masked = mask_payloads(&variant_quill, &variant_regions);
 
-    let differing_non_payload_byte_count = if source_masked.len() == variant_masked.len() {
-        source_masked
+    let mut differing_node_header_byte_count = 0usize;
+    let mut differing_descriptor_metadata_byte_count = 0usize;
+    let mut differing_interstitial_byte_count = 0usize;
+    if source_quill.len() == variant_quill.len() && region_layout_equal {
+        for ((source_byte, variant_byte), region) in source_quill
             .iter()
-            .zip(&variant_masked)
-            .filter(|(left, right)| left != right)
-            .count()
-    } else {
-        source_masked.len().max(variant_masked.len())
-    };
+            .zip(&variant_quill)
+            .zip(&source_regions)
+        {
+            if source_byte == variant_byte || *region == REGION_PAYLOAD {
+                continue;
+            }
+            match *region {
+                REGION_NODE_HEADER => differing_node_header_byte_count += 1,
+                REGION_DESCRIPTOR_METADATA => differing_descriptor_metadata_byte_count += 1,
+                REGION_INTERSTITIAL => differing_interstitial_byte_count += 1,
+                _ => {}
+            }
+        }
+    }
+
+    let differing_non_payload_byte_count = differing_node_header_byte_count
+        + differing_descriptor_metadata_byte_count
+        + differing_interstitial_byte_count;
+
+    let mut descriptor_presence_diff_count = 0usize;
+    let mut descriptor_name_diff_count = 0usize;
+    let mut descriptor_opt_a_diff_count = 0usize;
+    let mut descriptor_opt_b_diff_count = 0usize;
+    let mut descriptor_opt_c_diff_count = 0usize;
+    let mut descriptor_bit_type_diff_count = 0usize;
+    let mut descriptor_data_offset_diff_count = 0usize;
+    let mut descriptor_data_length_diff_count = 0usize;
+    let mut changed_descriptor_metadata_names = BTreeSet::new();
+
+    for (source_descriptor, variant_descriptor) in source_directory
+        .descriptors
+        .iter()
+        .zip(&variant_directory.descriptors)
+    {
+        let mut changed = false;
+        for (relative, len, count) in [
+            (0usize, 2usize, &mut descriptor_presence_diff_count),
+            (2, 4, &mut descriptor_name_diff_count),
+            (6, 2, &mut descriptor_opt_a_diff_count),
+            (8, 2, &mut descriptor_opt_b_diff_count),
+            (10, 2, &mut descriptor_opt_c_diff_count),
+            (12, 4, &mut descriptor_bit_type_diff_count),
+            (16, 4, &mut descriptor_data_offset_diff_count),
+            (20, 4, &mut descriptor_data_length_diff_count),
+        ] {
+            if field_diff(
+                &source_quill,
+                &variant_quill,
+                source_descriptor.entry_offset,
+                variant_descriptor.entry_offset,
+                relative,
+                len,
+            )? {
+                *count += 1;
+                changed = true;
+            }
+        }
+        if changed {
+            changed_descriptor_metadata_names.insert(descriptor_name(&source_descriptor.name));
+        }
+    }
+
+    let mut node_prefix_u16_diff_count = 0usize;
+    let mut node_count_diff_count = 0usize;
+    let mut node_next_diff_count = 0usize;
+    for (source_start, variant_start) in source_directory
+        .node_starts
+        .iter()
+        .zip(&variant_directory.node_starts)
+    {
+        node_prefix_u16_diff_count += usize::from(field_diff(
+            &source_quill,
+            &variant_quill,
+            *source_start,
+            *variant_start,
+            0,
+            2,
+        )?);
+        node_count_diff_count += usize::from(field_diff(
+            &source_quill,
+            &variant_quill,
+            *source_start,
+            *variant_start,
+            2,
+            2,
+        )?);
+        node_next_diff_count += usize::from(field_diff(
+            &source_quill,
+            &variant_quill,
+            *source_start,
+            *variant_start,
+            4,
+            4,
+        )?);
+    }
 
     let report = Report {
-        schema: "chaptera.quill-story-same-document-skeleton-diff.v1".to_owned(),
+        schema: "chaptera.quill-story-same-document-skeleton-diff.v2".to_owned(),
         source_sha256,
         variant_sha256,
         source_quill_len: source_quill.len(),
         variant_quill_len: variant_quill.len(),
-        descriptor_count: source_descriptors.len(),
+        descriptor_count: source_directory.descriptors.len(),
         descriptor_layout_equal,
+        region_layout_equal,
         masked_quill_equal: source_masked == variant_masked,
         source_masked_quill_sha256: sha256_hex(&source_masked),
         variant_masked_quill_sha256: sha256_hex(&variant_masked),
         differing_non_payload_byte_count,
-        evidence_boundary: "exact same-document public pair only; every declared Quill descriptor payload is masked before comparison; receipt retains only source identities, lengths, descriptor count/layout equality, masked hashes/equality and non-payload difference count; no document text, raw payloads, descriptor offsets, physical offsets or PUB artifacts".to_owned(),
+        differing_node_header_byte_count,
+        differing_descriptor_metadata_byte_count,
+        differing_interstitial_byte_count,
+        descriptor_presence_diff_count,
+        descriptor_name_diff_count,
+        descriptor_opt_a_diff_count,
+        descriptor_opt_b_diff_count,
+        descriptor_opt_c_diff_count,
+        descriptor_bit_type_diff_count,
+        descriptor_data_offset_diff_count,
+        descriptor_data_length_diff_count,
+        node_prefix_u16_diff_count,
+        node_count_diff_count,
+        node_next_diff_count,
+        changed_descriptor_metadata_names: changed_descriptor_metadata_names
+            .into_iter()
+            .collect(),
+        evidence_boundary: "exact same-document public pair only; every declared Quill descriptor payload is classified separately from descriptor metadata, list-node headers and interstitial bytes; receipt retains only source identities, lengths, equality flags, aggregate difference counts, changed metadata field classes and descriptor names; no document text, raw payloads, descriptor offsets, physical offsets or PUB artifacts".to_owned(),
     };
 
     if let Some(parent) = Path::new(&output_path)
