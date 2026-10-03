@@ -1116,11 +1116,11 @@ mod tests {
         );
         assert_eq!(
             classify_projection_failure("image placement references unknown node secret"),
-            "image_binding"
+            "image_placement_unknown_node"
         );
         assert_eq!(
-            classify_projection_failure("table secret cell has non-positive resolved bounds"),
-            "table_binding"
+            classify_projection_failure("Viewer node secret has non-positive bounds"),
+            "node_non_positive_bounds"
         );
         assert_eq!(
             classify_projection_failure("story frame references unknown node secret"),
