@@ -40,10 +40,12 @@ use pub_paint_bridge::{
 use pub_presentation_profile::STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1;
 use pub_presentation_profile::{
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
+    LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1, Legacy22PageListDialectV1,
+    Legacy22PageListEntryEvidenceV1, Legacy22PageListProfileInputV1,
     STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
     StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
     reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
-    select_reference_fixture_customer_page_seq_nums_v1,
+    select_legacy22_customer_page_indices_v1, select_reference_fixture_customer_page_seq_nums_v1,
     select_standard_print_service_tail_customer_page_seq_nums_v1,
 };
 #[cfg(test)]
@@ -70,11 +72,12 @@ use pub_reader::{
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
-    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
-    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
-    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
-    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
+    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
+    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
+    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
+    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
@@ -1814,6 +1817,63 @@ enum ViewerPageSelectionDisposition {
     },
 }
 
+fn select_legacy22_viewer_pages(
+    bytes: &[u8],
+    source: &PubSourceGraphBuild,
+    dialect: Legacy22PageListDialectV1,
+) -> ViewerPageSelection {
+    let generic = || ViewerPageSelection {
+        page_ids: source.effective_pages.page_ids.clone(),
+        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
+    };
+
+    let observation = match analyze_legacy_0x22_page_roles(Cursor::new(bytes)) {
+        Ok(observation) => observation,
+        Err(_) => return generic(),
+    };
+    let selection = match select_legacy22_customer_page_indices_v1(Legacy22PageListProfileInputV1 {
+        schema_version: LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1.to_owned(),
+        dialect,
+        document_page_list_entry_count: observation.document_page_list_entry_count,
+        physical_page_count: observation.physical_page_count,
+        entries: observation
+            .page_list_entries
+            .into_iter()
+            .map(|entry| Legacy22PageListEntryEvidenceV1 {
+                document_ordinal: entry.document_ordinal,
+                raw_type: entry.raw_type,
+            })
+            .collect(),
+    }) {
+        Some(selection) => selection,
+        None => return generic(),
+    };
+    if selection.materialized_page_count != source.effective_pages.page_ids.len() {
+        return generic();
+    }
+
+    let customer_page_count = selection.customer_page_indices.len();
+    let mut page_ids = Vec::with_capacity(customer_page_count);
+    for index in &selection.customer_page_indices {
+        let Some(page_id) = source.effective_pages.page_ids.get(*index).copied() else {
+            return generic();
+        };
+        page_ids.push(page_id);
+    }
+    if page_ids.is_empty() {
+        return generic();
+    }
+
+    ViewerPageSelection {
+        page_ids,
+        disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+            profile_id: selection.profile_id,
+            raw_page_count: selection.materialized_page_count,
+            customer_page_count,
+        },
+    }
+}
+
 /// Opens one mature 0x2C Publisher file into the read-only Viewer manifest.
 ///
 /// This function never writes to the supplied bytes and does not construct a
@@ -1982,10 +2042,8 @@ fn open_legacy_0x22_noquill_bundle(
         .context("build legacy-0x22 no-Quill PUB source graph for Viewer")?;
     let resolved = resolve_pub_source_graph(&source.graph)
         .context("resolve legacy no-Quill PUB source graph for Viewer")?;
-    let page_selection = ViewerPageSelection {
-        page_ids: source.effective_pages.page_ids.clone(),
-        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
-    };
+    let page_selection =
+        select_legacy22_viewer_pages(bytes, &source, Legacy22PageListDialectV1::NoQuill);
     let mut document = viewer_document_from_graph(
         bytes.len(),
         source_hash,
@@ -2133,10 +2191,8 @@ fn open_legacy_0x22_quill_bundle(
         .context("build legacy-0x22+Quill PUB source graph for Viewer")?;
     let resolved = resolve_pub_source_graph(&source.graph)
         .context("resolve legacy PUB source graph for Viewer")?;
-    let page_selection = ViewerPageSelection {
-        page_ids: source.effective_pages.page_ids.clone(),
-        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
-    };
+    let page_selection =
+        select_legacy22_viewer_pages(bytes, &source, Legacy22PageListDialectV1::Quill);
     let mut document = viewer_document_from_graph(
         bytes.len(),
         source_hash,
