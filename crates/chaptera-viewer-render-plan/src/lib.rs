@@ -555,7 +555,10 @@ impl fmt::Display for RenderPlanErrorV1 {
                 "authored render lane page {lane_page_id:?} does not match render-plan page {plan_page_id:?}"
             ),
             Self::AuthoredLaneDuplicateNode { node_id } => {
-                write!(formatter, "authored render lane contains duplicate node {node_id:?}")
+                write!(
+                    formatter,
+                    "authored render lane contains duplicate node {node_id:?}"
+                )
             }
             Self::AuthoredLaneBaseCollision { node_id } => write!(
                 formatter,
@@ -779,19 +782,20 @@ pub fn apply_authored_page_render_lane_v1(
         }
     }
 
-    plan.nodes.extend(lane.nodes.iter().map(|authored| NodeRenderPlanV1 {
-        node_id: authored.node_id,
-        #[cfg(feature = "projected-scene-instances")]
-        projected_scene_instance: None,
-        bounds: authored.bounds,
-        text_bounds: None,
-        transform: Affine2D::identity(),
-        solid_fill_rgb: authored.solid_fill_rgb,
-        solid_line: authored.solid_line.clone(),
-        image: None,
-        text: None,
-        table: None,
-    }));
+    plan.nodes
+        .extend(lane.nodes.iter().map(|authored| NodeRenderPlanV1 {
+            node_id: authored.node_id,
+            #[cfg(feature = "projected-scene-instances")]
+            projected_scene_instance: None,
+            bounds: authored.bounds,
+            text_bounds: None,
+            transform: Affine2D::identity(),
+            solid_fill_rgb: authored.solid_fill_rgb,
+            solid_line: authored.solid_line.clone(),
+            image: None,
+            text: None,
+            table: None,
+        }));
     Ok(())
 }
 
@@ -3480,12 +3484,10 @@ mod tests {
         let mut plan = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
         let base_len = plan.nodes.len();
         let page_id = plan.page_id;
-        let back: NodeId =
-            serde_json::from_str("\"01890f47-0d10-7abc-8def-0123456789ab\"")
-                .expect("authored NodeId");
-        let front: NodeId =
-            serde_json::from_str("\"01890f47-0d11-7abc-8def-0123456789ab\"")
-                .expect("authored NodeId");
+        let back: NodeId = serde_json::from_str("\"01890f47-0d10-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
+        let front: NodeId = serde_json::from_str("\"01890f47-0d11-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
         let lane = AuthoredPageRenderLaneV1 {
             page_id,
             nodes: vec![
@@ -3523,7 +3525,10 @@ mod tests {
         assert_eq!(plan.nodes[base_len + 1].node_id, front);
         assert_eq!(plan.nodes[base_len].solid_fill_rgb, Some([1, 2, 3]));
         assert_eq!(
-            plan.nodes[base_len + 1].solid_line.as_ref().map(|line| line.rgb),
+            plan.nodes[base_len + 1]
+                .solid_line
+                .as_ref()
+                .map(|line| line.rgb),
             Some([7, 8, 9])
         );
     }
@@ -3531,14 +3536,16 @@ mod tests {
     #[test]
     fn authored_lane_reorder_changes_only_effective_paint_order() {
         let base = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
-        let base_ids = base.nodes.iter().map(|node| node.node_id).collect::<Vec<_>>();
+        let base_ids = base
+            .nodes
+            .iter()
+            .map(|node| node.node_id)
+            .collect::<Vec<_>>();
         let page_id = base.page_id;
-        let a: NodeId =
-            serde_json::from_str("\"01890f47-0d20-7abc-8def-0123456789ab\"")
-                .expect("authored NodeId");
-        let b: NodeId =
-            serde_json::from_str("\"01890f47-0d21-7abc-8def-0123456789ab\"")
-                .expect("authored NodeId");
+        let a: NodeId = serde_json::from_str("\"01890f47-0d20-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
+        let b: NodeId = serde_json::from_str("\"01890f47-0d21-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
         let bounds_a = RectEmu::new(
             LengthEmu::new(100),
             LengthEmu::new(200),
@@ -3609,13 +3616,21 @@ mod tests {
             vec![b, a]
         );
 
-        let first_a = first.nodes.iter().find(|node| node.node_id == a).expect("A");
+        let first_a = first
+            .nodes
+            .iter()
+            .find(|node| node.node_id == a)
+            .expect("A");
         let reordered_a = reordered
             .nodes
             .iter()
             .find(|node| node.node_id == a)
             .expect("A reordered");
-        let first_b = first.nodes.iter().find(|node| node.node_id == b).expect("B");
+        let first_b = first
+            .nodes
+            .iter()
+            .find(|node| node.node_id == b)
+            .expect("B");
         let reordered_b = reordered
             .nodes
             .iter()
@@ -3632,9 +3647,8 @@ mod tests {
         let mut plan = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
         let original = plan.clone();
         let base_node = plan.nodes[0].node_id;
-        let duplicate: NodeId =
-            serde_json::from_str("\"01890f47-0d12-7abc-8def-0123456789ab\"")
-                .expect("authored NodeId");
+        let duplicate: NodeId = serde_json::from_str("\"01890f47-0d12-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
 
         let duplicate_lane = AuthoredPageRenderLaneV1 {
             page_id: plan.page_id,
