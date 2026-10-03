@@ -15,20 +15,22 @@ TARGETS = [
     {
         "source_sha256": "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
         "url": "http://helenhudspith.com/resources/textiles/laura_dale/textSpec_word.pub",
-        "known_timestamps": ["20090729050425"],
-        "known_duplicate_digest": "KTZERCRF3O4IBZTUJU6RUK7E7VQ27X7D",
-    },
-    {
-        "source_sha256": "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569",
-        "url": "http://helenhudspith.com/resources/graphics/fatima/0408/(1)%20One%20Point%20Perspective.pub",
-        "known_timestamps": [],
-        "known_duplicate_digest": None,
+        "known_duplicate_captures": [
+            {
+                "timestamp": "20090729050425",
+                "archive_digest": "KTZERCRF3O4IBZTUJU6RUK7E7VQ27X7D",
+            }
+        ],
     },
     {
         "source_sha256": "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff",
         "url": "http://helenhudspith.com/resources/product/roy_johnstone/Pod%20design%20ideas.pub",
-        "known_timestamps": ["20170214165303"],
-        "known_duplicate_digest": "2VDENI22PM4EU6E7RWWCZAXK6DGWNHBO",
+        "known_duplicate_captures": [
+            {
+                "timestamp": "20170214165303",
+                "archive_digest": "2VDENI22PM4EU6E7RWWCZAXK6DGWNHBO",
+            }
+        ],
     },
 ]
 
@@ -80,32 +82,34 @@ def discover(target: dict[str, object]) -> tuple[list[dict[str, str]], list[str]
     errors: list[str] = []
     rows: list[dict[str, str]] = []
 
-    # Keep discovery bounded. One canonical exact query normally returns every
-    # digest-collapsed capture for this URL. Retry through HTTPS only if the
-    # canonical query returns no rows or hits a transport error.
-    for candidate in (url, url.replace("http://", "https://", 1)):
+    split = urllib.parse.urlsplit(url)
+    exact_variants = (
+        url,
+        url.replace("http://", "https://", 1),
+    )
+    for candidate in exact_variants:
         try:
-            rows = cdx_query(candidate)
+            rows.extend(cdx_query(candidate))
         except Exception as exc:
             errors.append(type(exc).__name__)
-            rows = []
-        if rows:
-            break
 
-    # Filename-preserving directory-prefix fallback is only for the unresolved
-    # URL canonicalization case (not an additional broad crawl).
-    if not rows:
-        split = urllib.parse.urlsplit(url)
-        directory = split.path.rsplit("/", 1)[0] + "/"
-        prefix = urllib.parse.urlunsplit(("http", split.netloc, directory, "", ""))
+    # Search the exact parent directory to catch URL-encoding/canonicalization
+    # variants of the same basename. Also probe the historical www host.
+    directory = split.path.rsplit("/", 1)[0] + "/"
+    prefix_variants = (
+        urllib.parse.urlunsplit(("http", split.netloc, directory, "", "")),
+        urllib.parse.urlunsplit(("http", "www." + split.netloc, directory, "", "")),
+    )
+    wanted = normalized_basename(url)
+    for prefix in prefix_variants:
         try:
             prefix_rows = cdx_query(prefix, prefix=True)
         except Exception as exc:
             errors.append(type(exc).__name__)
-            prefix_rows = []
-        wanted = normalized_basename(url)
+            continue
         rows.extend(
-            row for row in prefix_rows
+            row
+            for row in prefix_rows
             if normalized_basename(row.get("original", "")) == wanted
         )
 
@@ -134,27 +138,29 @@ def main() -> int:
         rows, errors = discover(target)
         candidates: dict[str, dict[str, str | None]] = {}
 
-        known_duplicate_digest = target.get("known_duplicate_digest")
-        skipped_known_duplicate_captures = []
+        skipped_known_duplicate_captures = [
+            {
+                **capture,
+                "reason": "raw_sha1_equals_current_source",
+            }
+            for capture in target["known_duplicate_captures"]
+        ]
+        known_duplicate_digests = {
+            capture["archive_digest"]
+            for capture in target["known_duplicate_captures"]
+        }
         for row in rows:
             timestamp = row.get("timestamp")
             if not timestamp:
                 continue
-            if known_duplicate_digest and row.get("digest") == known_duplicate_digest:
-                skipped_known_duplicate_captures.append(
-                    {
-                        "timestamp": timestamp,
-                        "archive_digest": row.get("digest"),
-                        "reason": "raw_sha1_equals_current_source",
-                    }
-                )
+            if row.get("digest") in known_duplicate_digests:
                 continue
             candidates[timestamp] = {
                 "timestamp": timestamp,
                 "archive_digest": row.get("digest"),
                 "archive_length": row.get("length"),
                 "mimetype": row.get("mimetype"),
-                "discovery": "cdx",
+                "discovery": "cdx_or_parent_prefix",
             }
 
         captures = []
@@ -209,13 +215,13 @@ def main() -> int:
         )
 
     report = {
-        "schema": "chaptera.quill-story-wayback-materialize.v2",
+        "schema": "chaptera.quill-story-wayback-materialize.v3",
         "target_count": len(TARGETS),
         "targets": report_targets,
         "evidence_boundary": (
-            "exact three unresolved helenhudspith.com source URLs only; Wayback discovery "
-            "uses exact/prefix CDX plus two prior exact capture timestamps; downloaded bytes "
-            "are temporary and only CFB SHA/size/timestamp metadata is retained in this receipt"
+            "exact two remaining helenhudspith.com source URLs only; Wayback discovery "
+            "uses exact URL plus parent-directory/www prefix CDX; two prior captures are "
+            "prequalified as byte-identical duplicates and skipped; downloaded bytes are temporary and only CFB SHA/size/timestamp metadata is retained in this receipt"
         ),
     }
     (out_dir / "quill-story-wayback-materialize.json").write_text(
