@@ -4551,6 +4551,117 @@ mod tests {
     }
 
     #[test]
+    fn spread_ab_composes_half_pages_and_preserves_node_identity() {
+        let source_hash = Sha256Digest::from_bytes([0x42; 32]);
+        let page_ids = [81_u8, 82, 83, 84].map(|byte| PageId::from_canonical(id(byte)));
+        let node_ids = [61_u8, 62, 63, 64].map(|byte| NodeId::from_canonical(id(byte)));
+        let half_width = 100_i64;
+        let height = 200_i64;
+
+        let pages = page_ids
+            .iter()
+            .enumerate()
+            .map(|(index, page_id)| ViewerPage {
+                index: u32::try_from(index + 1).unwrap(),
+                id: *page_id,
+                width_emu: half_width,
+                height_emu: height,
+            })
+            .collect::<Vec<_>>();
+        let surfaces = page_ids
+            .iter()
+            .map(|page_id| ResolvedSurface {
+                origin: *page_id,
+                size: Size2D::new(LengthEmu::new(half_width), LengthEmu::new(height)),
+                bleed: None,
+                margins: None,
+            })
+            .collect::<Vec<_>>();
+        let nodes = page_ids
+            .iter()
+            .zip(node_ids.iter())
+            .map(|(page_id, node_id)| ResolvedPhysicalNode {
+                origin: *node_id,
+                parent_origin: page_id.into_canonical(),
+                bounds: RectEmu::new(
+                    LengthEmu::new(10),
+                    LengthEmu::new(20),
+                    LengthEmu::new(30),
+                    LengthEmu::new(40),
+                ),
+                transform: Affine2D::identity(),
+            })
+            .collect::<Vec<_>>();
+
+        let mut visual = ViewerGeometryDocument {
+            schema_version: VIEWER_GEOMETRY_SCHEMA_V0_1.to_owned(),
+            document: ViewerDocument {
+                schema_version: VIEWER_DOCUMENT_SCHEMA_V0_1.to_owned(),
+                source: ViewerSource {
+                    format: "pub".to_owned(),
+                    format_version: Some("0x2c".to_owned()),
+                    source_hash,
+                    byte_len: 1,
+                },
+                pages,
+                stories: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            scene: BoundedResolvedScene {
+                environment: viewer_geometry_environment_v0_1(),
+                surfaces,
+                nodes,
+                origin_mapping: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            paints: Vec::new(),
+            story_frames: Vec::new(),
+            text_fragments: Vec::new(),
+            typography_runs: Vec::new(),
+            paragraph_alignments: Vec::new(),
+            script_font_maps: Vec::new(),
+            tables: Vec::new(),
+            #[cfg(feature = "cmo-slot-compose")]
+            projected_instances: Vec::new(),
+            images: Vec::new(),
+        };
+
+        compose_mature_spread_pairs_secondary_left_ab_v1(&mut visual).unwrap();
+
+        assert_eq!(visual.document.pages.len(), 2);
+        assert_eq!(visual.scene.surfaces.len(), 2);
+        assert!(
+            visual
+                .document
+                .pages
+                .iter()
+                .all(|page| page.width_emu == 2 * half_width && page.height_emu == height)
+        );
+        assert_eq!(
+            visual.scene.nodes.iter().map(|node| node.origin).collect::<Vec<_>>(),
+            node_ids
+        );
+
+        let first_spread = visual.document.pages[0].id.into_canonical();
+        let second_spread = visual.document.pages[1].id.into_canonical();
+        assert_eq!(visual.scene.nodes[0].parent_origin, first_spread);
+        assert_eq!(visual.scene.nodes[1].parent_origin, first_spread);
+        assert_eq!(visual.scene.nodes[2].parent_origin, second_spread);
+        assert_eq!(visual.scene.nodes[3].parent_origin, second_spread);
+        assert_eq!(visual.scene.nodes[0].bounds.x.get(), 10);
+        assert_eq!(visual.scene.nodes[1].bounds.x.get(), 110);
+        assert_eq!(visual.scene.nodes[2].bounds.x.get(), 10);
+        assert_eq!(visual.scene.nodes[3].bounds.x.get(), 110);
+        assert!(
+            visual
+                .document
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "viewer.page_projection.spread_ab_applied")
+        );
+    }
+
+    #[test]
     fn image_uses_compose_only_with_known_page_exclusion() {
         let admitted = NodeId::from_canonical(id(61));
         let excluded = NodeId::from_canonical(id(62));
