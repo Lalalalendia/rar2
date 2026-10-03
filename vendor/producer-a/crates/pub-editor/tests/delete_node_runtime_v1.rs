@@ -356,3 +356,24 @@ fn undo_restores_same_uuidv7_entity_not_a_reconstructed_new_identity() {
         authored_shape_state_id_v1(&before)
     );
 }
+
+#[test]
+fn forked_project_preserves_delete_node_under_v0_12() {
+    let mut producer = EditorSession::new(graph()).expect("producer");
+    create_authored_rectangle(&mut producer);
+    producer
+        .delete_node(authored_node_id())
+        .expect("producer delete");
+
+    let forked = producer.fork_project_next_issue().expect("fork project");
+    assert_eq!(forked.schema_version, EDITOR_PROJECT_VERSION_V0_12);
+    assert!(matches!(
+        forked.operations.last(),
+        Some(EditOperation::DeleteNode { .. })
+    ));
+
+    let mut reopened = EditorSession::new(graph()).expect("reopen fork");
+    reopened.apply_project(&forked).expect("replay fork");
+    assert!(reopened.authored_shape(authored_node_id()).is_none());
+    assert_eq!(reopened.project(), forked);
+}
