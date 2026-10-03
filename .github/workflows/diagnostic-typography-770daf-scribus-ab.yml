@@ -1,4 +1,5 @@
 name: Diagnostic Typography 770daf Scribus A/B
+# A/B current typography writer against exact pre-change base.
 
 on:
   push:
