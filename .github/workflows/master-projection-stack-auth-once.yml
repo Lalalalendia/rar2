@@ -77,6 +77,9 @@ jobs:
             "GetPixel(",
             "master_first",
             "page_first",
+            "Invoke-Master-Visibility-Control",
+            "IsTwoPageMaster",
+            "save_as_picture_master_visibility_proven",
             "Original exact source changed"
           )) {
             if (-not $text.Contains($required)) {
@@ -166,6 +169,7 @@ jobs:
           $analysis = Join-Path $env:OUTPUT_ROOT "analysis\master-projection-stack-auth-01.json"
           if (Test-Path -LiteralPath $analysis) {
             $doc = Get-Content -LiteralPath $analysis -Raw | ConvertFrom-Json
+            "- master visibility control: $($doc.master_visibility_control.master_visible)" >> $env:GITHUB_STEP_SUMMARY
             "- master-first winner: $($doc.arms[0].overlap.winner)" >> $env:GITHUB_STEP_SUMMARY
             "- page-first winner: $($doc.arms[1].overlap.winner)" >> $env:GITHUB_STEP_SUMMARY
             "- verdict: $($doc.verdict)" >> $env:GITHUB_STEP_SUMMARY
