@@ -26,7 +26,6 @@ struct Descriptor {
 #[derive(Debug)]
 struct Doc {
     bytes: Vec<u8>,
-    contents: Vec<u8>,
     quill: Vec<u8>,
     story_catalog: MatureStoryCatalog,
     descriptors: Vec<Descriptor>,
@@ -182,7 +181,6 @@ fn load(path: &Path) -> Result<Doc> {
     let descriptors = parse_descriptor_directory(&quill)?;
     Ok(Doc {
         bytes,
-        contents,
         quill,
         story_catalog,
         descriptors,
