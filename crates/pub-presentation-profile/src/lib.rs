@@ -408,6 +408,150 @@ pub fn select_mature_zero_leader_detached_tail_customer_page_seq_nums_v1(
     })
 }
 
+pub const MATURE_PRIMARY_SECONDARY_APPLIED_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/primary-secondary-applied/v1";
+
+/// Admits the bounded primary/secondary applied-PAGE topology isolated by #987
+/// and retained as the sole 029 candidate after #1018 falsified root-prefix
+/// membership.
+///
+/// The DOCUMENT relation must be:
+/// - two leading nonzero no-master PAGE roots (primary, secondary);
+/// - a contiguous block of at least three nonzero applied PAGEs, each targeting
+///   one of those roots, using both roots, and ending on the secondary root;
+/// - one interleaved special DOCUMENT entry;
+/// - two detached tail PAGEs: first nonzero/no-master, second zero/no-master.
+///
+/// Customer PAGEs are the applied PAGEs targeting the primary first root.
+/// PDF/page count, payload/blankness, file identity and raw PAGE seqNum/OID
+/// constants are not selector inputs. Structural drift returns None.
+pub fn select_mature_primary_secondary_applied_customer_page_seq_nums_v1(
+    mut input: StandardPrintServiceTailProfileInputV1,
+) -> Option<StandardPrintServiceTailSelectionV1> {
+    if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
+        || input.confirmed_page_count != input.pages.len()
+        || input.special_entry_count != 1
+        || input.document_page_list_entry_count != input.confirmed_page_count.checked_add(1)?
+        || input.pages.len() < 7
+    {
+        return None;
+    }
+
+    input.pages.sort_by_key(|page| page.document_ordinal);
+    let mut ordinals = BTreeSet::new();
+    let mut seq_nums = BTreeSet::new();
+    for page in &input.pages {
+        if page.document_ordinal >= input.document_page_list_entry_count
+            || !ordinals.insert(page.document_ordinal)
+            || !seq_nums.insert(page.contents_seq_num)
+        {
+            return None;
+        }
+    }
+
+    let oid_is_zero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        page.oid_dword0 == Some(0) && page.oid_dword1 == Some(0)
+    };
+    let oid_is_nonzero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        matches!(
+            (page.oid_dword0, page.oid_dword1),
+            (Some(d0), Some(d1)) if d0 != 0 || d1 != 0
+        )
+    };
+
+    let primary = input.pages.first()?;
+    let secondary = input.pages.get(1)?;
+    if primary.document_ordinal != 0
+        || secondary.document_ordinal != 1
+        || !oid_is_nonzero(primary)
+        || !oid_is_nonzero(secondary)
+        || primary.applied_master_seq_num.is_some()
+        || secondary.applied_master_seq_num.is_some()
+    {
+        return None;
+    }
+    let primary_seq = primary.contents_seq_num;
+    let secondary_seq = secondary.contents_seq_num;
+
+    let mut applied_end = 2usize;
+    while let Some(page) = input.pages.get(applied_end) {
+        if page.applied_master_seq_num.is_none() {
+            break;
+        }
+        if !oid_is_nonzero(page)
+            || page.document_ordinal != applied_end
+            || !matches!(
+                page.applied_master_seq_num,
+                Some(master) if master == primary_seq || master == secondary_seq
+            )
+        {
+            return None;
+        }
+        applied_end = applied_end.checked_add(1)?;
+    }
+    let applied = input.pages.get(2..applied_end)?;
+    if applied.len() < 3
+        || !applied
+            .iter()
+            .any(|page| page.applied_master_seq_num == Some(primary_seq))
+        || !applied
+            .iter()
+            .any(|page| page.applied_master_seq_num == Some(secondary_seq))
+        || applied.last()?.applied_master_seq_num != Some(secondary_seq)
+    {
+        return None;
+    }
+
+    let last_applied_ordinal = applied.last()?.document_ordinal;
+    let tail = input.pages.get(applied_end..)?;
+    if tail.len() != 2
+        || tail
+            .iter()
+            .map(|page| page.document_ordinal)
+            .collect::<Vec<_>>()
+            != vec![
+                last_applied_ordinal.checked_add(2)?,
+                last_applied_ordinal.checked_add(3)?,
+            ]
+        || !oid_is_nonzero(&tail[0])
+        || tail[0].applied_master_seq_num.is_some()
+        || !oid_is_zero(&tail[1])
+        || tail[1].applied_master_seq_num.is_some()
+        || input
+            .document_page_list_entry_count
+            .checked_sub(last_applied_ordinal.checked_add(1)?)?
+            != 3
+    {
+        return None;
+    }
+
+    let customer_pages = applied
+        .iter()
+        .filter(|page| page.applied_master_seq_num == Some(primary_seq))
+        .collect::<Vec<_>>();
+    if customer_pages.is_empty() {
+        return None;
+    }
+
+    let mut service_page_seq_nums = applied
+        .iter()
+        .filter(|page| page.applied_master_seq_num == Some(secondary_seq))
+        .map(|page| page.contents_seq_num)
+        .collect::<Vec<_>>();
+    service_page_seq_nums.extend(tail.iter().map(|page| page.contents_seq_num));
+
+    Some(StandardPrintServiceTailSelectionV1 {
+        profile_id: MATURE_PRIMARY_SECONDARY_APPLIED_PROFILE_ID_V1.to_owned(),
+        raw_page_count: input.pages.len(),
+        customer_page_seq_nums: customer_pages
+            .into_iter()
+            .map(|page| page.contents_seq_num)
+            .collect(),
+        master_page_seq_num: primary_seq,
+        service_page_seq_nums,
+    })
+}
+
 pub const MATURE_MASTER_BANK_PROFILE_ID_V1: &str =
     "publisher-mature-0x2c/one-to-one-master-bank/v1";
 
