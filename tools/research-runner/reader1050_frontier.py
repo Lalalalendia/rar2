@@ -25,31 +25,8 @@ from cfb_physical import CFB  # noqa: E402
 SCHEMA = "chaptera.reader1050-hosted-frontier.v1"
 CASE_SCHEMA = "chaptera.reader1050-hosted-frontier-case.v1"
 
-KNOWN_OWNED_ROUTES = {
-    # QUILL-STORY-EARLY-TEXT-BOUNDARY-01 / #315/#337: valid early-mature
-    # Story-bearing sentinel family. These are format/recovery gaps, not
-    # evidence of corruption merely because normal Reader open fails.
-    "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-    "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-    "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-    "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff": {
-        "kind": "format_gap",
-        "owner": "QUILL-STORY-EARLY-TEXT-BOUNDARY-01",
-        "route": "existing_format_owner",
-    },
-}
+DEFAULT_EVIDENCE_REGISTRY = REPO_ROOT / "tools" / "research-runner" / "reader1050-evidence-registry.json"
+DEFAULT_RESEARCH_LEDGER = REPO_ROOT / "tools" / "research-runner" / "reader1050-research-ledger.json"
 
 KNOWN_STREAMS = {
     "contents": "Contents",
@@ -72,6 +49,114 @@ def find_unique(root: Path, name: str) -> Path:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def load_evidence_registry(path: Path) -> dict[str, dict[str, Any]]:
+    payload = read_json(path)
+    if payload.get("schema") != "chaptera.reader1050-evidence-registry.v1":
+        raise ValueError(f"unexpected evidence registry schema: {payload.get('schema')!r}")
+    entries: dict[str, dict[str, Any]] = {}
+    for row in payload.get("entries") or []:
+        sha = str(row.get("source_sha256") or "").lower()
+        if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+            raise ValueError(f"invalid evidence registry SHA-256: {sha!r}")
+        if sha in entries:
+            raise ValueError(f"duplicate evidence registry SHA-256: {sha}")
+        entries[sha] = row
+    return entries
+
+
+def load_research_ledger(path: Path) -> dict[str, list[dict[str, Any]]]:
+    payload = read_json(path)
+    if payload.get("schema") != "chaptera.reader1050-research-ledger.v1":
+        raise ValueError(f"unexpected research ledger schema: {payload.get('schema')!r}")
+    entries: dict[str, list[dict[str, Any]]] = {}
+    for row in payload.get("entries") or []:
+        sha = str(row.get("source_sha256") or "").lower()
+        if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+            raise ValueError(f"invalid research ledger SHA-256: {sha!r}")
+        entries.setdefault(sha, []).append(row)
+    return entries
+
+
+def effective_reader_state(row: dict[str, Any]) -> dict[str, Any]:
+    state = {
+        "cfb_inventory_available": row.get("cfb_inventory_available"),
+        "contents_family": row.get("contents_family"),
+        "has_surviving_evidence": row.get("has_surviving_evidence"),
+    }
+    probe = row.get("forced_trigger_probe")
+    graph = row.get("forced_partial_graph")
+    if (
+        row.get("salvage_eligibility") == "awaiting_typed_corruption_evidence"
+        and isinstance(probe, dict)
+    ):
+        if probe.get("cfb_inventory_available") is not None:
+            state["cfb_inventory_available"] = probe.get("cfb_inventory_available")
+        if probe.get("contents_family"):
+            state["contents_family"] = probe.get("contents_family")
+        if probe.get("has_surviving_evidence") is not None:
+            state["has_surviving_evidence"] = probe.get("has_surviving_evidence")
+        state["forced_partial_graph_status"] = (
+            graph.get("status") if isinstance(graph, dict) else None
+        )
+    return state
+
+
+def research_resolution(
+    source_sha256: str,
+    evidence_entry: dict[str, Any] | None,
+    ledger_entries: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if evidence_entry is None:
+        return None
+
+    disposition = evidence_entry.get("disposition")
+    if disposition == "existing_format_owner":
+        return {
+            "kind": "existing_format_owner",
+            "owner": evidence_entry.get("owner"),
+            "evidence_class": evidence_entry.get("evidence_class"),
+            "selectable": False,
+        }
+
+    if disposition != "existing_typed_corruption_evidence":
+        return None
+
+    receipt = evidence_entry.get("authority_receipt") or {}
+    authority_digest = receipt.get("evidence_digest")
+    if not authority_digest:
+        return None
+
+    closed = any(
+        row.get("discriminator") == "typed_corruption_evidence_discovery"
+        and row.get("state") == "closed"
+        and row.get("evidence_digest") == authority_digest
+        for row in ledger_entries
+    )
+    if not closed:
+        return None
+
+    handoff = next(
+        (
+            row
+            for row in ledger_entries
+            if row.get("discriminator") == "bounded_salvage_admission_validation"
+            and row.get("state") in {"handoff", "closed"}
+            and row.get("evidence_digest") == authority_digest
+        ),
+        None,
+    )
+    return {
+        "kind": "existing_typed_corruption_evidence",
+        "owner": evidence_entry.get("owner"),
+        "evidence_class": evidence_entry.get("evidence_class"),
+        "authority_evidence_digest": authority_digest,
+        "authority_classification": receipt.get("classification"),
+        "typed_discriminator_closed": True,
+        "salvage_admission_handoff": handoff is not None,
+        "selectable": False,
+    }
 
 
 def load_reader_inputs(reader_root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
@@ -146,20 +231,29 @@ def source_free_cfb_shape(data: bytes) -> dict[str, Any]:
     }
 
 
-def suggested_discriminator(row: dict[str, Any]) -> tuple[str, str]:
-    source_sha256 = str(row.get("source_sha256") or "").lower()
-    existing_owner = KNOWN_OWNED_ROUTES.get(source_sha256)
-    if existing_owner is not None:
-        return (
-            "existing_format_owner",
-            "Hand off to the already-grounded format-research owner; do not reinterpret normal-open failure as corruption evidence.",
-        )
-    if row.get("cfb_inventory_available") is False:
+def suggested_discriminator(
+    row: dict[str, Any],
+    resolution: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    if resolution is not None:
+        if resolution.get("kind") == "existing_format_owner":
+            return (
+                "existing_format_owner",
+                "Hand off to the already-grounded format-research owner; do not reinterpret normal-open failure as corruption evidence.",
+            )
+        if resolution.get("kind") == "existing_typed_corruption_evidence":
+            return (
+                "existing_typed_corruption_evidence",
+                "Bind the exact-SHA authority and reuse the completed typed-corruption discriminator; do not rediscover corruption evidence.",
+            )
+
+    effective = effective_reader_state(row)
+    if effective.get("cfb_inventory_available") is False:
         return (
             "container_integrity_gap",
             "Localize why bounded CFB inventory is unavailable before widening salvage admission.",
         )
-    if not row.get("contents_family"):
+    if not effective.get("contents_family"):
         return (
             "family_classification_gap",
             "Classify the exact Contents family or prove typed structural corruption; do not guess a marketing version.",
@@ -174,18 +268,17 @@ def suggested_discriminator(row: dict[str, Any]) -> tuple[str, str]:
         "Localize the exact Reader-open failure on this witness before changing parser or salvage behavior.",
     )
 
-
-def priority(row: dict[str, Any]) -> tuple[int, list[str]]:
+def priority(
+    row: dict[str, Any],
+    resolution: dict[str, Any] | None = None,
+) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
 
-    source_sha256 = str(row.get("source_sha256") or "").lower()
-    existing_owner = KNOWN_OWNED_ROUTES.get(source_sha256)
-    if existing_owner is not None:
-        score -= 500
-        reasons.append(
-            f"already owned by {existing_owner['owner']} ({existing_owner['kind']})"
-        )
+    if resolution is not None:
+        score -= 1000
+        reasons.append(f"resolved by {resolution['kind']}")
+
 
     if row.get("salvage_eligibility") == "awaiting_typed_corruption_evidence":
         score += 100
@@ -206,14 +299,15 @@ def priority(row: dict[str, Any]) -> tuple[int, list[str]]:
         ):
             score += 240
             reasons.append("forced trigger constructs partial salvage graph")
-    if row.get("has_surviving_evidence") is True:
+    effective = effective_reader_state(row)
+    if effective.get("has_surviving_evidence") is True:
         score += 80
         reasons.append("surviving evidence exists")
-    if row.get("cfb_inventory_available") is True:
+    if effective.get("cfb_inventory_available") is True:
         score += 40
         reasons.append("bounded CFB inventory available")
 
-    family = row.get("contents_family")
+    family = effective.get("contents_family")
     if family == "0x2c":
         score += 30
         reasons.append("mature 0x2c family")
@@ -238,6 +332,8 @@ def build_case(
     row: dict[str, Any],
     reader_record: dict[str, Any] | None,
     corpus_root: Path,
+    evidence_entry: dict[str, Any] | None = None,
+    ledger_entries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     source_sha256 = str(row["source_sha256"]).lower()
     pub_path = locate_pub(corpus_root, source_sha256)
@@ -249,22 +345,36 @@ def build_case(
         )
 
     cfb_shape = source_free_cfb_shape(data)
-    score, score_reasons = priority(row)
-    gap_class, next_operation = suggested_discriminator(row)
+    resolution = research_resolution(
+        source_sha256,
+        evidence_entry,
+        ledger_entries or [],
+    )
+    effective = effective_reader_state(row)
+    score, score_reasons = priority(row, resolution)
+    gap_class, next_operation = suggested_discriminator(row, resolution)
 
     return {
         "schema": CASE_SCHEMA,
         "source_sha256": source_sha256,
-        "existing_owner": KNOWN_OWNED_ROUTES.get(source_sha256),
+        "existing_owner": (
+            evidence_entry.get("owner")
+            if evidence_entry is not None
+            and evidence_entry.get("disposition") == "existing_format_owner"
+            else None
+        ),
+        "evidence_registry_entry": evidence_entry,
+        "research_resolution": resolution,
+        "selectable": resolution is None,
         "byte_len": len(data),
         "outcome": row.get("outcome"),
         "reader_route": row.get("reader_route"),
         "pub_profile": row.get("pub_profile"),
-        "contents_family": row.get("contents_family"),
+        "contents_family": effective.get("contents_family"),
         "salvage_eligibility": row.get("salvage_eligibility"),
         "corruption_evidence": row.get("corruption_evidence"),
-        "has_surviving_evidence": row.get("has_surviving_evidence"),
-        "cfb_inventory_available": row.get("cfb_inventory_available"),
+        "has_surviving_evidence": effective.get("has_surviving_evidence"),
+        "cfb_inventory_available": effective.get("cfb_inventory_available"),
         "open_error_signature_sha256": row.get("open_error_signature_sha256"),
         "forced_trigger_probe": row.get("forced_trigger_probe"),
         "forced_partial_graph": row.get("forced_partial_graph"),
@@ -294,8 +404,12 @@ def build_frontier(
     out_root: Path,
     source_run_id: str,
     source_sha: str,
+    evidence_registry_path: Path = DEFAULT_EVIDENCE_REGISTRY,
+    research_ledger_path: Path = DEFAULT_RESEARCH_LEDGER,
 ) -> dict[str, Any]:
     salvage, records = load_reader_inputs(reader_root)
+    evidence_registry = load_evidence_registry(evidence_registry_path)
+    research_ledger = load_research_ledger(research_ledger_path)
     unsupported = [
         row for row in salvage.get("rows", []) if row.get("outcome") == "unsupported"
     ]
@@ -305,17 +419,23 @@ def build_frontier(
             row,
             records.get(str(row.get("source_sha256", "")).lower()),
             corpus_root,
+            evidence_registry.get(str(row.get("source_sha256", "")).lower()),
+            research_ledger.get(str(row.get("source_sha256", "")).lower(), []),
         )
         for row in unsupported
     ]
     cases.sort(key=lambda row: (-int(row["frontier_score"]), row["source_sha256"]))
+    unresolved = [row for row in cases if row.get("selectable") is True]
+    unresolved.sort(key=lambda row: (-int(row["frontier_score"]), row["source_sha256"]))
 
-    selected = cases[0] if cases else None
+    selected = unresolved[0] if unresolved else None
     payload = {
         "schema": SCHEMA,
         "source_reader_run_id": str(source_run_id),
         "source_main_sha": source_sha,
         "unsupported_count": len(cases),
+        "resolved_count": len(cases) - len(unresolved),
+        "unresolved_count": len(unresolved),
         "status": "frontier_selected" if selected else "exhausted",
         "selected": selected,
         "queue": [
@@ -323,6 +443,8 @@ def build_frontier(
                 "source_sha256": row["source_sha256"],
                 "frontier_score": row["frontier_score"],
                 "existing_owner": row.get("existing_owner"),
+                "research_resolution": row.get("research_resolution"),
+                "selectable": row.get("selectable"),
                 "gap_class": row["gap_class"],
                 "contents_family": row["contents_family"],
                 "salvage_eligibility": row["salvage_eligibility"],
@@ -363,6 +485,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Reader source run: `{payload['source_reader_run_id']}`",
         f"- Main SHA: `{payload['source_main_sha']}`",
         f"- Unsupported cases: **{payload['unsupported_count']}**",
+        f"- Resolved by registry/ledger: **{payload['resolved_count']}**",
+        f"- Unresolved selectable cases: **{payload['unresolved_count']}**",
         f"- Status: **{payload['status']}**",
         "",
     ]
@@ -408,8 +532,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         [
             "## Queue",
             "",
-            "| SHA | score | gap | family | surviving evidence | CFB inventory |",
-            "| --- | ---: | --- | --- | --- | --- |",
+            "| SHA | score | selectable | gap | family | surviving evidence | CFB inventory |",
+            "| --- | ---: | --- | --- | --- | --- | --- |",
         ]
     )
     for row in payload["queue"]:
@@ -419,6 +543,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 [
                     f"`{row['source_sha256'][:12]}`",
                     str(row["frontier_score"]),
+                    str(row.get("selectable")),
                     f"`{row['gap_class']}`",
                     f"`{row.get('contents_family') or 'unresolved'}`",
                     str(row.get("has_surviving_evidence")),
@@ -450,6 +575,16 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument(
+        "--evidence-registry",
+        type=Path,
+        default=DEFAULT_EVIDENCE_REGISTRY,
+    )
+    parser.add_argument(
+        "--research-ledger",
+        type=Path,
+        default=DEFAULT_RESEARCH_LEDGER,
+    )
     args = parser.parse_args()
 
     payload = build_frontier(
@@ -458,6 +593,8 @@ def main() -> int:
         args.out,
         args.source_run_id,
         args.source_sha,
+        args.evidence_registry,
+        args.research_ledger,
     )
     print(
         json.dumps(
