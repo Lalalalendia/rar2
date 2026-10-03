@@ -1,0 +1,168 @@
+name: Publisher VBA tutorial source measurement v2
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-vba-source-estate-v2-measure.yml"
+      - "tools/pub_vba_estate_scan.py"
+  workflow_dispatch:
+
+concurrency:
+  group: pub-vba-source-estate-v2-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout rar2 classifier
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: rar2
+
+      - name: Checkout exact tutorial source estate
+        uses: actions/checkout@v5
+        with:
+          repository: areed1192/sigma_coding_youtube
+          ref: a4e8df97856ad224664254fa726ac56cbee4dc57
+          path: upstream
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify, classify and emit source-free receipt
+        working-directory: rar2
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C ../upstream rev-parse HEAD)" = "a4e8df97856ad224664254fa726ac56cbee4dc57"
+
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import subprocess
+          import sys
+          from collections import Counter
+
+          sys.path.insert(0, "tools")
+          from pub_vba_estate_scan import (
+              CALL_CLASSIFIER_VERSION,
+              classify_calls,
+              strip_vba_comments,
+          )
+
+          assert CALL_CLASSIFIER_VERSION == "v2", CALL_CLASSIFIER_VERSION
+
+          fixtures = [
+              ("vba/vba-publisher/Publisher - Excel Chart to Publisher.vb", "7672607054d1d500d642d8b063a6c31508b7660f", 1259),
+              ("vba/vba-publisher/Publisher - Excel Table to Publisher.vb", "12f35efc63ac0326a6c7baf13929bdcb99271c91", 1179),
+              ("vba/vba-publisher/Publisher - Introduction.vb", "268d1aaa77a711f3fd3acaddbf62d06483570905", 1164),
+              ("vba/vba-publisher/Publisher - Working With Documents.vb", "ac759ce204603fd1bead9778329a8436f95f21c1", 2609),
+              ("vba/vba-publisher/Publisher - Working With Pages.vb", "0a77ec3ac511221ce27daec1fc5cb7307e3c8f9a", 2956),
+          ]
+
+          risk_patterns = {
+              "autoexec_or_document_event": re.compile(
+                  r"(?i)\b(?:auto_open|autoopen|auto_close|autoclose|document_open|document_beforeclose|document_close)\b"
+              ),
+              "process_or_shell": re.compile(
+                  r"(?i)\b(?:shell|shellexecute|winexec|createprocess)\b|wscript\.shell"
+              ),
+              "network": re.compile(
+                  r"(?i)\b(?:xmlhttp|winhttp|urldownloadtofile|internetopen|internetreadfile|serverxmlhttp)\b"
+              ),
+              "registry": re.compile(
+                  r"(?i)\b(?:regwrite|regread|regdelete|savesetting|deletesetting)\b"
+              ),
+              "native_api_declare": re.compile(r"(?i)\bdeclare\s+(?:ptrsafe\s+)?(?:sub|function)\b"),
+              "filesystem_write": re.compile(
+                  r"(?i)\b(?:filecopy|kill|mkdir|rmdir)\b|\bopen\b[^\r\n]*\bfor\s+(?:output|append|binary|random)\b"
+              ),
+          }
+
+          family_files = Counter()
+          family_hits = Counter()
+          symbol_hits = Counter()
+          risk_totals = Counter()
+          rows = []
+
+          for rel, expected_blob, expected_size in fixtures:
+              path = pathlib.Path("../upstream") / rel
+              assert path.is_file(), rel
+              data = path.read_bytes()
+              assert len(data) == expected_size, (rel, len(data), expected_size)
+              blob = subprocess.check_output(
+                  ["git", "-C", "../upstream", "hash-object", rel],
+                  text=True,
+              ).strip()
+              assert blob == expected_blob, (rel, blob, expected_blob)
+
+              source = data.decode("utf-8-sig")
+              families, symbols = classify_calls(source)
+              cleaned = strip_vba_comments(source)
+              risks = {name: len(pattern.findall(cleaned)) for name, pattern in risk_patterns.items()}
+
+              for family, count in families.items():
+                  family_files[family] += 1
+                  family_hits[family] += count
+              symbol_hits.update(symbols)
+              risk_totals.update(risks)
+
+              rows.append({
+                  "source_sha256": hashlib.sha256(data).hexdigest(),
+                  "byte_len": len(data),
+                  "git_blob_sha": blob,
+                  "call_families": families,
+                  "symbols": symbols,
+                  "risk_counts": risks,
+              })
+
+          receipt = {
+              "schema": "chaptera.pub-vba-source-estate.v2",
+              "call_classifier_version": CALL_CLASSIFIER_VERSION,
+              "upstream": {
+                  "repository": "areed1192/sigma_coding_youtube",
+                  "commit": "a4e8df97856ad224664254fa726ac56cbee4dc57",
+                  "source_count": len(rows),
+              },
+              "claims": {
+                  "source_text_emitted": False,
+                  "vba_executed": False,
+                  "publisher_required": False,
+                  "frequency_is_market_prevalence": False,
+                  "corpus_role": "author-owned tutorial source evidence",
+              },
+              "totals": {
+                  "source_count": len(rows),
+                  "call_family_files": dict(sorted(family_files.items())),
+                  "call_family_hits": dict(sorted(family_hits.items())),
+                  "symbol_hits": dict(sorted(symbol_hits.items())),
+                  "risk_totals": dict(sorted(risk_totals.items())),
+              },
+              "sources": sorted(rows, key=lambda row: row["source_sha256"]),
+          }
+
+          out = pathlib.Path("target/pub-vba-source-estate-v2")
+          out.mkdir(parents=True, exist_ok=True)
+          (out / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt["totals"], indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-source-estate-v2
+          path: rar2/target/pub-vba-source-estate-v2/receipt.json
+          if-no-files-found: error
+          retention-days: 90
