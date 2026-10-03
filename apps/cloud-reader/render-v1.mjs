@@ -203,6 +203,7 @@ export function resolvedTextLinePaintPlan(node) {
   const height = safeInteger(bounds.height, "text.bounds.height");
   const fontSize = safeInteger(layout.font_size_emu, "text.font_size_emu");
   const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
+  const color = rgb(layout.color_rgb) ?? "rgb(0 0 0)";
   if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
 
   const verticalOffset = safeInteger(layout.vertical_offset_emu ?? 0, "text.vertical_offset_emu");
@@ -253,6 +254,7 @@ export function resolvedTextLinePaintPlan(node) {
     font_resource_id: layout.font_resource_id,
     font_size_emu: fontSize,
     line_height_emu: lineHeight,
+    color,
     lines: Object.freeze(lines)
   });
 }
@@ -304,6 +306,7 @@ function appendText(group, defs, node, fonts, index) {
       y: (line.y - plan.bounds.y) / EMU_PER_CSS_PX,
       "font-family": installed.family,
       "font-size": plan.font_size_emu / EMU_PER_CSS_PX,
+      fill: plan.color,
       "text-rendering": "geometricPrecision",
       "dominant-baseline": "text-before-edge",
       "data-text-authority": "server-shared-resolved",
