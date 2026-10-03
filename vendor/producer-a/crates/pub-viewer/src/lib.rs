@@ -2317,12 +2317,15 @@ pub fn open_mature_0x2c_geometry(
     Ok(open_mature_0x2c_bundle(bytes, environment)?.geometry)
 }
 
-fn translate_rect_x_for_spread_ab_v1(rect: RectEmu, dx: LengthEmu) -> Result<RectEmu> {
-    let x = rect
-        .x
+fn translate_transform_x_for_spread_ab_v1(
+    transform: &mut Affine2D,
+    dx: LengthEmu,
+) -> Result<()> {
+    transform.tx = transform
+        .tx
         .checked_add(dx)
-        .context("spread A/B x translation overflow")?;
-    Ok(RectEmu::new(x, rect.y, rect.width, rect.height))
+        .context("spread A/B transform x translation overflow")?;
+    Ok(())
 }
 
 fn derive_spread_surface_id_ab_v1(
@@ -2428,52 +2431,13 @@ fn compose_mature_spread_pairs_secondary_left_ab_v1(
         );
     }
 
-    let mut node_x_offsets = BTreeMap::<NodeId, LengthEmu>::new();
     for node in &mut visual.scene.nodes {
         let Some((spread_parent, dx)) = parent_projection.get(&node.parent_origin).copied() else {
             continue;
         };
         node.parent_origin = spread_parent;
         if dx != LengthEmu::ZERO {
-            node.bounds = translate_rect_x_for_spread_ab_v1(node.bounds, dx)?;
-        }
-        node_x_offsets.insert(node.origin, dx);
-    }
-
-    for frame in &mut visual.story_frames {
-        let Some(dx) = node_x_offsets.get(&frame.frame_id).copied() else {
-            continue;
-        };
-        if dx != LengthEmu::ZERO {
-            frame.text_content_bounds = frame
-                .text_content_bounds
-                .map(|bounds| translate_rect_x_for_spread_ab_v1(bounds, dx))
-                .transpose()?;
-        }
-    }
-
-    for table in &mut visual.tables {
-        let Some(dx) = node_x_offsets.get(&table.node_id).copied() else {
-            continue;
-        };
-        if dx == LengthEmu::ZERO {
-            continue;
-        }
-        for cell in &mut table.cells {
-            cell.bounds = cell
-                .bounds
-                .map(|bounds| translate_rect_x_for_spread_ab_v1(bounds, dx))
-                .transpose()?;
-        }
-        for border in &mut table.borders {
-            border.x1_emu = border
-                .x1_emu
-                .checked_add(dx.get())
-                .context("spread A/B table border x1 overflow")?;
-            border.x2_emu = border
-                .x2_emu
-                .checked_add(dx.get())
-                .context("spread A/B table border x2 overflow")?;
+            translate_transform_x_for_spread_ab_v1(&mut node.transform, dx)?;
         }
     }
 
@@ -2485,11 +2449,7 @@ fn compose_mature_spread_pairs_secondary_left_ab_v1(
             }
             projected.scene_instance.target_page_id = spread_parent.to_string();
             if *dx != LengthEmu::ZERO {
-                projected.bounds = translate_rect_x_for_spread_ab_v1(projected.bounds, *dx)?;
-                projected.text_content_bounds = projected
-                    .text_content_bounds
-                    .map(|bounds| translate_rect_x_for_spread_ab_v1(bounds, *dx))
-                    .transpose()?;
+                translate_transform_x_for_spread_ab_v1(&mut projected.transform, *dx)?;
             }
             break;
         }
@@ -2500,7 +2460,7 @@ fn compose_mature_spread_pairs_secondary_left_ab_v1(
     visual.document.diagnostics.push(ViewerDiagnostic {
         code: "viewer.page_projection.spread_ab_applied".to_owned(),
         severity: ViewerDiagnosticSeverity::Info,
-        message: "Research-only #1057 spread A/B composed adjacent secondary|primary half-PAGE pairs into wider Viewer presentation surfaces; canonical source PAGE/Node identities remain unchanged upstream.".to_owned(),
+        message: "Research-only #1057 spread A/B composed adjacent secondary|primary half-PAGE pairs into wider Viewer presentation surfaces using parent-space transform translation; canonical source PAGE/Node identities remain unchanged upstream.".to_owned(),
     });
     normalize_diagnostics(&mut visual.document.diagnostics);
     Ok(())
@@ -4649,9 +4609,13 @@ mod tests {
         assert_eq!(visual.scene.nodes[2].parent_origin, second_spread);
         assert_eq!(visual.scene.nodes[3].parent_origin, second_spread);
         assert_eq!(visual.scene.nodes[0].bounds.x.get(), 10);
-        assert_eq!(visual.scene.nodes[1].bounds.x.get(), 110);
+        assert_eq!(visual.scene.nodes[1].bounds.x.get(), 10);
         assert_eq!(visual.scene.nodes[2].bounds.x.get(), 10);
-        assert_eq!(visual.scene.nodes[3].bounds.x.get(), 110);
+        assert_eq!(visual.scene.nodes[3].bounds.x.get(), 10);
+        assert_eq!(visual.scene.nodes[0].transform.tx.get(), 0);
+        assert_eq!(visual.scene.nodes[1].transform.tx.get(), half_width);
+        assert_eq!(visual.scene.nodes[2].transform.tx.get(), 0);
+        assert_eq!(visual.scene.nodes[3].transform.tx.get(), half_width);
         assert!(
             visual
                 .document
