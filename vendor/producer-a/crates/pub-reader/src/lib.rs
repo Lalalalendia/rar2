@@ -74,9 +74,8 @@ pub use legacy22_noquill_graph::{
     read_legacy_0x22_image_wmf, read_legacy_0x22_image_wmfs,
 };
 pub use legacy22_page_role::{
-    LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1, LEGACY22_QUILL_PAGE_PROFILE_ID_V1,
-    Legacy22PageListDialectV1, Legacy22PageListPresentationSelectionV1,
-    select_legacy_0x22_page_list_presentation_v1,
+    LEGACY22_PAGE_ROLE_OBSERVATION_SCHEMA_V1, Legacy22PageListEntryObservationV1,
+    Legacy22PageRoleObservationReceiptV1, analyze_legacy_0x22_page_roles,
 };
 pub use mature_wmf::{
     MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, PubMatureOfficeArtWmfPreviewBundle,
