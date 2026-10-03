@@ -1,0 +1,70 @@
+name: Quill 2012 Common Crawl transport-tail replay
+
+on:
+  push:
+    branches:
+      - research/quill-story-wayback-donors-v2
+    paths:
+      - ".github/workflows/quill-story-commoncrawl-2012-transport-v1.yml"
+      - "tools/research/quill_story_commoncrawl_2012_transport_v1.py"
+      - "tools/corpus/harvest_pub.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quill-story-commoncrawl-2012-transport-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pinned-two:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout exact two current source witnesses
+        uses: actions/checkout@v5
+        with:
+          repository: Lalalalendia/lalamu
+          ref: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+          path: _witness/lalamu
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            pub-corpus/corpus/native/unclassified/211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157.pub
+            pub-corpus/corpus/native/unclassified/ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff.pub
+
+      - name: Check replay script
+        run: python -m py_compile tools/research/quill_story_commoncrawl_2012_transport_v1.py
+
+      - name: Replay pinned 2012 captures and classify the +1 byte
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python tools/research/quill_story_commoncrawl_2012_transport_v1.py
+
+      - name: Enforce bounded interpretation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("out/quill-story-commoncrawl-2012-transport.json").read_text())
+          assert report["schema"] == "chaptera.quill-story-commoncrawl-2012-transport.v1"
+          assert len(report["rows"]) == 2
+          for row in report["rows"]:
+              assert row["crawl"] == "CC-MAIN-2012"
+              assert row["source_sector_aligned_512"] is True
+              assert row["capture_byte_len"] == row["source_byte_len"] + 1
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quill-story-commoncrawl-2012-transport-v1-${{ github.run_id }}
+          path: out/quill-story-commoncrawl-2012-transport.json
+          if-no-files-found: error
+          retention-days: 30
