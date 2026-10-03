@@ -17,6 +17,7 @@ const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/clou
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Measurement-only phase extraction; raw worker stderr is never retained.
 const readerPhaseFromStderr = (stderrTail) => {
   const prefix = "CHAPTERA_READER_PHASE ";
   const phases = String(stderrTail ?? "")
