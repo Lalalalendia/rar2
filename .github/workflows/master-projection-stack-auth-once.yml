@@ -1,0 +1,187 @@
+name: Master projection stack authority one-shot
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/master-projection-stack-auth-once.yml"
+      - "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/master-projection-stack-auth-once.yml"
+      - "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: master-projection-stack-publisher-2019
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: windows-latest
+    outputs:
+      trusted_sha: ${{ steps.trust.outputs.trusted_sha }}
+    steps:
+      - name: Bind checkout
+        id: trust
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ("${{ github.event_name }}" -eq "push") {
+            if ("${{ github.ref }}" -ne "refs/heads/main") {
+              throw "Native one-shot push must be refs/heads/main."
+            }
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          }
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.trust.outputs.trusted_sha }}
+          persist-credentials: false
+
+      - name: Parse native operation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected master stack oracle."
+          }
+
+      - name: Enforce bounded source/output contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $text = Get-Content "tools/research-runner/operations/master_projection_stack_auth_01.ps1" -Raw
+          foreach ($required in @(
+            "Pages.Item(1)",
+            ".Master",
+            ".Shapes",
+            ".AddShape(",
+            ".Save()",
+            ".SaveAsPicture(",
+            "GetPixel(",
+            "master_first",
+            "page_first",
+            "Original exact source changed"
+          )) {
+            if (-not $text.Contains($required)) {
+              throw "Missing required stack-oracle contract marker: $required"
+            }
+          }
+          foreach ($forbidden in @(
+            "Application.Run",
+            ".PrintOut(",
+            ".ExportAsFixedFormat("
+          )) {
+            if ($text.Contains($forbidden)) {
+              throw "Forbidden unrelated output/execution token: $forbidden"
+            }
+          }
+
+  native:
+    needs: contract
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: pub-native-lab
+    runs-on:
+      - self-hosted
+      - Windows
+      - pub-research
+      - publisher-2019
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA256: 0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade
+      OUTPUT_ROOT: ${{ github.workspace }}\out\pub-research\master-projection-stack-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.contract.outputs.trusted_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact trusted checkout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne "${{ needs.contract.outputs.trusted_sha }}") {
+            throw "Trusted checkout mismatch: $actual"
+          }
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Bind exact ordinary fixture
+        id: fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = Join-Path "${{ github.workspace }}" "out\pinned1050\materialized\native\$env:SOURCE_SHA256.pub"
+          if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Exact ordinary source is missing from pinned 1050 materialization."
+          }
+          $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:SOURCE_SHA256) {
+            throw "Fixture SHA mismatch: $actual"
+          }
+          "path=$path" >> $env:GITHUB_OUTPUT
+
+      - name: Run native master-vs-page stack oracle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path $env:OUTPUT_ROOT | Out-Null
+          pwsh -NoProfile -File tools/research-runner/operations/master_projection_stack_auth_01.ps1 \
+            -InputPath "${{ steps.fixture.outputs.path }}" \
+            -OutputRoot "$env:OUTPUT_ROOT"
+
+      - name: Publish stack verdict
+        if: always()
+        shell: pwsh
+        run: |
+          "## MASTER-PROJECTION-STACK-AUTH-01" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "- trusted SHA: ${{ needs.contract.outputs.trusted_sha }}" >> $env:GITHUB_STEP_SUMMARY
+          "- source SHA: $env:SOURCE_SHA256" >> $env:GITHUB_STEP_SUMMARY
+          $analysis = Join-Path $env:OUTPUT_ROOT "analysis\master-projection-stack-auth-01.json"
+          if (Test-Path -LiteralPath $analysis) {
+            $doc = Get-Content -LiteralPath $analysis -Raw | ConvertFrom-Json
+            "- master-first winner: $($doc.arms[0].overlap.winner)" >> $env:GITHUB_STEP_SUMMARY
+            "- page-first winner: $($doc.arms[1].overlap.winner)" >> $env:GITHUB_STEP_SUMMARY
+            "- verdict: $($doc.verdict)" >> $env:GITHUB_STEP_SUMMARY
+            "- original source unchanged: $($doc.source.unchanged_after_experiment)" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "- analysis receipt missing" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload source-free native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-projection-stack-${{ github.run_id }}
+          path: |
+            out/pub-research/master-projection-stack-${{ github.run_id }}/environment.json
+            out/pub-research/master-projection-stack-${{ github.run_id }}/analysis/**
+            out/pub-research/master-projection-stack-${{ github.run_id }}/logs/**
+          if-no-files-found: error
+          retention-days: 30
