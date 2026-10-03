@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    AuthoringTextPresetV1, EDITOR_PROJECT_VERSION_V0_12, EditOperation, EditorError,
-    EditorSession, LengthEmu, RectEmu,
+    AuthoringTextPresetV1, EDITOR_PROJECT_VERSION_V0_12, EditOperation, EditorError, EditorSession,
+    LengthEmu, RectEmu,
 };
 use pub_model::{
     Document, DocumentId, Page, PageId, ResolvedGraph, Sha256Digest, Size2D, SourceDescriptor,
