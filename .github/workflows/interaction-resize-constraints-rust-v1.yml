@@ -1,0 +1,51 @@
+name: Interaction Resize Constraints Rust V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-interaction/src/lib.rs"
+      - "vendor/producer-a/crates/pub-interaction/src/resize_constraints_v1.rs"
+      - "vendor/producer-a/crates/pub-interaction/tests/resize_constraints_v1.rs"
+      - "services/editor-api/resize_constraints_v1.py"
+      - "services/editor-api/test_resize_constraints_v1.py"
+      - ".github/workflows/interaction-resize-constraints-rust-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check pub-interaction formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction -- --check
+
+      - name: Check pub-interaction
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction --all-targets
+
+      - name: Lint pub-interaction
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction --all-targets -- -D warnings
+
+      - name: Prove Rust ResizeConstraint V1 vectors
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction --test resize_constraints_v1
+
+      - name: Re-prove retained Python donor vectors
+        working-directory: services/editor-api
+        run: python -m unittest -v test_resize_constraints_v1
