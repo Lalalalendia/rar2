@@ -17,6 +17,7 @@ members = [
   "crates/pub-odg",
   "crates/pub-writer",
   "crates/pub-editor",
+  "crates/pub-cli",
   "producer",
 ]
 
