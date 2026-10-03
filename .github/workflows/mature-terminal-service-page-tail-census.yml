@@ -1,0 +1,318 @@
+name: Mature terminal-service page-tail census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-terminal-service-page-tail-census.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-terminal-service-page-tail-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-page-tail-census
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
+      - name: Materialize exact Batch01 PUB pairs
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/mature-page-tail-census"
+          mkdir -p "$RUNNER_TEMP/mature-page-tail-census/fixtures" target/mature-page-tail-census/raw target/mature-page-tail-census/projection target/mature-page-tail-census/status
+          python - <<'PY'
+          import csv, hashlib, json, os, shutil
+          from pathlib import Path
+
+          source_root = Path("out/pinned1050/materialized/native")
+          out_root = Path(os.environ["RUNNER_TEMP"]) / "mature-page-tail-census" / "fixtures"
+          rows = []
+          with Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              for row in csv.DictReader(handle):
+                  sha = row["pub_sha256"].casefold()
+                  source = source_root / f"{sha}.pub"
+                  data = source.read_bytes()
+                  assert hashlib.sha256(data).hexdigest() == sha
+                  target = out_root / f"{row['basename']}.pub"
+                  shutil.copyfile(source, target)
+                  rows.append({
+                      "fixture": row["basename"],
+                      "source_sha256": sha,
+                      "source_bytes": len(data),
+                      "reference_pages": int(row["pdf_pages"]),
+                  })
+
+          assert len(rows) == 55, len(rows)
+          Path("target/mature-page-tail-census/input-manifest.json").write_text(
+              json.dumps({
+                  "schema": "chaptera.mature-terminal-service-page-tail-input.v1",
+                  "fixture_count": len(rows),
+                  "rows": rows,
+                  "claims": {
+                      "reference_page_count_used_as_product_authority": False,
+                      "pdf_bytes_present": False,
+                      "story_text_emitted": False,
+                  },
+              }, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - name: Build source-semantic analyzers
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt --jobs 2
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin page-projection-receipt --jobs 2
+
+      - name: Analyze all 55 paired PUB sources
+        run: |
+          set -euo pipefail
+          for pub in "$RUNNER_TEMP"/mature-page-tail-census/fixtures/*.pub; do
+            name="$(basename "$pub" .pub)"
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-role-receipt" "$pub" "target/mature-page-tail-census/raw/$name.json"; then
+              echo 0 > "target/mature-page-tail-census/status/$name.raw.exit"
+            else
+              echo $? > "target/mature-page-tail-census/status/$name.raw.exit"
+            fi
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-projection-receipt" "$pub" "target/mature-page-tail-census/projection/$name.json"; then
+              echo 0 > "target/mature-page-tail-census/status/$name.projection.exit"
+            else
+              echo $? > "target/mature-page-tail-census/status/$name.projection.exit"
+            fi
+          done
+
+      - name: Evaluate source-only positional profile
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("target/mature-page-tail-census")
+          manifest = json.loads((root / "input-manifest.json").read_text())
+
+          def oid_zero(page):
+              return page.get("oid_dword0") == 0 and page.get("oid_dword1") == 0
+
+          def classify(raw):
+              pages = sorted(raw.get("pages", []), key=lambda p: p["document_ordinal"])
+              entries = sorted(raw.get("document_entries", []), key=lambda e: e["document_ordinal"])
+              if len(pages) < 4:
+                  return None, "too_few_pages"
+              leader = pages[0]
+              if oid_zero(leader) or leader.get("applied_master_seq_num") is not None:
+                  return None, "leader_not_nonzero_unapplied"
+              leader_seq = leader.get("contents_seq_num")
+
+              index = 1
+              nonzero = []
+              while index < len(pages) and not oid_zero(pages[index]):
+                  page = pages[index]
+                  if page.get("applied_master_seq_num") != leader_seq:
+                      return None, "nonzero_block_master_drift"
+                  nonzero.append(page)
+                  index += 1
+
+              if len(nonzero) < 2:
+                  return None, "nonzero_block_too_short"
+
+              zero_tail = pages[index:]
+              if not zero_tail:
+                  return None, "zero_tail_missing"
+              if any(
+                  not oid_zero(page) or page.get("applied_master_seq_num") != leader_seq
+                  for page in zero_tail
+              ):
+                  return None, "zero_tail_relation_drift"
+
+              customer_pages = nonzero[:-1]
+              terminal_service = nonzero[-1]
+              customer_last_ordinal = customer_pages[-1]["document_ordinal"]
+              suffix = [
+                  entry for entry in entries
+                  if entry["document_ordinal"] > customer_last_ordinal
+              ]
+              if len(suffix) != 4:
+                  return None, "service_suffix_not_four_entries"
+
+              suffix_types = [entry["raw_type"] for entry in suffix]
+              if suffix_types not in ([67, 67, 67, 67], [67, 89, 67, 67]):
+                  return None, "service_suffix_type_drift"
+              if suffix[0]["document_ordinal"] != terminal_service["document_ordinal"]:
+                  return None, "terminal_service_position_drift"
+              if sum(entry["raw_type"] != 67 for entry in entries) != (1 if suffix_types[1] == 89 else 0):
+                  return None, "unexpected_special_entry"
+
+              return {
+                  "customer_page_count": len(customer_pages),
+                  "confirmed_page_count": raw.get("confirmed_page_count"),
+                  "document_page_list_entry_count": raw.get("document_page_list_entry_count"),
+                  "special_entry_count": raw.get("special_entry_count"),
+                  "suffix_form": "page-special-page-page" if suffix_types[1] == 89 else "page-page-page-page",
+                  "role_tokens": (
+                      [{"oid": "nonzero", "master": "none"}]
+                      + [{"oid": "nonzero", "master": "leader"} for _ in nonzero]
+                      + [{"oid": "zero", "master": "leader"} for _ in zero_tail]
+                  ),
+              }, "admitted"
+
+          rows = []
+          for input_row in manifest["rows"]:
+              fixture = input_row["fixture"]
+              raw_exit = int((root / "status" / f"{fixture}.raw.exit").read_text())
+              projection_exit = int((root / "status" / f"{fixture}.projection.exit").read_text())
+              row = {
+                  "fixture": fixture,
+                  "reference_pages_validation_only": input_row["reference_pages"],
+                  "raw_exit_code": raw_exit,
+                  "projection_exit_code": projection_exit,
+              }
+
+              if projection_exit == 0:
+                  projection = json.loads((root / "projection" / f"{fixture}.json").read_text())
+                  row["current_viewer_pages"] = projection.get("viewer_page_count")
+                  row["current_page_count_matches_reference_validation_only"] = (
+                      projection.get("viewer_page_count") == input_row["reference_pages"]
+                  )
+
+              if raw_exit == 0:
+                  raw = json.loads((root / "raw" / f"{fixture}.json").read_text())
+                  admitted, reason = classify(raw)
+                  row["profile_disposition"] = reason
+                  if admitted is not None:
+                      row.update(admitted)
+                      predicted = admitted["customer_page_count"]
+                      current = row.get("current_viewer_pages")
+                      reference = input_row["reference_pages"]
+                      row["predicted_matches_reference_validation_only"] = predicted == reference
+                      row["would_change_current_viewer"] = current is not None and predicted != current
+                      row["would_fix_current_mismatch_validation_only"] = (
+                          current is not None and current != reference and predicted == reference
+                      )
+                      row["would_break_current_match_validation_only"] = (
+                          current is not None and current == reference and predicted != reference
+                      )
+              else:
+                  row["profile_disposition"] = "raw_analyzer_not_applicable_or_failed"
+              rows.append(row)
+
+          admitted = [row for row in rows if row["profile_disposition"] == "admitted"]
+          summary = {
+              "schema": "chaptera.mature-terminal-service-page-tail-census.v1",
+              "fixture_count": len(rows),
+              "raw_success_count": sum(row["raw_exit_code"] == 0 for row in rows),
+              "projection_success_count": sum(row["projection_exit_code"] == 0 for row in rows),
+              "admitted_count": len(admitted),
+              "admitted_reference_match_count_validation_only": sum(
+                  row.get("predicted_matches_reference_validation_only") is True for row in admitted
+              ),
+              "admitted_reference_mismatch_count_validation_only": sum(
+                  row.get("predicted_matches_reference_validation_only") is False for row in admitted
+              ),
+              "would_fix_current_mismatch_count_validation_only": sum(
+                  row.get("would_fix_current_mismatch_validation_only") is True for row in admitted
+              ),
+              "would_break_current_match_count_validation_only": sum(
+                  row.get("would_break_current_match_validation_only") is True for row in admitted
+              ),
+              "would_change_current_viewer_count": sum(
+                  row.get("would_change_current_viewer") is True for row in admitted
+              ),
+              "rows": rows,
+              "claims": {
+                  "measurement_only": True,
+                  "selector_uses_reference_page_count": False,
+                  "selector_uses_visual_payload": False,
+                  "selector_uses_blankness": False,
+                  "selector_uses_content_or_text": False,
+                  "selector_uses_exact_hash_or_seqnum": False,
+                  "selector_uses_only_page_order_oid_zero_class_and_applied_master_relation": True,
+                  "pdf_page_count_is_validation_only": True,
+                  "raw_pub_bytes_emitted": False,
+                  "story_text_emitted": False,
+                  "source_seq_nums_emitted": False,
+              },
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          print(json.dumps({
+              key: summary[key]
+              for key in [
+                  "fixture_count",
+                  "raw_success_count",
+                  "projection_success_count",
+                  "admitted_count",
+                  "admitted_reference_match_count_validation_only",
+                  "admitted_reference_mismatch_count_validation_only",
+                  "would_fix_current_mismatch_count_validation_only",
+                  "would_break_current_match_count_validation_only",
+                  "would_change_current_viewer_count",
+              ]
+          }, indent=2, sort_keys=True))
+          print("admitted fixtures:")
+          for row in admitted:
+              print(json.dumps({
+                  "fixture": row["fixture"],
+                  "current": row.get("current_viewer_pages"),
+                  "predicted": row.get("customer_page_count"),
+                  "reference_validation_only": row["reference_pages_validation_only"],
+                  "suffix": row.get("suffix_form"),
+                  "fix": row.get("would_fix_current_mismatch_validation_only"),
+                  "break": row.get("would_break_current_match_validation_only"),
+              }, sort_keys=True))
+          PY
+
+      - name: Upload source-safe census
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-terminal-service-page-tail-census
+          path: |
+            target/mature-page-tail-census/input-manifest.json
+            target/mature-page-tail-census/summary.json
+            target/mature-page-tail-census/status/
+          if-no-files-found: error
+          retention-days: 30
