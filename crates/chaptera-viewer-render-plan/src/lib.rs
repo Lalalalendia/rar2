@@ -3529,6 +3529,105 @@ mod tests {
     }
 
     #[test]
+    fn authored_lane_reorder_changes_only_effective_paint_order() {
+        let base = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
+        let base_ids = base.nodes.iter().map(|node| node.node_id).collect::<Vec<_>>();
+        let page_id = base.page_id;
+        let a: NodeId =
+            serde_json::from_str("\"01890f47-0d20-7abc-8def-0123456789ab\"")
+                .expect("authored NodeId");
+        let b: NodeId =
+            serde_json::from_str("\"01890f47-0d21-7abc-8def-0123456789ab\"")
+                .expect("authored NodeId");
+        let bounds_a = RectEmu::new(
+            LengthEmu::new(100),
+            LengthEmu::new(200),
+            LengthEmu::new(300),
+            LengthEmu::new(400),
+        );
+        let bounds_b = RectEmu::new(
+            LengthEmu::new(110),
+            LengthEmu::new(210),
+            LengthEmu::new(300),
+            LengthEmu::new(400),
+        );
+        let node = |node_id, bounds, color| AuthoredPageRenderNodeV1 {
+            node_id,
+            bounds,
+            solid_fill_rgb: Some(color),
+            solid_line: None,
+        };
+
+        let mut first = base.clone();
+        apply_authored_page_render_lane_v1(
+            &mut first,
+            &AuthoredPageRenderLaneV1 {
+                page_id,
+                nodes: vec![node(a, bounds_a, [1, 2, 3]), node(b, bounds_b, [4, 5, 6])],
+            },
+        )
+        .expect("A then B");
+
+        let mut reordered = base;
+        apply_authored_page_render_lane_v1(
+            &mut reordered,
+            &AuthoredPageRenderLaneV1 {
+                page_id,
+                nodes: vec![node(b, bounds_b, [4, 5, 6]), node(a, bounds_a, [1, 2, 3])],
+            },
+        )
+        .expect("B then A");
+
+        assert_eq!(
+            first.nodes[..base_ids.len()]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            base_ids,
+            "base/imported lane order must remain untouched"
+        );
+        assert_eq!(
+            reordered.nodes[..base_ids.len()]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            base_ids,
+            "reorder must not perturb the base/imported lane"
+        );
+        assert_eq!(
+            first.nodes[base_ids.len()..]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            vec![a, b]
+        );
+        assert_eq!(
+            reordered.nodes[base_ids.len()..]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            vec![b, a]
+        );
+
+        let first_a = first.nodes.iter().find(|node| node.node_id == a).expect("A");
+        let reordered_a = reordered
+            .nodes
+            .iter()
+            .find(|node| node.node_id == a)
+            .expect("A reordered");
+        let first_b = first.nodes.iter().find(|node| node.node_id == b).expect("B");
+        let reordered_b = reordered
+            .nodes
+            .iter()
+            .find(|node| node.node_id == b)
+            .expect("B reordered");
+        assert_eq!(first_a.bounds, reordered_a.bounds);
+        assert_eq!(first_b.bounds, reordered_b.bounds);
+        assert_eq!(first_a.solid_fill_rgb, reordered_a.solid_fill_rgb);
+        assert_eq!(first_b.solid_fill_rgb, reordered_b.solid_fill_rgb);
+    }
+
+    #[test]
     fn authored_lane_rejects_duplicate_and_base_collision_without_partial_append() {
         let mut plan = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
         let original = plan.clone();
