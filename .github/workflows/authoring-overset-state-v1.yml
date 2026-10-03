@@ -9,7 +9,6 @@ on:
       - 'tools/validate_authoring_overset_receipt.py'
       - 'packages/protocol/authoring-overset/**'
       - 'vendor/producer-a/producer/**'
-      - 'vendor/producer-a/crates/pub-editor/**'
       - 'vendor/producer-a/crates/pub-layout/**'
   push:
     branches:
