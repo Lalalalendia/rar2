@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
 const READER_EVIDENCE_REGISTRY_SCHEMA_V1: &str =
     "chaptera.reader1050-evidence-registry.v1";
@@ -45,34 +46,44 @@ pub fn typed_corruption_authority(source_sha256: &str) -> Option<ReaderSalvageAu
         return None;
     }
 
-    let registry: EvidenceRegistry =
-        serde_json::from_str(READER_EVIDENCE_REGISTRY_JSON).ok()?;
-    if registry.schema != READER_EVIDENCE_REGISTRY_SCHEMA_V1 {
-        return None;
-    }
-
-    let entry = registry.entries.into_iter().find(|entry| {
+    let registry = evidence_registry()?;
+    let mut matches = registry.entries.iter().filter(|entry| {
         entry.source_sha256 == source_sha256
             && entry.evidence_class == "typed_corruption"
             && entry.disposition == "existing_typed_corruption_evidence"
-    })?;
-
-    let evidence_digest = entry.authority_receipt.evidence_digest?;
-    if !is_sha256_digest(&evidence_digest) {
+    });
+    let entry = matches.next()?;
+    if matches.next().is_some() {
         return None;
     }
-    let classification = entry.authority_receipt.classification?;
+
+    let evidence_digest = entry.authority_receipt.evidence_digest.as_ref()?;
+    if !is_sha256_digest(evidence_digest) {
+        return None;
+    }
+    let classification = entry.authority_receipt.classification.as_ref()?;
     if classification.trim().is_empty() || entry.owner.trim().is_empty() {
         return None;
     }
 
     Some(ReaderSalvageAuthority {
-        source_sha256: entry.source_sha256,
-        owner: entry.owner,
-        task_id: entry.authority_receipt.task_id,
-        evidence_digest,
-        classification,
+        source_sha256: entry.source_sha256.clone(),
+        owner: entry.owner.clone(),
+        task_id: entry.authority_receipt.task_id.clone(),
+        evidence_digest: evidence_digest.clone(),
+        classification: classification.clone(),
     })
+}
+
+fn evidence_registry() -> Option<&'static EvidenceRegistry> {
+    static REGISTRY: OnceLock<Option<EvidenceRegistry>> = OnceLock::new();
+    REGISTRY
+        .get_or_init(|| {
+            let registry: EvidenceRegistry =
+                serde_json::from_str(READER_EVIDENCE_REGISTRY_JSON).ok()?;
+            (registry.schema == READER_EVIDENCE_REGISTRY_SCHEMA_V1).then_some(registry)
+        })
+        .as_ref()
 }
 
 fn is_sha256_hex(value: &str) -> bool {
