@@ -48,11 +48,18 @@ pub struct ReaderSalvageAuthority {
 }
 
 pub fn typed_corruption_authority(source_sha256: &str) -> Option<ReaderSalvageAuthority> {
+    let registry = evidence_registry()?;
+    typed_corruption_authority_from_registry(registry, source_sha256)
+}
+
+fn typed_corruption_authority_from_registry(
+    registry: &EvidenceRegistry,
+    source_sha256: &str,
+) -> Option<ReaderSalvageAuthority> {
     if !is_sha256_hex(source_sha256) {
         return None;
     }
 
-    let registry = evidence_registry()?;
     let mut matches = registry.entries.iter().filter(|entry| {
         entry.source_sha256 == source_sha256
             && entry.evidence_class == "typed_corruption"
@@ -139,6 +146,82 @@ mod tests {
         assert_eq!(authority.task_id, "PUB-T-650");
         assert_eq!(authority.run_id, 36072949588);
         assert_eq!(authority.artifact_id, 10838639727);
+    }
+
+    fn registry_from_json(json: &str) -> EvidenceRegistry {
+        serde_json::from_str(json).expect("synthetic evidence registry")
+    }
+
+    #[test]
+    fn duplicate_typed_authority_fails_closed() {
+        let registry = registry_from_json(&format!(
+            r#"{{
+                "schema":"chaptera.reader-evidence-registry.v1",
+                "entries":[
+                    {{
+                        "source_sha256":"{0}",
+                        "owner":"one",
+                        "evidence_class":"typed_corruption",
+                        "authority_receipt":{{
+                            "kind":"closed_discriminator",
+                            "task_id":"T1",
+                            "run_id":1,
+                            "artifact_id":2,
+                            "evidence_digest":"sha256:{1}",
+                            "classification":"malformed"
+                        }},
+                        "disposition":"existing_typed_corruption_evidence"
+                    }},
+                    {{
+                        "source_sha256":"{0}",
+                        "owner":"two",
+                        "evidence_class":"typed_corruption",
+                        "authority_receipt":{{
+                            "kind":"closed_discriminator",
+                            "task_id":"T2",
+                            "run_id":3,
+                            "artifact_id":4,
+                            "evidence_digest":"sha256:{1}",
+                            "classification":"malformed"
+                        }},
+                        "disposition":"existing_typed_corruption_evidence"
+                    }}
+                ]
+            }}"#,
+            OPNHOUS_SHA256,
+            "a".repeat(64)
+        ));
+        assert!(
+            typed_corruption_authority_from_registry(&registry, OPNHOUS_SHA256).is_none()
+        );
+    }
+
+    #[test]
+    fn typed_authority_requires_closed_complete_receipt() {
+        let registry = registry_from_json(&format!(
+            r#"{{
+                "schema":"chaptera.reader-evidence-registry.v1",
+                "entries":[{{
+                    "source_sha256":"{0}",
+                    "owner":"owner",
+                    "evidence_class":"typed_corruption",
+                    "authority_receipt":{{
+                        "kind":"existing_format_owner",
+                        "task_id":"T1",
+                        "run_id":0,
+                        "artifact_id":2,
+                        "evidence_digest":"sha256:{1}",
+                        "classification":"malformed"
+                    }},
+                    "disposition":"existing_typed_corruption_evidence"
+                }}]
+            }}"#,
+            OPNHOUS_SHA256,
+            "a".repeat(64)
+        ));
+        assert!(
+            typed_corruption_authority_from_registry(&registry, OPNHOUS_SHA256).is_none()
+        );
     }
 
     #[test]
