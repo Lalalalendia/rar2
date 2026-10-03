@@ -378,7 +378,7 @@ mod tests {
         let frame_id = frame(2);
         let export_plan = plan(story_id);
         let content = format!(
-            "<?xml version=\"1.0\"?><office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\"><office:automatic-styles/>\n<office:body><office:drawing><draw:page><draw:frame draw:name=\"{}\"><draw:text-box><text:p>Hello</text:p></draw:text-box>\n        </draw:frame></draw:page></office:drawing></office:body></office:document-content>",
+            "<?xml version=\"1.0\"?><office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\">  <office:automatic-styles/>\n<office:body><office:drawing><draw:page><draw:frame draw:name=\"{}\"><draw:text-box><text:p>Hello</text:p></draw:text-box>\n        </draw:frame></draw:page></office:drawing></office:body></office:document-content>",
             frame_name(frame_id)
         );
         let mut package = OdgPackage {
@@ -425,7 +425,7 @@ mod tests {
         let frame_id = frame(4);
         let export_plan = plan(story_id);
         let content = format!(
-            "<office:document-content><office:automatic-styles/>\n<draw:frame draw:name=\"{}\"><text:p>Hello</text:p>        </draw:frame></office:document-content>",
+            "<office:document-content>  <office:automatic-styles/>\n<draw:frame draw:name=\"{}\"><text:p>Hello</text:p>        </draw:frame></office:document-content>",
             frame_name(frame_id)
         );
         let mut package = OdgPackage {
