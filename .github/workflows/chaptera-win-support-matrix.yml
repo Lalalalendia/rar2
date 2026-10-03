@@ -8,7 +8,12 @@ on:
       - "packages/product/reader-portable/v1/README.md"
       - "tools/validate_windows_support_matrix.py"
       - "tools/test_validate_windows_support_matrix.py"
-      - "apps/chaptera-desktop/**"
+      - "Cargo.toml"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/chaptera-viewer-render-plan/Cargo.toml"
+      - "crates/chaptera-mobile-reader-core/Cargo.toml"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/crates/*/Cargo.toml"
       - ".github/workflows/chaptera-win-support-matrix.yml"
   push:
     branches: [main]
