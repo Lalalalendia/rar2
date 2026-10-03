@@ -1,0 +1,400 @@
+name: Build Factory T891 T892 portable native bundle
+
+on:
+  push:
+    branches:
+      - "research/package-factory-t891-t892-portable"
+  pull_request:
+    paths:
+      - ".github/workflows/build-factory-t891-t892-portable.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 3dcdd676dfbddb3862e89a8df8d0385b88fe8d85
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build portable helper executables
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller olefile
+          pyinstaller --noconfirm --clean --onefile --name operation_blast_radius_v1 --paths tools --paths tools/corpus --hidden-import olefile tools/operation_blast_radius_v1.py
+          pyinstaller --noconfirm --clean --onefile --name pub_operation_algebra_fingerprint --paths tools --paths tools/corpus --hidden-import olefile tools/pub_operation_algebra_fingerprint.py
+
+          foreach ($exe in @("dist/operation_blast_radius_v1.exe","dist/pub_operation_algebra_fingerprint.exe")) {
+            if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "helper exe missing: $exe" }
+            & $exe --help | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "helper smoke test failed: $exe" }
+            Get-FileHash -Algorithm SHA256 -LiteralPath $exe | Format-List
+          }
+
+      - name: Assemble portable Publisher native bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceSha = (git rev-parse HEAD).Trim()
+          if ($sourceSha -ne "3dcdd676dfbddb3862e89a8df8d0385b88fe8d85") { throw "Unexpected source commit: $sourceSha" }
+
+          $bundle = Join-Path $env:RUNNER_TEMP "pub-factory-t891-t892-native-bundle"
+          if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+
+          $files = @(
+            "tools/research-runner/experiments/pub-tlb-shape-effects-batch01.packet.json",
+            "tools/research-runner/operations/publisher_tlb_shape_effects_batch01.ps1",
+            "tools/research-runner/experiments/pub-operation-algebra-t840-style-fill-01.packet.json",
+            "tools/research-runner/operations/publisher_operation_algebra_t840_style_fill_01.ps1",
+            "tools/research-runner/prepare_native_run.ps1",
+            "tools/research-runner/finalize_native_run.ps1",
+            "tools/windows/pub-runtime/PubRuntime.psm1",
+            "tools/pub_operation_algebra_fingerprint.py",
+            "tools/operation_blast_radius_v1.py",
+            "tools/corpus/cfb_physical_diff.py",
+            "tools/corpus/cfb_physical.py"
+          )
+          foreach ($relative in $files) {
+            $destination = Join-Path $bundle $relative
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+            Copy-Item -LiteralPath $relative -Destination $destination -Force
+          }
+
+          $bin = Join-Path $bundle "tools-bin"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item -LiteralPath "dist/operation_blast_radius_v1.exe" -Destination (Join-Path $bin "operation_blast_radius_v1.exe") -Force
+          Copy-Item -LiteralPath "dist/pub_operation_algebra_fingerprint.exe" -Destination (Join-Path $bin "pub_operation_algebra_fingerprint.exe") -Force
+
+          $pythonShimPs1 = @'
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+if ($null -eq $RemainingArgs -or $RemainingArgs.Count -lt 1) {
+    throw "Bundled python shim requires a helper script path."
+}
+
+$scriptName = [IO.Path]::GetFileName([string]$RemainingArgs[0])
+$rest = @()
+if ($RemainingArgs.Count -gt 1) {
+    $rest = @($RemainingArgs[1..($RemainingArgs.Count - 1)])
+}
+
+switch ($scriptName.ToLowerInvariant()) {
+    "operation_blast_radius_v1.py" {
+        $exe = Join-Path $PSScriptRoot "operation_blast_radius_v1.exe"
+    }
+    "pub_operation_algebra_fingerprint.py" {
+        $exe = Join-Path $PSScriptRoot "pub_operation_algebra_fingerprint.exe"
+    }
+    default {
+        throw "Unsupported bundled python helper: $scriptName"
+    }
+}
+
+& $exe @rest
+exit $LASTEXITCODE
+'@
+          Set-Content -LiteralPath (Join-Path $bin "python-shim.ps1") -Value $pythonShimPs1 -Encoding UTF8
+
+          $pythonCmd = @'
+@echo off
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0python-shim.ps1" %*
+exit /b %ERRORLEVEL%
+'@
+          Set-Content -LiteralPath (Join-Path $bin "python.cmd") -Value $pythonCmd -Encoding ASCII
+
+          $runner = @'
+param(
+    [string]$OutputRoot = ""
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$root = $PSScriptRoot
+$manifestPath = Join-Path $root "bundle-manifest.json"
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+foreach ($property in $manifest.files.PSObject.Properties) {
+    $relative = [string]$property.Name
+    $expected = [string]$property.Value
+    $candidate = Join-Path $root ($relative.Replace("/", "\"))
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        throw "Portable bundle file missing: $relative"
+    }
+    $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected.ToLowerInvariant()) {
+        throw "Portable bundle SHA-256 mismatch: $relative"
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $OutputRoot = Join-Path $root ("out\factory-native-" + $stamp)
+}
+New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
+
+$transcriptPath = Join-Path $OutputRoot "RUN-TRANSCRIPT.txt"
+$summaryPath = Join-Path $OutputRoot "RUN-SUMMARY.json"
+$fullZip = Join-Path $root "PUB-FACTORY-T891-T892-FULL-EVIDENCE.zip"
+$receiptsZip = Join-Path $root "PUB-FACTORY-T891-T892-RECEIPTS.zip"
+
+$summary = [ordered]@{
+    schema = "chaptera.pub.factory-native-portable-result.v1"
+    source_main_sha = [string]$manifest.source_main_sha
+    bundle_schema = [string]$manifest.schema
+    t891 = [ordered]@{ status = "not_started"; error = $null; required_evidence_count = $null }
+    t892 = [ordered]@{ status = "not_started"; error = $null; required_evidence_count = $null }
+    final_status = "running"
+    top_level_error = $null
+}
+
+function Write-Summary {
+    $summary | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+}
+
+function Verify-Required {
+    param([string]$PacketPath,[string]$ExperimentOut)
+    $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
+    $missing = @()
+    foreach ($relative in @($packet.evidence.required)) {
+        $candidate = Join-Path $ExperimentOut ([string]$relative)
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            $missing += [string]$relative
+        }
+    }
+    if ($missing.Count -gt 0) { throw "Required evidence missing: $($missing -join ', ')" }
+    return @($packet.evidence.required).Count
+}
+
+function Invoke-Experiment {
+    param(
+        [string]$Label,
+        [string]$PacketRelative,
+        [string]$OperationRelative,
+        [string]$ExperimentOut
+    )
+
+    $packet = Join-Path $root $PacketRelative
+    $operation = Join-Path $root $OperationRelative
+    $prepare = Join-Path $root "tools\research-runner\prepare_native_run.ps1"
+    $finalize = Join-Path $root "tools\research-runner\finalize_native_run.ps1"
+
+    $env:PUB_RESEARCH_PACKET_SHA256 = (Get-FileHash -LiteralPath $packet -Algorithm SHA256).Hash.ToLowerInvariant()
+    $env:GITHUB_SHA = [string]$manifest.source_main_sha
+    $env:PUB_RESEARCH_PROFILE_ID = "portable-publisher-2019"
+    $env:RUNNER_ARCH = $env:PROCESSOR_ARCHITECTURE
+
+    Write-Host ""
+    Write-Host ("=== " + $Label + " / PREPARE ===") -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $prepare -PacketPath $packet -OutputRoot $ExperimentOut
+    if ($LASTEXITCODE -ne 0) { throw "$Label prepare failed: $LASTEXITCODE" }
+
+    Write-Host ("=== " + $Label + " / NATIVE ===") -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $operation -PacketPath $packet -OutputRoot $ExperimentOut
+    if ($LASTEXITCODE -ne 0) { throw "$Label native operation failed: $LASTEXITCODE" }
+
+    Write-Host ("=== " + $Label + " / FINALIZE ===") -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $finalize -PacketPath $packet -OutputRoot $ExperimentOut
+    if ($LASTEXITCODE -ne 0) { throw "$Label finalize failed: $LASTEXITCODE" }
+
+    return Verify-Required -PacketPath $packet -ExperimentOut $ExperimentOut
+}
+
+function Copy-IfExists {
+    param([string]$Source,[string]$Destination)
+    if (-not (Test-Path -LiteralPath $Source)) { return }
+    $parent = Split-Path -Parent $Destination
+    if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
+}
+
+function Pack-Results {
+    Write-Summary
+
+    if (Test-Path -LiteralPath $fullZip) { Remove-Item -LiteralPath $fullZip -Force }
+    Compress-Archive -Path (Join-Path $OutputRoot "*") -DestinationPath $fullZip -Force
+
+    $receiptsRoot = Join-Path $env:TEMP ("pub-factory-receipts-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $receiptsRoot | Out-Null
+    try {
+        Copy-IfExists $summaryPath (Join-Path $receiptsRoot "RUN-SUMMARY.json")
+        Copy-IfExists $transcriptPath (Join-Path $receiptsRoot "RUN-TRANSCRIPT.txt")
+
+        foreach ($name in @("T891-tlb-shape-effects","T892-operation-algebra")) {
+            $src = Join-Path $OutputRoot $name
+            $dst = Join-Path $receiptsRoot $name
+            if (-not (Test-Path -LiteralPath $src -PathType Container)) { continue }
+            New-Item -ItemType Directory -Force -Path $dst | Out-Null
+            Copy-IfExists (Join-Path $src "environment.json") (Join-Path $dst "environment.json")
+            Copy-IfExists (Join-Path $src "evidence-manifest.json") (Join-Path $dst "evidence-manifest.json")
+            Copy-IfExists (Join-Path $src "analysis") (Join-Path $dst "analysis")
+            Copy-IfExists (Join-Path $src "logs") (Join-Path $dst "logs")
+        }
+
+        if (Test-Path -LiteralPath $receiptsZip) { Remove-Item -LiteralPath $receiptsZip -Force }
+        Compress-Archive -Path (Join-Path $receiptsRoot "*") -DestinationPath $receiptsZip -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $receiptsRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$oldPath = $env:PATH
+$env:PATH = (Join-Path $root "tools-bin") + ";" + $env:PATH
+$transcriptStarted = $false
+$exitCode = 0
+
+try {
+    Start-Transcript -LiteralPath $transcriptPath -Force | Out-Null
+    $transcriptStarted = $true
+    Write-Summary
+
+    $t891Out = Join-Path $OutputRoot "T891-tlb-shape-effects"
+    $summary.t891.status = "running"
+    Write-Summary
+    try {
+        $summary.t891.required_evidence_count = Invoke-Experiment -Label "T891 / TLB SHAPE EFFECTS" -PacketRelative "tools\research-runner\experiments\pub-tlb-shape-effects-batch01.packet.json" -OperationRelative "tools\research-runner\operations\publisher_tlb_shape_effects_batch01.ps1" -ExperimentOut $t891Out
+        $summary.t891.status = "success"
+        Write-Summary
+    }
+    catch {
+        $summary.t891.status = "failed"
+        $summary.t891.error = $_.Exception.Message
+        $summary.final_status = "failed_t891"
+        Write-Summary
+        throw
+    }
+
+    $t892Out = Join-Path $OutputRoot "T892-operation-algebra"
+    $summary.t892.status = "running"
+    Write-Summary
+    try {
+        $summary.t892.required_evidence_count = Invoke-Experiment -Label "T892 / OPERATION ALGEBRA" -PacketRelative "tools\research-runner\experiments\pub-operation-algebra-t840-style-fill-01.packet.json" -OperationRelative "tools\research-runner\operations\publisher_operation_algebra_t840_style_fill_01.ps1" -ExperimentOut $t892Out
+        $summary.t892.status = "success"
+        Write-Summary
+    }
+    catch {
+        $summary.t892.status = "failed"
+        $summary.t892.error = $_.Exception.Message
+        $summary.final_status = "failed_t892"
+        Write-Summary
+        throw
+    }
+
+    $summary.final_status = "success"
+    Write-Summary
+}
+catch {
+    $exitCode = 1
+    if ($summary.final_status -eq "running") { $summary.final_status = "failed_preflight" }
+    $summary.top_level_error = $_.Exception.Message
+    Write-Summary
+    Write-Host ("FAILED: " + $_.Exception.Message) -ForegroundColor Red
+}
+finally {
+    $env:PATH = $oldPath
+    Remove-Item Env:PUB_RESEARCH_PACKET_SHA256 -ErrorAction SilentlyContinue
+    if ($transcriptStarted) {
+        try { Stop-Transcript | Out-Null } catch {}
+    }
+    Pack-Results
+    Write-Host ""
+    Write-Host "SEND BACK BOTH FILES:" -ForegroundColor Yellow
+    Write-Host $fullZip -ForegroundColor Yellow
+    Write-Host $receiptsZip -ForegroundColor Yellow
+}
+
+exit $exitCode
+'@
+          Set-Content -LiteralPath (Join-Path $bundle "run-native.ps1") -Value $runner -Encoding UTF8
+
+          $cmd = @'
+@echo off
+setlocal
+cd /d "%~dp0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-native.ps1"
+set EXITCODE=%ERRORLEVEL%
+echo.
+echo Exit code: %EXITCODE%
+pause
+exit /b %EXITCODE%
+'@
+          Set-Content -LiteralPath (Join-Path $bundle "RUN_NATIVE.cmd") -Value $cmd -Encoding ASCII
+
+          $readme = @'
+PUB Research Factory portable native bundle — T891 + T892
+
+1. Распаковать архив.
+2. Запустить RUN_NATIVE.cmd.
+3. Дождаться завершения.
+4. Прислать обратно ДВА файла:
+   - PUB-FACTORY-T891-T892-FULL-EVIDENCE.zip
+   - PUB-FACTORY-T891-T892-RECEIPTS.zip
+
+Никакой rar2 checkout, Git, Rust, pip, Python или PowerShell 7 на этой машине не нужен.
+Нужен только exact Publisher 2019 runtime; packet сам проверит version/hash.
+
+T891 запускается первым. Если он падает, T892 не запускается, но оба ZIP всё равно создаются с partial evidence.
+'@
+          Set-Content -LiteralPath (Join-Path $bundle "README_RU.txt") -Value $readme -Encoding UTF8
+
+          $manifestFiles = $files + @(
+            "tools-bin/operation_blast_radius_v1.exe",
+            "tools-bin/pub_operation_algebra_fingerprint.exe",
+            "tools-bin/python-shim.ps1",
+            "tools-bin/python.cmd",
+            "run-native.ps1",
+            "RUN_NATIVE.cmd",
+            "README_RU.txt"
+          )
+          $hashes = [ordered]@{}
+          foreach ($relative in $manifestFiles) {
+            $candidate = Join-Path $bundle ($relative.Replace("/", "\"))
+            $hashes[$relative.Replace("\", "/")] = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+
+          $manifest = [ordered]@{
+            schema = "chaptera.pub.factory-native-portable.v1"
+            source_main_sha = $sourceSha
+            experiment_ids = @("PUB-TLB-SHAPE-EFFECTS-BATCH01","PUB-OPALG-T840-STYLE-FILL-01")
+            inventory_sha256 = "a13d86edc1622b7f3cba6524cba7a4553e120864889e59038712061a05003b5c"
+            publisher_version_prefix = "16.0.12527."
+            publisher_exe_sha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
+            repo_checkout_required = $false
+            git_required = $false
+            python_required = $false
+            rust_required = $false
+            pwsh_required = $false
+            files = $hashes
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
+          Get-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Raw
+
+          $zip = Join-Path $env:RUNNER_TEMP "PUB_FACTORY_NATIVE_PORTABLE_T891_T892.zip"
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath $zip -Force
+          Get-FileHash -Algorithm SHA256 -LiteralPath $zip | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-factory-t891-t892-native-portable-windows
+          path: ${{ runner.temp }}/PUB_FACTORY_NATIVE_PORTABLE_T891_T892.zip
+          if-no-files-found: error
+          retention-days: 7
