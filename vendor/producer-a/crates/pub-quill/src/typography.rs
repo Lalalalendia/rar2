@@ -2460,6 +2460,7 @@ mod tests {
             default_style_selector_present: true,
             alignment: None,
             alignment_source_value: None,
+            alignment_source: None,
         };
         let default = CharacterDefaultObservation {
             logical_style_index: 2,
@@ -2541,6 +2542,7 @@ mod tests {
             default_style_selector_present: false,
             alignment: None,
             alignment_source_value: None,
+            alignment_source: None,
         };
         let default = CharacterDefaultObservation {
             logical_style_index: 0,
@@ -2580,6 +2582,7 @@ mod tests {
                 default_style_selector_present: false,
                 alignment: None,
                 alignment_source_value: None,
+                alignment_source: None,
             },
             ParagraphTypographyRange {
                 global_start_utf16: 5,
@@ -2596,6 +2599,7 @@ mod tests {
                 default_style_selector_present: false,
                 alignment: None,
                 alignment_source_value: None,
+                alignment_source: None,
             },
         ];
         let defaults = vec![CharacterDefaultObservation {
@@ -2702,6 +2706,7 @@ mod tests {
             default_style_selector_present: false,
             alignment: None,
             alignment_source_value: None,
+            alignment_source: None,
         };
         let default = CharacterDefaultObservation {
             logical_style_index: 0,
@@ -2781,6 +2786,7 @@ mod tests {
             default_style_selector_present: false,
             alignment: None,
             alignment_source_value: None,
+            alignment_source: None,
         };
         let defaults = vec![
             CharacterDefaultObservation {
