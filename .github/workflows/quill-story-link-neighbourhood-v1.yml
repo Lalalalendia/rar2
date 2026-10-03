@@ -1,0 +1,45 @@
+name: Quill final-two link-neighbourhood archaeology
+
+on:
+  push:
+    branches:
+      - research/quill-story-wayback-donors-v2
+    paths:
+      - ".github/workflows/quill-story-link-neighbourhood-v1.yml"
+      - "tools/research/quill_story_link_neighbourhood_v1.py"
+      - "tools/corpus/harvest_pub.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quill-story-link-neighbourhood-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-two:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check bounded archaeology script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/research/quill_story_link_neighbourhood_v1.py
+
+      - name: Recover historical parent-page PUB links
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python tools/research/quill_story_link_neighbourhood_v1.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quill-story-link-neighbourhood-v1-${{ github.run_id }}
+          path: out/quill-story-link-neighbourhood.json
+          if-no-files-found: error
+          retention-days: 30
