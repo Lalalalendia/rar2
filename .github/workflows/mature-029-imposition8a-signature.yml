@@ -1,0 +1,242 @@
+name: Mature 029 imposition 0x8A signature census
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-029-imposition8a-signature.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/imposition8a-signature-receipt.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-029-imposition8a-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-029-imposition8a
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact 1050 and census target identities
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv, hashlib, json
+          from pathlib import Path
+
+          root = Path("out/pinned1050/materialized/native")
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+
+          family = [
+              "273d283c93fafb0f14b772ba8475a6b48db0a4f9c1a0789605ce26ea811996d3",
+              "5eb5055bc75918ca8dbc7093fa267a3365f25129fd2c3dc88c7be3540f44e4cd",
+              "7c630704ce369f775fe7a24ec180f5c7997eb779f28bd57ab8c7dda66297a17c",
+              "9915c5612d7d8ce49fc733bbbe748c80325fb0094af0ba0d42a2b15fc648e5bd",
+              "a8c8a3c36a925fdc9de7c4f5e43e014a606751b2d09635cbc1b04f50ccb7fcea",
+              "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e",
+          ]
+          for sha in family:
+              path = root / f"{sha}.pub"
+              assert path.is_file(), sha
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == sha, sha
+
+          batch = []
+          with Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open(
+              newline="", encoding="utf-8-sig"
+          ) as handle:
+              for row in csv.DictReader(handle):
+                  batch.append(row["pub_sha256"].casefold())
+          assert len(batch) == 55, len(batch)
+          for sha in batch:
+              assert (root / f"{sha}.pub").is_file(), sha
+
+          targets = sorted(set(batch) | set(family))
+          Path("target/mature-029-imposition8a").mkdir(parents=True, exist_ok=True)
+          Path("target/mature-029-imposition8a/targets.json").write_text(
+              json.dumps({"family": family, "batch01": batch, "targets": targets}, indent=2) + "\n"
+          )
+          print("targets", len(targets))
+          PY
+
+      - name: Build source-safe 0x8A receipt
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml --check
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin imposition8a-signature-receipt --jobs 2
+
+      - name: Inspect recurrence and Batch01 controls
+        run: |
+          set -euo pipefail
+          mkdir -p target/mature-029-imposition8a/receipts target/mature-029-imposition8a/status
+          python - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+
+          root = Path("out/pinned1050/materialized/native")
+          out = Path("target/mature-029-imposition8a")
+          targets = json.loads((out / "targets.json").read_text())["targets"]
+          binary = Path("target/mature-029-imposition8a/debug/imposition8a-signature-receipt")
+
+          for sha in targets:
+              source = root / f"{sha}.pub"
+              receipt = out / "receipts" / f"{sha}.json"
+              proc = subprocess.run(
+                  [str(binary), str(source), str(receipt)],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  timeout=30,
+              )
+              (out / "status" / f"{sha}.exit").write_text(str(proc.returncode) + "\n")
+              if proc.returncode != 0:
+                  (out / "status" / f"{sha}.stderr").write_text(proc.stderr[-4000:])
+          PY
+
+      - name: Build source-safe imposition signature census
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path("target/mature-029-imposition8a")
+          manifest = json.loads((root / "targets.json").read_text())
+          family = set(manifest["family"])
+          batch = set(manifest["batch01"])
+
+          def canonical_digest(value):
+              raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+              return hashlib.sha256(raw).hexdigest()
+
+          def shape_only(value):
+              if isinstance(value, list):
+                  return [shape_only(v) for v in value]
+              if isinstance(value, dict):
+                  out = {}
+                  for key, item in value.items():
+                      if key in {
+                          "declared_length",
+                          "decoded_bytes",
+                          "remaining_bytes",
+                          "unsupported_tail_length",
+                          "source_bytes",
+                      }:
+                          continue
+                      out[key] = shape_only(item)
+                  return out
+              return value
+
+          rows = []
+          for sha in manifest["targets"]:
+              exit_code = int((root / "status" / f"{sha}.exit").read_text())
+              row = {
+                  "source_sha256": sha,
+                  "in_029_family": sha in family,
+                  "in_batch01": sha in batch,
+                  "exit_code": exit_code,
+              }
+              receipt_path = root / "receipts" / f"{sha}.json"
+              if exit_code == 0 and receipt_path.is_file():
+                  receipt = json.loads(receipt_path.read_text())
+                  objects = receipt.get("imposition_objects", [])
+                  row.update({
+                      "confirmed_page_count": receipt.get("confirmed_page_count"),
+                      "imposition_object_count": receipt.get("imposition_object_count"),
+                      "shape_signature_sha256": canonical_digest(shape_only(objects)),
+                      "length_sensitive_signature_sha256": canonical_digest(objects),
+                  })
+              rows.append(row)
+
+          family_rows = [row for row in rows if row["in_029_family"] and row["exit_code"] == 0]
+          family_shape = {row.get("shape_signature_sha256") for row in family_rows}
+          family_lengths = {row.get("length_sensitive_signature_sha256") for row in family_rows}
+          family_object_counts = {row.get("imposition_object_count") for row in family_rows}
+          family_shape_digest = next(iter(family_shape)) if len(family_shape) == 1 else None
+
+          controls = [
+              row for row in rows
+              if row["in_batch01"] and not row["in_029_family"] and row["exit_code"] == 0
+          ]
+          matching_controls = [
+              row for row in controls
+              if family_shape_digest is not None
+              and row.get("shape_signature_sha256") == family_shape_digest
+          ]
+          control_shapes = Counter(
+              row.get("shape_signature_sha256")
+              for row in controls
+              if row.get("shape_signature_sha256") is not None
+          )
+
+          summary = {
+              "schema": "chaptera.mature-029-imposition8a-census.v1",
+              "target_count": len(rows),
+              "family_target_count": len(family),
+              "family_success_count": len(family_rows),
+              "family_shape_signature_unanimous": len(family_rows) == len(family) and len(family_shape) == 1,
+              "family_length_sensitive_signature_unanimous": len(family_rows) == len(family) and len(family_lengths) == 1,
+              "family_imposition_object_count_unanimous": len(family_rows) == len(family) and len(family_object_counts) == 1,
+              "family_shape_signature_sha256": family_shape_digest,
+              "batch01_control_success_count": len(controls),
+              "batch01_control_matching_family_shape_count": len(matching_controls),
+              "batch01_distinct_control_shape_count": len(control_shapes),
+              "family_rows": family_rows,
+              "matching_control_rows": matching_controls,
+              "claims": {
+                  "measurement_only": True,
+                  "publisher_or_pdf_input_used": False,
+                  "raster_used": False,
+                  "raw_scalar_values_retained": False,
+                  "raw_fixed_bytes_retained": False,
+                  "raw_seq_nums_retained": False,
+                  "story_text_retained": False,
+                  "signature_is_research_fingerprint_not_product_authority": True,
+                  "raw_source_graph_mutated": False,
+              },
+          }
+          (root / "summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe 0x8A census
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-029-imposition8a-census
+          path: target/mature-029-imposition8a/summary.json
+          if-no-files-found: error
+          retention-days: 30
