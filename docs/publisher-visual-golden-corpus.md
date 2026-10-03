@@ -17,6 +17,10 @@ This registry tracks externally held Microsoft Publisher PDF visual-oracle bytes
 
 Publisher PDF is visual authority only. It must not be used to infer hidden PUB semantics. Semantic claims require PUB/native evidence. Comparison tooling must materialize an external bundle and verify every PDF against the committed SHA before use.
 
+A PDF page is also **not automatically the same semantic surface as a Reader logical page**. Reference pairs may represent a logical publication page, a facing/reader spread, an imposed production sheet, or an as-yet-unclassified output surface. The visual comparator therefore exposes `reference_surface_stage` with the bounded vocabulary `logical_page | viewport_spread | production_sheet | unknown`. Existing Batch 01 fingerprints do not contain independent stage authority, so missing values default to `unknown`; the comparator does not infer a stage from raster similarity, PDF page count or media size.
+
+Stage promotion requires independent native/source/export provenance such as Publisher `Document.Pages.Count`, `ReaderSpread` membership/offsets, `Document.PrintStyle`, or an exact export-mode receipt. Until then, page-count agreement or disagreement is a visual diagnostic only and must not authorize Viewer PAGE membership.
+
 Canonical tranche files:
 - `tools/corpus/receipts/publisher-visual-golden-batch-01-tranche-a-2026-10-03.csv`
 - `tools/corpus/receipts/publisher-visual-golden-batch-01-tranche-a-2026-10-03.json`

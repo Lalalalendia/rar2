@@ -254,6 +254,7 @@ jobs:
               "compared_page_count": data["compared_page_count"],
               "unsupported_pair_count": data["unsupported_pair_count"],
               "page_count_mismatch_pair_count": data["page_count_mismatch_pair_count"],
+              "reference_surface_stage_counts": data["reference_surface_stage_counts"],
               "corpus_mean_changed_cell_fraction": data["corpus_mean_changed_cell_fraction"],
               "worst_pages": data["worst_pages"][:10],
           }, indent=2, sort_keys=True))
@@ -267,6 +268,7 @@ jobs:
                   "remapped_page_count": delta["remapped_page_count"],
                   "identity_unknown_page_count": delta["identity_unknown_page_count"],
                   "page_identity_remaps": delta["page_identity_remaps"][:10],
+                  "reference_surface_stage_counts": delta["reference_surface_stage_counts"],
                   "improved_page_count": delta["improved_page_count"],
                   "regressed_page_count": delta["regressed_page_count"],
                   "unchanged_page_count": delta["unchanged_page_count"],
