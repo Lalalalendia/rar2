@@ -1,0 +1,305 @@
+name: Editable Typography Consumer Edit V1
+# Exact real-consumer edit proof for #999.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-typography-consumer-edit-v1.yml"
+      - "tools/ci/scribus_typography_edit_consumer.py"
+      - "tools/ci/libreoffice_draw_typography_edit.py"
+      - "tools/verify_editable_typography_export.py"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+  push:
+    branches:
+      - conversion/editable-typography-consumer-edit-01c
+    paths:
+      - ".github/workflows/editable-typography-consumer-edit-v1.yml"
+      - "tools/ci/scribus_typography_edit_consumer.py"
+      - "tools/ci/libreoffice_draw_typography_edit.py"
+      - "tools/verify_editable_typography_export.py"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: editable-typography-consumer-edit-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-consumer-edit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/editable-typography-consumer-edit
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/editable-typography-consumer-edit-evidence
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+      PINNED_CORPUS_COUNT: "1050"
+      PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+      WITNESS_SHA: "4758095aa58927b1aefa23c384bb16cd598e6732ef2af5af68471118dc25c567"
+      WITNESS_STORY: "212617a9-1536-56fb-87fc-b6a3bbd5f493"
+      EXPECTED_FONT_FAMILY: "Montserrat"
+      EXPECTED_FONT_SIZE_PT: "24"
+      EDIT_MARKER: "__CHAPTERA_TYPO_EDIT_V1__"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Check changed Rust formatting
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -p pub-export -p pub-idml -p pub-odg -- --check
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity and witness
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate corpus SHA"
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          witness = root / (os.environ["WITNESS_SHA"] + ".pub")
+          assert witness.is_file(), witness
+          print(f"verified exact corpus + witness {witness.name}")
+          PY
+
+      - name: Build exact typography and route probes
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --release --bin editable_typography_probe --bin editable_route_probe
+
+      - name: Reprove exact bounded witness and expected typography
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          witness="$CORPUS_ROOT/$WITNESS_SHA.pub"
+          "$CARGO_TARGET_DIR/release/editable_typography_probe" "$witness" > "$EVIDENCE_ROOT/typography-probe.json"
+          python - <<'PY'
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          data = json.loads((root / "typography-probe.json").read_text())
+          assert data["source_sha256"] == os.environ["WITNESS_SHA"], data["source_sha256"]
+          assert data["open_state"] == "admitted", data
+          items = data.get("items", [])
+          matches = [
+              item for item in items
+              if item["story_id"] == os.environ["WITNESS_STORY"]
+              and item["font_family"].strip() == os.environ["EXPECTED_FONT_FAMILY"]
+              and math.isclose(
+                  float(item["font_size_pt"]),
+                  float(os.environ["EXPECTED_FONT_SIZE_PT"]),
+                  rel_tol=0.0,
+                  abs_tol=0.02,
+              )
+          ]
+          assert len(matches) == 1, matches
+          expected = {
+              **data,
+              "all_items": items,
+              "eligible_count_in_source": data["eligible_count"],
+              "eligible_count": 1,
+              "items": matches,
+              "selection_basis": "exact_consumer_edit_montserrat_witness_v1",
+          }
+          (root / "expected.json").write_text(
+              json.dumps(expected, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({
+              "source_sha256": data["source_sha256"],
+              "story_id": matches[0]["story_id"],
+              "font_family": matches[0]["font_family"],
+              "font_size_pt": matches[0]["font_size_pt"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Materialize exact IDML and ODG
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/materialized"
+          witness="$CORPUS_ROOT/$WITNESS_SHA.pub"
+          "$CARGO_TARGET_DIR/release/editable_route_probe"             "$witness"             --label "$WITNESS_SHA.pub"             --materialize-dir "$EVIDENCE_ROOT/materialized"             > "$EVIDENCE_ROOT/route.json"
+          test -s "$EVIDENCE_ROOT/materialized/output.idml"
+          test -s "$EVIDENCE_ROOT/materialized/output.odg"
+          test -s "$EVIDENCE_ROOT/materialized/idml.report.json"
+          test -s "$EVIDENCE_ROOT/materialized/odg.report.json"
+
+      - name: Verify wire before consumer edit
+        run: |
+          set -euo pipefail
+          python tools/verify_editable_typography_export.py             wire             --expected "$EVIDENCE_ROOT/expected.json"             --root "$EVIDENCE_ROOT/materialized"             --receipt "$EVIDENCE_ROOT/wire.json"
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends             scribus libreoffice-draw xvfb fonts-montserrat python3-uno
+
+      - name: Scribus real text edit save fresh reopen
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/scribus"
+
+          CHAPTERA_SCRIBUS_EDIT_OUT="$EVIDENCE_ROOT/scribus/round1.sla"           CHAPTERA_SCRIBUS_EDIT_RECEIPT="$EVIDENCE_ROOT/scribus-edit.json"           CHAPTERA_EDIT_MARKER="$EDIT_MARKER"           CHAPTERA_EXPECTED_FONT_FAMILY="$EXPECTED_FONT_FAMILY"           CHAPTERA_EXPECTED_FONT_SIZE_PT="$EXPECTED_FONT_SIZE_PT"           CHAPTERA_SCRIBUS_EDIT_MODE=edit             timeout 180s xvfb-run -a scribus -g -ns               -py tools/ci/scribus_typography_edit_consumer.py --               "$EVIDENCE_ROOT/materialized/output.idml"
+
+          test -s "$EVIDENCE_ROOT/scribus/round1.sla"
+
+          CHAPTERA_SCRIBUS_EDIT_OUT="$EVIDENCE_ROOT/scribus/round2.sla"           CHAPTERA_SCRIBUS_EDIT_RECEIPT="$EVIDENCE_ROOT/scribus-reopen.json"           CHAPTERA_EDIT_MARKER="$EDIT_MARKER"           CHAPTERA_EXPECTED_FONT_FAMILY="$EXPECTED_FONT_FAMILY"           CHAPTERA_EXPECTED_FONT_SIZE_PT="$EXPECTED_FONT_SIZE_PT"           CHAPTERA_SCRIBUS_EDIT_MODE=verify             timeout 180s xvfb-run -a scribus -g -ns               -py tools/ci/scribus_typography_edit_consumer.py --               "$EVIDENCE_ROOT/scribus/round1.sla"
+
+          test -s "$EVIDENCE_ROOT/scribus/round2.sla"
+
+          python tools/verify_editable_typography_export.py             scribus             --expected "$EVIDENCE_ROOT/expected.json"             --input "$EVIDENCE_ROOT/scribus/round2.sla"             --receipt "$EVIDENCE_ROOT/scribus-typography.json"
+
+      - name: LibreOffice Draw real UNO text edit save fresh reopen
+        run: |
+          set -euo pipefail
+          mkdir -p             "$EVIDENCE_ROOT/libreoffice"             "$EVIDENCE_ROOT/lo-edit-profile"             "$EVIDENCE_ROOT/lo-verify-profile"             "$EVIDENCE_ROOT/lo-final-profile"             "$EVIDENCE_ROOT/final-fodg"
+
+          start_lo() {
+            local port="$1"
+            local profile="$2"
+            libreoffice               --headless               --nologo               --nodefault               --norestore               --nolockcheck               "-env:UserInstallation=file://$profile"               "--accept=socket,host=127.0.0.1,port=$port;urp;StarOffice.ServiceManager"               > "$EVIDENCE_ROOT/libreoffice/lo-$port.log" 2>&1 &
+            LO_PID=$!
+          }
+
+          stop_lo() {
+            if [[ -n "${LO_PID:-}" ]]; then
+              kill "$LO_PID" 2>/dev/null || true
+              wait "$LO_PID" 2>/dev/null || true
+              LO_PID=""
+            fi
+          }
+
+          trap stop_lo EXIT
+
+          start_lo 20831 "$EVIDENCE_ROOT/lo-edit-profile"
+          timeout 90s /usr/bin/python3 tools/ci/libreoffice_draw_typography_edit.py             edit             --input "$EVIDENCE_ROOT/materialized/output.odg"             --output "$EVIDENCE_ROOT/libreoffice/round1.odg"             --marker "$EDIT_MARKER"             --expected-font-family "$EXPECTED_FONT_FAMILY"             --expected-font-size-pt "$EXPECTED_FONT_SIZE_PT"             --receipt "$EVIDENCE_ROOT/libreoffice-edit.json"             --port 20831
+          stop_lo
+          test -s "$EVIDENCE_ROOT/libreoffice/round1.odg"
+
+          start_lo 20832 "$EVIDENCE_ROOT/lo-verify-profile"
+          timeout 90s /usr/bin/python3 tools/ci/libreoffice_draw_typography_edit.py             verify             --input "$EVIDENCE_ROOT/libreoffice/round1.odg"             --output "$EVIDENCE_ROOT/libreoffice/round2.odg"             --marker "$EDIT_MARKER"             --expected-font-family "$EXPECTED_FONT_FAMILY"             --expected-font-size-pt "$EXPECTED_FONT_SIZE_PT"             --receipt "$EVIDENCE_ROOT/libreoffice-reopen.json"             --port 20832
+          stop_lo
+          test -s "$EVIDENCE_ROOT/libreoffice/round2.odg"
+
+          timeout 120s libreoffice             --headless             --nologo             --nodefault             --norestore             "-env:UserInstallation=file://$EVIDENCE_ROOT/lo-final-profile"             --convert-to fodg             --outdir "$EVIDENCE_ROOT/final-fodg"             "$EVIDENCE_ROOT/libreoffice/round2.odg"
+
+          test -s "$EVIDENCE_ROOT/final-fodg/round2.fodg"
+
+          python tools/verify_editable_typography_export.py             libreoffice             --expected "$EVIDENCE_ROOT/expected.json"             --input "$EVIDENCE_ROOT/final-fodg/round2.fodg"             --receipt "$EVIDENCE_ROOT/libreoffice-typography.json"
+
+      - name: Build source-safe consumer-edit acceptance receipt
+        env:
+          REPO_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          expected = json.loads((root / "expected.json").read_text())
+          item = expected["items"][0]
+
+          def load(name):
+              return json.loads((root / name).read_text())
+
+          receipt = {
+              "schema": "chaptera.editable-typography-consumer-edit-receipt.v1",
+              "repository_commit_sha": os.environ["REPO_SHA"],
+              "source_sha256": os.environ["WITNESS_SHA"],
+              "story_id": item["story_id"],
+              "font_family": item["font_family"],
+              "font_size_emu": item["font_size_emu"],
+              "font_size_pt": item["font_size_pt"],
+              "edit_marker_sha256": hashlib.sha256(
+                  os.environ["EDIT_MARKER"].encode("utf-8")
+              ).hexdigest(),
+              "checks": {
+                  "target_wire": load("wire.json"),
+                  "scribus_edit": load("scribus-edit.json"),
+                  "scribus_fresh_reopen": load("scribus-reopen.json"),
+                  "scribus_typography_after_edit": load("scribus-typography.json"),
+                  "libreoffice_edit": load("libreoffice-edit.json"),
+                  "libreoffice_fresh_reopen": load("libreoffice-reopen.json"),
+                  "libreoffice_typography_after_edit": load("libreoffice-typography.json"),
+              },
+              "claims": {
+                  "consumer_text_edit_used_real_scribus_api": True,
+                  "consumer_text_edit_used_real_libreoffice_uno": True,
+                  "direct_sla_or_odg_xml_patch_used": False,
+                  "edited_text_survived_fresh_reopen": True,
+                  "same_edited_object_retained_font_family_and_size": True,
+                  "loss_report_manifest_upgraded_by_this_change": False,
+                  "color_alignment_or_mixed_runs_proven": False,
+              },
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({
+              "source_sha256": receipt["source_sha256"],
+              "story_id": receipt["story_id"],
+              "font_family": receipt["font_family"],
+              "font_size_pt": receipt["font_size_pt"],
+              "claims": receipt["claims"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe consumer-edit receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editable-typography-consumer-edit-v1-${{ github.run_id }}
+          path: |
+            target/editable-typography-consumer-edit-evidence/typography-probe.json
+            target/editable-typography-consumer-edit-evidence/expected.json
+            target/editable-typography-consumer-edit-evidence/route.json
+            target/editable-typography-consumer-edit-evidence/wire.json
+            target/editable-typography-consumer-edit-evidence/scribus-edit.json
+            target/editable-typography-consumer-edit-evidence/scribus-reopen.json
+            target/editable-typography-consumer-edit-evidence/scribus-typography.json
+            target/editable-typography-consumer-edit-evidence/libreoffice-edit.json
+            target/editable-typography-consumer-edit-evidence/libreoffice-reopen.json
+            target/editable-typography-consumer-edit-evidence/libreoffice-typography.json
+            target/editable-typography-consumer-edit-evidence/receipt.json
+          if-no-files-found: warn
+          retention-days: 90
