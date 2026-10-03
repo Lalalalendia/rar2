@@ -151,9 +151,7 @@ fn fourcc(value: &[u8; 4]) -> String {
 fn quill_error(error: &QuillStoryReadError) -> (String, Option<String>) {
     let (kind, chunk) = match error {
         QuillStoryReadError::TooShort { .. } => ("too_short", None),
-        QuillStoryReadError::DescriptorNodeTruncated { .. } => {
-            ("descriptor_node_truncated", None)
-        }
+        QuillStoryReadError::DescriptorNodeTruncated { .. } => ("descriptor_node_truncated", None),
         QuillStoryReadError::DescriptorListPointerOutOfBounds { .. } => {
             ("descriptor_list_pointer_out_of_bounds", None)
         }
@@ -183,19 +181,13 @@ fn quill_error(error: &QuillStoryReadError) -> (String, Option<String>) {
         QuillStoryReadError::ToknStoryOrdinalOutOfBounds { .. } => {
             ("tokn_story_ordinal_out_of_bounds", None)
         }
-        QuillStoryReadError::ToknUnexpectedPlcType { .. } => {
-            ("tokn_unexpected_plc_type", None)
-        }
+        QuillStoryReadError::ToknUnexpectedPlcType { .. } => ("tokn_unexpected_plc_type", None),
         QuillStoryReadError::ToknCountOverflow { .. } => ("tokn_count_overflow", None),
         QuillStoryReadError::ToknNonMonotonicBoundary { .. } => {
             ("tokn_non_monotonic_boundary", None)
         }
-        QuillStoryReadError::ToknInvalidBlockLength { .. } => {
-            ("tokn_invalid_block_length", None)
-        }
-        QuillStoryReadError::ToknTokenSpanOverflow { .. } => {
-            ("tokn_token_span_overflow", None)
-        }
+        QuillStoryReadError::ToknInvalidBlockLength { .. } => ("tokn_invalid_block_length", None),
+        QuillStoryReadError::ToknTokenSpanOverflow { .. } => ("tokn_token_span_overflow", None),
         QuillStoryReadError::ToknTokenLengthExceedsBoundary { .. } => {
             ("tokn_token_length_exceeds_boundary", None)
         }
@@ -262,10 +254,8 @@ pub fn build_story65_continuation_diagnostic(
             entry_count: catalog.entries.len(),
         },
         Err(StoryCatalogReadError::MissingDeclaredCount) => {
-            match parse_bounded_empty_mature_story_catalog_variant(
-                &contents,
-                &story_catalog_chunk,
-            ) {
+            match parse_bounded_empty_mature_story_catalog_variant(&contents, &story_catalog_chunk)
+            {
                 Ok(_) => PubStory65CatalogState::PhysicalEmpty,
                 Err(error) => PubStory65CatalogState::MissingCountButNotPhysicalEmpty {
                     error_kind: story_catalog_error_kind(&error).to_owned(),
@@ -305,29 +295,27 @@ pub fn build_story65_continuation_diagnostic(
         table_reference_count,
     };
 
-    let quill_state = match parse_confirmed_story_catalog(
-        StreamPath(QUILL_STREAM_PATH.into()),
-        &quill,
-    ) {
-        Ok(catalog) => PubQuillStoryState::Confirmed {
-            descriptor_node_count: catalog.descriptor_nodes.len(),
-            descriptor_count: catalog
-                .descriptor_nodes
-                .iter()
-                .map(|node| node.descriptors.len())
-                .sum(),
-            syid_count: catalog.syid.ids.len(),
-            strs_count: catalog.strs.lengths.len(),
-            story_count: catalog.stories.len(),
-            text_byte_len: catalog.text.bytes.len(),
-            tcd_count: catalog.tcd.len(),
-            tokn_count: catalog.tokn.len(),
-        },
-        Err(error) => {
-            let (error_kind, chunk) = quill_error(&error);
-            PubQuillStoryState::Rejected { error_kind, chunk }
-        }
-    };
+    let quill_state =
+        match parse_confirmed_story_catalog(StreamPath(QUILL_STREAM_PATH.into()), &quill) {
+            Ok(catalog) => PubQuillStoryState::Confirmed {
+                descriptor_node_count: catalog.descriptor_nodes.len(),
+                descriptor_count: catalog
+                    .descriptor_nodes
+                    .iter()
+                    .map(|node| node.descriptors.len())
+                    .sum(),
+                syid_count: catalog.syid.ids.len(),
+                strs_count: catalog.strs.lengths.len(),
+                story_count: catalog.stories.len(),
+                text_byte_len: catalog.text.bytes.len(),
+                tcd_count: catalog.tcd.len(),
+                tokn_count: catalog.tokn.len(),
+            },
+            Err(error) => {
+                let (error_kind, chunk) = quill_error(&error);
+                PubQuillStoryState::Rejected { error_kind, chunk }
+            }
+        };
 
     let story65_geometry_only_gate_eligible = story65.is_physical_empty()
         && live_story_demand.distinct_story_id_count == 0
@@ -380,9 +368,8 @@ mod tests {
 
     #[test]
     fn quill_error_codes_are_source_safe_and_stable() {
-        let (kind, chunk) = quill_error(&QuillStoryReadError::MissingRequiredChunk {
-            name: *b"STRS",
-        });
+        let (kind, chunk) =
+            quill_error(&QuillStoryReadError::MissingRequiredChunk { name: *b"STRS" });
         assert_eq!(kind, "missing_required_chunk");
         assert_eq!(chunk.as_deref(), Some("STRS"));
 
