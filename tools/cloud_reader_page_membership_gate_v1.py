@@ -100,16 +100,24 @@ def membership_transitions(current: dict, baseline: dict) -> tuple[list[dict], l
         }
 
         if before_digest is None:
-            transitions.append({
-                **common,
-                "baseline_candidate_pages": before_count,
-                "current_candidate_pages": now_count,
-                "baseline_page_identity_order_sha256": None,
-                "current_page_identity_order_sha256": now_digest,
-                "page_count_changed": count_changed,
-                "page_identity_or_order_changed": None,
-                "identity_comparison_available": False,
-            })
+            if count_changed:
+                transitions.append({
+                    **common,
+                    "baseline_candidate_pages": before_count,
+                    "current_candidate_pages": now_count,
+                    "baseline_page_identity_order_sha256": None,
+                    "current_page_identity_order_sha256": now_digest,
+                    "page_count_changed": True,
+                    "page_identity_or_order_changed": None,
+                    "identity_comparison_available": False,
+                })
+            else:
+                bootstrap.append({
+                    **common,
+                    "candidate_pages": now_count,
+                    "current_page_identity_order_sha256": now_digest,
+                    "reason": "baseline_predates_page_identity_order_digest",
+                })
             continue
 
         identity_changed = before_digest != now_digest
@@ -351,11 +359,12 @@ def self_test() -> None:
         summary("old", 9, None, LOGICAL_STAGE),
         empty,
     )
-    assert old_same_count["status"] == "blocked"
-    assert old_same_count["bootstrap_identity_count"] == 0
+    assert old_same_count["status"] == "pass"
+    assert old_same_count["membership_sensitive_transition_count"] == 0
+    assert old_same_count["bootstrap_identity_count"] == 1
     assert (
-        old_same_count["blocked_transitions"][0]["reason"]
-        == "baseline_page_identity_unavailable"
+        old_same_count["bootstrap_identity_rows"][0]["reason"]
+        == "baseline_predates_page_identity_order_digest"
     )
 
     old_count_change = evaluate(
