@@ -6,6 +6,7 @@ on:
       - ".github/workflows/quill-story-readonly-oracle-v2.yml"
       - "tools/research-runner/experiments/quill-story-readonly-oracle-02.packet.json"
       - "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"
+      - "tools/windows/run_quill_story_readonly_oracle_direct.ps1"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - ".github/workflows/quill-story-readonly-oracle-v2.yml"
       - "tools/research-runner/experiments/quill-story-readonly-oracle-02.packet.json"
       - "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"
+      - "tools/windows/run_quill_story_readonly_oracle_direct.ps1"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
   workflow_dispatch:
 
@@ -52,19 +54,25 @@ jobs:
           cat packet-validation.json
           echo "packet_sha256=$(python -c 'import json; print(json.load(open("packet-validation.json"))["packet_sha256"])')" >> "$GITHUB_OUTPUT"
 
-      - name: Parse PowerShell operation
+      - name: Parse PowerShell operation and direct helper
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"),
-            [ref]$tokens,
-            [ref]$errors
+          $paths = @(
+            "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1",
+            "tools/windows/run_quill_story_readonly_oracle_direct.ps1"
           )
-          if ($errors.Count -ne 0) {
-            $errors | Format-List | Out-String | Write-Error
-            exit 1
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
           }
 
       - name: Rustfmt resolver
@@ -211,16 +219,23 @@ jobs:
           }
           assert set(rows) == expected
 
-          donor = rows["6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a"]
-          if donor["unique_hash_partition"]:
-              assert donor["terminal_fdpp_ordinals_zero_based"] == [11, 12, 13, 25], donor
+          cross_checks = {
+              "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a": [11, 12, 13, 25],
+              "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569": [0, 1, 45],
+          }
+          matched = 0
+          for source_sha, expected_ordinals in cross_checks.items():
+              row = rows[source_sha]
+              if row["unique_hash_partition"]:
+                  assert row["terminal_fdpp_ordinals_zero_based"] == expected_ordinals, row
+                  matched += 1
 
           forbidden = ("document_text", "raw_bytes", "source_path", "filename")
           lowered = path.read_text().lower()
           assert all(token not in lowered for token in forbidden)
           print(json.dumps({
               "uniquely_resolved_count": report["uniquely_resolved_count"],
-              "donor_cross_check": "matched" if donor["unique_hash_partition"] else "not_uniquely_resolved",
+              "historical_donor_cross_checks_matched": matched,
           }, indent=2))
           PY
 
