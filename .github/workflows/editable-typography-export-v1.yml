@@ -100,13 +100,21 @@ jobs:
           set -euo pipefail
           cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --release --bin editable_typography_probe --bin editable_route_probe
 
-      - name: Select first exact bounded typography witness
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
+
+      - name: Select exact bounded typography witness with installed font
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE_ROOT"
           python - <<'PY'
+          import collections
           import json
           import os
+          import re
           import subprocess
           from pathlib import Path
 
@@ -114,7 +122,25 @@ jobs:
           evidence = Path(os.environ["EVIDENCE_ROOT"])
           probe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "editable_typography_probe"
 
+          def norm(value):
+              return re.sub(r"\\s+", " ", value.strip().strip("'\\\"")).casefold()
+
+          fc = subprocess.run(
+              ["fc-list", "--format", "%{family}\\n"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          installed = {
+              norm(name)
+              for line in fc.stdout.splitlines()
+              for name in line.split(",")
+              if norm(name)
+          }
+
           selected = None
+          candidate_families = collections.Counter()
+          candidate_story_count = 0
           for path in sorted(root.glob("*.pub")):
               run = subprocess.run(
                   [str(probe), str(path)],
@@ -124,21 +150,51 @@ jobs:
                   timeout=30,
               )
               data = json.loads(run.stdout)
-              if data["open_state"] == "admitted" and data["eligible_count"] > 0:
-                  selected = (path, data)
+              if data["open_state"] != "admitted":
+                  continue
+              for item in data.get("items", []):
+                  candidate_story_count += 1
+                  candidate_families[item["font_family"]] += 1
+                  if norm(item["font_family"]) in installed:
+                      selected = (path, data, item)
+                      break
+              if selected is not None:
                   break
 
-          assert selected is not None, "exact corpus contains no bounded full-Story typography witness"
-          path, data = selected
+          census = {
+              "schema": "chaptera.editable-typography-installed-font-census.v1",
+              "installed_family_count": len(installed),
+              "candidate_story_count_scanned": candidate_story_count,
+              "candidate_families": dict(sorted(candidate_families.items())),
+          }
+          (evidence / "font-census.json").write_text(
+              json.dumps(census, indent=2, sort_keys=True) + "\n"
+          )
+
+          assert selected is not None, (
+              "exact corpus has bounded typography but no scanned Story whose source "
+              "font family is exactly installed in the consumer environment; "
+              f"candidate_families={dict(candidate_families.most_common(30))}"
+          )
+          path, data, item = selected
+          expected = {
+              **data,
+              "eligible_count_in_source": data["eligible_count"],
+              "eligible_count": 1,
+              "items": [item],
+              "selection_basis": "exact_installed_font_family",
+          }
           (evidence / "expected.json").write_text(
-              json.dumps(data, indent=2, sort_keys=True) + "\n"
+              json.dumps(expected, indent=2, sort_keys=True) + "\n"
           )
           (evidence / "witness.txt").write_text(str(path) + "\n")
           print(json.dumps({
-              "source_sha256": data["source_sha256"],
-              "eligible_count": data["eligible_count"],
-              "font_size_pt": sorted({item["font_size_pt"] for item in data["items"]}),
-              "font_family_count": len({item["font_family"] for item in data["items"]}),
+              "source_sha256": expected["source_sha256"],
+              "eligible_count": expected["eligible_count"],
+              "font_family": item["font_family"],
+              "font_size_pt": item["font_size_pt"],
+              "selection_basis": expected["selection_basis"],
+              "candidate_story_count_scanned": candidate_story_count,
           }, indent=2, sort_keys=True))
           PY
 
@@ -155,12 +211,6 @@ jobs:
         run: |
           set -euo pipefail
           python tools/verify_editable_typography_export.py             wire             --expected "$EVIDENCE_ROOT/expected.json"             --root "$EVIDENCE_ROOT/materialized"             --receipt "$EVIDENCE_ROOT/wire.json"
-
-      - name: Install independent editable-output consumers
-        run: |
-          set -euo pipefail
-          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
 
       - name: Scribus import save reopen save
         run: |
@@ -249,6 +299,7 @@ jobs:
           name: editable-typography-export-v1-${{ github.run_id }}
           path: |
             target/editable-typography-evidence/expected.json
+            target/editable-typography-evidence/font-census.json
             target/editable-typography-evidence/route.json
             target/editable-typography-evidence/wire.json
             target/editable-typography-evidence/scribus.json
