@@ -31,7 +31,8 @@ use chaptera_scene_instance::{
     direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderPlanErrorV1,
+    AuthoredPageRenderLaneV1, AuthoredPageRenderNodeV1, ExplicitRenderTextFontResourceV1,
+    PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1, apply_authored_page_render_lane_v1,
     build_page_render_plan_with_text_layout_resolver_v1,
     build_page_render_plan_with_text_layout_v1,
 };
@@ -125,6 +126,62 @@ fn build_desktop_page_render_plan_with_source_fonts(
     build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
         source_fonts.resource_for_fragment(fragment)
     })
+}
+
+fn editor_authored_page_render_lane(
+    editor: &pub_editor::EditorSession,
+    page_id: pub_editor::PageId,
+) -> Result<AuthoredPageRenderLaneV1, String> {
+    let stack = editor
+        .authored_stack(page_id)
+        .ok_or_else(|| "authored lane page is absent from the editor graph".to_owned())?;
+    let mut nodes = Vec::with_capacity(stack.members.len());
+
+    for node_id in stack.members {
+        let shape = editor
+            .authored_shape(node_id)
+            .ok_or_else(|| format!("authored lane member {node_id:?} has no authored shape"))?;
+        if shape.page_id != page_id || shape.parent_id != page_id {
+            return Err(format!(
+                "authored lane member {node_id:?} does not belong directly to page {page_id:?}"
+            ));
+        }
+        if shape.provenance != pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
+            || shape.paint.provenance != pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
+        {
+            return Err(format!(
+                "authored lane member {node_id:?} is not canonically AuthorCreated"
+            ));
+        }
+
+        nodes.push(AuthoredPageRenderNodeV1 {
+            node_id,
+            bounds: shape.bounds,
+            solid_fill_rgb: shape.paint.fill.visible.then_some([
+                shape.paint.fill.color.r,
+                shape.paint.fill.color.g,
+                shape.paint.fill.color.b,
+            ]),
+            solid_line: shape.paint.stroke.visible.then_some(RenderSolidLineV1 {
+                rgb: [
+                    shape.paint.stroke.color.r,
+                    shape.paint.stroke.color.g,
+                    shape.paint.stroke.color.b,
+                ],
+                width_emu: shape.paint.stroke.width_emu,
+            }),
+        });
+    }
+
+    Ok(AuthoredPageRenderLaneV1 { page_id, nodes })
+}
+
+fn apply_editor_authored_page_lane(
+    plan: &mut PageRenderPlanV1,
+    editor: &pub_editor::EditorSession,
+) -> Result<(), String> {
+    let lane = editor_authored_page_render_lane(editor, plan.page_id)?;
+    apply_authored_page_render_lane_v1(plan, &lane).map_err(|error| error.to_string())
 }
 
 fn text_layout_disposition_counts(plan: &PageRenderPlanV1) -> (usize, usize) {
@@ -749,8 +806,17 @@ fn direct_scene_instance(
     target_page_id: &str,
     node_id: pub_editor::NodeId,
 ) -> Option<SceneInstanceV1> {
-    let authored = editor.graph().nodes.get(&node_id)?;
-    if authored.header.parent_id.to_string() != target_page_id {
+    let direct_page_owned = editor
+        .graph()
+        .nodes
+        .get(&node_id)
+        .is_some_and(|node| node.header.parent_id.to_string() == target_page_id)
+        || editor.authored_shape(node_id).is_some_and(|shape| {
+            shape.page_id.as_canonical().to_string() == target_page_id
+                && shape.parent_id == shape.page_id
+                && shape.provenance == pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
+        });
+    if !direct_page_owned {
         return None;
     }
     direct_page_local_instance_v1(&node_id.as_canonical().to_string(), target_page_id).ok()
@@ -4755,12 +4821,15 @@ impl ViewerApp {
             .pages
             .get(page_index)
             .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
-        let render_plan = if self.source_fonts_active {
+        let mut render_plan = if self.source_fonts_active {
             build_desktop_page_render_plan_with_source_fonts(visual, page_index, &self.source_fonts)
         } else {
             build_desktop_page_render_plan(visual, page_index)
         }
         .map_err(|error| error.to_string())?;
+        if let Some(editor) = self.editor.as_ref() {
+            apply_editor_authored_page_lane(&mut render_plan, editor)?;
+        }
         let page_id_text = page.id.as_canonical().to_string();
 
         let mut hit_entries = Vec::new();
@@ -5019,14 +5088,7 @@ impl ViewerApp {
         let movable_nodes = &frame_work.movable_nodes;
         let resizable_nodes = &frame_work.resizable_nodes;
 
-        let page_origin = page.id.into_canonical();
         let page_id_text = page.id.as_canonical().to_string();
-        let page_nodes = visual
-            .scene
-            .nodes
-            .iter()
-            .filter(|node| node.parent_origin == page_origin)
-            .collect::<Vec<_>>();
         let selected_bounds = self
             .canvas_selection
             .primary()
@@ -5480,24 +5542,20 @@ impl ViewerApp {
                 }
 
                 if let Some(selected_instance_id) = selected_canvas_instance.as_deref()
-                    && let Some(selected_node_id) =
-                        hit_index.node_for_instance(selected_instance_id)
-                    && let Some(node) = page_nodes
-                        .iter()
-                        .copied()
-                        .find(|node| node.origin == selected_node_id)
-                    && node.bounds.width.get() > 0
-                    && node.bounds.height.get() > 0
+                    && let Some(selected_hit) = hit_index.entry_for_instance(selected_instance_id)
+                    && selected_hit.bounds.width.get() > 0
+                    && selected_hit.bounds.height.get() > 0
                 {
+                    let selected_node_id = selected_hit.node_id;
                     let selected_bounds = next_canvas_resize
-                        .filter(|resize| resize.node_id() == node.origin)
+                        .filter(|resize| resize.node_id() == selected_node_id)
                         .and_then(|resize| resize.preview_bounds())
                         .or_else(|| {
                             next_canvas_drag
-                                .filter(|drag| drag.node_id() == node.origin)
+                                .filter(|drag| drag.node_id() == selected_node_id)
                                 .map(|drag| drag.preview_bounds())
                         })
-                        .unwrap_or(node.bounds);
+                        .unwrap_or(selected_hit.bounds);
                     let min = egui::pos2(
                         page_rect.left() + selected_bounds.x.get() as f32 * scene_scale,
                         page_rect.top() + selected_bounds.y.get() as f32 * scene_scale,
@@ -5515,7 +5573,7 @@ impl ViewerApp {
                         && let Some(fragment) = visual
                             .text_fragments
                             .iter()
-                            .find(|fragment| fragment.frame_id == node.origin)
+                            .find(|fragment| fragment.frame_id == selected_node_id)
                         && self.editor.as_ref().is_some_and(|editor| {
                             editor.can_replace_story_text(fragment.story_id).is_ok()
                         })
@@ -5535,7 +5593,7 @@ impl ViewerApp {
                             .put(button_rect, egui::Button::new("Edit Text"))
                             .clicked()
                         {
-                            edit_text_request = Some((fragment.story_id, node.origin));
+                            edit_text_request = Some((fragment.story_id, selected_node_id));
                         }
                     }
                     if resize_enabled {
@@ -6024,9 +6082,14 @@ fn paint_page_thumbnail(
     let Some(page) = visual.document.pages.get(page_index) else {
         return;
     };
-    let Ok(render_plan) = build_desktop_page_render_plan(visual, page_index) else {
+    let Ok(mut render_plan) = build_desktop_page_render_plan(visual, page_index) else {
         return;
     };
+    if let Some(editor) = editor
+        && apply_editor_authored_page_lane(&mut render_plan, editor).is_err()
+    {
+        return;
+    }
     if render_plan.page_size.width.get() <= 0 || render_plan.page_size.height.get() <= 0 {
         return;
     }
