@@ -1,4 +1,4 @@
-name: Quill exact-three Wayback donor sweep
+name: Quill final-two Wayback donor sweep
 
 on:
   push:
@@ -21,13 +21,13 @@ env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
 
 jobs:
-  exact-three:
+  exact-two:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
-      - name: Checkout exact unresolved source witnesses only
+      - name: Checkout exact two remaining source witnesses only
         uses: actions/checkout@v5
         with:
           repository: Lalalalendia/lalamu
@@ -36,7 +36,6 @@ jobs:
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             pub-corpus/corpus/native/unclassified/211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157.pub
-            pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub
             pub-corpus/corpus/native/unclassified/ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff.pub
 
       - name: Verify exact source identities
@@ -44,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           root="_witness/lalamu/pub-corpus/corpus/native/unclassified"
-          test "$(find "$root" -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 3
+          test "$(find "$root" -maxdepth 1 -type f -name '*.pub' | wc -l)" -eq 2
           for path in "$root"/*.pub; do
             sha="$(basename "$path" .pub)"
             echo "${sha}  ${path}" | sha256sum -c -
@@ -149,7 +148,7 @@ jobs:
               by_source.setdefault(row["source_sha256"], []).append(row)
 
           summary = {
-              "schema": "chaptera.quill-story-wayback-donor-sweep.v2",
+              "schema": "chaptera.quill-story-wayback-donor-sweep.v3",
               "candidate_count": len(rows),
               "admitted_compare_count": sum(row["compare_status"] == "admitted" for row in rows),
               "exact_partition_donor_count": len(exact_donors),
@@ -158,7 +157,7 @@ jobs:
               }),
               "rows": rows,
               "evidence_boundary": (
-                  "exact three unresolved helenhudspith sources only; donor admission requires "
+                  "exact two remaining helenhudspith sources only; donor admission requires "
                   "same source TEXT bytes, grounded Contents Story identity/cardinality, ordinary "
                   "historical Quill catalog and historical cumulative Story ends mapping into the "
                   "original source FDPP boundary set; no document text or PUB bytes retained"
