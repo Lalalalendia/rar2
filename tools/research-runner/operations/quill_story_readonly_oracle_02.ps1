@@ -20,7 +20,16 @@ $ExpectedWitnessSha256 = @(
 $LalamuCommit = "f78cc6f455f4dc222868f9cc035511a6ca7a91ea"
 $AnalysisPath = Join-Path $OutputRoot "analysis\quill-story-readonly-oracle.json"
 $LogPath = Join-Path $OutputRoot "logs\quill-story-readonly-oracle.txt"
-$TempRoot = Join-Path $env:RUNNER_TEMP ("quill-story-readonly-oracle-" + [guid]::NewGuid().ToString("N"))
+$FixtureRoot = [string]$env:PUB_RESEARCH_FIXTURE_ROOT
+$TempBase = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    $env:RUNNER_TEMP
+} else {
+    $env:TEMP
+}
+if ([string]::IsNullOrWhiteSpace($TempBase)) {
+    throw "Neither RUNNER_TEMP nor TEMP is available for temporary witness staging"
+}
+$TempRoot = Join-Path $TempBase ("quill-story-readonly-oracle-" + [guid]::NewGuid().ToString("N"))
 $WitnessDir = Join-Path $TempRoot "witness"
 
 function Close-PubDocument {
@@ -60,12 +69,22 @@ function Get-Utf16LeDigest {
 New-Item -ItemType Directory -Force -Path $WitnessDir | Out-Null
 try {
     foreach ($sha in $ExpectedWitnessSha256) {
-        $url = "https://raw.githubusercontent.com/Lalalalendia/lalamu/$LalamuCommit/pub-corpus/corpus/native/unclassified/$sha.pub"
         $target = Join-Path $WitnessDir "$sha.pub"
-        Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+        if (-not [string]::IsNullOrWhiteSpace($FixtureRoot)) {
+            $source = Join-Path $FixtureRoot "$sha.pub"
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+                throw "Exact local witness missing: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination $target -Force
+        } else {
+            $url = "https://raw.githubusercontent.com/Lalalalendia/lalamu/$LalamuCommit/pub-corpus/corpus/native/unclassified/$sha.pub"
+            Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+        }
+
         $record = Get-PubFileRecord $target
         if ($record.sha256 -ne $sha) {
-            throw "Downloaded witness SHA mismatch for $sha"
+            $mode = if ([string]::IsNullOrWhiteSpace($FixtureRoot)) { "downloaded" } else { "local" }
+            throw "$mode witness SHA mismatch for $sha"
         }
     }
 
@@ -149,7 +168,8 @@ try {
         witness_count = $witnesses.Count
         witnesses = @($witnesses | Sort-Object source_sha256)
         source_commit = $LalamuCommit
-        evidence_boundary = "Exact four SHA-addressed #337 supersets; public pinned donor bytes are downloaded into runner temp and deleted after the run; Publisher Open is read-only only; receipt contains Story UTF-16 lengths and SHA-256 digests, never document text; no Save or SaveAs."
+        witness_source = if ([string]::IsNullOrWhiteSpace($FixtureRoot)) { "pinned_lalamu_download" } else { "exact_local_fixture_root" }
+        evidence_boundary = "Exact four SHA-addressed #337 supersets; witness bytes are SHA-verified and staged into temp from either the exact local fixture root or the pinned public lalamu lineage, then deleted after the run; Publisher Open is read-only only; receipt contains Story UTF-16 lengths and SHA-256 digests, never document text; no Save or SaveAs."
     }
 
     Write-PubJson -Value $receipt -Path $AnalysisPath

@@ -15,6 +15,7 @@ mod locale;
 mod product_smoke;
 mod reader_product_ui;
 mod reader_salvage;
+mod rectangle_creation;
 mod render_backend;
 mod selection_keyboard;
 mod source_font;
@@ -1386,6 +1387,7 @@ struct ViewerApp {
     canvas_selection: SceneSelectionState,
     canvas_drag: Option<MoveTransaction>,
     canvas_resize: Option<ResizeTransaction>,
+    rectangle_creation: rectangle_creation::RectangleCreateSessionV1,
     created_text_box_scene_nodes: BTreeSet<pub_editor::NodeId>,
     text_mode: Option<text_session::DesktopTextMode>,
     zoom: f32,
@@ -1450,6 +1452,7 @@ impl ViewerApp {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -1994,6 +1997,7 @@ impl ViewerApp {
     }
 
     fn load_path(&mut self, path: PathBuf) {
+        self.rectangle_creation = rectangle_creation::RectangleCreateSessionV1::default();
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
         let generation = self.open_state.begin_attempt();
@@ -2293,6 +2297,43 @@ impl ViewerApp {
             }
             if ui.button("Scan PUB folder…").clicked() {
                 self.open_pub_folder_diagnostics();
+            }
+
+            let rectangle_active = self.rectangle_creation.active();
+            let rectangle_response = ui.add_enabled(
+                editor_available && self.visual.is_some(),
+                egui::SelectableLabel::new(rectangle_active, "Rectangle"),
+            );
+            if rectangle_response.clicked() {
+                self.canvas_drag = None;
+                self.canvas_resize = None;
+                if rectangle_active {
+                    match self.rectangle_creation.deactivate_to_select() {
+                        Ok(()) => {
+                            self.edit_status = Some("Rectangle tool deactivated.".to_owned());
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Rectangle tool could not deactivate: {error}"));
+                        }
+                    }
+                } else {
+                    if self.text_mode.is_some() {
+                        self.exit_canvas_text_mode("rectangle_tool_activation");
+                    }
+                    match self.rectangle_creation.activate() {
+                        Ok(()) => {
+                            self.edit_status = Some(
+                                "Rectangle tool active. Drag on the page to create one rectangle."
+                                    .to_owned(),
+                            );
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Rectangle tool could not activate: {error}"));
+                        }
+                    }
+                }
             }
 
             if let Some(label) = document_label {
@@ -4608,7 +4649,30 @@ impl ViewerApp {
             };
 
             if key == egui::Key::Escape {
-                if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
+                if self.rectangle_creation.active() {
+                    if self.rectangle_creation.gesture_token.is_some() {
+                        match self.rectangle_creation.cancel() {
+                            Ok(()) => {
+                                self.edit_status =
+                                    Some("Cancelled the Rectangle draw gesture.".to_owned());
+                            }
+                            Err(error) => {
+                                self.edit_status =
+                                    Some(format!("Rectangle gesture cancel failed: {error}"));
+                            }
+                        }
+                    } else {
+                        match self.rectangle_creation.deactivate_to_select() {
+                            Ok(()) => {
+                                self.edit_status = Some("Rectangle tool deactivated.".to_owned());
+                            }
+                            Err(error) => {
+                                self.edit_status =
+                                    Some(format!("Rectangle tool could not deactivate: {error}"));
+                            }
+                        }
+                    }
+                } else if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
                     self.edit_status = Some("Cancelled the active canvas gesture.".to_owned());
                 } else if self.canvas_selection.len() > 0 {
                     self.canvas_selection.clear();
@@ -5143,6 +5207,8 @@ impl ViewerApp {
         let mut drag_error = None;
         let mut resize_commit = None;
         let mut resize_error = None;
+        let mut rectangle_release = None;
+        let mut rectangle_error = None;
         let mut edit_text_request: Option<(pub_editor::StoryId, pub_editor::NodeId)> = None;
         let mut text_pointer_request: Option<(String, pub_interaction::DocumentPoint)> = None;
         let mut text_exit_request = false;
@@ -5207,6 +5273,62 @@ impl ViewerApp {
                 let press_screen = ui.ctx().input(|input| input.pointer.press_origin());
                 let press_document = press_screen
                     .and_then(|pointer| canvas_document_point(page_rect, scene_scale, pointer));
+                let primary_pressed = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
+                let primary_down = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_down(egui::PointerButton::Primary));
+                let primary_released = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
+
+                if !reader_only_mode()
+                    && self.text_mode.is_none()
+                    && self.rectangle_creation.active()
+                {
+                    if self.rectangle_creation.gesture_token.is_none()
+                        && primary_pressed
+                        && let (Some(pointer_start_screen), Some(pointer_start)) =
+                            (press_screen, press_document)
+                        && page_rect.contains(pointer_start_screen)
+                        && let Err(error) = self.rectangle_creation.pointer_down(
+                            page.id,
+                            pointer_start,
+                            "rectangle-draw-v1".to_owned(),
+                        )
+                    {
+                        rectangle_error = Some(format!("Rectangle draw could not start: {error}"));
+                    }
+
+                    if self.rectangle_creation.gesture_token.is_some()
+                        && primary_down
+                        && let Some(point) = pointer_document
+                        && let Err(error) = self.rectangle_creation.pointer_move(point)
+                    {
+                        let _ = self.rectangle_creation.cancel();
+                        rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
+                    }
+
+                    if self.rectangle_creation.gesture_token.is_some() && primary_released {
+                        if let Some(point) = pointer_document {
+                            match self.rectangle_creation.pointer_up(point) {
+                                Ok(release) => rectangle_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.rectangle_creation.cancel();
+                                    rectangle_error =
+                                        Some(format!("Rectangle draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error = Some(
+                                "Rectangle draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
@@ -5214,69 +5336,101 @@ impl ViewerApp {
                     && let (Some(pointer_start), Some(pointer_current)) =
                         (press_document, pointer_document)
                 {
-                    let mut resize_started = false;
-                    if let (Some(selected_instance), Some(pointer_start_screen)) =
-                        (selected_canvas_instance.as_deref(), press_screen)
-                        && let Some((node_id, before)) =
-                            resizable_nodes.get(selected_instance).copied()
-                    {
-                        let selected_screen_bounds = ScreenRect::new(
-                            f64::from(page_rect.left() + before.x.get() as f32 * scene_scale),
-                            f64::from(page_rect.top() + before.y.get() as f32 * scene_scale),
-                            f64::from(before.width.get() as f32 * scene_scale),
-                            f64::from(before.height.get() as f32 * scene_scale),
-                        );
-                        if let Ok(selected_screen_bounds) = selected_screen_bounds
-                            && let Ok(ResizePointerDown::Handle(handle)) =
-                                classify_resize_pointer_down(
-                                    selected_screen_bounds,
-                                    ScreenPoint::new(
-                                        f64::from(pointer_start_screen.x),
-                                        f64::from(pointer_start_screen.y),
-                                    ),
-                                    6.0,
+                    if self.rectangle_creation.active() {
+                        next_canvas_drag = None;
+                        next_canvas_resize = None;
+                        let result = if self.rectangle_creation.gesture_token.is_none() {
+                            self.rectangle_creation
+                                .pointer_down(
+                                    page.id,
+                                    pointer_start,
+                                    "rectangle-draw-v1".to_owned(),
                                 )
+                                .and_then(|()| {
+                                    self.rectangle_creation
+                                        .pointer_move(pointer_current)
+                                        .map(|_| ())
+                                })
+                        } else {
+                            self.rectangle_creation
+                                .pointer_move(pointer_current)
+                                .map(|_| ())
+                        };
+                        if let Err(error) = result {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error =
+                                Some(format!("Rectangle draw could not start: {error}"));
+                        }
+                    } else {
+                        let mut resize_started = false;
+                        if let (Some(selected_instance), Some(pointer_start_screen)) =
+                            (selected_canvas_instance.as_deref(), press_screen)
+                            && let Some((node_id, before)) =
+                                resizable_nodes.get(selected_instance).copied()
                         {
-                            resize_started = true;
-                            canvas_hit = Some(selected_instance.to_owned());
-                            next_canvas_drag = None;
-                            match ResizeTransaction::begin(node_id, before, handle, pointer_start) {
-                                Ok(mut resize) => match resize.update(pointer_current) {
-                                    Ok(ResizeUpdate::Preview(_))
-                                    | Ok(ResizeUpdate::Invalid { .. }) => {
-                                        next_canvas_resize = Some(resize);
-                                    }
+                            let selected_screen_bounds = ScreenRect::new(
+                                f64::from(page_rect.left() + before.x.get() as f32 * scene_scale),
+                                f64::from(page_rect.top() + before.y.get() as f32 * scene_scale),
+                                f64::from(before.width.get() as f32 * scene_scale),
+                                f64::from(before.height.get() as f32 * scene_scale),
+                            );
+                            if let Ok(selected_screen_bounds) = selected_screen_bounds
+                                && let Ok(ResizePointerDown::Handle(handle)) =
+                                    classify_resize_pointer_down(
+                                        selected_screen_bounds,
+                                        ScreenPoint::new(
+                                            f64::from(pointer_start_screen.x),
+                                            f64::from(pointer_start_screen.y),
+                                        ),
+                                        6.0,
+                                    )
+                            {
+                                resize_started = true;
+                                canvas_hit = Some(selected_instance.to_owned());
+                                next_canvas_drag = None;
+                                match ResizeTransaction::begin(
+                                    node_id,
+                                    before,
+                                    handle,
+                                    pointer_start,
+                                ) {
+                                    Ok(mut resize) => match resize.update(pointer_current) {
+                                        Ok(ResizeUpdate::Preview(_))
+                                        | Ok(ResizeUpdate::Invalid { .. }) => {
+                                            next_canvas_resize = Some(resize);
+                                        }
+                                        Err(error) => {
+                                            next_canvas_resize = None;
+                                            resize_error =
+                                                Some(format!("Object resize cancelled: {error}"));
+                                        }
+                                    },
                                     Err(error) => {
                                         next_canvas_resize = None;
                                         resize_error =
                                             Some(format!("Object resize cancelled: {error}"));
                                     }
-                                },
-                                Err(error) => {
-                                    next_canvas_resize = None;
-                                    resize_error =
-                                        Some(format!("Object resize cancelled: {error}"));
                                 }
                             }
                         }
-                    }
 
-                    if !resize_started && let Some(hit) = hit_index.topmost_at(pointer_start) {
-                        canvas_hit = Some(hit.instance_id.clone());
-                        next_canvas_resize = None;
-                        if let Some((node_id, before)) =
-                            movable_nodes.get(&hit.instance_id).copied()
-                        {
-                            match MoveTransaction::begin(node_id, before, pointer_start).and_then(
-                                |mut drag| {
-                                    drag.update(pointer_current)?;
-                                    Ok(drag)
-                                },
-                            ) {
-                                Ok(drag) => next_canvas_drag = Some(drag),
-                                Err(error) => {
-                                    next_canvas_drag = None;
-                                    drag_error = Some(format!("Object move cancelled: {error}"));
+                        if !resize_started && let Some(hit) = hit_index.topmost_at(pointer_start) {
+                            canvas_hit = Some(hit.instance_id.clone());
+                            next_canvas_resize = None;
+                            if let Some((node_id, before)) =
+                                movable_nodes.get(&hit.instance_id).copied()
+                            {
+                                match MoveTransaction::begin(node_id, before, pointer_start)
+                                    .and_then(|mut drag| {
+                                        drag.update(pointer_current)?;
+                                        Ok(drag)
+                                    }) {
+                                    Ok(drag) => next_canvas_drag = Some(drag),
+                                    Err(error) => {
+                                        next_canvas_drag = None;
+                                        drag_error =
+                                            Some(format!("Object move cancelled: {error}"));
+                                    }
                                 }
                             }
                         }
@@ -5285,7 +5439,26 @@ impl ViewerApp {
                     && self.text_mode.is_none()
                     && response.drag_stopped_by(egui::PointerButton::Primary)
                 {
-                    if let (Some(mut resize), Some(point)) =
+                    if self.rectangle_creation.active()
+                        && self.rectangle_creation.gesture_token.is_some()
+                    {
+                        if let Some(point) = pointer_document {
+                            match self.rectangle_creation.pointer_up(point) {
+                                Ok(release) => rectangle_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.rectangle_creation.cancel();
+                                    rectangle_error =
+                                        Some(format!("Rectangle draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error = Some(
+                                "Rectangle draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
+                    } else if let (Some(mut resize), Some(point)) =
                         (next_canvas_resize.take(), pointer_document)
                     {
                         match resize.update(point) {
@@ -5321,7 +5494,16 @@ impl ViewerApp {
                     && response.dragged_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
-                    if let Some(mut resize) = next_canvas_resize {
+                    if self.rectangle_creation.active()
+                        && self.rectangle_creation.gesture_token.is_some()
+                    {
+                        if let Some(point) = pointer_document
+                            && let Err(error) = self.rectangle_creation.pointer_move(point)
+                        {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
+                        }
+                    } else if let Some(mut resize) = next_canvas_resize {
                         match resize.update(point) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
                                 next_canvas_resize = Some(resize);
@@ -5343,6 +5525,7 @@ impl ViewerApp {
                 }
 
                 if !reader_only_mode()
+                    && !self.rectangle_creation.active()
                     && response.clicked_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
@@ -5509,6 +5692,31 @@ impl ViewerApp {
                     }
                 }
 
+                if self.rectangle_creation.page_id == Some(page.id)
+                    && let Ok(rectangle_creation::RectangleCreatePreviewV1::Bounds(bounds)) =
+                        self.rectangle_creation.preview()
+                    && let Some(preview_rect) = render_backend::physical_rect_to_egui(
+                        page_rect,
+                        scene_scale,
+                        bounds.x.get(),
+                        bounds.y.get(),
+                        bounds.width.get(),
+                        bounds.height.get(),
+                    )
+                {
+                    painter.rect_filled(
+                        preview_rect,
+                        0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 48),
+                    );
+                    painter.rect_stroke(
+                        preview_rect,
+                        0,
+                        egui::Stroke::new(1.5_f32, egui::Color32::BLACK),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
                 if let Some(mode) = self.text_mode.as_ref()
                     && let Some(stop) = text_session::focus_caret(mode)
                     && stop.page_id == page_id_text
@@ -5637,6 +5845,46 @@ impl ViewerApp {
                     }
                 }
             });
+
+        if let Some(error) = rectangle_error {
+            self.edit_status = Some(error);
+        }
+        if let Some(release) = rectangle_release {
+            let created_page_id = match release {
+                rectangle_creation::RectangleCreateReleaseV1::Commit { page_id, .. } => {
+                    Some(page_id)
+                }
+                rectangle_creation::RectangleCreateReleaseV1::NoChange => None,
+            };
+            let outcome = match self.editor.as_mut() {
+                Some(editor) => self.rectangle_creation.commit_release(editor, release),
+                None => Err("Editor session is unavailable.".to_owned()),
+            };
+            match outcome {
+                Ok(Some(node_id)) => {
+                    self.finish_authoring_change(
+                        "Created Rectangle in the authoring session. One CreateShape operation was committed.",
+                    );
+                    if let Some(page_id) = created_page_id {
+                        match direct_page_local_instance_v1(
+                            &node_id.as_canonical().to_string(),
+                            &page_id.as_canonical().to_string(),
+                        ) {
+                            Ok(instance) => self.canvas_selection.select_only(instance.instance_id),
+                            Err(error) => {
+                                self.edit_status = Some(format!(
+                                    "Rectangle was created, but durable selection could not bind: {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.edit_status = Some(error);
+                }
+            }
+        }
 
         if text_exit_request {
             self.exit_canvas_text_mode("canvas_non_text_click");
@@ -6828,6 +7076,7 @@ mod tests {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -6896,6 +7145,7 @@ mod tests {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -7179,6 +7429,7 @@ mod tests {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
