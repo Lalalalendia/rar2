@@ -6177,7 +6177,7 @@ mod tests {
     fn source_pub_is_not_a_write_target_by_construction() {
         let source = include_str!("main.rs");
         let production_source = source
-            .split_once("#[cfg(test)]")
+            .split_once("\n#[cfg(test)]\nmod tests {")
             .map_or(source, |(production, _)| production);
 
         assert!(production_source.contains("fs::read(&path)"));
