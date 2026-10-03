@@ -26,15 +26,25 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::CanonicalId;
+use pub_model::{CanonicalId, LengthEmu, StoryId};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const EXPORT_PLAN_SCHEMA_V0_1: &str = "0.1";
 pub const STORY_FONT_FAMILY_FEATURE: &str = "story.typography.font_family";
 pub const STORY_FONT_SIZE_FEATURE: &str = "story.typography.font_size";
 pub const STORY_TEXT_COLOR_FEATURE: &str = "story.typography.color";
 pub const STORY_PARAGRAPH_ALIGNMENT_FEATURE: &str = "story.paragraph_alignment";
+pub const FULL_STORY_TYPOGRAPHY_SCHEMA_V1: &str = "chaptera.full-story-typography.v1";
+
+/// Target-neutral bounded typography authority for a Story whose entire text
+/// range is proven to use one explicit font family and one explicit font size.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FullStoryTypographyV1 {
+    pub story_id: StoryId,
+    pub font_family: String,
+    pub font_size_emu: LengthEmu,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TargetProfile {
@@ -61,6 +71,49 @@ pub struct TargetCapabilityManifest {
     /// Semantic feature key -> strongest disposition the adapter declares.
     pub features: BTreeMap<String, CapabilityLevel>,
 }
+
+/// Exact request-level capability exception layered over the target-global
+/// manifest. This is intentionally scoped by semantic origin + feature so a
+/// bounded proof cannot silently upgrade unrelated requests of the same kind.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ScopedCapabilityOverride {
+    pub origin: CanonicalId,
+    pub feature: String,
+    pub disposition: CapabilityLevel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScopedCapabilityError {
+    DuplicateOverride {
+        origin: CanonicalId,
+        feature: String,
+    },
+    UnusedOverride {
+        origin: CanonicalId,
+        feature: String,
+    },
+}
+
+impl std::fmt::Display for ScopedCapabilityError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateOverride { origin, feature } => {
+                write!(
+                    formatter,
+                    "duplicate scoped capability override {feature} @ {origin}"
+                )
+            }
+            Self::UnusedOverride { origin, feature } => {
+                write!(
+                    formatter,
+                    "unused scoped capability override {feature} @ {origin}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ScopedCapabilityError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SemanticFeatureRequest {
@@ -142,20 +195,54 @@ impl ExportPlan {
 /// semantic requirements + target manifest produce the same plan.
 pub fn plan_export(
     manifest: &TargetCapabilityManifest,
-    mut requests: Vec<SemanticFeatureRequest>,
+    requests: Vec<SemanticFeatureRequest>,
 ) -> ExportPlan {
+    plan_export_with_scoped_capabilities(manifest, requests, Vec::new())
+        .expect("empty scoped capability set is always valid")
+}
+
+pub fn plan_export_with_scoped_capabilities(
+    manifest: &TargetCapabilityManifest,
+    mut requests: Vec<SemanticFeatureRequest>,
+    overrides: Vec<ScopedCapabilityOverride>,
+) -> Result<ExportPlan, ScopedCapabilityError> {
     requests.sort();
 
+    let mut scoped = BTreeMap::<(CanonicalId, String), CapabilityLevel>::new();
+    for item in overrides {
+        let key = (item.origin, item.feature.clone());
+        if scoped.insert(key, item.disposition).is_some() {
+            return Err(ScopedCapabilityError::DuplicateOverride {
+                origin: item.origin,
+                feature: item.feature,
+            });
+        }
+    }
+
+    let mut used = BTreeSet::<(CanonicalId, String)>::new();
     let mut features = Vec::with_capacity(requests.len());
     let mut losses = Vec::new();
     let mut blockers = Vec::new();
 
     for request in requests {
-        let disposition = manifest
-            .features
-            .get(&request.feature)
-            .copied()
-            .unwrap_or(CapabilityLevel::Unsupported);
+        let scoped_key = request
+            .origin
+            .map(|origin| (origin, request.feature.clone()));
+        let disposition = scoped_key
+            .as_ref()
+            .and_then(|key| scoped.get(key).copied())
+            .unwrap_or_else(|| {
+                manifest
+                    .features
+                    .get(&request.feature)
+                    .copied()
+                    .unwrap_or(CapabilityLevel::Unsupported)
+            });
+        if let Some(key) = scoped_key {
+            if scoped.contains_key(&key) {
+                used.insert(key);
+            }
+        }
 
         let planned = PlannedFeature {
             request: request.clone(),
@@ -173,14 +260,21 @@ pub fn plan_export(
         features.push(planned);
     }
 
-    ExportPlan {
+    if let Some((origin, feature)) = scoped.keys().find(|key| !used.contains(*key)) {
+        return Err(ScopedCapabilityError::UnusedOverride {
+            origin: *origin,
+            feature: feature.clone(),
+        });
+    }
+
+    Ok(ExportPlan {
         schema_version: EXPORT_PLAN_SCHEMA_V0_1.to_owned(),
         target: manifest.target.clone(),
         conversion_fence: None,
         features,
         losses,
         blockers,
-    }
+    })
 }
 
 pub fn plan_export_fenced(
@@ -339,6 +433,114 @@ mod tests {
         assert!(plan.can_serialize());
         assert_eq!(plan.losses[0].kind, LossKind::Flattened);
         assert_eq!(plan.losses[0].severity, LossSeverity::Structural);
+    }
+
+    #[test]
+    fn scoped_capability_override_is_exact_origin_and_feature_only() {
+        let manifest = TargetCapabilityManifest {
+            target: target(),
+            features: BTreeMap::new(),
+        };
+        let origin = id(7);
+        let other = id(8);
+        let request = |feature: &str, origin| SemanticFeatureRequest {
+            feature: feature.into(),
+            origin: Some(origin),
+            property_path: None,
+            require_preserved: false,
+        };
+
+        let plan = plan_export_with_scoped_capabilities(
+            &manifest,
+            vec![
+                request(STORY_FONT_FAMILY_FEATURE, origin),
+                request(STORY_FONT_SIZE_FEATURE, origin),
+                request(STORY_TEXT_COLOR_FEATURE, origin),
+                request(STORY_FONT_FAMILY_FEATURE, other),
+            ],
+            vec![
+                ScopedCapabilityOverride {
+                    origin,
+                    feature: STORY_FONT_FAMILY_FEATURE.into(),
+                    disposition: CapabilityLevel::Preserved,
+                },
+                ScopedCapabilityOverride {
+                    origin,
+                    feature: STORY_FONT_SIZE_FEATURE.into(),
+                    disposition: CapabilityLevel::Preserved,
+                },
+            ],
+        )
+        .expect("scoped plan");
+
+        let disposition = |feature: &str, request_origin| {
+            plan.features
+                .iter()
+                .find(|planned| {
+                    planned.request.feature == feature
+                        && planned.request.origin == Some(request_origin)
+                })
+                .map(|planned| planned.disposition)
+                .expect("planned feature")
+        };
+
+        assert_eq!(
+            disposition(STORY_FONT_FAMILY_FEATURE, origin),
+            CapabilityLevel::Preserved
+        );
+        assert_eq!(
+            disposition(STORY_FONT_SIZE_FEATURE, origin),
+            CapabilityLevel::Preserved
+        );
+        assert_eq!(
+            disposition(STORY_TEXT_COLOR_FEATURE, origin),
+            CapabilityLevel::Unsupported
+        );
+        assert_eq!(
+            disposition(STORY_FONT_FAMILY_FEATURE, other),
+            CapabilityLevel::Unsupported
+        );
+        assert_eq!(plan.losses.len(), 2);
+    }
+
+    #[test]
+    fn scoped_capability_override_rejects_stale_or_duplicate_proof() {
+        let manifest = TargetCapabilityManifest {
+            target: target(),
+            features: BTreeMap::new(),
+        };
+        let request = SemanticFeatureRequest {
+            feature: STORY_FONT_FAMILY_FEATURE.into(),
+            origin: Some(id(9)),
+            property_path: None,
+            require_preserved: false,
+        };
+        let override_item = ScopedCapabilityOverride {
+            origin: id(9),
+            feature: STORY_FONT_FAMILY_FEATURE.into(),
+            disposition: CapabilityLevel::Preserved,
+        };
+
+        assert!(matches!(
+            plan_export_with_scoped_capabilities(
+                &manifest,
+                vec![request.clone()],
+                vec![override_item.clone(), override_item],
+            ),
+            Err(ScopedCapabilityError::DuplicateOverride { .. })
+        ));
+        assert!(matches!(
+            plan_export_with_scoped_capabilities(
+                &manifest,
+                vec![request],
+                vec![ScopedCapabilityOverride {
+                    origin: id(10),
+                    feature: STORY_FONT_FAMILY_FEATURE.into(),
+                    disposition: CapabilityLevel::Preserved,
+                }],
+            ),
+            Err(ScopedCapabilityError::UnusedOverride { .. })
+        ));
     }
 
     #[test]
