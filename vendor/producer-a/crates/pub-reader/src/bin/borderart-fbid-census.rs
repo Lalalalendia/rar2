@@ -184,29 +184,32 @@ fn parse_oplfb_name(
     let limit = start.checked_add(len).context("OplFb content end overflow")?;
 
     let mut cursor = ContentsCursor::bounded(stream, contents, start, len)?;
-    if cursor.remaining() < 2 {
-        anyhow::bail!("empty OplFb child at 0x{start:X}");
+    while cursor.remaining() >= 2 {
+        let position = cursor.position();
+        let (field_id, wire_type) =
+            decode_packed_field_tag([contents[position], contents[position + 1]]);
+        if field_id == OPLFB_SZ_FBRD_NAME_FIELD && wire_type == BLOCK_TYPE_UTF16_Z {
+            let (name, end, name_source_offset) =
+                decode_utf16_z_field(contents, position, limit)?;
+            if end > limit {
+                anyhow::bail!("OplFb name crosses child boundary");
+            }
+            return Ok(CatalogNameObservation {
+                ordinal: 0,
+                name,
+                child_source_offset: child.source.offset,
+                name_source_offset,
+            });
+        }
+
+        parse_confirmed_block(&mut cursor).with_context(|| {
+            format!(
+                "parse OplFb pre-name field0x{field_id:02X}/wire0x{wire_type:02X} at 0x{position:X}"
+            )
+        })?;
     }
 
-    let (first_id, first_wire) =
-        decode_packed_field_tag([contents[cursor.position()], contents[cursor.position() + 1]]);
-    if first_id == 0x02 && first_wire == BLOCK_TYPE_U32 {
-        parse_confirmed_block(&mut cursor).context("parse optional OplFb field0x02")?;
-    }
-
-    let name_offset = cursor.position();
-    let (name, end, name_source_offset) =
-        decode_utf16_z_field(contents, name_offset, limit)?;
-    if end > limit {
-        anyhow::bail!("OplFb name crosses child boundary");
-    }
-
-    Ok(CatalogNameObservation {
-        ordinal: 0,
-        name,
-        child_source_offset: child.source.offset,
-        name_source_offset,
-    })
+    anyhow::bail!("OplFb child at 0x{start:X} has no bounded SzFBrdName")
 }
 
 fn parse_catalog_names(
