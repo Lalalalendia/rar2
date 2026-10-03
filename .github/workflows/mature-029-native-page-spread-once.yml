@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/mature-029-native-page-spread-once.yml"
       - "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
+      - "tools/windows/run_mature_029_native_page_spread_direct.ps1"
   push:
     branches:
       - main
@@ -17,7 +18,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: mature-029-native-page-spread-publisher-2019
+  group: mature-029-native-page-spread-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -60,6 +61,23 @@ jobs:
           if ($errors.Count -ne 0) {
             $errors | ForEach-Object { Write-Error $_.Message }
             throw "PowerShell parser rejected native 029 probe."
+          }
+
+      - name: Parse direct offline fallback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_mature_029_native_page_spread_direct.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected direct 029 fallback."
           }
 
       - name: Enforce read-only source contract
