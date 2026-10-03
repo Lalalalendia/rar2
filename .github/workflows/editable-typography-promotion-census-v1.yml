@@ -1,0 +1,121 @@
+name: Editable Typography Promotion Census V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-typography-promotion-census-v1.yml"
+      - "tools/ci/editable_typography_promotion_census.py"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-reader/**"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: editable-typography-promotion-census-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/editable-typography-promotion-census
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/editable-typography-promotion-census-evidence
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+      PINNED_CORPUS_COUNT: "1050"
+      PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate corpus SHA"
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          print(f"verified {len(paths)} exact PUB files; sha-list digest={digest}")
+          PY
+
+      - name: Build bounded typography probe
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor --release --bin editable_typography_probe
+
+      - name: Census exact bounded typography classes
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          python tools/ci/editable_typography_promotion_census.py \
+            --corpus-root "$CORPUS_ROOT" \
+            --probe "$CARGO_TARGET_DIR/release/editable_typography_probe" \
+            --output "$EVIDENCE_ROOT/receipt.json"
+
+      - name: Verify census is measurement-only
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["EVIDENCE_ROOT"]) / "receipt.json"
+          data = json.loads(path.read_text())
+          assert data["schema"] == "chaptera.editable-typography-promotion-census.v1"
+          assert data["corpus_file_count"] == int(os.environ["PINNED_CORPUS_COUNT"])
+          assert data["claims"] == {
+              "consumer_survival_proven_by_this_receipt": False,
+              "loss_report_or_manifest_changed": False,
+              "measurement_only": True,
+              "story_text_recorded": False,
+          }
+          assert data["eligible_story_count"] >= data["montserrat"]["story_count"]
+          assert data["montserrat"]["story_count"] == sum(
+              int(value)
+              for value in data["montserrat"]["size_emu_story_counts"].values()
+          )
+          print("promotion census receipt validated")
+          PY
+
+      - name: Upload source-safe promotion census
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editable-typography-promotion-census-v1-${{ github.run_id }}
+          path: target/editable-typography-promotion-census-evidence/receipt.json
+          if-no-files-found: error
+          retention-days: 90
