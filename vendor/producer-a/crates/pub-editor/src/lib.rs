@@ -9,6 +9,7 @@
 mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
+mod duplicate_authored_rectangle_v1;
 mod writer_assessment;
 
 pub use authored_stack_lifecycle_v1::{
@@ -27,6 +28,11 @@ pub use create_shape_runtime_v1::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     CreateShapeRuntimeValidationError, Srgb8V1, validate_authored_shape_runtime_v1,
+};
+pub use duplicate_authored_rectangle_v1::{
+    DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1,
+    DuplicateAuthoredRectangleErrorV1, DuplicateAuthoredRectanglePlanV1,
+    plan_duplicate_authored_rectangle_v1, validate_duplicate_authored_rectangle_source_v1,
 };
 pub use writer_assessment::{
     EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
@@ -1894,6 +1900,48 @@ impl EditorSession {
                 .cloned()
                 .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
         })
+    }
+
+    pub fn can_duplicate_authored_rectangle(
+        &self,
+        source_node_id: NodeId,
+    ) -> Result<(), DuplicateAuthoredRectangleErrorV1> {
+        self.validate_source_identity()
+            .map_err(DuplicateAuthoredRectangleErrorV1::Commit)?;
+        let source = self.authored_shapes.get(&source_node_id).ok_or(
+            DuplicateAuthoredRectangleErrorV1::SourceUnsupported {
+                node_id: source_node_id,
+            },
+        )?;
+        if !self.graph.pages.contains_key(&source.page_id) {
+            return Err(DuplicateAuthoredRectangleErrorV1::SourceUnsupported {
+                node_id: source_node_id,
+            });
+        }
+        validate_duplicate_authored_rectangle_source_v1(source)
+    }
+
+    pub fn duplicate_authored_rectangle(
+        &mut self,
+        source_node_id: NodeId,
+        destination_node_id: NodeId,
+        placement_policy: &str,
+    ) -> Result<EditOperation, DuplicateAuthoredRectangleErrorV1> {
+        self.can_duplicate_authored_rectangle(source_node_id)?;
+        let source = self
+            .authored_shapes
+            .get(&source_node_id)
+            .expect("Duplicate capability verified current authored source")
+            .clone();
+        let plan =
+            plan_duplicate_authored_rectangle_v1(&source, destination_node_id, placement_policy)?;
+        self.create_shape(
+            plan.destination_node_id,
+            plan.page_id,
+            plan.bounds,
+            plan.paint,
+        )
+        .map_err(DuplicateAuthoredRectangleErrorV1::Commit)
     }
 
     pub fn source_image_count(&self) -> usize {
