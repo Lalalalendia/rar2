@@ -23,6 +23,7 @@ mod ole_presentation;
 mod resolve;
 mod salvage;
 mod salvage_authority;
+mod story65_diagnostic;
 mod structural_base;
 mod table_bridge;
 mod wmf;
@@ -126,6 +127,11 @@ pub use salvage::{
     probe_reader_salvage_candidate_with_trigger,
 };
 pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
+pub use story65_diagnostic::{
+    PUB_STORY65_CONTINUATION_DIAGNOSTIC_SCHEMA_V1, PubQuillStoryState,
+    PubStory65CatalogState, PubStory65ContinuationDiagnostic, PubStory65ForcedGraphSummary,
+    PubStory65LiveStoryDemand, build_story65_continuation_diagnostic,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
