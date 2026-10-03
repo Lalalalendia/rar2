@@ -64,8 +64,9 @@ pub use pub_reader::{
 };
 use pub_reader::{
     FailureCode, FailureEnvelope, FailureEnvelopeContext, FailureParserStage,
-    FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
-    LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
+    FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, Legacy22PageListDialectV1,
+    LegacyOleCachedPresentationScan, LegacyOleCachedPresentationSelection,
+    MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
@@ -75,7 +76,7 @@ use pub_reader::{
     build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
     derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
     read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
-    select_unambiguous_legacy_ole_cached_presentation,
+    select_legacy_0x22_page_list_presentation_v1, select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1758,6 +1759,48 @@ enum ViewerPageSelectionDisposition {
     },
 }
 
+fn select_legacy22_viewer_pages(
+    bytes: &[u8],
+    source: &PubSourceGraphBuild,
+    dialect: Legacy22PageListDialectV1,
+) -> ViewerPageSelection {
+    let generic = || ViewerPageSelection {
+        page_ids: source.effective_pages.page_ids.clone(),
+        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
+    };
+
+    let selection = match select_legacy_0x22_page_list_presentation_v1(
+        Cursor::new(bytes),
+        dialect,
+    ) {
+        Ok(Some(selection)) => selection,
+        Ok(None) | Err(_) => return generic(),
+    };
+    if selection.materialized_page_count != source.effective_pages.page_ids.len() {
+        return generic();
+    }
+
+    let mut page_ids = Vec::with_capacity(selection.customer_page_indices.len());
+    for index in selection.customer_page_indices {
+        let Some(page_id) = source.effective_pages.page_ids.get(index).copied() else {
+            return generic();
+        };
+        page_ids.push(page_id);
+    }
+    if page_ids.is_empty() {
+        return generic();
+    }
+
+    ViewerPageSelection {
+        page_ids,
+        disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+            profile_id: selection.profile_id.to_owned(),
+            raw_page_count: selection.materialized_page_count,
+            customer_page_count: selection.customer_page_indices.len(),
+        },
+    }
+}
+
 /// Opens one mature 0x2C Publisher file into the read-only Viewer manifest.
 ///
 /// This function never writes to the supplied bytes and does not construct a
@@ -1926,10 +1969,8 @@ fn open_legacy_0x22_noquill_bundle(
         .context("build legacy-0x22 no-Quill PUB source graph for Viewer")?;
     let resolved = resolve_pub_source_graph(&source.graph)
         .context("resolve legacy no-Quill PUB source graph for Viewer")?;
-    let page_selection = ViewerPageSelection {
-        page_ids: source.effective_pages.page_ids.clone(),
-        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
-    };
+    let page_selection =
+        select_legacy22_viewer_pages(bytes, &source, Legacy22PageListDialectV1::NoQuill);
     let mut document = viewer_document_from_graph(
         bytes.len(),
         source_hash,
@@ -2064,10 +2105,8 @@ fn open_legacy_0x22_quill_bundle(
         .context("build legacy-0x22+Quill PUB source graph for Viewer")?;
     let resolved = resolve_pub_source_graph(&source.graph)
         .context("resolve legacy PUB source graph for Viewer")?;
-    let page_selection = ViewerPageSelection {
-        page_ids: source.effective_pages.page_ids.clone(),
-        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
-    };
+    let page_selection =
+        select_legacy22_viewer_pages(bytes, &source, Legacy22PageListDialectV1::Quill);
     let mut document = viewer_document_from_graph(
         bytes.len(),
         source_hash,
