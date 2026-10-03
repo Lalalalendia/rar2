@@ -24,10 +24,10 @@ use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, LossItem, LossKind, LossSeverity, PersistenceCompatibilityAssessment,
     PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
-    PersistenceTargetProfile, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
-    WriterCapabilityManifest, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
-    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, assess_persistence_compatibility,
-    build_export_report, plan_export, render_human_summary,
+    PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
+    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, SemanticFeatureRequest,
+    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    assess_persistence_compatibility, build_export_report, plan_export, render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
@@ -4091,7 +4091,12 @@ fn editable_export_plan(
 
     let typography_stories = source_typography_runs
         .iter()
-        .filter_map(|run| graph.stories.contains_key(&run.story_id).then_some(run.story_id))
+        .filter_map(|run| {
+            graph
+                .stories
+                .contains_key(&run.story_id)
+                .then_some(run.story_id)
+        })
         .collect::<BTreeSet<_>>();
     let color_stories = source_typography_runs
         .iter()
@@ -4102,7 +4107,12 @@ fn editable_export_plan(
         .collect::<BTreeSet<_>>();
     let alignment_stories = source_paragraph_alignments
         .iter()
-        .filter_map(|run| graph.stories.contains_key(&run.story_id).then_some(run.story_id))
+        .filter_map(|run| {
+            graph
+                .stories
+                .contains_key(&run.story_id)
+                .then_some(run.story_id)
+        })
         .collect::<BTreeSet<_>>();
 
     for story_id in typography_stories {
