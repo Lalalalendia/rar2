@@ -585,14 +585,36 @@ pub fn run_guest_scene_worker(
 }
 
 fn classify_projection_failure(error: &str) -> &'static str {
-    if error.contains("projected Scene") || error.contains("projected instance") {
+    if error.contains("duplicate Viewer node id") {
+        "node_duplicate_id"
+    } else if error.contains("has non-positive bounds") {
+        "node_non_positive_bounds"
+    } else if error.contains("parent cycle") {
+        "node_parent_cycle"
+    } else if error.contains("resolves to neither page nor node")
+        || error.contains("missing Viewer node")
+    {
+        "node_parent_unresolved"
+    } else if error.contains("duplicate Viewer image resource") {
+        "image_duplicate_resource"
+    } else if error.contains("image placement references unknown node") {
+        "image_placement_unknown_node"
+    } else if error.contains("duplicate image source window") {
+        "image_duplicate_source_window"
+    } else if error.contains("duplicate image recolor") {
+        "image_duplicate_recolor"
+    } else if error.contains("image resource references unknown node") {
+        "image_resource_unknown_node"
+    } else if error.contains("has multiple image resources") {
+        "image_multiple_resources_per_node"
+    } else if error.contains("projected Scene") || error.contains("projected instance") {
         "projected_instance"
     } else if error.contains("image resource")
         || error.contains("image placement")
         || error.contains("image source window")
         || error.contains("image recolor")
     {
-        "image_binding"
+        "image_binding_other"
     } else if error.contains("table") {
         "table_binding"
     } else if error.contains("story frame")
@@ -605,7 +627,7 @@ fn classify_projection_failure(error: &str) -> &'static str {
         "page_binding"
     } else if error.contains("Viewer node") || error.contains("parent") || error.contains("node id")
     {
-        "node_geometry"
+        "node_geometry_other"
     } else if error.contains("paint") {
         "paint_binding"
     } else if error.contains("source hash") {
