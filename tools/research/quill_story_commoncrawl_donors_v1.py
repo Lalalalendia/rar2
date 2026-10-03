@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import concurrent.futures
 import hashlib
 import json
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -59,18 +59,10 @@ def crawl_year(crawl_id: str) -> int:
         return 9999
 
 
-def url_variants(url: str) -> list[str]:
+def canonical_index_url(url: str) -> str:
     split = urllib.parse.urlsplit(url)
-    hosts = [split.netloc]
-    if not split.netloc.startswith("www."):
-        hosts.append("www." + split.netloc)
-    variants = []
-    for scheme in ("http", "https"):
-        for host in hosts:
-            variants.append(
-                urllib.parse.urlunsplit((scheme, host, split.path, "", ""))
-            )
-    return variants
+    host = split.netloc.removeprefix("www.")
+    return host + split.path
 
 
 def main() -> int:
@@ -96,54 +88,48 @@ def main() -> int:
         seen_capture = set()
 
         query_specs = []
+        candidate_url = canonical_index_url(target["url"])
         for crawl in crawls:
             crawl_id = str(crawl["id"])
             endpoint = str(crawl["cdx-api"])
-            for candidate_url in url_variants(target["url"]):
-                params = {
-                    "url": candidate_url,
-                    "output": "json",
-                    "filter": "status:200",
-                    "collapse": "digest",
-                }
-                query_specs.append(
-                    (crawl_id, candidate_url, endpoint + "?" + urllib.parse.urlencode(params))
-                )
+            params = {
+                "url": candidate_url,
+                "output": "json",
+                "filter": "status:200",
+                "collapse": "digest",
+            }
+            query_specs.append(
+                (crawl_id, candidate_url, endpoint + "?" + urllib.parse.urlencode(params))
+            )
 
-        def run_query(spec):
-            crawl_id, candidate_url, query = spec
+        for query_index, (crawl_id, candidate_url, query) in enumerate(query_specs):
+            if query_index:
+                time.sleep(0.5)
             try:
-                return crawl_id, candidate_url, request_json_lines(query, timeout=14), None
+                rows = request_json_lines(query, timeout=12)
             except Exception as exc:
-                return crawl_id, candidate_url, [], type(exc).__name__
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-            for crawl_id, candidate_url, rows, error_class in pool.map(
-                run_query, query_specs
-            ):
-                if error_class:
-                    errors.append({"crawl": crawl_id, "error_class": error_class})
+                errors.append({"crawl": crawl_id, "error_class": type(exc).__name__})
+                continue
+            for row in rows:
+                key = (
+                    str(row.get("digest", "")),
+                    str(row.get("filename", "")),
+                    str(row.get("offset", "")),
+                )
+                if key in seen_capture:
                     continue
-                for row in rows:
-                    key = (
-                        str(row.get("digest", "")),
-                        str(row.get("filename", "")),
-                        str(row.get("offset", "")),
-                    )
-                    if key in seen_capture:
-                        continue
-                    seen_capture.add(key)
-                    discovered.append(
-                        {
-                            "crawl": crawl_id,
-                            "url": str(row.get("url", candidate_url)),
-                            "timestamp": str(row.get("timestamp", "")),
-                            "digest": str(row.get("digest", "")),
-                            "filename": str(row.get("filename", "")),
-                            "offset": str(row.get("offset", "")),
-                            "length": str(row.get("length", "")),
-                        }
-                    )
+                seen_capture.add(key)
+                discovered.append(
+                    {
+                        "crawl": crawl_id,
+                        "url": str(row.get("url", candidate_url)),
+                        "timestamp": str(row.get("timestamp", "")),
+                        "digest": str(row.get("digest", "")),
+                        "filename": str(row.get("filename", "")),
+                        "offset": str(row.get("offset", "")),
+                        "length": str(row.get("length", "")),
+                    }
+                )
 
         captures = []
         seen_sha = set()
@@ -211,8 +197,8 @@ def main() -> int:
         "targets": report_targets,
         "evidence_boundary": (
             "exact two remaining helenhudspith source URLs only; queries all published "
-            "Common Crawl collections through 2017 across http/https and www/non-www exact "
-            "URL variants; only bounded WARC/ARC range payloads are materialized temporarily; "
+            "Common Crawl collections through 2017 using one scheme-less canonical exact "
+            "URL query per crawl (which CDX canonicalization may match across schemes/www); requests are sequential and throttled; only bounded WARC/ARC range payloads are materialized temporarily; "
             "receipt retains only crawl/timestamp/digest/hash/size/status metadata"
         ),
     }
