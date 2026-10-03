@@ -1,0 +1,330 @@
+name: Measure current benign Publisher migration VBA leads
+
+on:
+  push:
+    branches:
+      - "research/vba-current-benign-migration-leads-01"
+  workflow_dispatch:
+
+concurrency:
+  group: vba-current-benign-leads-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install public-download helper
+        run: python -m pip install --disable-pip-version-check gdown
+
+      - name: Acquire current benign migration artifacts without executing them
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/vba-current/private target/vba-current/public
+
+          # Bill Stuart explicitly shared this file in Microsoft Q&A as his
+          # Publisher-to-PDF macro used on ~2000 PUB files. Keep downloaded
+          # bytes private to the runner.
+          set +e
+          gdown --fuzzy             "https://drive.google.com/file/d/1FVy_PX7vm5c1eV2kl11A4J40SlexMVND/view?usp=sharing"             -O target/vba-current/private/bill-stuart-drive.bin             > target/vba-current/public/bill-gdown.log 2>&1
+          echo "$?" > target/vba-current/public/bill-gdown-exit.txt
+          set -e
+
+          python - <<'PY'
+          from __future__ import annotations
+          import hashlib
+          import html
+          import io
+          import json
+          import re
+          import sys
+          import urllib.parse
+          import urllib.request
+          import zipfile
+          from pathlib import Path
+
+          sys.path.insert(0, "tools")
+          import pub_vba_estate_scan as scanner
+
+          ROOT = Path("target/vba-current")
+          PRIVATE = ROOT / "private"
+          PUBLIC = ROOT / "public"
+          UA = "chaptera-pub-current-benign-leads/1.0"
+          MAX_DOWNLOAD = 50 * 1024 * 1024
+          MAX_MEMBER = 40 * 1024 * 1024
+
+          sources = {
+              "bill-stuart-drive": {
+                  "provenance_url": "https://learn.microsoft.com/en-us/answers/questions/5809729/help-converting-pub-files",
+                  "download_url": "https://drive.google.com/file/d/1FVy_PX7vm5c1eV2kl11A4J40SlexMVND/view?usp=sharing",
+                  "author_shared_for_macro_use": True,
+              },
+              "pubfilerescue": {
+                  "provenance_url": "https://learn.microsoft.com/en-us/answers/questions/5809729/help-converting-pub-files",
+                  "download_url": "https://pubfilerescue.com/",
+                  "author_shared_for_macro_use": True,
+              },
+          }
+
+          def sha256(data: bytes) -> str:
+              return hashlib.sha256(data).hexdigest()
+
+          def fetch(url: str, timeout: int = 25) -> tuple[bytes, dict[str, str], str]:
+              req = urllib.request.Request(url, headers={"User-Agent": UA})
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  data = resp.read(MAX_DOWNLOAD + 1)
+                  if len(data) > MAX_DOWNLOAD:
+                      raise ValueError("download_too_large")
+                  headers = {k.lower(): v for k, v in resp.headers.items()}
+                  return data, headers, resp.geturl()
+
+          def likely_text(data: bytes) -> bool:
+              if not data or b"\x00" in data[:4096]:
+                  return False
+              sample = data[:4096]
+              printable = sum(b in b"\t\r\n" or 32 <= b < 127 for b in sample)
+              return printable / max(1, len(sample)) > 0.82
+
+          def classify_text(data: bytes) -> dict | None:
+              if not likely_text(data):
+                  return None
+              for enc in ("utf-8-sig", "cp1252"):
+                  try:
+                      text = data.decode(enc)
+                      break
+                  except UnicodeDecodeError:
+                      continue
+              else:
+                  return None
+              low = text.casefold()
+              if not any(token in low for token in ("sub ", "function ", "publisher.", "activedocument", "thisdocument", "exportasfixedformat")):
+                  return None
+              families, symbols = scanner.classify_calls(text)
+              return {
+                  "classifier_version": scanner.CALL_CLASSIFIER_VERSION,
+                  "call_families": families,
+                  "symbols": symbols,
+                  "source_text_emitted": False,
+              }
+
+          records = []
+          pub_paths = []
+
+          def record_bytes(source_id: str, label: str, origin_url: str, data: bytes, *, member: str | None = None):
+              item = {
+                  "source_id": source_id,
+                  "label": label,
+                  "origin_url": origin_url,
+                  "sha256": sha256(data),
+                  "byte_len": len(data),
+                  "member": member,
+                  "container_type": "unknown",
+                  "source_classification": None,
+              }
+
+              if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+                  item["container_type"] = "cfb"
+                  p = PRIVATE / f"{source_id}-{item['sha256'][:16]}.pub"
+                  p.write_bytes(data)
+                  pub_paths.append(p)
+              elif data.startswith(b"PK\x03\x04"):
+                  item["container_type"] = "zip"
+                  try:
+                      with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                          for zi in zf.infolist():
+                              if zi.is_dir() or zi.file_size > MAX_MEMBER:
+                                  continue
+                              child = zf.read(zi)
+                              record_bytes(source_id, Path(zi.filename).name or "zip-member", origin_url, child, member=zi.filename)
+                  except zipfile.BadZipFile:
+                      item["zip_status"] = "bad_zip"
+              elif data.startswith(b"MZ"):
+                  item["container_type"] = "pe"
+              elif data.lstrip().startswith((b"<!DOCTYPE", b"<html", b"<HTML")):
+                  item["container_type"] = "html"
+              else:
+                  text_class = classify_text(data)
+                  if text_class:
+                      item["container_type"] = "text"
+                      item["source_classification"] = text_class
+                  else:
+                      item["container_type"] = "binary"
+
+              records.append(item)
+
+          # Google Drive artifact acquired by gdown.
+          bill_path = PRIVATE / "bill-stuart-drive.bin"
+          if bill_path.exists() and bill_path.stat().st_size > 0:
+              record_bytes(
+                  "bill-stuart-drive",
+                  "public-drive-object",
+                  sources["bill-stuart-drive"]["download_url"],
+                  bill_path.read_bytes(),
+              )
+
+          # PubFileRescue: crawl homepage and only same-origin download-looking links.
+          rescue = {
+              "homepage_status": None,
+              "homepage_final_url": None,
+              "candidate_urls": [],
+              "errors": [],
+          }
+          try:
+              home, headers, final = fetch("https://pubfilerescue.com/")
+              rescue["homepage_status"] = "fetched"
+              rescue["homepage_final_url"] = final
+              text = home.decode("utf-8", "replace")
+              hrefs = re.findall(r"""href\s*=\s*["']([^"']+)["']""", text, flags=re.I)
+              candidates = []
+              for href in hrefs:
+                  href = html.unescape(href.strip())
+                  if not href or href.startswith(("#", "mailto:", "javascript:")):
+                      continue
+                  url = urllib.parse.urljoin(final, href)
+                  parsed = urllib.parse.urlparse(url)
+                  if parsed.netloc.casefold() not in {"pubfilerescue.com", "www.pubfilerescue.com"}:
+                      continue
+                  low = url.casefold()
+                  if any(token in low for token in (".zip", ".bas", ".ps1", ".pub", "download", "rescue")):
+                      candidates.append(url)
+              rescue["candidate_urls"] = sorted(set(candidates))[:30]
+
+              for i, url in enumerate(rescue["candidate_urls"]):
+                  try:
+                      data, h, resolved = fetch(url)
+                      cd = h.get("content-disposition", "")
+                      name_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^;"\']+)', cd, flags=re.I)
+                      label = urllib.parse.unquote(name_match.group(1)) if name_match else Path(urllib.parse.urlparse(resolved).path).name
+                      if not label:
+                          label = f"candidate-{i}"
+                      record_bytes("pubfilerescue", label, resolved, data)
+                  except Exception as exc:
+                      rescue["errors"].append({"url": url, "error": type(exc).__name__ + ":" + str(exc)})
+          except Exception as exc:
+              rescue["homepage_status"] = "failed"
+              rescue["errors"].append({"url": "https://pubfilerescue.com/", "error": type(exc).__name__ + ":" + str(exc)})
+
+          # Inert scanner over any recovered CFB/PUB bytes.
+          if pub_paths:
+              scan = scanner.build_receipt(pub_paths, include_paths=False)
+          else:
+              scan = {
+                  "schema": "chaptera.pub-vba-estate-scan.v1",
+                  "call_classifier_version": scanner.CALL_CLASSIFIER_VERSION,
+                  "claims": {
+                      "vba_executed": False,
+                      "ole_com_activated": False,
+                      "external_links_refreshed": False,
+                      "publisher_required": False,
+                      "source_text_emitted": False,
+                      "frequency_is_market_prevalence": False,
+                  },
+                  "totals": {
+                      "file_count": 0,
+                      "cfb_ok": 0,
+                      "cfb_parse_failed": 0,
+                      "read_failed": 0,
+                      "vba_storage_seen_any": 0,
+                      "vba_project_present_any": 0,
+                      "vba_state_counts": {},
+                      "call_family_files": {},
+                      "call_family_hits": {},
+                      "symbol_hits": {},
+                  },
+                  "files": [],
+              }
+
+          # Never emit local filenames or source text. Container/member names are
+          # retained only as public-download provenance metadata.
+          receipt = {
+              "schema": "chaptera.pub-vba-current-benign-leads.v1",
+              "sources": sources,
+              "claims": {
+                  "downloaded_artifacts_executed": False,
+                  "vba_executed": False,
+                  "ole_com_activated": False,
+                  "source_text_emitted": False,
+                  "binary_bytes_uploaded": False,
+                  "frequency_is_market_prevalence": False,
+              },
+              "download_records": sorted(records, key=lambda x: (x["source_id"], x["sha256"], x.get("member") or "")),
+              "pubfilerescue_crawl": rescue,
+              "pub_scanner": scan,
+          }
+          (PUBLIC / "receipt.json").write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          print(json.dumps({
+              "record_count": len(records),
+              "container_types": {
+                  kind: sum(r["container_type"] == kind for r in records)
+                  for kind in sorted({r["container_type"] for r in records})
+              },
+              "source_classifications": [
+                  {
+                      "source_id": r["source_id"],
+                      "sha256": r["sha256"],
+                      "byte_len": r["byte_len"],
+                      "member": r.get("member"),
+                      "container_type": r["container_type"],
+                      "call_families": (r.get("source_classification") or {}).get("call_families"),
+                  }
+                  for r in records
+                  if r.get("source_classification")
+              ],
+              "pub_scanner_totals": scan["totals"],
+              "pubfilerescue_candidate_count": len(rescue["candidate_urls"]),
+              "pubfilerescue_errors": len(rescue["errors"]),
+          }, ensure_ascii=False, indent=2, sort_keys=True))
+          PY
+
+      - name: Verify source-free boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("target/vba-current/public/receipt.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          assert data["claims"]["downloaded_artifacts_executed"] is False
+          assert data["claims"]["vba_executed"] is False
+          assert data["claims"]["ole_com_activated"] is False
+          assert data["claims"]["source_text_emitted"] is False
+          assert data["claims"]["binary_bytes_uploaded"] is False
+          assert data["pub_scanner"]["claims"]["vba_executed"] is False
+          assert data["pub_scanner"]["claims"]["ole_com_activated"] is False
+          assert data["pub_scanner"]["claims"]["source_text_emitted"] is False
+          text = p.read_text(encoding="utf-8")
+          assert "Attribute VB_" not in text
+          assert "\nSub " not in text
+          assert "\nFunction " not in text
+          print(json.dumps(data["pub_scanner"]["totals"], indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-current-benign-leads-receipt
+          path: |
+            target/vba-current/public/receipt.json
+            target/vba-current/public/bill-gdown-exit.txt
+            target/vba-current/public/bill-gdown.log
+          if-no-files-found: error
+          retention-days: 90
