@@ -111,12 +111,35 @@ jobs:
                   continue
 
               receipt = json.loads(receipt_path.read_text())
+              source_bytes = source.read_bytes()
+              variant_bytes = variant.read_bytes()
+              overlap = min(len(source_bytes), len(variant_bytes))
+              overlap_diff_count = sum(
+                  left != right
+                  for left, right in zip(source_bytes[:overlap], variant_bytes[:overlap])
+              )
+              variant_is_source_plus_trailing_bytes = (
+                  len(variant_bytes) >= len(source_bytes)
+                  and variant_bytes[:len(source_bytes)] == source_bytes
+              )
+              trailing = (
+                  variant_bytes[len(source_bytes):]
+                  if variant_is_source_plus_trailing_bytes
+                  else b""
+              )
               rows.append({
                   "source_sha256": source_sha,
                   "crawl": crawl,
                   "timestamp": timestamp,
                   "variant_sha256": variant_sha,
                   "compare_status": "admitted",
+                  "whole_file_overlap_diff_count": overlap_diff_count,
+                  "variant_is_source_plus_trailing_bytes": variant_is_source_plus_trailing_bytes,
+                  "variant_trailing_byte_count": len(trailing),
+                  "variant_trailing_all_zero": bool(trailing) and all(byte == 0 for byte in trailing),
+                  "variant_trailing_all_ascii_whitespace": bool(trailing) and all(
+                      byte in (9, 10, 13, 32) for byte in trailing
+                  ),
                   "source_byte_len": receipt["source_byte_len"],
                   "variant_byte_len": receipt["variant_byte_len"],
                   "contents_story_count_equal": receipt["contents_story_count_equal"],
