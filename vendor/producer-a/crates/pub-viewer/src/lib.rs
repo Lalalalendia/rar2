@@ -7,6 +7,13 @@
 //! CFB, Contents, Quill, Escher, byte offsets, and writer mutation state are not
 //! part of the Viewer contract.
 
+mod borderart;
+
+pub use borderart::{
+    ViewerDecorativeBorderResourceV1, ViewerDecorativeBorderSlotRefV1,
+    ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
+};
+
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "cmo-slot-compose")]
 use chaptera_layout_projection::{
@@ -253,6 +260,10 @@ pub struct ViewerGeometryDocument {
     pub projected_instances: Vec<ViewerProjectedSceneInstanceV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ViewerEmbeddedImage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decorative_border_resources: Vec<ViewerDecorativeBorderResourceV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decorative_borders: Vec<ViewerDecorativeBorderV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2166,6 +2177,8 @@ fn open_legacy_0x22_noquill_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_border_resources: Vec::new(),
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2293,6 +2306,8 @@ fn open_legacy_0x22_quill_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_border_resources: Vec::new(),
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2715,6 +2730,14 @@ fn open_mature_0x2c_bundle(
         });
     }
 
+    let (decorative_borders, decorative_border_resources, borderart_diagnostics) =
+        borderart::viewer_decorative_borders_v1(
+            bytes,
+            &pipeline.source_hash,
+            &pipeline.resolved.graph,
+        );
+    document.diagnostics.extend(borderart_diagnostics);
+
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.visual.geometry_only".to_owned(),
@@ -2739,6 +2762,8 @@ fn open_mature_0x2c_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances,
         images,
+        decorative_border_resources,
+        decorative_borders,
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -5061,6 +5086,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         let page_id = graph.document.pages[0];
@@ -5218,6 +5245,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.scene.nodes.clone();
 
@@ -5672,6 +5701,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5781,6 +5812,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5849,6 +5882,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.clone();
         visual.document.source.source_hash = Sha256Digest::from_bytes([0xCD; 32]);
