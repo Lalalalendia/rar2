@@ -1,9 +1,10 @@
 use pub_editor::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
-    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, AuthoredStackLifecycleErrorV1,
-    AuthoredStackLifecycleKindV1, AuthoredStackV1, LengthEmu, NodeId, PageId, RectEmu, Srgb8V1,
-    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
-    authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
+    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
+    AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1, AuthoredStackV1, LengthEmu,
+    NodeId, PageId, RectEmu, Srgb8V1, apply_authored_stack_transition_forward_v1,
+    apply_authored_stack_transition_inverse_v1, authored_stack_state_id_v1,
+    plan_create_shape_append_v1, plan_delete_shape_remove_v1,
 };
 
 fn canonical_id<T: serde::de::DeserializeOwned>(value: &str) -> T {
@@ -74,7 +75,11 @@ fn create_appends_at_authored_front_and_inverse_removes_exact_membership() {
     assert_eq!(second.after.members, vec![node_a(), node_b()]);
 
     let two = apply_authored_stack_transition_forward_v1(&one, &second).expect("apply B");
-    assert_eq!(two.members.last(), Some(&node_b()), "new create is authored front/top");
+    assert_eq!(
+        two.members.last(),
+        Some(&node_b()),
+        "new create is authored front/top"
+    );
 
     let undone = apply_authored_stack_transition_inverse_v1(&two, &second).expect("undo B");
     assert_eq!(undone, one);
@@ -86,7 +91,8 @@ fn delete_removes_exact_middle_position_and_inverse_restores_same_order() {
         page_id: page_id(),
         members: vec![node_a(), node_b()],
     };
-    let delete = plan_delete_shape_remove_v1(&before, &shape(node_a(), page_id())).expect("delete A");
+    let delete =
+        plan_delete_shape_remove_v1(&before, &shape(node_a(), page_id())).expect("delete A");
     assert_eq!(delete.kind, AuthoredStackLifecycleKindV1::RemoveDeleted);
     assert_eq!(delete.member_index, 0);
     assert_eq!(delete.after.members, vec![node_b()]);
