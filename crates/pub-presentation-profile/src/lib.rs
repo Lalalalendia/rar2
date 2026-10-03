@@ -1638,6 +1638,120 @@ mod tests {
         assert!(select_legacy22_customer_page_indices_v1(bad_ordinal).is_none());
     }
 
+    fn mature_spread_pair_ab_input() -> MatureSpreadPairProfileInputV1 {
+        let primary = 100_u32;
+        let secondary = 101_u32;
+        let pages = vec![
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 0,
+                contents_seq_num: primary,
+                oid_dword0: Some(1),
+                oid_dword1: Some(1),
+                applied_master_seq_num: None,
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 1,
+                contents_seq_num: secondary,
+                oid_dword0: Some(1),
+                oid_dword1: Some(2),
+                applied_master_seq_num: None,
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 2,
+                contents_seq_num: 200,
+                oid_dword0: Some(2),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(secondary),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 3,
+                contents_seq_num: 201,
+                oid_dword0: Some(2),
+                oid_dword1: Some(1),
+                applied_master_seq_num: Some(primary),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 4,
+                contents_seq_num: 202,
+                oid_dword0: Some(2),
+                oid_dword1: Some(2),
+                applied_master_seq_num: Some(secondary),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 5,
+                contents_seq_num: 203,
+                oid_dword0: Some(2),
+                oid_dword1: Some(3),
+                applied_master_seq_num: Some(primary),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 6,
+                contents_seq_num: 204,
+                oid_dword0: Some(2),
+                oid_dword1: Some(4),
+                applied_master_seq_num: Some(secondary),
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 8,
+                contents_seq_num: 300,
+                oid_dword0: Some(3),
+                oid_dword1: Some(1),
+                applied_master_seq_num: None,
+            },
+            StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: 9,
+                contents_seq_num: 301,
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: None,
+            },
+        ];
+        let document_entries = (0..10)
+            .map(|ordinal| MatureSpreadPairDocumentEntryEvidenceV1 {
+                document_ordinal: ordinal,
+                raw_type: Some(if ordinal == 7 {
+                    MATURE_SPREAD_SPECIAL_RAW_TYPE_V1
+                } else {
+                    MATURE_SPREAD_PAGE_RAW_TYPE_V1
+                }),
+            })
+            .collect();
+
+        MatureSpreadPairProfileInputV1 {
+            base: StandardPrintServiceTailProfileInputV1 {
+                schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+                document_page_list_entry_count: 10,
+                confirmed_page_count: pages.len(),
+                special_entry_count: 1,
+                scenario_evidence_list_count: 0,
+                observed_scenario_page_count: 0,
+                pages,
+            },
+            document_entries,
+        }
+    }
+
+    #[test]
+    fn mature_spread_pair_ab_selects_all_paired_half_pages_in_source_order() {
+        let selection =
+            select_mature_spread_pair_half_page_seq_nums_ab_v1(mature_spread_pair_ab_input())
+                .unwrap();
+        assert_eq!(selection.profile_id, MATURE_SPREAD_PAIR_AB_PROFILE_ID_V1);
+        assert_eq!(selection.customer_page_seq_nums, vec![200, 201, 202, 203]);
+        assert_eq!(selection.service_page_seq_nums, vec![204, 300, 301]);
+    }
+
+    #[test]
+    fn mature_spread_pair_ab_rejects_pair_order_or_suffix_drift() {
+        let mut bad_pair = mature_spread_pair_ab_input();
+        bad_pair.base.pages[2].applied_master_seq_num = Some(100);
+        assert!(select_mature_spread_pair_half_page_seq_nums_ab_v1(bad_pair).is_none());
+
+        let mut bad_suffix = mature_spread_pair_ab_input();
+        bad_suffix.document_entries[7].raw_type = Some(MATURE_SPREAD_PAGE_RAW_TYPE_V1);
+        assert!(select_mature_spread_pair_half_page_seq_nums_ab_v1(bad_suffix).is_none());
+    }
+
     fn mature_zero_leader_detached_input(
         customer_count: usize,
     ) -> StandardPrintServiceTailProfileInputV1 {
