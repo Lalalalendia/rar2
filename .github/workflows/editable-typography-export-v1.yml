@@ -152,16 +152,18 @@ jobs:
               data = json.loads(run.stdout)
               if data["open_state"] != "admitted":
                   continue
-              for item in data.get("items", []):
+              items = data.get("items", [])
+              for item in items:
                   candidate_story_count += 1
                   candidate_families[item["font_family"]] += 1
-                  if (
-                      norm(item["font_family"]) == "montserrat"
-                      and norm(item["font_family"]) in installed
-                  ):
-                      selected = (path, data, item)
-                      break
-              if selected is not None:
+              proven = [
+                  item for item in items
+                  if norm(item["font_family"]) == "montserrat"
+                  and norm(item["font_family"]) in installed
+                  and item["font_size_pt"] == 24
+              ]
+              if len(proven) == 1:
+                  selected = (path, data, proven[0])
                   break
 
           census = {
