@@ -36,6 +36,9 @@ jobs:
       - name: Test source-neutral authored lane composition
         run: cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml
 
+      - name: Check Desktop formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
       - name: Check Desktop integration
         run: cargo check -p chaptera-desktop --all-targets
 
