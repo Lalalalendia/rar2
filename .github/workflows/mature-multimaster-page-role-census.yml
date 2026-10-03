@@ -1,0 +1,414 @@
+name: Mature multi-master page-role relation census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-multimaster-page-role-census.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-multimaster-page-role-census-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-multimaster-page-role-census
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
+      - name: Materialize exact Batch01 PUB pairs
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/mature-multimaster-page-role-census"
+          mkdir -p "$RUNNER_TEMP/mature-multimaster-page-role-census/fixtures"
+          mkdir -p target/mature-multimaster-page-role-census/raw
+          mkdir -p target/mature-multimaster-page-role-census/projection
+          mkdir -p target/mature-multimaster-page-role-census/status
+          python - <<'PY'
+          import csv
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          source_root = Path("out/pinned1050/materialized/native")
+          out_root = Path(os.environ["RUNNER_TEMP"]) / "mature-multimaster-page-role-census" / "fixtures"
+          rows = []
+          with Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              for row in csv.DictReader(handle):
+                  sha = row["pub_sha256"].casefold()
+                  source = source_root / f"{sha}.pub"
+                  data = source.read_bytes()
+                  assert hashlib.sha256(data).hexdigest() == sha
+                  target = out_root / f"{row['basename']}.pub"
+                  shutil.copyfile(source, target)
+                  rows.append({
+                      "oracle_id": row["oracle_id"],
+                      "fixture": row["basename"],
+                      "source_sha256": sha,
+                      "source_bytes": len(data),
+                      "reference_pages": int(row["pdf_pages"]),
+                  })
+
+          assert len(rows) == 55, len(rows)
+          Path("target/mature-multimaster-page-role-census/input-manifest.json").write_text(
+              json.dumps({
+                  "schema": "chaptera.mature-multimaster-page-role-input.v1",
+                  "fixture_count": len(rows),
+                  "rows": rows,
+                  "claims": {
+                      "reference_page_count_used_as_selector_authority": False,
+                      "pdf_bytes_present": False,
+                      "story_text_emitted": False,
+                  },
+              }, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - name: Build source-semantic analyzers
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt --jobs 2
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin page-projection-receipt --jobs 2
+
+      - name: Analyze all 55 paired PUB sources
+        run: |
+          set -euo pipefail
+          for pub in "$RUNNER_TEMP"/mature-multimaster-page-role-census/fixtures/*.pub; do
+            name="$(basename "$pub" .pub)"
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-role-receipt" "$pub" "target/mature-multimaster-page-role-census/raw/$name.json"; then
+              echo 0 > "target/mature-multimaster-page-role-census/status/$name.raw.exit"
+            else
+              echo $? > "target/mature-multimaster-page-role-census/status/$name.raw.exit"
+            fi
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-projection-receipt" "$pub" "target/mature-multimaster-page-role-census/projection/$name.json"; then
+              echo 0 > "target/mature-multimaster-page-role-census/status/$name.projection.exit"
+            else
+              echo $? > "target/mature-multimaster-page-role-census/status/$name.projection.exit"
+            fi
+          done
+
+      - name: Build source-safe relation census
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import collections
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("target/mature-multimaster-page-role-census")
+          manifest = json.loads((root / "input-manifest.json").read_text())
+
+          def oid_class(page):
+              a = page.get("oid_dword0")
+              b = page.get("oid_dword1")
+              if a is None or b is None:
+                  return "missing"
+              return "zero" if a == 0 and b == 0 else "nonzero"
+
+          def page_relation_signature(raw):
+              pages = sorted(raw.get("pages", []), key=lambda p: p["document_ordinal"])
+              seq_to_ordinal = {
+                  page["contents_seq_num"]: page["document_ordinal"]
+                  for page in pages
+                  if isinstance(page.get("contents_seq_num"), int)
+              }
+              tokens = []
+              fan_in = collections.Counter()
+              external_master_ref_count = 0
+              for page in pages:
+                  master = page.get("applied_master_seq_num")
+                  if master is None:
+                      master_relation = "none"
+                  elif master == page.get("contents_seq_num"):
+                      master_relation = "self"
+                      fan_in[page["document_ordinal"]] += 1
+                  elif master in seq_to_ordinal:
+                      target_ordinal = seq_to_ordinal[master]
+                      master_relation = f"page_ordinal:{target_ordinal}"
+                      fan_in[target_ordinal] += 1
+                  else:
+                      raw_type = page.get("applied_master_raw_type")
+                      master_relation = (
+                          f"external_raw_type:{raw_type}"
+                          if raw_type is not None
+                          else "external_unknown"
+                      )
+                      external_master_ref_count += 1
+                  tokens.append({
+                      "document_ordinal": page["document_ordinal"],
+                      "oid_class": oid_class(page),
+                      "master_relation": master_relation,
+                      "master_out_degree": 0 if master is None else 1,
+                      "applied_master_raw_type": page.get("applied_master_raw_type"),
+                      "pgt_type": page.get("pgt_type"),
+                      "previous_raw_type": page.get("previous_document_entry_raw_type"),
+                      "next_raw_type": page.get("next_document_entry_raw_type"),
+                      "shape_child_count": page.get("shape_child_count", 0),
+                      "group_child_count": page.get("group_child_count", 0),
+                  })
+
+              for token in tokens:
+                  token["master_in_degree"] = fan_in[token["document_ordinal"]]
+
+              document_type_sequence = [
+                  entry.get("raw_type")
+                  for entry in sorted(
+                      raw.get("document_entries", []),
+                      key=lambda e: e["document_ordinal"],
+                  )
+              ]
+              signature_basis = {
+                  "special_entry_count": raw.get("special_entry_count"),
+                  "document_type_sequence": document_type_sequence,
+                  "external_master_ref_count": external_master_ref_count,
+                  "pages": tokens,
+              }
+              signature_json = json.dumps(
+                  signature_basis,
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              signature_sha256 = hashlib.sha256(signature_json.encode("utf-8")).hexdigest()
+              return signature_basis, signature_sha256
+
+          rows = []
+          signature_counts = collections.Counter()
+          target_oracles = {"batch01-029", "batch01-033"}
+
+          for input_row in manifest["rows"]:
+              fixture = input_row["fixture"]
+              oracle_id = input_row["oracle_id"]
+              raw_exit = int((root / "status" / f"{fixture}.raw.exit").read_text())
+              projection_exit = int((root / "status" / f"{fixture}.projection.exit").read_text())
+              row = {
+                  "oracle_id": oracle_id,
+                  "fixture": fixture,
+                  "reference_pages_validation_only": input_row["reference_pages"],
+                  "raw_exit_code": raw_exit,
+                  "projection_exit_code": projection_exit,
+                  "target_residual": oracle_id in target_oracles,
+              }
+
+              if projection_exit == 0:
+                  projection = json.loads((root / "projection" / f"{fixture}.json").read_text())
+                  row["current_viewer_pages"] = projection.get("viewer_page_count")
+                  row["current_page_count_matches_reference_validation_only"] = (
+                      projection.get("viewer_page_count") == input_row["reference_pages"]
+                  )
+
+              if raw_exit == 0:
+                  raw = json.loads((root / "raw" / f"{fixture}.json").read_text())
+                  relation_graph, signature_sha256 = page_relation_signature(raw)
+                  row["relation_graph"] = relation_graph
+                  row["relation_signature_sha256"] = signature_sha256
+                  row["confirmed_page_count"] = raw.get("confirmed_page_count")
+                  row["document_page_list_entry_count"] = raw.get("document_page_list_entry_count")
+                  row["special_entry_count"] = raw.get("special_entry_count")
+                  row["controlling_object_count"] = len(raw.get("controlling", []))
+                  roots = [
+                      page for page in relation_graph["pages"]
+                      if page["master_relation"] == "none"
+                      and page["master_in_degree"] > 0
+                  ]
+                  root_ordinals = [page["document_ordinal"] for page in roots]
+                  root_set = set(root_ordinals)
+                  applied_pages = [
+                      page for page in relation_graph["pages"]
+                      if page["master_out_degree"] == 1
+                  ]
+                  applied_targets_are_roots = all(
+                      page["master_relation"].startswith("page_ordinal:")
+                      and int(page["master_relation"].split(":", 1)[1]) in root_set
+                      for page in applied_pages
+                  )
+                  roots_form_prefix = root_ordinals == list(range(len(root_ordinals)))
+                  row["multi_root_profile_admitted"] = (
+                      len(roots) >= 2
+                      and relation_graph["external_master_ref_count"] == 0
+                      and roots_form_prefix
+                      and applied_targets_are_roots
+                  )
+                  row["multi_root_predicted_page_count"] = len(roots)
+                  row["multi_root_root_ordinals"] = root_ordinals
+                  if row["multi_root_profile_admitted"]:
+                      row["multi_root_predicted_matches_reference_validation_only"] = (
+                          len(roots) == input_row["reference_pages"]
+                      )
+                      current = row.get("current_viewer_pages")
+                      row["multi_root_would_fix_current_mismatch_validation_only"] = (
+                          current is not None
+                          and current != input_row["reference_pages"]
+                          and len(roots) == input_row["reference_pages"]
+                      )
+                      row["multi_root_would_break_current_match_validation_only"] = (
+                          current is not None
+                          and current == input_row["reference_pages"]
+                          and len(roots) != input_row["reference_pages"]
+                      )
+                  signature_counts[signature_sha256] += 1
+              rows.append(row)
+
+          targets = [row for row in rows if row["target_residual"]]
+          assert {row["oracle_id"] for row in targets} == target_oracles, targets
+          assert len(targets) == 2, len(targets)
+
+          target_signatures_equal = (
+              len(targets) == 2
+              and targets[0].get("relation_signature_sha256")
+              == targets[1].get("relation_signature_sha256")
+          )
+
+          admitted_multi_root = [
+              row for row in rows
+              if row.get("multi_root_profile_admitted") is True
+          ]
+
+          summary = {
+              "schema": "chaptera.mature-multimaster-page-role-census.v2",
+              "fixture_count": len(rows),
+              "raw_success_count": sum(row["raw_exit_code"] == 0 for row in rows),
+              "projection_success_count": sum(row["projection_exit_code"] == 0 for row in rows),
+              "current_page_count_mismatch_count_validation_only": sum(
+                  row.get("current_page_count_matches_reference_validation_only") is False
+                  for row in rows
+              ),
+              "relation_signature_count": len(signature_counts),
+              "relation_signature_population": dict(sorted(signature_counts.items())),
+              "target_oracles": sorted(target_oracles),
+              "target_relation_signatures_equal": target_signatures_equal,
+              "multi_root_admitted_count": len(admitted_multi_root),
+              "multi_root_admitted_oracles": sorted(
+                  row["oracle_id"] for row in admitted_multi_root
+              ),
+              "multi_root_reference_match_count_validation_only": sum(
+                  row.get("multi_root_predicted_matches_reference_validation_only") is True
+                  for row in admitted_multi_root
+              ),
+              "multi_root_reference_mismatch_count_validation_only": sum(
+                  row.get("multi_root_predicted_matches_reference_validation_only") is False
+                  for row in admitted_multi_root
+              ),
+              "multi_root_would_fix_current_mismatch_count_validation_only": sum(
+                  row.get("multi_root_would_fix_current_mismatch_validation_only") is True
+                  for row in admitted_multi_root
+              ),
+              "multi_root_would_break_current_match_count_validation_only": sum(
+                  row.get("multi_root_would_break_current_match_validation_only") is True
+                  for row in admitted_multi_root
+              ),
+              "target_rows": targets,
+              "rows": rows,
+              "claims": {
+                  "measurement_only": True,
+                  "selector_defined": True,
+                  "selector_name": "multi-referenced-no-master-root/v1",
+                  "selector_requires_two_or_more_referenced_no_master_roots": True,
+                  "selector_requires_roots_form_document_prefix": True,
+                  "selector_requires_all_applied_pages_target_roots": True,
+                  "selector_requires_no_external_master_targets": True,
+                  "reference_page_count_used_as_selector_authority": False,
+                  "pdf_page_count_is_validation_only": True,
+                  "selector_uses_visual_payload": False,
+                  "selector_uses_blankness": False,
+                  "selector_uses_content_or_text": False,
+                  "selector_uses_fixture_hash_or_name": False,
+                  "source_seq_nums_emitted": False,
+                  "source_oid_values_emitted": False,
+                  "relation_targets_normalized_to_page_ordinals_or_external_raw_type": True,
+                  "master_relation_fan_in_out_emitted": True,
+                  "raw_pub_bytes_emitted": False,
+                  "story_text_emitted": False,
+              },
+          }
+          (root / "summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+
+          print(json.dumps({
+              "fixture_count": summary["fixture_count"],
+              "raw_success_count": summary["raw_success_count"],
+              "projection_success_count": summary["projection_success_count"],
+              "current_page_count_mismatch_count_validation_only":
+                  summary["current_page_count_mismatch_count_validation_only"],
+              "relation_signature_count": summary["relation_signature_count"],
+              "target_relation_signatures_equal": summary["target_relation_signatures_equal"],
+              "multi_root_admitted_count": summary["multi_root_admitted_count"],
+              "multi_root_admitted_oracles": summary["multi_root_admitted_oracles"],
+              "multi_root_reference_match_count_validation_only":
+                  summary["multi_root_reference_match_count_validation_only"],
+              "multi_root_reference_mismatch_count_validation_only":
+                  summary["multi_root_reference_mismatch_count_validation_only"],
+              "multi_root_would_fix_current_mismatch_count_validation_only":
+                  summary["multi_root_would_fix_current_mismatch_count_validation_only"],
+              "multi_root_would_break_current_match_count_validation_only":
+                  summary["multi_root_would_break_current_match_count_validation_only"],
+          }, indent=2, sort_keys=True))
+          print("target residual relation graphs:")
+          for row in targets:
+              print(json.dumps({
+                  "oracle_id": row["oracle_id"],
+                  "current_viewer_pages": row.get("current_viewer_pages"),
+                  "reference_pages_validation_only": row["reference_pages_validation_only"],
+                  "signature": row.get("relation_signature_sha256"),
+                  "relation_graph": row.get("relation_graph"),
+              }, sort_keys=True))
+          PY
+
+      - name: Upload source-safe relation census
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-multimaster-page-role-census
+          path: |
+            target/mature-multimaster-page-role-census/input-manifest.json
+            target/mature-multimaster-page-role-census/summary.json
+            target/mature-multimaster-page-role-census/status/
+          if-no-files-found: error
+          retention-days: 30
