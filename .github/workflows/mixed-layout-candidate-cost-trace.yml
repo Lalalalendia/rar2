@@ -142,6 +142,10 @@ jobs:
               rows.append(row)
               print(json.dumps(row, sort_keys=True))
 
+          assert all(row["exit_code"] == -24 for row in rows), rows
+          assert all(row["policy_candidate_profiles_seen"] for row in rows), rows
+          assert all(row["last_candidate_marker"] for row in rows), rows
+
           payload = {
               "schema": "chaptera.mixed-layout-candidate-cost.v1",
               "repository_commit_sha": "${{ github.sha }}",
