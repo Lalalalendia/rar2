@@ -7,6 +7,9 @@ on:
       - "tools/pub_vba_estate_scan.py"
       - "tools/test_pub_vba_estate_scan.py"
       - "tools/pub_vba_estate_scan.md"
+      - "tools/pub_vba_migration_plan.py"
+      - "tools/test_pub_vba_migration_plan.py"
+      - "tools/pub_vba_migration_plan.md"
       - "tools/materialize_reader_corpus_v1.py"
       - "tools/reader_corpus_manifest_v1.json"
       - ".github/workflows/pub-vba-estate-scan.yml"
@@ -35,6 +38,7 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py tools/pub_vba_migration_plan.py tools/test_pub_vba_migration_plan.py tools/materialize_reader_corpus_v1.py
           python tools/test_pub_vba_estate_scan.py
+          python tools/test_pub_vba_migration_plan.py
       - name: Materialize exact SHA-pinned 22-file PUB corpus
         run: |
           set -euo pipefail
@@ -77,6 +81,8 @@ jobs:
         if: always()
         with:
           name: pub-vba-estate-corpus22
-          path: target/pub-vba-estate/receipt.json
+          path: |
+            target/pub-vba-estate/receipt.json
+            target/pub-vba-estate/migration-plan.json
           if-no-files-found: error
           retention-days: 90
