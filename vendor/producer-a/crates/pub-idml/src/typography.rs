@@ -10,14 +10,32 @@ use std::fmt::Write as _;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdmlTypographyError {
     NonIdmlPackage,
-    DuplicateStory { story_id: StoryId },
-    InvalidFontFamily { story_id: StoryId },
-    InvalidFontSize { story_id: StoryId },
-    MissingPlannedFeature { story_id: StoryId, feature: &'static str },
-    MissingStoryPart { story_id: StoryId },
-    BinaryStoryPart { story_id: StoryId },
-    UnexpectedStoryMarkup { story_id: StoryId },
-    InvalidXmlCharacter { story_id: StoryId, scalar: u32 },
+    DuplicateStory {
+        story_id: StoryId,
+    },
+    InvalidFontFamily {
+        story_id: StoryId,
+    },
+    InvalidFontSize {
+        story_id: StoryId,
+    },
+    MissingPlannedFeature {
+        story_id: StoryId,
+        feature: &'static str,
+    },
+    MissingStoryPart {
+        story_id: StoryId,
+    },
+    BinaryStoryPart {
+        story_id: StoryId,
+    },
+    UnexpectedStoryMarkup {
+        story_id: StoryId,
+    },
+    InvalidXmlCharacter {
+        story_id: StoryId,
+        scalar: u32,
+    },
 }
 
 impl fmt::Display for IdmlTypographyError {
@@ -151,13 +169,16 @@ fn validate_plan_and_value(
 }
 
 fn has_planned_feature(plan: &ExportPlan, origin: CanonicalId, feature: &str) -> bool {
-    plan.features.iter().any(|planned| {
-        planned.request.origin == Some(origin) && planned.request.feature == feature
-    })
+    plan.features
+        .iter()
+        .any(|planned| planned.request.origin == Some(origin) && planned.request.feature == feature)
 }
 
 fn story_path(story_id: StoryId) -> String {
-    format!("Stories/Story_{}.xml", idml_self("us", story_id.into_canonical()))
+    format!(
+        "Stories/Story_{}.xml",
+        idml_self("us", story_id.into_canonical())
+    )
 }
 
 fn idml_self(prefix: &str, id: CanonicalId) -> String {
@@ -206,10 +227,7 @@ fn format_emu_points(value: LengthEmu) -> String {
     result
 }
 
-fn escape_xml_text(
-    story_id: StoryId,
-    input: &str,
-) -> Result<String, IdmlTypographyError> {
+fn escape_xml_text(story_id: StoryId, input: &str) -> Result<String, IdmlTypographyError> {
     let mut output = String::new();
     for character in input.chars() {
         let scalar = u32::from(character);
