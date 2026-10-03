@@ -154,7 +154,9 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Vec<Descriptor>> {
 fn descriptor_payload<'a>(bytes: &'a [u8], descriptor: &Descriptor) -> Result<&'a [u8]> {
     let start = usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
     let len = usize::try_from(descriptor.data_length).context("descriptor length too large")?;
-    let end = start.checked_add(len).context("descriptor payload overflow")?;
+    let end = start
+        .checked_add(len)
+        .context("descriptor payload overflow")?;
     bytes
         .get(start..end)
         .with_context(|| format!("descriptor {} payload outside Quill", descriptor.ordinal))
