@@ -34,8 +34,10 @@ use pub_export::{
     PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
     PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
     STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
-    SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
-    assess_persistence_compatibility, build_export_report, plan_export, render_human_summary,
+    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
+    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
+    render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
@@ -2614,6 +2616,7 @@ impl EditorSession {
     ) -> Result<(ExportReport, String, ExportPlan), EditorExportError> {
         self.validate_source_identity()
             .map_err(EditorExportError::Session)?;
+        let typography = self.full_story_typography_v1();
         let plan = editable_export_plan(
             target,
             &self.graph,
@@ -2622,7 +2625,9 @@ impl EditorSession {
             &self.source_typography_runs,
             &self.source_typography_size_runs,
             &self.source_paragraph_alignments,
-        );
+            &typography,
+        )
+        .map_err(|error| EditorExportError::Report(error.to_string()))?;
         let report = build_export_report(
             &plan,
             ExportReportSource {
@@ -4425,6 +4430,7 @@ fn frame_from_payload(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
@@ -4433,7 +4439,8 @@ fn editable_export_plan(
     source_typography_runs: &[PubTypographyRun],
     source_typography_size_runs: &[PubTypographySizeRun],
     source_paragraph_alignments: &[PubParagraphAlignmentRun],
-) -> ExportPlan {
+    full_story_typography: &[FullStoryTypographyV1],
+) -> Result<ExportPlan, ScopedCapabilityError> {
     let mut features = BTreeMap::new();
     features.insert("page.geometry".into(), CapabilityLevel::Preserved);
     features.insert("story.text".into(), CapabilityLevel::Preserved);
@@ -4650,7 +4657,48 @@ fn editable_export_plan(
         }
     }
 
-    plan_export(&manifest, requests)
+    let scoped = consumer_proven_typography_overrides_v1(target, full_story_typography);
+    plan_export_with_scoped_capabilities(&manifest, requests, scoped)
+}
+
+fn consumer_proven_typography_overrides_v1(
+    target: EditorEditableTarget,
+    typography: &[FullStoryTypographyV1],
+) -> Vec<ScopedCapabilityOverride> {
+    // Consumer-proven semantic class:
+    // - #1079 proves real target-side edit -> save -> fresh reopen;
+    // - #1091 proves the exact 1050 corpus contains 60 bounded Montserrat
+    //   Stories across three source files and six independent size strata;
+    // - #1097 proves all 60 wire carriers survive Scribus and LibreOffice
+    //   save/reopen with exact family+size carrier histograms.
+    //
+    // Keep this predicate semantic: no source SHA, Story id, or tested-size
+    // hardcode. Other families remain explicit Unsupported debt.
+    let supports = |item: &FullStoryTypographyV1| match target {
+        EditorEditableTarget::Idml | EditorEditableTarget::Odg => {
+            item.font_family.trim() == "Montserrat"
+        }
+    };
+
+    typography
+        .iter()
+        .filter(|item| supports(item))
+        .flat_map(|item| {
+            let origin = item.story_id.into_canonical();
+            [
+                ScopedCapabilityOverride {
+                    origin,
+                    feature: STORY_FONT_FAMILY_FEATURE.into(),
+                    disposition: CapabilityLevel::Preserved,
+                },
+                ScopedCapabilityOverride {
+                    origin,
+                    feature: STORY_FONT_SIZE_FEATURE.into(),
+                    disposition: CapabilityLevel::Preserved,
+                },
+            ]
+        })
+        .collect()
 }
 
 fn replacement_asset_resource_id(sha256: Sha256Digest) -> ResourceId {
@@ -5557,6 +5605,43 @@ mod asset_reachability_tests {
         .into_iter()
         .collect::<Vec<_>>();
         assert_eq!(refs, vec![a, b]);
+    }
+
+    #[test]
+    fn consumer_proven_typography_override_is_montserrat_only() {
+        let montserrat_story =
+            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x31; 16]));
+        let arial_story = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x32; 16]));
+        let typography = vec![
+            FullStoryTypographyV1 {
+                story_id: montserrat_story,
+                font_family: "Montserrat".into(),
+                font_size_emu: LengthEmu::new(304_800),
+            },
+            FullStoryTypographyV1 {
+                story_id: arial_story,
+                font_family: "Arial".into(),
+                font_size_emu: LengthEmu::new(152_400),
+            },
+        ];
+
+        for target in [EditorEditableTarget::Idml, EditorEditableTarget::Odg] {
+            let overrides = consumer_proven_typography_overrides_v1(target, &typography);
+            assert_eq!(overrides.len(), 2);
+            assert!(overrides.iter().all(|item| {
+                item.origin == montserrat_story.into_canonical()
+                    && matches!(
+                        item.feature.as_str(),
+                        STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
+                    )
+                    && item.disposition == CapabilityLevel::Preserved
+            }));
+            assert!(
+                overrides
+                    .iter()
+                    .all(|item| { item.origin != arial_story.into_canonical() })
+            );
+        }
     }
 
     #[test]
