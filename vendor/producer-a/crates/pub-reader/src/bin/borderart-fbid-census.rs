@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use pub_contents::{
-    BLOCK_TYPE_U16, BLOCK_TYPE_U32, ContentsFamily, RawContentsBlockBody, detect_family,
-    parse_0x2c_header, parse_confirmed_0x2c_chunk, parse_confirmed_0x2c_trailer_root,
-    parse_confirmed_chunk_reference,
+    detect_family, parse_0x2c_header, parse_confirmed_0x2c_chunk,
+    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference, ContentsFamily,
+    RawContentsBlockBody, BLOCK_TYPE_U16, BLOCK_TYPE_U32,
 };
 use pub_core::StreamPath;
 use serde::Serialize;
@@ -123,8 +123,9 @@ fn scan_file(path: &Path) -> FileReceipt {
 fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
     let pub_bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let source_sha256 = sha256_hex(&pub_bytes);
-    let contents = pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
-        .with_context(|| format!("read {CONTENTS_STREAM_PATH}"))?;
+    let contents =
+        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
+            .with_context(|| format!("read {CONTENTS_STREAM_PATH}"))?;
 
     let family = detect_family(&contents).context("detect Contents family")?;
     if family != ContentsFamily::Family0x2c {
@@ -162,8 +163,9 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
     let mut ifbmax_observations = Vec::new();
 
     for seq_num in 0..trailer.directory.slots.len() {
-        let Some(reference) = parse_confirmed_chunk_reference(&contents, &trailer.directory, seq_num)
-            .with_context(|| format!("parse directory reference seq {seq_num}"))?
+        let Some(reference) =
+            parse_confirmed_chunk_reference(&contents, &trailer.directory, seq_num)
+                .with_context(|| format!("parse directory reference seq {seq_num}"))?
         else {
             continue;
         };
@@ -185,7 +187,11 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
                 if chunk.unsupported_tail.is_some() {
                     shape_chunks_with_opaque_tail += 1;
                 }
-                for field in chunk.fields.iter().filter(|field| field.id == OPLPO_FBID_FIELD) {
+                for field in chunk
+                    .fields
+                    .iter()
+                    .filter(|field| field.id == OPLPO_FBID_FIELD)
+                {
                     if field.block_type != BLOCK_TYPE_U16 {
                         shape_fbid_wrong_wire_count += 1;
                         continue;
@@ -210,7 +216,11 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
                 if chunk.unsupported_tail.is_some() {
                     fancy_borders_chunks_with_opaque_tail += 1;
                 }
-                for field in chunk.fields.iter().filter(|field| field.id == OPLPLBFB_IFBMAX_FIELD) {
+                for field in chunk
+                    .fields
+                    .iter()
+                    .filter(|field| field.id == OPLPLBFB_IFBMAX_FIELD)
+                {
                     if field.block_type != BLOCK_TYPE_U32 {
                         ifbmax_wrong_wire_count += 1;
                         continue;
@@ -299,7 +309,9 @@ fn main() -> Result<()> {
     let mut ifbmax_value_counts = BTreeMap::<u32, usize>::new();
     for row in &rows {
         for observation in &row.shape_fbid_observations {
-            *shape_fbid_value_counts.entry(observation.value).or_default() += 1;
+            *shape_fbid_value_counts
+                .entry(observation.value)
+                .or_default() += 1;
         }
         for observation in &row.ifbmax_observations {
             *ifbmax_value_counts.entry(observation.value).or_default() += 1;
