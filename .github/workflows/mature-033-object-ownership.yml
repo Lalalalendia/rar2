@@ -1,0 +1,136 @@
+name: Mature 033 object ownership crosswalk
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-033-object-ownership.yml"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/page-object-ownership-receipt.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-033-object-ownership-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-033-object-ownership
+  SOURCE_SHA256: "4029d4a1bf5be89d745c079b9c06ab33e5bdceb997a4761c5e11238110d879c9"
+
+jobs:
+  crosswalk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Bind exact 033 source
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path("out/pinned1050/materialized/native")
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+
+          sha = os.environ["SOURCE_SHA256"]
+          source = root / f"{sha}.pub"
+          assert source.is_file(), source
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == sha
+          print(source)
+          PY
+
+      - name: Build existing source and Viewer ownership receipt
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml --check
+          cargo build --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer --bin page-object-ownership-receipt \
+            --features cmo-slot-compose --jobs 2
+
+      - name: Join SourceGraph objects to current Viewer scene
+        run: |
+          set -euo pipefail
+          mkdir -p target/mature-033-object-ownership
+          "$CARGO_TARGET_DIR/debug/page-object-ownership-receipt"             "out/pinned1050/materialized/native/$SOURCE_SHA256.pub"             target/mature-033-object-ownership/summary.json
+
+      - name: Assert source-only localization boundary
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(
+              Path("target/mature-033-object-ownership/summary.json").read_text()
+          )
+          assert data["schema"] == "chaptera.mature-033-object-ownership-crosswalk.v1"
+          assert data["source_sha256"] == "4029d4a1bf5be89d745c079b9c06ab33e5bdceb997a4761c5e11238110d879c9"
+          assert data["page_count"] == 12
+          assert data["viewer_selected_page_count"] == 12
+          assert len(data["pages"]) == 12
+          assert sum(bool(row["selected_by_current_viewer"]) for row in data["pages"]) == 12
+          assert data["claims"]["measurement_only"] is True
+          assert data["claims"]["new_source_parser_semantics_added"] is False
+          assert data["claims"]["source_graph_mutated"] is False
+          assert data["claims"]["viewer_semantics_changed"] is False
+          assert data["claims"]["publisher_pdf_or_raster_used"] is False
+          assert data["claims"]["raw_page_id_emitted"] is False
+          assert data["claims"]["raw_node_id_emitted"] is False
+          assert data["claims"]["raw_contents_seq_num_emitted"] is False
+          assert data["claims"]["raw_oid_values_emitted"] is False
+          assert data["claims"]["story_text_emitted"] is False
+          assert data["source_graph_total_node_count"] > 0
+          print(json.dumps({
+              "source_nodes": data["source_graph_total_node_count"],
+              "page_owned_source_nodes": data["source_graph_page_owned_node_count"],
+              "viewer_scene_nodes": data["viewer_scene_total_node_count"],
+              "viewer_known_source_nodes": data["viewer_scene_known_source_node_count"],
+              "viewer_unknown_origins": data["viewer_scene_unknown_origin_count"],
+              "projected_instances": data["projected_instance_count"],
+              "inherited_master_projected_instances": data["inherited_master_projected_instance_count"],
+              "pages": [
+                  {
+                      "ordinal": row["source_document_ordinal"],
+                      "selected_by_current_viewer": row["selected_by_current_viewer"],
+                      "role": row["role"],
+                      "source_graph": row["source_graph"],
+                      "viewer_projection": row["viewer_projection"],
+                  }
+                  for row in data["pages"]
+              ],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe ownership evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-033-object-ownership
+          path: target/mature-033-object-ownership/summary.json
+          if-no-files-found: error
+          retention-days: 30
