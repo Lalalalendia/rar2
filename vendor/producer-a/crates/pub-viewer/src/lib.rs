@@ -1072,8 +1072,7 @@ where
 
         let placement_count = image.placements.len();
         image.placements.retain(|placement| {
-            page_for_node(placement.node_id)
-                .is_none_or(|page_id| selected_pages.contains(&page_id))
+            page_for_node(placement.node_id).is_none_or(|page_id| selected_pages.contains(&page_id))
         });
         stats.dropped_placements += placement_count.saturating_sub(image.placements.len());
     }
@@ -2573,11 +2572,10 @@ fn open_mature_0x2c_bundle(
     ));
 
     let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
-    let image_admission = retain_viewer_image_uses_for_selected_pages_v1(
-        &mut images,
-        &selected_pages,
-        |node_id| resolved_page_for_node_v1(&pipeline.resolved.graph, node_id),
-    );
+    let image_admission =
+        retain_viewer_image_uses_for_selected_pages_v1(&mut images, &selected_pages, |node_id| {
+            resolved_page_for_node_v1(&pipeline.resolved.graph, node_id)
+        });
     if image_admission.dropped_node_uses > 0
         || image_admission.dropped_placements > 0
         || image_admission.dropped_resources > 0
