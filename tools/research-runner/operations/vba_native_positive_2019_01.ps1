@@ -146,6 +146,48 @@ try {
         throw "Publisher exposed no active VBProject for the opened publication."
     }
 
+    # ActiveVBProject is a global VBE selection. Never mutate it unless it is
+    # provably bound to the exact publication we opened for this experiment.
+    if ($accessPath -eq "Application.VBE.ActiveVBProject") {
+        $projectFileName = $null
+        try { $projectFileName = [string]$project.FileName } catch {}
+        $bound = $false
+        if (-not [string]::IsNullOrWhiteSpace($projectFileName)) {
+            try {
+                $bound = [string]::Equals(
+                    [IO.Path]::GetFullPath($projectFileName),
+                    [IO.Path]::GetFullPath($input),
+                    [StringComparison]::OrdinalIgnoreCase
+                )
+            } catch {
+                $bound = $false
+            }
+        }
+        if (-not $bound) {
+            $blocked = [ordered]@{
+                schema = "pub-vba-native-positive-2019-01/v1"
+                experiment_id = $ExpectedExperiment
+                verdict = "blocked"
+                blocker_code = "active_vbproject_not_bound_to_fixture"
+                vbproject_access_path = $accessPath
+                active_project_file_leaf = if ([string]::IsNullOrWhiteSpace($projectFileName)) { $null } else { [IO.Path]::GetFileName($projectFileName) }
+                expected_file_leaf = [IO.Path]::GetFileName($input)
+                macro_execution_invoked = $false
+                trust_settings_modified = $false
+                generated_pub_private_local = $false
+                macro_source_sha256 = $macroSourceSha256
+            }
+            Write-ResultAndLog $blocked @(
+                "experiment=$ExpectedExperiment",
+                "verdict=blocked",
+                "blocker=active_vbproject_not_bound_to_fixture",
+                "macro_execution_invoked=false",
+                "trust_settings_modified=false"
+            )
+            throw "ActiveVBProject is not provably bound to the exact input publication."
+        }
+    }
+
     $projectSummaryBefore = Get-ProjectSummary $project
     $component = $project.VBComponents.Add($VbextCtStdModule)
     $component.Name = "ChapteraProbe"
