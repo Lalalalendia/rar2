@@ -2722,10 +2722,12 @@ impl EditorSession {
             &self.graph,
             &self.image_replacements,
             &self.source_image_nodes,
-            &self.source_typography_runs,
-            &self.source_typography_size_runs,
-            &self.source_paragraph_alignments,
-            &typography,
+            EditableExportTypographyInputs {
+                source_typography_runs: &self.source_typography_runs,
+                source_typography_size_runs: &self.source_typography_size_runs,
+                source_paragraph_alignments: &self.source_paragraph_alignments,
+                full_story_typography: &typography,
+            },
         )
         .map_err(|error| EditorExportError::Report(error.to_string()))?;
         let report = build_export_report(
@@ -4703,15 +4705,19 @@ fn frame_from_payload(
     })
 }
 
+struct EditableExportTypographyInputs<'a> {
+    source_typography_runs: &'a [PubTypographyRun],
+    source_typography_size_runs: &'a [PubTypographySizeRun],
+    source_paragraph_alignments: &'a [PubParagraphAlignmentRun],
+    full_story_typography: &'a [FullStoryTypographyV1],
+}
+
 fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
     image_replacements: &BTreeMap<NodeId, Sha256Digest>,
     source_image_nodes: &BTreeMap<NodeId, ResourceId>,
-    source_typography_runs: &[PubTypographyRun],
-    source_typography_size_runs: &[PubTypographySizeRun],
-    source_paragraph_alignments: &[PubParagraphAlignmentRun],
-    full_story_typography: &[FullStoryTypographyV1],
+    typography: EditableExportTypographyInputs<'_>,
 ) -> Result<ExportPlan, ScopedCapabilityError> {
     let mut features = BTreeMap::new();
     features.insert("page.geometry".into(), CapabilityLevel::Preserved);
@@ -4781,7 +4787,7 @@ fn editable_export_plan(
         });
     }
 
-    let font_family_stories = source_typography_runs
+    let font_family_stories = typography.source_typography_runs
         .iter()
         .filter_map(|run| {
             graph
@@ -4790,20 +4796,20 @@ fn editable_export_plan(
                 .then_some(run.story_id)
         })
         .collect::<BTreeSet<_>>();
-    let font_size_stories = source_typography_runs
+    let font_size_stories = typography.source_typography_runs
         .iter()
         .map(|run| run.story_id)
-        .chain(source_typography_size_runs.iter().map(|run| run.story_id))
+        .chain(typography.source_typography_size_runs.iter().map(|run| run.story_id))
         .filter(|story_id| graph.stories.contains_key(story_id))
         .collect::<BTreeSet<_>>();
-    let color_stories = source_typography_runs
+    let color_stories = typography.source_typography_runs
         .iter()
         .filter_map(|run| {
             (run.color_rgb.is_some() && graph.stories.contains_key(&run.story_id))
                 .then_some(run.story_id)
         })
         .collect::<BTreeSet<_>>();
-    let alignment_stories = source_paragraph_alignments
+    let alignment_stories = typography.source_paragraph_alignments
         .iter()
         .filter_map(|run| {
             graph
@@ -4929,7 +4935,7 @@ fn editable_export_plan(
         }
     }
 
-    let scoped = consumer_proven_typography_overrides_v1(target, full_story_typography);
+    let scoped = consumer_proven_typography_overrides_v1(target, typography.full_story_typography);
     plan_export_with_scoped_capabilities(&manifest, requests, scoped)
 }
 
