@@ -2,7 +2,10 @@ use crate::{
     IdmlPackage, IdmlPackageBuilder, IdmlPackageError, IdmlPartKind, IdmlSimpleTable,
     IdmlTableError,
 };
-use pub_export::{CapabilityLevel, ExportPlan, LossKind};
+use pub_export::{
+    CapabilityLevel, ExportPlan, FullStoryTypographyV1, LossKind, STORY_FONT_FAMILY_FEATURE,
+    STORY_FONT_SIZE_FEATURE,
+};
 use pub_model::{
     CanonicalId, EMU_PER_POINT, LengthEmu, NodeId, PageId, ResolvedGraph, Story, StoryFlowError,
     StoryFrame, StoryId, validate_story_frames,
@@ -68,6 +71,9 @@ pub enum IdmlSemanticError {
     },
     UnreportedRichStoryDowngrade {
         story_id: StoryId,
+    },
+    UnplannedStoryTypography {
+        origin: CanonicalId,
     },
     InvalidXmlCharacter {
         story_id: StoryId,
@@ -142,6 +148,10 @@ impl fmt::Display for IdmlSemanticError {
                 formatter,
                 "Story {} содержит rich semantics, но export plan не сообщает downgrade",
                 story_id.as_canonical()
+            ),
+            Self::UnplannedStoryTypography { origin } => write!(
+                formatter,
+                "Story {origin} typography supplied without exact preserved font-family + font-size plan"
             ),
             Self::InvalidXmlCharacter { story_id, scalar } => write!(
                 formatter,
@@ -218,7 +228,43 @@ pub fn project_resolved_graph_to_idml<
         RunProperties,
     >,
     profile: &IdmlWireProfile,
+    frame_for: FrameExtractor,
+) -> Result<IdmlPackage, IdmlSemanticError>
+where
+    FrameExtractor: FnMut(NodeId, &NodePayload) -> Option<StoryFrame<StoryId, NodeId>>,
+{
+    project_resolved_graph_to_idml_with_typography(
+        plan,
+        graph,
+        profile,
+        frame_for,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn project_resolved_graph_to_idml_with_typography<
+    NodePayload,
+    Resource,
+    StyleKind,
+    StyleProperties,
+    ExtensionStorage,
+    ParagraphProperties,
+    RunProperties,
+    FrameExtractor,
+>(
+    plan: &ExportPlan,
+    graph: &ResolvedGraph<
+        NodePayload,
+        Resource,
+        StyleKind,
+        StyleProperties,
+        ExtensionStorage,
+        ParagraphProperties,
+        RunProperties,
+    >,
+    profile: &IdmlWireProfile,
     mut frame_for: FrameExtractor,
+    typography: &BTreeMap<CanonicalId, FullStoryTypographyV1>,
 ) -> Result<IdmlPackage, IdmlSemanticError>
 where
     FrameExtractor: FnMut(NodeId, &NodePayload) -> Option<StoryFrame<StoryId, NodeId>>,
@@ -231,6 +277,14 @@ where
     }
 
     let mut builder = IdmlPackageBuilder::from_export_plan(plan)?;
+    for (origin, style) in typography {
+        if *origin != style.story_id
+            || !has_preserved_feature(plan, *origin, STORY_FONT_FAMILY_FEATURE)
+            || !has_preserved_feature(plan, *origin, STORY_FONT_SIZE_FEATURE)
+        {
+            return Err(IdmlSemanticError::UnplannedStoryTypography { origin: *origin });
+        }
+    }
     let mut frames = Vec::new();
 
     for page_id in &graph.document.pages {
@@ -310,7 +364,7 @@ where
     for story in graph.stories.values() {
         validate_story_downgrade(plan, story)?;
         let path = story_path(story.id);
-        let xml = story_xml(story, profile)?;
+        let xml = story_xml(story, profile, typography.get(&story.id.into_canonical()))?;
         builder.add_part(path, IdmlPartKind::Story, xml)?;
     }
 
@@ -506,7 +560,7 @@ where
         let xml = if let Some((node_id, table)) = tables.get(&story.id) {
             story_xml_with_table(story, *node_id, table, profile)?
         } else {
-            story_xml(story, profile)?
+            story_xml(story, profile, None)?
         };
         builder.add_part(path, IdmlPartKind::Story, xml)?;
     }
@@ -616,7 +670,11 @@ fn designmap_xml<
     xml
 }
 
-fn story_xml(story: &Story, profile: &IdmlWireProfile) -> Result<String, IdmlSemanticError> {
+fn story_xml(
+    story: &Story,
+    profile: &IdmlWireProfile,
+    typography: Option<&FullStoryTypographyV1>,
+) -> Result<String, IdmlSemanticError> {
     let escaped = escape_story_text(story)?;
     let mut xml = String::new();
     writeln!(xml, "<?xml version=\"1.0\" encoding=\"utf-8\"?>").unwrap();
@@ -635,9 +693,26 @@ fn story_xml(story: &Story, profile: &IdmlWireProfile) -> Result<String, IdmlSem
     xml.push_str(
         "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n",
     );
-    xml.push_str(
-        "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\">\n",
-    );
+    if let Some(style) = typography {
+        let font = escape_xml_text(story.id, &style.font_family)?;
+        let point_size = format_ratio(
+            i128::from(style.font_size_emu),
+            i128::from(EMU_PER_POINT),
+            15,
+        );
+        writeln!(
+            xml,
+            "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" PointSize=\"{point_size}\">"
+        )
+        .unwrap();
+        xml.push_str("        <Properties>\n");
+        writeln!(xml, "          <AppliedFont type=\"string\">{font}</AppliedFont>").unwrap();
+        xml.push_str("        </Properties>\n");
+    } else {
+        xml.push_str(
+            "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\">\n",
+        );
+    }
     writeln!(xml, "        <Content>{escaped}</Content>").unwrap();
     xml.push_str("      </CharacterStyleRange>\n");
     xml.push_str("    </ParagraphStyleRange>\n");
@@ -835,15 +910,16 @@ fn format_ratio(numerator: i128, denominator: i128, precision: usize) -> String 
 }
 
 fn escape_story_text(story: &Story) -> Result<String, IdmlSemanticError> {
-    let mut escaped = String::with_capacity(story.text.len());
+    escape_xml_text(story.id, &story.text)
+}
 
-    for character in story.text.chars() {
+fn escape_xml_text(story_id: StoryId, input: &str) -> Result<String, IdmlSemanticError> {
+    let mut escaped = String::with_capacity(input.len());
+
+    for character in input.chars() {
         let scalar = u32::from(character);
         if !is_xml_10_scalar(scalar) {
-            return Err(IdmlSemanticError::InvalidXmlCharacter {
-                story_id: story.id,
-                scalar,
-            });
+            return Err(IdmlSemanticError::InvalidXmlCharacter { story_id, scalar });
         }
 
         match character {
