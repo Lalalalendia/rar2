@@ -1,0 +1,195 @@
+name: Quill Perspective same-document donor replication
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/quill-story-perspective-donor-diff.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-perspective-donor-diff.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-perspective-skeleton-diff.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quill-story-perspective-donor-diff-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  exact-pair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout exact current Perspective source witness only
+        uses: actions/checkout@v5
+        with:
+          repository: Lalalalendia/lalamu
+          ref: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+          path: _witness/lalamu
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub
+
+      - name: Fetch exact 2009 same-document Perspective donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _witness/donor out
+          python - <<'PY'
+          import hashlib
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          timestamp = "20090207014409"
+          original = "http://helenhudspith.com/resources/graphics/fatima/0408/(1)%20One%20Point%20Perspective.pub"
+          quoted = urllib.parse.quote(urllib.parse.unquote(original), safe=":/%()?=&")
+          url = f"https://web.archive.org/web/{timestamp}id_/{quoted}"
+          req = urllib.request.Request(
+              url,
+              headers={"User-Agent": "Chaptera-PUB-research/1.0 (+exact-public-lineage-probe)"},
+          )
+          with urllib.request.urlopen(req, timeout=90) as response:
+              payload = response.read()
+          expected = "31c7fe40089f93e9baa27972498d450257105b290cc1f6e39f28e49ea230a476"
+          actual = hashlib.sha256(payload).hexdigest()
+          assert actual == expected, (actual, len(payload), url)
+          assert len(payload) == 43008, len(payload)
+          assert payload.startswith(bytes.fromhex("d0cf11e0a1b11ae1"))
+          Path("_witness/donor/one-point-perspective-2009.pub").write_bytes(payload)
+          PY
+
+          source="_witness/lalamu/pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub"
+          echo "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569  ${source}" | sha256sum -c -
+          test "$(stat -c '%s' "${source}")" -eq 43008
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check targeted Rust surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2021 --check             vendor/producer-a/crates/pub-reader/src/bin/quill-story-perspective-donor-diff.rs             vendor/producer-a/crates/pub-reader/src/bin/quill-story-perspective-skeleton-diff.rs
+          cargo clippy             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-perspective-donor-diff             --bin quill-story-perspective-skeleton-diff             -- -D warnings
+
+      - name: Compare logical streams and Quill descriptor payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-perspective-donor-diff --             "_witness/lalamu/pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub"             "_witness/donor/one-point-perspective-2009.pub"             "out/quill-story-perspective-donor-diff.json"
+
+      - name: Localize all Quill non-payload differences
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin quill-story-perspective-skeleton-diff --             "_witness/lalamu/pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub"             "_witness/donor/one-point-perspective-2009.pub"             "out/quill-story-perspective-skeleton-diff.json"
+
+      - name: Emit source-safe replication summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          stream_path = Path("out/quill-story-perspective-donor-diff.json")
+          skeleton_path = Path("out/quill-story-perspective-skeleton-diff.json")
+          stream = json.loads(stream_path.read_text())
+          skeleton = json.loads(skeleton_path.read_text())
+
+          assert stream["schema"] == "chaptera.quill-story-same-document-stream-diff.v1"
+          assert skeleton["schema"] == "chaptera.quill-story-same-document-skeleton-diff.v2"
+          assert stream["source_sha256"] == "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569"
+          assert stream["variant_sha256"] == "31c7fe40089f93e9baa27972498d450257105b290cc1f6e39f28e49ea230a476"
+          assert skeleton["source_sha256"] == stream["source_sha256"]
+          assert skeleton["variant_sha256"] == stream["variant_sha256"]
+          assert stream["source_byte_len"] == 43008
+          assert stream["variant_byte_len"] == 43008
+          assert stream["text_payloads_equal"] is True
+
+          changed_all_ff_source = sorted({
+              row["source_name"]
+              for row in stream["quill_descriptors"]
+              if not row["payload_equal"]
+              and row["source_name"] is not None
+              and row["source_all_ff"] is True
+              and row["variant_all_ff"] is False
+          })
+          changed_other = sorted({
+              row["source_name"] or row["variant_name"]
+              for row in stream["quill_descriptors"]
+              if not row["payload_equal"]
+              and not (
+                  row["source_all_ff"] is True
+                  and row["variant_all_ff"] is False
+              )
+          })
+
+          summary = {
+              "schema": "chaptera.quill-story-perspective-donor-replication.v1",
+              "source_sha256": stream["source_sha256"],
+              "donor_sha256": stream["variant_sha256"],
+              "logical_stream_topology_equal": stream["logical_stream_topology_equal"],
+              "changed_logical_stream_paths": stream["changed_logical_stream_paths"],
+              "contents_stream_equal": stream["contents_stream_equal"],
+              "quill_descriptor_topology_equal": stream["quill_descriptor_topology_equal"],
+              "changed_quill_descriptor_names": stream["changed_quill_descriptor_names"],
+              "changed_source_all_ff_vs_donor_live_names": changed_all_ff_source,
+              "changed_other_descriptor_names": changed_other,
+              "text_payloads_equal": stream["text_payloads_equal"],
+              "fdpp_payloads_equal": stream["fdpp_payloads_equal"],
+              "fdpc_payloads_equal": stream["fdpc_payloads_equal"],
+              "stsh_payloads_equal": stream["stsh_payloads_equal"],
+              "syid_payloads_equal": stream["syid_payloads_equal"],
+              "strs_payloads_equal": stream["strs_payloads_equal"],
+              "descriptor_layout_equal": skeleton["descriptor_layout_equal"],
+              "region_layout_equal": skeleton["region_layout_equal"],
+              "differing_node_header_byte_count": skeleton["differing_node_header_byte_count"],
+              "differing_descriptor_metadata_byte_count": skeleton["differing_descriptor_metadata_byte_count"],
+              "differing_interstitial_byte_count": skeleton["differing_interstitial_byte_count"],
+              "interstitial_diff_run_count": skeleton["interstitial_diff_run_count"],
+              "interstitial_diff_run_lengths": skeleton["interstitial_diff_run_lengths"],
+              "source_interstitial_diff_all_ff": skeleton["source_interstitial_diff_all_ff"],
+              "variant_interstitial_diff_all_ff": skeleton["variant_interstitial_diff_all_ff"],
+              "interstitial_diff_gap_bytes": skeleton["interstitial_diff_gap_bytes"],
+              "changed_descriptor_metadata_names": skeleton["changed_descriptor_metadata_names"],
+              "interpretation_fence": (
+                  "This exact second-lineage replication may show whether the selective Quill "
+                  "service-plane clearing pattern reproduces independently. It does not by itself "
+                  "prove family-wide corruption or authorize Reader recovery grammar."
+              ),
+          }
+          Path("out/quill-story-perspective-donor-replication-summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps(summary, indent=2, sort_keys=True))
+
+          for path in (stream_path, skeleton_path):
+              lowered = path.read_text().lower()
+              for forbidden in ("document_text", "raw_payload", "source_path", "filename"):
+                  assert forbidden not in lowered
+          PY
+
+      - name: Remove PUB bytes before artifact upload
+        if: always()
+        shell: bash
+        run: rm -rf _witness
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quill-story-perspective-donor-replication-${{ github.run_id }}
+          path: |
+            out/quill-story-perspective-donor-diff.json
+            out/quill-story-perspective-skeleton-diff.json
+            out/quill-story-perspective-donor-replication-summary.json
+          if-no-files-found: error
+          retention-days: 30
