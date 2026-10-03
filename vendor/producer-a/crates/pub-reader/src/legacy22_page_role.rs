@@ -2,157 +2,85 @@ use super::CONTENTS_STREAM_PATH;
 use anyhow::{Context, Result, bail};
 use pub_contents::{Legacy0x22Directory, Legacy0x22DirectoryEntry, parse_legacy_0x22_directory};
 use pub_core::StreamPath;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 const LEGACY_DOCUMENT_TYPE: u16 = 0x0015;
 const LEGACY_PAGE_TYPE: u16 = 0x0014;
-const LEGACY_PAGE_LIST_SPECIAL_TYPE: u16 = 0x0041;
 const LEGACY_LIST_HEADER_SIZE: usize = 10;
 const LEGACY_LIST_U16_RECORD_SIZE: u16 = 2;
 
-pub const LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1: &str =
-    "publisher-legacy22/noquill-middle-pages/v1";
-pub const LEGACY22_QUILL_PAGE_PROFILE_ID_V1: &str =
-    "publisher-legacy22/quill-middle-pages/v1";
+pub const LEGACY22_PAGE_ROLE_OBSERVATION_SCHEMA_V1: &str =
+    "chaptera.legacy22-page-role-observation.v1";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Legacy22PageListDialectV1 {
-    NoQuill,
-    Quill,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Legacy22PageListEntryObservationV1 {
+    pub document_ordinal: usize,
+    pub raw_type: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Legacy22PageListPresentationSelectionV1 {
-    pub profile_id: &'static str,
-    pub raw_page_list_entry_count: usize,
-    pub materialized_page_count: usize,
-    pub customer_page_indices: Vec<usize>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Legacy22PageRoleObservationReceiptV1 {
+    pub schema: String,
+    pub document_page_list_entry_count: usize,
+    pub physical_page_count: usize,
+    pub page_list_entries: Vec<Legacy22PageListEntryObservationV1>,
 }
 
-pub fn select_legacy_0x22_page_list_presentation_v1<R: Read + Seek>(
+/// Emits the strict old-0x22 DOCUMENT/PageList topology used by the presentation
+/// layer without classifying customer-visible pages.
+///
+/// This deliberately does not use the bounded low-family CFB recovery path.
+/// The current product profile was proven only on strict CFB + legacy directory
+/// parses; recovery-only inputs must remain on the generic no-loss projection.
+pub fn analyze_legacy_0x22_page_roles<R: Read + Seek>(
     mut reader: R,
-    dialect: Legacy22PageListDialectV1,
-) -> Result<Option<Legacy22PageListPresentationSelectionV1>> {
+) -> Result<Legacy22PageRoleObservationReceiptV1> {
     reader.seek(SeekFrom::Start(0))?;
     let mut pub_bytes = Vec::new();
     reader.read_to_end(&mut pub_bytes)?;
 
-    // Product admission is intentionally stricter than the low-family SourceGraph
-    // recovery path. The 650-file recurrence authority was established only on
-    // strict CFB + legacy directory/PageList parses; a recovery-only file must
-    // retain the generic no-loss Viewer projection until independently proven.
-    let contents = match pub_cfb::read_stream_reader(
-        Cursor::new(pub_bytes.as_slice()),
-        CONTENTS_STREAM_PATH,
-    ) {
-        Ok(contents) => contents,
-        Err(_) => return Ok(None),
-    };
-
+    let contents =
+        pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
+            .with_context(|| format!("strictly read {CONTENTS_STREAM_PATH}"))?;
     let stream = StreamPath(CONTENTS_STREAM_PATH.into());
     let directory = parse_legacy_0x22_directory(stream, &contents)
-        .context("parse legacy 0x22 Contents directory for PAGE presentation")?;
+        .context("parse strict legacy 0x22 directory for PAGE-role observation")?;
     let document = unique_entry_by_type(&directory, LEGACY_DOCUMENT_TYPE, "DOCUMENT 0x0015")?;
     let page_list = parse_u16_id_list(&contents, document, "DOCUMENT PageList")?;
     if page_list.is_empty() {
-        return Ok(None);
+        bail!("legacy DOCUMENT PageList is empty");
     }
     if page_list.iter().copied().collect::<BTreeSet<_>>().len() != page_list.len() {
-        return Ok(None);
+        bail!("legacy DOCUMENT PageList repeats an object id");
     }
 
-    let entry_types = page_list
-        .iter()
-        .map(|object_id| {
-            directory
-                .entry_by_object_id(*object_id)
-                .map(|entry| entry.chunk_type)
-        })
-        .collect::<Option<Vec<_>>>();
-    let Some(entry_types) = entry_types else {
-        return Ok(None);
-    };
+    let mut page_list_entries = Vec::with_capacity(page_list.len());
+    for (document_ordinal, object_id) in page_list.into_iter().enumerate() {
+        let entry = directory
+            .entry_by_object_id(object_id)
+            .with_context(|| {
+                format!("legacy DOCUMENT PageList references missing object {object_id}")
+            })?;
+        page_list_entries.push(Legacy22PageListEntryObservationV1 {
+            document_ordinal,
+            raw_type: entry.chunk_type,
+        });
+    }
+
     let physical_page_count = directory
         .entries
         .iter()
         .filter(|entry| entry.chunk_type == LEGACY_PAGE_TYPE)
         .count();
 
-    Ok(select_from_entry_types(
-        dialect,
+    Ok(Legacy22PageRoleObservationReceiptV1 {
+        schema: LEGACY22_PAGE_ROLE_OBSERVATION_SCHEMA_V1.to_owned(),
+        document_page_list_entry_count: page_list_entries.len(),
         physical_page_count,
-        &entry_types,
-    ))
-}
-
-fn select_from_entry_types(
-    dialect: Legacy22PageListDialectV1,
-    physical_page_count: usize,
-    entry_types: &[u16],
-) -> Option<Legacy22PageListPresentationSelectionV1> {
-    let materialized_page_count = entry_types
-        .iter()
-        .filter(|raw_type| **raw_type == LEGACY_PAGE_TYPE)
-        .count();
-    if physical_page_count != materialized_page_count.checked_add(1)? {
-        return None;
-    }
-
-    match dialect {
-        Legacy22PageListDialectV1::NoQuill => {
-            if entry_types.len() < 4
-                || entry_types
-                    .iter()
-                    .any(|raw_type| *raw_type != LEGACY_PAGE_TYPE)
-            {
-                return None;
-            }
-            let customer_end = entry_types.len().checked_sub(1)?;
-            if customer_end <= 2 {
-                return None;
-            }
-            Some(Legacy22PageListPresentationSelectionV1 {
-                profile_id: LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1,
-                raw_page_list_entry_count: entry_types.len(),
-                materialized_page_count,
-                customer_page_indices: (2..customer_end).collect(),
-            })
-        }
-        Legacy22PageListDialectV1::Quill => {
-            if entry_types.len() < 6
-                || entry_types[0] != LEGACY_PAGE_TYPE
-                || entry_types[1] != LEGACY_PAGE_TYPE
-            {
-                return None;
-            }
-            let tail_start = entry_types.len().checked_sub(3)?;
-            if tail_start <= 2
-                || entry_types[2..tail_start]
-                    .iter()
-                    .any(|raw_type| *raw_type != LEGACY_PAGE_TYPE)
-            {
-                return None;
-            }
-            let tail = &entry_types[tail_start..];
-            let all_page_tail = tail == [LEGACY_PAGE_TYPE, LEGACY_PAGE_TYPE, LEGACY_PAGE_TYPE];
-            let special_tail = tail
-                == [
-                    LEGACY_PAGE_TYPE,
-                    LEGACY_PAGE_LIST_SPECIAL_TYPE,
-                    LEGACY_PAGE_TYPE,
-                ];
-            if !all_page_tail && !special_tail {
-                return None;
-            }
-            Some(Legacy22PageListPresentationSelectionV1 {
-                profile_id: LEGACY22_QUILL_PAGE_PROFILE_ID_V1,
-                raw_page_list_entry_count: entry_types.len(),
-                materialized_page_count,
-                customer_page_indices: (2..tail_start).collect(),
-            })
-        }
-    }
+        page_list_entries,
+    })
 }
 
 fn unique_entry_by_type<'a>(
@@ -203,8 +131,13 @@ fn parse_u16_id_list(
     let max_count = read_u16(contents, list_start + 2).context("legacy list max_count missing")?;
     let record_size =
         read_u16(contents, list_start + 4).context("legacy list record_size missing")?;
-    if max_count < count || record_size != LEGACY_LIST_U16_RECORD_SIZE {
-        return Ok(Vec::new());
+    if max_count < count {
+        bail!("{label}: max_count {max_count} is less than count {count}");
+    }
+    if record_size != LEGACY_LIST_U16_RECORD_SIZE {
+        bail!(
+            "{label}: record size {record_size}, expected {LEGACY_LIST_U16_RECORD_SIZE}"
+        );
     }
 
     let payload_start = header_end;
@@ -219,8 +152,7 @@ fn parse_u16_id_list(
     let mut ids = Vec::with_capacity(usize::from(count));
     for index in 0..usize::from(count) {
         let offset = payload_start + index * usize::from(record_size);
-        let object_id = read_u16(contents, offset).context("legacy list object id missing")?;
-        ids.push(object_id);
+        ids.push(read_u16(contents, offset).context("legacy list object id missing")?);
     }
     debug_assert_eq!(payload_end, payload_start + payload_len);
     Ok(ids)
@@ -229,91 +161,4 @@ fn parse_u16_id_list(
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     let raw = bytes.get(offset..offset.checked_add(2)?)?;
     Some(u16::from_le_bytes([raw[0], raw[1]]))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn noquill_profile_selects_only_middle_pages() {
-        let selection = select_from_entry_types(
-            Legacy22PageListDialectV1::NoQuill,
-            5,
-            &[LEGACY_PAGE_TYPE; 4],
-        )
-        .expect("bounded no-Quill envelope should select");
-        assert_eq!(selection.customer_page_indices, vec![2]);
-        assert_eq!(selection.materialized_page_count, 4);
-    }
-
-    #[test]
-    fn noquill_profile_fails_open_on_physical_page_drift() {
-        assert_eq!(
-            select_from_entry_types(
-                Legacy22PageListDialectV1::NoQuill,
-                4,
-                &[LEGACY_PAGE_TYPE; 4],
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn quill_profile_accepts_current_special_tail() {
-        let selection = select_from_entry_types(
-            Legacy22PageListDialectV1::Quill,
-            6,
-            &[
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_LIST_SPECIAL_TYPE,
-                LEGACY_PAGE_TYPE,
-            ],
-        )
-        .expect("bounded Quill special-tail envelope should select");
-        assert_eq!(selection.customer_page_indices, vec![2]);
-        assert_eq!(selection.materialized_page_count, 5);
-    }
-
-    #[test]
-    fn quill_profile_accepts_historical_all_page_tail() {
-        let selection = select_from_entry_types(
-            Legacy22PageListDialectV1::Quill,
-            8,
-            &[
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-                LEGACY_PAGE_TYPE,
-            ],
-        )
-        .expect("bounded historical Quill envelope should select");
-        assert_eq!(selection.customer_page_indices, vec![2, 3]);
-        assert_eq!(selection.materialized_page_count, 7);
-    }
-
-    #[test]
-    fn quill_profile_rejects_unproven_tail_shape() {
-        assert_eq!(
-            select_from_entry_types(
-                Legacy22PageListDialectV1::Quill,
-                6,
-                &[
-                    LEGACY_PAGE_TYPE,
-                    LEGACY_PAGE_TYPE,
-                    LEGACY_PAGE_TYPE,
-                    LEGACY_PAGE_LIST_SPECIAL_TYPE,
-                    LEGACY_PAGE_TYPE,
-                    LEGACY_PAGE_TYPE,
-                ],
-            ),
-            None
-        );
-    }
 }
