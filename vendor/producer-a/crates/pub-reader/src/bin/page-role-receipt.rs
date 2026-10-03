@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use pub_core::Sha256Digest;
+use pub_model::Sha256Digest;
 use pub_reader::{analyze_mature_0x2c_page_roles, derive_pub_page_id};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -29,8 +29,10 @@ fn main() -> Result<()> {
     }
     for (json_page, page) in pages.iter_mut().zip(receipt.pages.iter()) {
         let page_id = derive_pub_page_id(&source_hash, page.contents_seq_num)?;
-        let fingerprint =
-            format!("{:x}", Sha256::digest(page_id.as_canonical().as_bytes()));
+        let fingerprint = Sha256::digest(page_id.as_canonical().as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         let object = json_page
             .as_object_mut()
             .context("page-role receipt page must be an object")?;
