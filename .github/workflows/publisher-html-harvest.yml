@@ -10,6 +10,7 @@ on:
       - "research/publisher_html_seed_urls.json"
       - "research/publisher_html_borderart_join.py"
       - "research/publisher_borderart_catalog_usage_census.py"
+      - "research/publisher_borderart_static_projection.py"
   workflow_dispatch:
 
 concurrency:
@@ -60,6 +61,13 @@ jobs:
             --objects out/publisher-html-harvest/objects.json \
             --out out/publisher-html-harvest/borderart-catalog-usage-census.json
 
+      - name: Guard distinct same-shape BorderArt projections
+        run: |
+          python research/publisher_borderart_static_projection.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-static-projection.json
+
       - name: Publish summary
         if: always()
         run: |
@@ -100,6 +108,19 @@ jobs:
               for row in d["rows"]:
                   mark = "present" if row["present"] else "missing"
                   f.write(f"- `{row['property_name']} {row['priv']}`: **{mark}**, sources={row['source_count']}\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-static-projection.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-static-projection.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt same-shape projection guard\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write("- current OplPo: `Fbid priv=903 value=0`\n")
+              f.write("- LastFmt OplOdpo: `FBID priv=2418 value=Basic...Wide Inline`\n")
+              f.write("- conclusion: distinct property coordinates / value domains\n")
           PY
           fi
           if [ -f out/publisher-html-harvest/borderart-catalog-usage-census.json ]; then
@@ -149,5 +170,6 @@ jobs:
             out/publisher-html-harvest/legacy-odpo-frontier.json
             out/publisher-html-harvest/borderart-fbid-join.json
             out/publisher-html-harvest/borderart-catalog-usage-census.json
+            out/publisher-html-harvest/borderart-static-projection.json
           if-no-files-found: error
           retention-days: 30
