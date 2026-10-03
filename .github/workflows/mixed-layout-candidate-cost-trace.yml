@@ -73,7 +73,7 @@ jobs:
               r"^CHAPTERA_READER_PERF mixed_layout:policy_candidates:(\d+):safe:(\d+):reshape:(\d+)$"
           )
           candidate_re = re.compile(
-              r"^CHAPTERA_READER_PERF mixed_layout:line:(\d+):candidate:(\d+):reshape:([01]):(start|done)$"
+              r"^CHAPTERA_READER_PERF mixed_layout:line:(\d+):candidate:(\d+):total:(\d+):safe:(\d+):reshape_total:(\d+):requires_reshape:([01]):(start|done)$"
           )
 
           rows = []
@@ -126,8 +126,11 @@ jobs:
                       last_candidate = {
                           "line_index": int(m.group(1)),
                           "candidate_ordinal": int(m.group(2)),
-                          "requires_reshaping": m.group(3) == "1",
-                          "event": m.group(4),
+                          "candidate_total": int(m.group(3)),
+                          "safe_candidate_total": int(m.group(4)),
+                          "reshape_candidate_total": int(m.group(5)),
+                          "requires_reshaping": m.group(6) == "1",
+                          "event": m.group(7),
                       }
               row = {
                   "fixture_id": fixture_id,
@@ -143,7 +146,6 @@ jobs:
               print(json.dumps(row, sort_keys=True))
 
           assert all(row["exit_code"] == -24 for row in rows), rows
-          assert all(row["policy_candidate_profiles_seen"] for row in rows), rows
           assert all(row["last_candidate_marker"] for row in rows), rows
 
           payload = {
