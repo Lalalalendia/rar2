@@ -11,11 +11,13 @@ import fitz
 PAIRS = [
     {
         "id": "virginia-devinettes-2021",
+        "required": True,
         "pub": "virginia-devinettes.pub",
         "pdf": "virginia-devinettes-reference.pdf",
     },
     {
         "id": "virginia-remplacante-zone-a-2015",
+        "required": False,
         "pub": "virginia-remplacante-modifiable.pub",
         "pdf": "virginia-remplacante-zone-a-reference.pdf",
     },
@@ -142,7 +144,16 @@ def main() -> int:
         pub = args.pair_dir / spec["pub"]
         pdf = args.pair_dir / spec["pdf"]
         if not pub.is_file() or not pdf.is_file():
-            raise SystemExit(f"required exact pair is unavailable: {spec['id']}")
+            if spec["required"]:
+                raise SystemExit(f"required exact pair is unavailable: {spec['id']}")
+            rows.append(
+                {
+                    "pair_id": spec["id"],
+                    "availability_status": "source_temporarily_unavailable",
+                    "required": False,
+                }
+            )
+            continue
 
         raw_receipt = args.out / f"{spec['id']}-page-role.json"
         run_page_role(pub, raw_receipt)
@@ -228,6 +239,8 @@ def main() -> int:
         rows.append(
             {
                 "pair_id": spec["id"],
+                "availability_status": "acquired",
+                "required": spec["required"],
                 "raw_page_count": scenario["raw_document_page_count"],
                 "reference_pdf_page_count": reference_pages,
                 "roles_unresolved_at_baseline": True,

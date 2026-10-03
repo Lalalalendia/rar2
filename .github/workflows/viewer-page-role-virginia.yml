@@ -51,14 +51,20 @@ jobs:
           python tools/acquire_virginia_pub_pdf_pairs.py "$RUNNER_TEMP/virginia-pairs"
           test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes.pub"
           test -f "$RUNNER_TEMP/virginia-pairs/virginia-devinettes-reference.pdf"
-          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub"
-          test -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-zone-a-reference.pdf"
+          test -f "$RUNNER_TEMP/virginia-pairs/acquisition.json"
 
       - name: Prove exact Virginia Viewer page projection
         env:
           CHAPTERA_VIRGINIA_DEVINETTES_PUB: ${{ runner.temp }}/virginia-pairs/virginia-devinettes.pub
-          CHAPTERA_VIRGINIA_REMPLACANTE_PUB: ${{ runner.temp }}/virginia-pairs/virginia-remplacante-modifiable.pub
-        run: cargo test -p pub-viewer exact_virginia_ -- --ignored --nocapture
+        run: |
+          set -euo pipefail
+          cargo test -p pub-viewer exact_virginia_devinettes_standard_print_page_projection -- --ignored --nocapture
+          if [[ -f "$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" ]]; then
+            CHAPTERA_VIRGINIA_REMPLACANTE_PUB="$RUNNER_TEMP/virginia-pairs/virginia-remplacante-modifiable.pub" \
+              cargo test -p pub-viewer exact_virginia_remplacante_standard_print_page_projection -- --ignored --nocapture
+          else
+            echo "Optional Virginia Remplacante source pair unavailable; Devinettes remains the required gate."
+          fi
 
       - name: Resolve current scenario page authority
         run: |
