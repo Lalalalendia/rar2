@@ -1,0 +1,247 @@
+name: Editable Typography Scoped Preserved V2
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-typography-scoped-preserved-v2.yml"
+      - "tools/ci/verify_typography_scoped_disposition.py"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-editor/**"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: editable-typography-scoped-preserved-v2-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scoped-disposition:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/editable-typography-scoped-v2
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/editable-typography-scoped-v2-evidence
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+      PINNED_CORPUS_COUNT: "1050"
+      PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt,clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check scoped planner and editor
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-export -p pub-editor -- --check
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-export
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+          cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate corpus SHA"
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          PY
+
+      - name: Build exact typography and route probes
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-editor --release \
+            --bin editable_typography_probe \
+            --bin editable_route_probe
+
+      - name: Verify all three proven Montserrat sources
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          shas=(
+            4758095aa58927b1aefa23c384bb16cd598e6732ef2af5af68471118dc25c567
+            770daf58c214d6f848af676b6a53c04934f7c1499e5674837a18a2f63875dc90
+            f4f23d04d29f20407b9e5c1f57f8df84e71084d9e8cd4f0c1cc0064737053de7
+          )
+          for sha in "${shas[@]}"; do
+            case_root="$EVIDENCE_ROOT/$sha"
+            mkdir -p "$case_root/materialized"
+            "$CARGO_TARGET_DIR/release/editable_typography_probe" \
+              "$CORPUS_ROOT/$sha.pub" > "$case_root/probe.json"
+            python - "$case_root/probe.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          montserrat = [
+              item for item in data.get("items", [])
+              if item.get("font_family", "").strip() == "Montserrat"
+          ]
+          assert len(montserrat) == 20, len(montserrat)
+          PY
+            "$CARGO_TARGET_DIR/release/editable_route_probe" \
+              "$CORPUS_ROOT/$sha.pub" \
+              --label "$sha.pub" \
+              --materialize-dir "$case_root/materialized" \
+              > "$case_root/route.json"
+            for target in idml odg; do
+              python tools/ci/verify_typography_scoped_disposition.py \
+                --probe "$case_root/probe.json" \
+                --report "$case_root/materialized/$target.report.json" \
+                --receipt "$case_root/$target.disposition.json"
+            done
+          done
+
+      - name: Select and verify a non-Montserrat control
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          evidence = Path(os.environ["EVIDENCE_ROOT"]) / "control"
+          evidence.mkdir(parents=True, exist_ok=True)
+          probe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "editable_typography_probe"
+
+          selected = None
+          for path in sorted(root.glob("*.pub")):
+              run = subprocess.run(
+                  [str(probe), str(path)],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+                  timeout=30,
+              )
+              data = json.loads(run.stdout)
+              items = data.get("items", [])
+              if items and all(
+                  item.get("font_family", "").strip() != "Montserrat"
+                  for item in items
+              ):
+                  selected = (path, data)
+                  break
+          assert selected is not None, "no non-Montserrat bounded typography control"
+          path, data = selected
+          (evidence / "source.txt").write_text(str(path) + "\n")
+          (evidence / "probe.json").write_text(
+              json.dumps(data, indent=2, sort_keys=True) + "\n"
+          )
+          print(path.name)
+          PY
+          pub="$(cat "$EVIDENCE_ROOT/control/source.txt")"
+          sha="$(basename "$pub" .pub)"
+          mkdir -p "$EVIDENCE_ROOT/control/materialized"
+          "$CARGO_TARGET_DIR/release/editable_route_probe" \
+            "$pub" \
+            --label "$sha.pub" \
+            --materialize-dir "$EVIDENCE_ROOT/control/materialized" \
+            > "$EVIDENCE_ROOT/control/route.json"
+          for target in idml odg; do
+            python tools/ci/verify_typography_scoped_disposition.py \
+              --probe "$EVIDENCE_ROOT/control/probe.json" \
+              --report "$EVIDENCE_ROOT/control/materialized/$target.report.json" \
+              --receipt "$EVIDENCE_ROOT/control/$target.disposition.json"
+          done
+
+      - name: Build scoped disposition acceptance receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          shas = [
+              "4758095aa58927b1aefa23c384bb16cd598e6732ef2af5af68471118dc25c567",
+              "770daf58c214d6f848af676b6a53c04934f7c1499e5674837a18a2f63875dc90",
+              "f4f23d04d29f20407b9e5c1f57f8df84e71084d9e8cd4f0c1cc0064737053de7",
+          ]
+          sources = []
+          for sha in shas:
+              idml = json.loads((root / sha / "idml.disposition.json").read_text())
+              odg = json.loads((root / sha / "odg.disposition.json").read_text())
+              assert idml["proven_story_count"] == 20
+              assert odg["proven_story_count"] == 20
+              assert idml["promoted_feature_count"] == 40
+              assert odg["promoted_feature_count"] == 40
+              sources.append({"source_sha256": sha, "idml": idml, "odg": odg})
+
+          control_idml = json.loads((root / "control" / "idml.disposition.json").read_text())
+          control_odg = json.loads((root / "control" / "odg.disposition.json").read_text())
+          assert control_idml["proven_story_count"] == 0
+          assert control_odg["proven_story_count"] == 0
+          assert control_idml["promoted_feature_count"] == 0
+          assert control_odg["promoted_feature_count"] == 0
+
+          receipt = {
+              "schema": "chaptera.editable-typography-scoped-preserved-v2.v1",
+              "proven_family": "Montserrat",
+              "proven_source_count": 3,
+              "proven_story_count": 60,
+              "promoted_feature_count_per_target": 120,
+              "sources": sources,
+              "non_montserrat_control": {
+                  "idml": control_idml,
+                  "odg": control_odg,
+              },
+              "claims": {
+                  "scoped_only": True,
+                  "source_sha_or_story_hardcode_in_product_logic": False,
+                  "font_size_hardcode_in_product_logic": False,
+                  "color_or_alignment_promoted": False,
+              },
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({
+              "proven_story_count": receipt["proven_story_count"],
+              "promoted_feature_count_per_target": receipt["promoted_feature_count_per_target"],
+          }, indent=2))
+          PY
+
+      - name: Upload scoped disposition receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editable-typography-scoped-preserved-v2-${{ github.run_id }}
+          path: |
+            target/editable-typography-scoped-v2-evidence/receipt.json
+            target/editable-typography-scoped-v2-evidence/*/*.disposition.json
+            target/editable-typography-scoped-v2-evidence/control/*.disposition.json
+          if-no-files-found: warn
+          retention-days: 90
