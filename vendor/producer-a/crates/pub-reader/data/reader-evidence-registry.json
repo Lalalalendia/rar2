@@ -52,8 +52,8 @@
       "authority_receipt": {
         "kind": "closed_discriminator",
         "task_id": "PUB-T-650",
-        "run_id": "36072949588",
-        "artifact_id": "10838639727",
+        "run_id": 36072949588,
+        "artifact_id": 10838639727,
         "evidence_digest": "sha256:b814c65752ecdbfcbafcfb16b869f000313fdb7327a4a6a6ad9865fb294a4aed",
         "classification": "malformed-or-stale-publisher97-media-variant"
       },
