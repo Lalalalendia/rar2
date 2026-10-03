@@ -7,14 +7,13 @@
 
 use crate::create_shape_runtime_v1::is_editor_created_uuid_v7_node_id;
 use crate::{
-    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
-    AuthoredShapeRuntimeV1, AuthoredShapeTransformV1, EditorError, LengthEmu, NodeId, PageId,
-    RectEmu, validate_authored_shape_runtime_v1,
+    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
+    AuthoredShapeTransformV1, EditorError, LengthEmu, NodeId, PageId, RectEmu,
+    validate_authored_shape_runtime_v1,
 };
 use std::fmt;
 
-pub const DUPLICATE_PLACEMENT_POLICY_V1: &str =
-    "chaptera.duplicate-placement.10pt-down-right.v1";
+pub const DUPLICATE_PLACEMENT_POLICY_V1: &str = "chaptera.duplicate-placement.10pt-down-right.v1";
 pub const DUPLICATE_OFFSET_EMU_V1: i64 = 127_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,9 +38,8 @@ pub enum DuplicateAuthoredRectangleErrorV1 {
 impl fmt::Display for DuplicateAuthoredRectangleErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedPlacementPolicy => formatter.write_str(
-                "Duplicate requires chaptera.duplicate-placement.10pt-down-right.v1",
-            ),
+            Self::UnsupportedPlacementPolicy => formatter
+                .write_str("Duplicate requires chaptera.duplicate-placement.10pt-down-right.v1"),
             Self::SourceUnsupported { node_id } => write!(
                 formatter,
                 "node {} is not an admitted author-created direct page-owned Rectangle",
@@ -62,7 +60,9 @@ impl fmt::Display for DuplicateAuthoredRectangleErrorV1 {
                 "Duplicate placement for source {} exceeds safe geometry bounds",
                 node_id.as_canonical()
             ),
-            Self::Commit(error) => write!(formatter, "Duplicate CreateShape commit failed: {error}"),
+            Self::Commit(error) => {
+                write!(formatter, "Duplicate CreateShape commit failed: {error}")
+            }
         }
     }
 }
