@@ -34,6 +34,12 @@ jobs:
             --seeds research/publisher_html_seed_urls.json \
             --out out/publisher-html-harvest
 
+      - name: Build legacy OplOdpo frontier receipt
+        run: |
+          python research/publisher_html_legacy_frontier.py \
+            --harvest out/publisher-html-harvest/harvest.json \
+            --out out/publisher-html-harvest/legacy-odpo-frontier.json
+
       - name: Publish summary
         if: always()
         run: |
@@ -62,6 +68,20 @@ jobs:
           PY
             cat "$HOME/summary.md" >> "$GITHUB_STEP_SUMMARY"
           fi
+          if [ -f out/publisher-html-harvest/legacy-odpo-frontier.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/legacy-odpo-frontier.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## Legacy OplOdpo frontier\n\n")
+              f.write(f"- present: `{d['present_count']}/{d['watch_count']}`\n")
+              f.write(f"- missing: `{d['missing_count']}`\n")
+              for row in d["rows"]:
+                  mark = "present" if row["present"] else "missing"
+                  f.write(f"- `{row['property_name']} {row['priv']}`: **{mark}**, sources={row['source_count']}\n")
+          PY
+          fi
 
       - name: Upload derived corpus metadata
         if: always()
@@ -75,5 +95,6 @@ jobs:
             out/publisher-html-harvest/properties.tsv
             out/publisher-html-harvest/registry.tsv
             out/publisher-html-harvest/version-diff.json
+            out/publisher-html-harvest/legacy-odpo-frontier.json
           if-no-files-found: error
           retention-days: 30
