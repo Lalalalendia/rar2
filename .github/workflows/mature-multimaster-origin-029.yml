@@ -1,0 +1,107 @@
+name: Mature multi-master PAGE origin 029
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-multimaster-origin-029.yml"
+      - "tools/mature_multimaster_origin_029_v1.py"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/page-role-receipt.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-multimaster-origin-029-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-multimaster-origin-029
+
+jobs:
+  discriminator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned corpus identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          shas=sorted(p.stem.casefold() for p in Path("out/pinned1050/materialized/native").glob("*.pub"))
+          digest=hashlib.sha256("".join(x+"\n" for x in shas).encode("ascii")).hexdigest()
+          assert len(shas)==1050
+          assert digest=="21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+          PY
+
+      - name: Build PAGE-role analyzer
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt
+
+      - name: Emit six exact recurring-family receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/receipts"
+          analyzer="$CARGO_TARGET_DIR/debug/page-role-receipt"
+          for sha in             273d283c93fafb0f14b772ba8475a6b48db0a4f9c1a0789605ce26ea811996d3             5eb5055bc75918ca8dbc7093fa267a3365f25129fd2c3dc88c7be3540f44e4cd             7c630704ce369f775fe7a24ec180f5c7997eb779f28bd57ab8c7dda66297a17c             9915c5612d7d8ce49fc733bbbe748c80325fb0094af0ba0d42a2b15fc648e5bd             a8c8a3c36a925fdc9de7c4f5e43e014a606751b2d09635cbc1b04f50ccb7fcea             c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e
+          do
+            "$analyzer"               "out/pinned1050/materialized/native/$sha.pub"               "$RUNNER_TEMP/receipts/$sha.json"
+          done
+
+      - name: Compare PtlvOrigin fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/mature_multimaster_origin_029_v1.py             "$RUNNER_TEMP/receipts"             target/mature-multimaster-origin-029/summary.json
+
+      - name: Assert privacy and authority fences
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("target/mature-multimaster-origin-029/summary.json").read_text())
+          assert d["schema"]=="chaptera.mature-multimaster-origin-029.v1"
+          assert d["source_count"]==6
+          c=d["claims"]
+          assert c["measurement_only"] is True
+          assert c["raw_container_bytes_emitted"] is False
+          assert c["only_container_sha256_emitted"] is True
+          assert c["publisher_or_pdf_reference_used"] is False
+          assert c["product_selection_changed"] is False
+          assert d["comparison"]["origin_promoted_to_authority"] is False
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-multimaster-origin-029
+          path: target/mature-multimaster-origin-029/summary.json
+          if-no-files-found: error
+          retention-days: 30
