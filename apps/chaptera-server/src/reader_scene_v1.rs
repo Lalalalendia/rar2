@@ -1926,6 +1926,52 @@ mod tests {
                 mime: SHARED_FALLBACK_FONT_MIME.to_owned(),
                 bytes: chaptera_desktop_fallback_font_resource::bytes().to_vec(),
             };
+            let viewer_direct_yellow_runs = bundle
+                .geometry
+                .typography_runs
+                .iter()
+                .filter(|run| run.color_rgb == Some([255, 255, 0]))
+                .count();
+            let fallback_font = shared_text_font_resource();
+            let mut render_direct_yellow_runs = 0_usize;
+            let mut render_uniform_yellow_fragments = 0_usize;
+            let mut render_text_fragments = 0_usize;
+            for page_index in 0..bundle.geometry.document.pages.len() {
+                let plan = build_page_render_plan_with_text_layout_resolver_v1(
+                    &bundle.geometry,
+                    page_index,
+                    &fallback_font,
+                    |fragment| {
+                        let source_family =
+                            effective_source_font_family_v1(&bundle.geometry, fragment)?;
+                        (source_family.trim().eq_ignore_ascii_case("Arial"))
+                            .then(|| configured.explicit_resource())
+                    },
+                )
+                .expect("exact Carlton diagnostic render plan must build");
+                for node in &plan.nodes {
+                    let Some(text) = node.text.as_ref() else {
+                        continue;
+                    };
+                    render_text_fragments += 1;
+                    render_direct_yellow_runs += text
+                        .typography
+                        .iter()
+                        .filter(|run| run.color_rgb == Some([255, 255, 0]))
+                        .count();
+                    if uniform_text_color_rgb_v1(text) == Some([255, 255, 0]) {
+                        render_uniform_yellow_fragments += 1;
+                    }
+                }
+            }
+            println!(
+                "CLOUD_READER_TEXT_COLOR_HOP_PROBE viewer_yellow_runs={} render_text_fragments={} render_yellow_runs={} render_uniform_yellow_fragments={}",
+                viewer_direct_yellow_runs,
+                render_text_fragments,
+                render_direct_yellow_runs,
+                render_uniform_yellow_fragments,
+            );
+
             let configured_scene = from_viewer_geometry_with_fonts(
                 "probe:configured-font".to_owned(),
                 actual_sha256.clone(),
