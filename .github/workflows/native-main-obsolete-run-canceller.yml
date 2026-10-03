@@ -34,7 +34,7 @@ jobs:
           trap 'rm -f "$runs_file"' EXIT
 
           gh api --paginate --method GET "repos/$GH_REPO/actions/runs"             -f event=push -f per_page=100             --jq '.workflow_runs[]
-              | select(.path == env.TARGET_WORKFLOW_PATH)
+              | select(.path == ".github/workflows/mature-029-native-page-spread-once.yml")
               | select(.status == "queued"
                     or .status == "pending"
                     or .status == "in_progress"
