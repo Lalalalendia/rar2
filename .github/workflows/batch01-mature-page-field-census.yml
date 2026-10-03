@@ -1,0 +1,174 @@
+name: Batch01 mature PAGE field census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/batch01-mature-page-field-census.yml"
+      - "tools/batch01_mature_page_field_census_v1.py"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/bin/page-role-receipt.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: batch01-mature-page-field-census-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/batch01-mature-page-fields
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
+      - name: Download post-legacy22 Batch01 visual receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: publisher-visual-golden-batch01-receipt
+          path: out/current-visual
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 37129422737
+
+      - name: Verify exact 23-case cohort
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path("out/current-visual/summary.json").read_text())
+          assert d["schema"] == "chaptera.publisher-visual-fingerprint-compare.v1"
+          assert d["page_count_mismatch_pair_count"] == 23
+          assert d["unsupported_pair_count"] == 0
+          rows = [
+              r for r in d["pairs"]
+              if r.get("rendered") is True
+              and r.get("candidate_pages") != r.get("reference_pages")
+          ]
+          assert len(rows) == 23, len(rows)
+          print("current residual cohort verified: 23 mismatches, Unsupported=0")
+          PY
+
+      - name: Materialize exact 23 residual PUBs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/page-fields-pubs" "$RUNNER_TEMP/page-fields-receipts"
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          visual = json.loads(Path("out/current-visual/summary.json").read_text())
+          wanted = {
+              row["fixture"]
+              for row in visual["pairs"]
+              if row.get("rendered") is True
+              and row.get("candidate_pages") != row.get("reference_pages")
+          }
+          pairs = list(csv.DictReader(
+              Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open(
+                  newline="", encoding="utf-8-sig"
+              )
+          ))
+          by_name = {row["basename"]: row for row in pairs}
+          corpus = Path("out/pinned1050/materialized/native")
+          target = Path(os.environ["RUNNER_TEMP"]) / "page-fields-pubs"
+          assert len(wanted) == 23
+          for name in sorted(wanted):
+              row = by_name[name]
+              source = corpus / f"{row['pub_sha256'].casefold()}.pub"
+              assert source.exists(), source
+              shutil.copyfile(source, target / f"{name}.pub")
+          assert len(list(target.glob("*.pub"))) == 23
+          PY
+
+      - name: Build current source-safe PAGE-role analyzer
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt
+
+      - name: Emit current PAGE field receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pub in "$RUNNER_TEMP"/page-fields-pubs/*.pub; do
+            name="$(basename "$pub" .pub)"
+            cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt --               "$pub" "$RUNNER_TEMP/page-fields-receipts/$name.json"
+          done
+
+      - name: Build source-safe CPo/Rgohpo census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/batch01_mature_page_field_census_v1.py             out/current-visual/summary.json             "$RUNNER_TEMP/page-fields-receipts"             target/batch01-mature-page-fields/summary.json
+
+      - name: Assert measurement fences
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path("target/batch01-mature-page-fields/summary.json").read_text())
+          assert d["schema"] == "chaptera.batch01-mature-page-field-census.v1"
+          assert d["mismatch_fixture_count"] == 23
+          c = d["claims"]
+          assert c["measurement_only"] is True
+          assert c["publisher_reference_page_count_used_as_product_authority"] is False
+          assert c["cpo_rgohpo_promoted_to_authority"] is False
+          assert c["page_suppression_changed"] is False
+          assert c["product_semantics_changed"] is False
+          assert c["raw_story_text_emitted"] is False
+          assert c["raw_contents_seq_nums_emitted"] is False
+          print("measurement fences verified")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: batch01-mature-page-field-census
+          path: target/batch01-mature-page-fields/
+          if-no-files-found: error
+          retention-days: 30
