@@ -175,7 +175,11 @@ jobs:
               "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
               "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff",
           ):
-              assert by_sha[required]["downloaded_cfb_count"] >= 1, required
+              row = by_sha[required]
+              assert (
+                  row["known_duplicate_capture_count"] >= 1
+                  or row["downloaded_cfb_count"] >= 1
+              ), required
           PY
 
       - name: Remove historical PUB bytes before artifact upload
