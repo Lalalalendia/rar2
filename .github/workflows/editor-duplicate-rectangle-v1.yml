@@ -6,6 +6,7 @@ on:
       - "vendor/producer-a/crates/pub-editor/src/duplicate_authored_rectangle_v1.rs"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "vendor/producer-a/crates/pub-editor/tests/duplicate_authored_rectangle_v1.rs"
+      - "apps/chaptera-desktop/src/main.rs"
       - ".github/workflows/editor-duplicate-rectangle-v1.yml"
   push:
     branches:
@@ -48,3 +49,49 @@ jobs:
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
           --test create_shape_runtime_v1
           --test authored_stack_runtime_v1
+
+      - name: Check Desktop Duplicate integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Lint Desktop Duplicate integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+  real-gui:
+    needs: core
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $url = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove Duplicate through real Desktop GUI
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_duplicate_button_commits_one_create_shape_and_selects_duplicate_on_real_pub
+          -- --ignored --nocapture
