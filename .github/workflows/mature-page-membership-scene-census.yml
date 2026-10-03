@@ -1,0 +1,217 @@
+name: Mature PAGE membership Scene census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mature-page-membership-scene-census.yml"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/page-projection-receipt.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mature-page-membership-scene-census-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/mature-page-membership-scene-census
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Materialize exact Batch01 PUB pairs
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/mature-page-membership-scene-census"
+          mkdir -p "$RUNNER_TEMP/mature-page-membership-scene-census/fixtures"
+          mkdir -p target/mature-page-membership-scene-census/{raw,projection,status}
+          python - <<'PY'
+          import csv, hashlib, json, os, shutil
+          from pathlib import Path
+
+          source_root = Path("out/pinned1050/materialized/native")
+          paths = sorted(source_root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+
+          out_root = Path(os.environ["RUNNER_TEMP"]) / "mature-page-membership-scene-census" / "fixtures"
+          rows = []
+          with Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open(newline="", encoding="utf-8") as handle:
+              for row in csv.DictReader(handle):
+                  sha = row["pub_sha256"].casefold()
+                  source = source_root / f"{sha}.pub"
+                  data = source.read_bytes()
+                  assert hashlib.sha256(data).hexdigest() == sha
+                  shutil.copyfile(source, out_root / f"{row['basename']}.pub")
+                  rows.append({
+                      "oracle_id": row["oracle_id"],
+                      "fixture": row["basename"],
+                      "source_sha256": sha,
+                      "reference_pages_validation_only": int(row["pdf_pages"]),
+                  })
+          assert len(rows) == 55
+          Path("target/mature-page-membership-scene-census/input-manifest.json").write_text(
+              json.dumps({"schema":"chaptera.mature-page-membership-scene-input.v1","fixture_count":55,"rows":rows}, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - name: Build source-safe analyzers
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt --jobs 2
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin page-projection-receipt --jobs 2
+
+      - name: Analyze all 55 paired PUB sources
+        run: |
+          set -euo pipefail
+          for pub in "$RUNNER_TEMP"/mature-page-membership-scene-census/fixtures/*.pub; do
+            name="$(basename "$pub" .pub)"
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-role-receipt" "$pub" "target/mature-page-membership-scene-census/raw/$name.json"; then echo 0 > "target/mature-page-membership-scene-census/status/$name.raw.exit"; else echo $? > "target/mature-page-membership-scene-census/status/$name.raw.exit"; fi
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-projection-receipt" "$pub" "target/mature-page-membership-scene-census/projection/$name.json"; then echo 0 > "target/mature-page-membership-scene-census/status/$name.projection.exit"; else echo $? > "target/mature-page-membership-scene-census/status/$name.projection.exit"; fi
+          done
+
+      - name: Build membership discriminator
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("target/mature-page-membership-scene-census")
+          manifest = json.loads((root / "input-manifest.json").read_text())
+          targets = {"batch01-029", "batch01-033"}
+
+          def roles(raw):
+              pages = sorted(raw.get("pages", []), key=lambda p: p["document_ordinal"])
+              seq_to_ordinal = {p["contents_seq_num"]: p["document_ordinal"] for p in pages if isinstance(p.get("contents_seq_num"), int)}
+              fan_in = {p["document_ordinal"]: 0 for p in pages}
+              for p in pages:
+                  m = p.get("applied_master_seq_num")
+                  if m in seq_to_ordinal:
+                      fan_in[seq_to_ordinal[m]] += 1
+              out = []
+              for p in pages:
+                  m = p.get("applied_master_seq_num")
+                  relation = "none" if m is None else f"page_ordinal:{seq_to_ordinal[m]}" if m in seq_to_ordinal else "external"
+                  out.append({
+                      "document_ordinal": p["document_ordinal"],
+                      "master_relation": relation,
+                      "master_in_degree": fan_in[p["document_ordinal"]],
+                      "shape_child_count": p.get("shape_child_count", 0),
+                      "group_child_count": p.get("group_child_count", 0),
+                  })
+              roots = [r["document_ordinal"] for r in out if r["master_relation"] == "none" and r["master_in_degree"] > 0]
+              return out, roots
+
+          payload_keys = [
+              "direct_scene_node_count","story_frame_count","text_fragment_count",
+              "table_count","paint_count","image_node_use_count","image_placement_count"
+          ]
+          rows = []
+          for inp in manifest["rows"]:
+              fixture = inp["fixture"]
+              raw_exit = int((root/"status"/f"{fixture}.raw.exit").read_text())
+              proj_exit = int((root/"status"/f"{fixture}.projection.exit").read_text())
+              row = {"oracle_id":inp["oracle_id"],"fixture":fixture,"raw_exit_code":raw_exit,"projection_exit_code":proj_exit,"target_residual":inp["oracle_id"] in targets}
+              if raw_exit == 0 and proj_exit == 0:
+                  raw = json.loads((root/"raw"/f"{fixture}.json").read_text())
+                  proj = json.loads((root/"projection"/f"{fixture}.json").read_text())
+                  rr, root_ordinals = roles(raw)
+                  per = {int(p["document_ordinal_zero_based"]):p for p in proj.get("per_page", [])}
+                  joined = []
+                  for r in rr:
+                      scene = per.get(r["document_ordinal"], {})
+                      item = dict(r)
+                      for key in payload_keys:
+                          item[key] = int(scene.get(key, 0))
+                      item["scene_payload_score"] = sum(item[key] for key in payload_keys)
+                      item["root_candidate"] = r["document_ordinal"] in root_ordinals
+                      joined.append(item)
+                  roots_rows = [r for r in joined if r["root_candidate"]]
+                  applied_rows = [r for r in joined if r["master_relation"].startswith("page_ordinal:")]
+                  row.update({
+                      "viewer_page_count": proj.get("viewer_page_count"),
+                      "root_ordinals": root_ordinals,
+                      "root_source_child_total": sum(r["shape_child_count"]+r["group_child_count"] for r in roots_rows),
+                      "applied_source_child_total": sum(r["shape_child_count"]+r["group_child_count"] for r in applied_rows),
+                      "root_scene_payload_total": sum(r["scene_payload_score"] for r in roots_rows),
+                      "applied_scene_payload_total": sum(r["scene_payload_score"] for r in applied_rows),
+                      "root_all_scene_empty": bool(roots_rows) and all(r["scene_payload_score"] == 0 for r in roots_rows),
+                      "applied_any_scene_nonempty": any(r["scene_payload_score"] > 0 for r in applied_rows),
+                      "page_roles": joined,
+                  })
+              rows.append(row)
+
+          target_rows = [r for r in rows if r["target_residual"]]
+          assert {r["oracle_id"] for r in target_rows} == targets
+          summary = {
+              "schema":"chaptera.mature-page-membership-scene-census.v1",
+              "fixture_count":len(rows),
+              "raw_success_count":sum(r["raw_exit_code"]==0 for r in rows),
+              "projection_success_count":sum(r["projection_exit_code"]==0 for r in rows),
+              "target_rows":target_rows,
+              "rows":rows,
+              "claims":{
+                  "measurement_only":True,
+                  "reference_page_count_used_as_selector_authority":False,
+                  "page_identity_emitted":False,
+                  "node_identity_emitted":False,
+                  "source_seq_nums_emitted":False,
+                  "source_oid_values_emitted":False,
+                  "story_text_emitted":False,
+                  "direct_scene_payload_counted_before_candidate_pruning":True
+              }
+          }
+          (root/"summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True)+"\n")
+          print(json.dumps({"fixture_count":len(rows),"raw_success_count":summary["raw_success_count"],"projection_success_count":summary["projection_success_count"],"targets":[{
+              "oracle_id":r["oracle_id"],
+              "viewer_page_count":r.get("viewer_page_count"),
+              "root_ordinals":r.get("root_ordinals"),
+              "root_source_child_total":r.get("root_source_child_total"),
+              "applied_source_child_total":r.get("applied_source_child_total"),
+              "root_scene_payload_total":r.get("root_scene_payload_total"),
+              "applied_scene_payload_total":r.get("applied_scene_payload_total"),
+              "root_all_scene_empty":r.get("root_all_scene_empty"),
+              "applied_any_scene_nonempty":r.get("applied_any_scene_nonempty")
+          } for r in target_rows]}, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe membership census
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mature-page-membership-scene-census
+          path: |
+            target/mature-page-membership-scene-census/input-manifest.json
+            target/mature-page-membership-scene-census/summary.json
+            target/mature-page-membership-scene-census/status/
+          if-no-files-found: error
+          retention-days: 30
