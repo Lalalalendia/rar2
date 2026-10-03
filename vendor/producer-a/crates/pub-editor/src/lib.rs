@@ -1806,16 +1806,7 @@ impl EditorSession {
     pub fn try_project(&self) -> Result<EditorProject, EditorProjectError> {
         let table_grids = effective_table_grids(&self.graph);
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
-            let schema_version = if self
-                .undo
-                .iter()
-                .any(|operation| matches!(operation, EditOperation::DeleteNode { .. }))
-            {
-                EDITOR_PROJECT_VERSION_V0_12
-            } else {
-                EDITOR_PROJECT_VERSION_V0_11
-            };
-            (schema_version, Some(identity.clone()))
+            (EDITOR_PROJECT_VERSION_V0_12, Some(identity.clone()))
         } else {
             let legacy_schema = if self
                 .undo
