@@ -3382,7 +3382,9 @@ mod tests {
                             default_alignment_absent += 1;
                             "default_alignment_absent"
                         }
-                        [value] if QuillParagraphAlignment::from_persisted_value(*value).is_some() => {
+                        [value]
+                            if QuillParagraphAlignment::from_persisted_value(*value).is_some() =>
+                        {
                             default_alignment_supported += 1;
                             "default_alignment_supported"
                         }
@@ -3421,7 +3423,9 @@ mod tests {
             eprintln!(
                 "missing_range ordinal={} utf16_len={} stories={} selector_source={} default_class={}",
                 ordinal,
-                range.global_end_utf16.saturating_sub(range.global_start_utf16),
+                range
+                    .global_end_utf16
+                    .saturating_sub(range.global_start_utf16),
                 story_parts.join(","),
                 selector_source,
                 default_class,
