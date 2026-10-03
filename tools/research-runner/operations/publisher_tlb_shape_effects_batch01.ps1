@@ -50,6 +50,31 @@ $logDir = Join-Path $OutputRoot "logs"
 $privateDir = Join-Path $OutputRoot "private/tlb-shape-effects-batch01"
 New-Item -ItemType Directory -Force -Path $analysisDir,$blastDir,$logDir,$privateDir | Out-Null
 
+$progressPath = Join-Path $analysisDir "tlb-shape-effects-progress.json"
+$progressLogPath = Join-Path $logDir "tlb-shape-effects-progress.ndjson"
+$script:ProgressSequence = 0
+
+function Write-Progress {
+    param(
+        [string]$CandidateId = "",
+        [string]$ArmName = "",
+        [Parameter(Mandatory = $true)][string]$Step
+    )
+
+    $script:ProgressSequence++
+    $payload = [ordered]@{
+        schema = "chaptera.pub.t891-native-progress.v1"
+        experiment_id = $ExpectedExperiment
+        sequence = [int]$script:ProgressSequence
+        captured_at_utc = [DateTime]::UtcNow.ToString("o")
+        candidate_id = $CandidateId
+        arm = $ArmName
+        step = $Step
+    }
+    Write-PubJson -Value $payload -Path $progressPath
+    Add-Content -LiteralPath $progressLogPath -Value ($payload | ConvertTo-Json -Compress) -Encoding UTF8
+}
+
 function Release-Com($Value) {
     if ($null -ne $Value -and [System.Runtime.InteropServices.Marshal]::IsComObject($Value)) {
         try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($Value) } catch {}
@@ -410,6 +435,7 @@ function Invoke-Arm {
     $slug = ($CandidateId -replace '[^A-Za-z0-9]+','-').Trim('-').ToLowerInvariant()
     $armDir = Join-Path $privateDir (Join-Path $slug $ArmName)
     New-Item -ItemType Directory -Force -Path $armDir | Out-Null
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "arm-start"
 
     $working = Join-Path $armDir "working.pub"
     $output = Join-Path $armDir "output.pub"
@@ -417,6 +443,7 @@ function Invoke-Arm {
     $semanticPath = Join-Path $armDir "semantic.json"
     $fingerprintPath = Join-Path $armDir "fingerprint.json"
     Copy-Item -LiteralPath $BaselinePath -Destination $working -Force
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "working-copy-ready"
 
     $before = $null
     $runtimeAfter = $null
@@ -428,15 +455,25 @@ function Invoke-Arm {
     $app = $null
     $doc = $null
     try {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-create-start"
         $app = New-PubPublisherApplication
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-create-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-open-start"
         $doc = $app.Open($working, $false, $false)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-open-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "read-current-start"
         $before = Get-CandidateValue -Document $doc -CandidateId $CandidateId
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "read-current-done"
 
         if ($ArmName -eq "same_value") {
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-start"
             try {
                 Set-CandidateValue -Document $doc -CandidateId $CandidateId -Value $before
                 $runtimeAfter = Get-CandidateValue -Document $doc -CandidateId $CandidateId
                 $selectedValue = $before
+                Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-done"
             }
             catch {
                 $armStatus = "setter_error"
@@ -444,6 +481,7 @@ function Invoke-Arm {
             }
         }
         elseif ($ArmName -eq "changed_value") {
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-start"
             foreach ($candidateValue in @(Get-ChangedValueCandidates -CandidateId $CandidateId -Current $before)) {
                 if (Test-EquivalentValue $candidateValue $before) { continue }
                 try {
@@ -472,12 +510,16 @@ function Invoke-Arm {
                 $armStatus = "no_changed_value"
                 $runtimeAfter = Get-CandidateValue -Document $doc -CandidateId $CandidateId
             }
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-done"
         }
         else {
             $runtimeAfter = $before
+            Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "mutation-skipped"
         }
 
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "save-as-start"
         $doc.SaveAs($output, $PbFilePublication, $false)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "save-as-done"
     }
     catch {
         $armStatus = "arm_error"
@@ -485,8 +527,12 @@ function Invoke-Arm {
         throw
     }
     finally {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-close-start"
         Close-Document $doc
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "document-close-done"
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-close-start"
         Close-PubPublisherApplication $app
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "publisher-close-done"
     }
 
     $app2 = $null
@@ -494,18 +540,37 @@ function Invoke-Arm {
     $semantic = $null
     $reopenedValue = $null
     try {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-create-start"
         $app2 = New-PubPublisherApplication
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-create-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-start"
         $doc2 = $app2.Open($output, $true, $false)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-readback-start"
         $reopenedValue = Get-CandidateValue -Document $doc2 -CandidateId $CandidateId
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-readback-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "semantic-snapshot-start"
         $semantic = Get-ShapeEffectsSnapshot -Document $doc2
         Write-PubJson -Value $semantic -Path $semanticPath
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "semantic-snapshot-done"
+
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "pdf-export-start"
         $doc2.ExportAsFixedFormat($PbFixedFormatTypePDF, $pdf, $PbIntentStandard)
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "pdf-export-done"
     }
     finally {
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-close-start"
         Close-Document $doc2
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-document-close-done"
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-close-start"
         Close-PubPublisherApplication $app2
+        Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "reopen-publisher-close-done"
     }
 
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "fingerprint-start"
     $fingerprintTool = Join-Path $repoRoot "tools/pub_operation_algebra_fingerprint.py"
     & python $fingerprintTool --pub $output --pdf $pdf --out $fingerprintPath
     if ($LASTEXITCODE -ne 0) {
@@ -513,6 +578,8 @@ function Invoke-Arm {
     }
     $fingerprint = Get-Content -LiteralPath $fingerprintPath -Raw | ConvertFrom-Json
     $semanticSha = (Get-FileHash -LiteralPath $semanticPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "fingerprint-done"
+    Write-Progress -CandidateId $CandidateId -ArmName $ArmName -Step "arm-done"
 
     return [ordered]@{
         status = $armStatus
@@ -581,6 +648,7 @@ function Invoke-BlastRadius {
     $slug = ([string]$Spec.id -replace '[^A-Za-z0-9]+','-').Trim('-').ToLowerInvariant()
     $evidencePath = Join-Path $privateDir "$slug/$Mode-blast-evidence.json"
     $receiptPath = Join-Path $blastDir "$slug-$Mode.json"
+    Write-Progress -CandidateId ([string]$Spec.id) -ArmName $Mode -Step "blast-start"
     New-BlastEvidence -Spec $Spec -Mode $Mode -Path $evidencePath
 
     $controlPub = Join-Path $privateDir "$slug/control/output.pub"
@@ -600,6 +668,7 @@ function Invoke-BlastRadius {
     }
 
     $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    Write-Progress -CandidateId ([string]$Spec.id) -ArmName $Mode -Step "blast-done"
     return [ordered]@{
         receipt_path = ("analysis/blast-radius/{0}-{1}.json" -f $slug,$Mode)
         changed_stream_count = @($receipt.cfb.control_mutation_stream_delta).Count
@@ -684,20 +753,32 @@ function Classify-Candidate {
 }
 
 $baselinePath = Join-Path $privateDir "baseline.pub"
+Write-Progress -Step "baseline-create-start"
 New-BaselinePublication -Path $baselinePath
+Write-Progress -Step "baseline-create-done"
 $baselineHash = (Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $baselineApp = $null
 $baselineDoc = $null
 $baselineSnapshot = $null
 try {
+    Write-Progress -Step "baseline-reopen-publisher-create-start"
     $baselineApp = New-PubPublisherApplication
+    Write-Progress -Step "baseline-reopen-publisher-create-done"
+    Write-Progress -Step "baseline-reopen-document-start"
     $baselineDoc = $baselineApp.Open($baselinePath, $true, $false)
+    Write-Progress -Step "baseline-reopen-document-done"
+    Write-Progress -Step "baseline-snapshot-start"
     $baselineSnapshot = Get-ShapeEffectsSnapshot -Document $baselineDoc
+    Write-Progress -Step "baseline-snapshot-done"
 }
 finally {
+    Write-Progress -Step "baseline-reopen-document-close-start"
     Close-Document $baselineDoc
+    Write-Progress -Step "baseline-reopen-document-close-done"
+    Write-Progress -Step "baseline-reopen-publisher-close-start"
     Close-PubPublisherApplication $baselineApp
+    Write-Progress -Step "baseline-reopen-publisher-close-done"
 }
 
 $results = @()
@@ -708,6 +789,7 @@ $logLines = @(
 )
 
 foreach ($candidateId in $CandidateIds) {
+    Write-Progress -CandidateId $candidateId -Step "candidate-start"
     $spec = $packet.factory.candidates | Where-Object { [string]$_.id -eq $candidateId } | Select-Object -First 1
     if ($null -eq $spec) { throw "Missing packet metadata for $candidateId" }
 
@@ -742,6 +824,7 @@ foreach ($candidateId in $CandidateIds) {
     }
 
     $logLines += "$candidateId classification=$classification same_streams=$($sameComparison.changed_streams -join ',') changed_streams=$($changedComparison.changed_streams -join ',') same_ranges=$($sameBlast.changed_range_count) changed_ranges=$($changedBlast.changed_range_count)"
+    Write-Progress -CandidateId $candidateId -Step "candidate-done"
 }
 
 $result = [ordered]@{
@@ -767,3 +850,4 @@ $result = [ordered]@{
 
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "tlb-shape-effects-batch01.json")
 $logLines | Set-Content -LiteralPath (Join-Path $logDir "tlb-shape-effects-batch01.txt") -Encoding ASCII
+Write-Progress -Step "batch-done"
