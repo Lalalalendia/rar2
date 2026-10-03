@@ -31,6 +31,12 @@ class CorpusCFB(CFB):
     chain, stream-size and mini-stream bounds remain inherited unchanged.
     """
 
+    def _labels(self) -> None:
+        # The corpus census needs only the logical Quill stream. Avoid the
+        # shared parser's global physical labeling pass, which intentionally
+        # validates unrelated historical OlePres chains.
+        return
+
     def _dirs(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         index = 0
