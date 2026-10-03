@@ -5774,7 +5774,12 @@ fn apply_image_inverse(
 }
 
 fn source_image_crop_state(graph: &PubResolvedGraph, node_id: NodeId) -> Option<ImageCropStateV1> {
-    let crop = graph.nodes.get(&node_id)?.payload.explicit_image_crop.as_ref()?;
+    let crop = graph
+        .nodes
+        .get(&node_id)?
+        .payload
+        .explicit_image_crop
+        .as_ref()?;
     if crop.ambiguous {
         return None;
     }
@@ -5791,7 +5796,10 @@ fn effective_image_crop_state(
     overrides: &BTreeMap<NodeId, ImageCropStateV1>,
     node_id: NodeId,
 ) -> Option<ImageCropStateV1> {
-    overrides.get(&node_id).copied().or_else(|| source_image_crop_state(graph, node_id))
+    overrides
+        .get(&node_id)
+        .copied()
+        .or_else(|| source_image_crop_state(graph, node_id))
 }
 
 fn apply_crop_forward(
@@ -5799,7 +5807,12 @@ fn apply_crop_forward(
     overrides: &mut BTreeMap<NodeId, ImageCropStateV1>,
     operation: &EditOperation,
 ) -> Result<(), EditorError> {
-    let EditOperation::SetImageCrop { node_id, before, after } = operation else {
+    let EditOperation::SetImageCrop {
+        node_id,
+        before,
+        after,
+    } = operation
+    else {
         unreachable!("only SetImageCrop reaches crop overlay apply")
     };
     if effective_image_crop_state(graph, overrides, *node_id) != Some(*before) {
@@ -5814,7 +5827,12 @@ fn apply_crop_inverse(
     overrides: &mut BTreeMap<NodeId, ImageCropStateV1>,
     operation: &EditOperation,
 ) -> Result<(), EditorError> {
-    let EditOperation::SetImageCrop { node_id, before, after } = operation else {
+    let EditOperation::SetImageCrop {
+        node_id,
+        before,
+        after,
+    } = operation
+    else {
         unreachable!("only SetImageCrop reaches crop overlay inverse")
     };
     if effective_image_crop_state(graph, overrides, *node_id) != Some(*after) {
@@ -5952,10 +5970,7 @@ mod image_crop_authoring_tests {
             page_id,
             pub_model::Page {
                 id: page_id,
-                size: pub_model::Size2D::new(
-                    LengthEmu::new(5_000_000),
-                    LengthEmu::new(5_000_000),
-                ),
+                size: pub_model::Size2D::new(LengthEmu::new(5_000_000), LengthEmu::new(5_000_000)),
                 bleed: None,
                 margins: None,
                 children: vec![node_id],
@@ -6032,11 +6047,7 @@ mod image_crop_authoring_tests {
         )
     }
 
-    fn install_source_png(
-        session: &mut EditorSession,
-        node_id: NodeId,
-        resource_id: ResourceId,
-    ) {
+    fn install_source_png(session: &mut EditorSession, node_id: NodeId, resource_id: ResourceId) {
         session.source_image_nodes.insert(node_id, resource_id);
         session.source_image_assets.insert(
             resource_id,
@@ -6068,7 +6079,10 @@ mod image_crop_authoring_tests {
         assert!(matches!(operation, EditOperation::SetImageCrop { .. }));
         assert_eq!(session.image_crop_for(node_id), Some(after));
         assert_eq!(session.graph.nodes[&node_id].header.bounds, source_bounds);
-        assert_eq!(session.project().schema_version, EDITOR_PROJECT_VERSION_V0_14);
+        assert_eq!(
+            session.project().schema_version,
+            EDITOR_PROJECT_VERSION_V0_14
+        );
 
         assert!(matches!(
             session.set_image_crop(node_id, before, after),
@@ -6095,7 +6109,9 @@ mod image_crop_authoring_tests {
             LengthEmu::new(350_000),
             LengthEmu::new(450_000),
         );
-        session.resize_node_to(node_id, resized).expect("resize preserves crop");
+        session
+            .resize_node_to(node_id, resized)
+            .expect("resize preserves crop");
         assert_eq!(session.image_crop_for(node_id), Some(after));
 
         let project = session.project();
