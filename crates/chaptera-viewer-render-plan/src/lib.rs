@@ -3374,6 +3374,42 @@ mod tests {
 
     #[cfg(feature = "projected-scene-instances")]
     #[test]
+    fn cmo_projected_instance_without_target_frame_fails_closed() {
+        let mut visual = fixture();
+        let page_id = visual.document.pages[0].id;
+        let origin_node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        let instance = SceneInstanceV1 {
+            schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+            instance_id: "sha256:cmo-missing-target-frame-fixture".to_owned(),
+            projection_kind: SceneProjectionKindV1::CmoStorySlot,
+            origin_node_id: origin_node_id.as_canonical().to_string(),
+            target_page_id: page_id.as_canonical().to_string(),
+            source_parent_origin: None,
+            story_authority_id: Some(story_id.as_canonical().to_string()),
+            cmo_slot_index: Some(0),
+            cmo_scalar_index: Some(0),
+        };
+        visual
+            .projected_instances
+            .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+                scene_instance: instance,
+                target_frame_node_id: None,
+                target_frame_paint_scalar_end: None,
+                text_content_bounds: None,
+                bounds: visual.scene.nodes[0].bounds,
+                transform: Affine2D::identity(),
+            });
+
+        let error = build_page_render_plan_v1(&visual, 0).expect_err("missing Cmo frame must fail");
+        assert!(matches!(
+            error,
+            RenderPlanErrorV1::ProjectedTargetFrameMissing { .. }
+        ));
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
     fn projected_slot_suppresses_only_marker_glyphs_and_keeps_scalar_count() {
         let mut visual = fixture();
         let page_id = visual.document.pages[0].id;
