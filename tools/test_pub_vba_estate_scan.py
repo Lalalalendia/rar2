@@ -218,6 +218,7 @@ def main() -> int:
 
     calls = """\nRem MailMerge.DataSource\n' ExportAsFixedFormat\nSet p = ActiveDocument.Pages(1)\np.Shapes(1).TextFrame.TextRange.Text = \"ok\"\nActiveDocument.ExportAsFixedFormat pbFixedFormatTypePDF, \"x.pdf\"\n"""
     families, symbols = module.classify_calls(calls)
+    assert families["documents"] >= 1
     assert families["pages"] >= 1
     assert families["shapes"] >= 1
     assert families["text"] >= 2
@@ -225,12 +226,48 @@ def main() -> int:
     assert "mail_merge" not in families
     assert symbols["ExportAsFixedFormat"] == 1
 
-    string_calls = 'msg = "MailMerge.DataSource ExportAsFixedFormat"\nSet app = CreateObject("Publisher.Application")\n'
+    string_calls = (
+        'msg = "MailMerge.DataSource ExportAsFixedFormat"\n'
+        'Set app = CreateObject("Publisher.Application")\n'
+        'Set running = GetObject(, "Publisher.Application")\n'
+    )
     string_families, string_symbols = module.classify_calls(string_calls)
     assert "mail_merge" not in string_families
     assert "output" not in string_families
-    assert string_families["application_lifecycle"] == 1
+    assert string_families["application_lifecycle"] == 2
     assert string_symbols["CreateObject(Publisher.Application)"] == 1
+    assert string_symbols["GetObject(Publisher.Application)"] == 1
+
+    document_only = "Set doc = ActiveDocument\n"
+    document_families, document_symbols = module.classify_calls(document_only)
+    assert document_families == {"documents": 1}
+    assert document_symbols == {"ActiveDocument": 1}
+
+    taxonomy_calls = """
+Set doc = ThisDocument
+Set newDoc = Application.Documents.Add
+Set opened = Application.Documents.Open("x.pub")
+doc.LayoutGuides.Rows = 3
+doc.RulerGuides.Add 1, 10
+doc.UpdateOLEObjects
+doc.SaveAs "copy.pub"
+doc.Pages(1).ExportEmailHTML "mail.html"
+doc.WebPagePreview
+"""
+    taxonomy_families, taxonomy_symbols = module.classify_calls(taxonomy_calls)
+    assert taxonomy_families["documents"] >= 5
+    assert taxonomy_families["pages"] == 1
+    assert taxonomy_families["layout"] == 2
+    assert taxonomy_families["output"] == 3
+    assert taxonomy_families["ole_links"] == 1
+    assert taxonomy_symbols["Documents.Add"] == 1
+    assert taxonomy_symbols["Documents.Open"] == 1
+    assert taxonomy_symbols["LayoutGuides"] == 1
+    assert taxonomy_symbols["RulerGuides"] == 1
+    assert taxonomy_symbols["UpdateOLEObjects"] == 1
+    assert taxonomy_symbols["SaveAs"] == 1
+    assert taxonomy_symbols["ExportEmailHTML"] == 1
+    assert taxonomy_symbols["WebPagePreview"] == 1
 
     extracted_source = b'Attribute VB_Name = "Module1"\r\nSub X()\r\nActiveDocument.Pages(1).Shapes(1).TextFrame.TextRange.Text = "x"\r\nActiveDocument.ExportAsFixedFormat 2, "x.pdf"\r\nEnd Sub\r\n'
     extracted = module.inspect_pub_bytes(source_macro_cfb(extracted_source))
@@ -241,6 +278,7 @@ def main() -> int:
     assert admitted[0]["project_stream_status"] == "present"
     assert admitted[0]["vba_project_stream_status"] == "present"
     assert admitted[0]["module_sources_extracted"] == 1
+    assert extracted["call_families"]["documents"] >= 1
     assert extracted["call_families"]["pages"] >= 1
     assert extracted["call_families"]["shapes"] >= 1
     assert extracted["call_families"]["text"] >= 1
@@ -280,7 +318,9 @@ def main() -> int:
     assert bad["cfb_status"] == "parse_failed"
     assert bad["vba_state"] == "unknown"
 
-    assert module.build_receipt([], include_paths=False)["claims"]["source_text_emitted"] is False
+    empty_receipt = module.build_receipt([], include_paths=False)
+    assert empty_receipt["claims"]["source_text_emitted"] is False
+    assert empty_receipt["call_classifier_version"] == "v2"
 
     print({"tests": "ok", "macro_state": macro["vba_state"], "plain_state": plain["vba_state"]})
     return 0
