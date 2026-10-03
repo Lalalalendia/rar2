@@ -2305,7 +2305,7 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
-                    let rectangles = self.authored_rectangle_exports_v1()?;
+                    let rectangles = self.authored_rectangle_exports_v1(target)?;
                     add_authored_rectangles_to_idml(&plan, &mut package, &rectangles).map_err(
                         |error| EditorExportError::Projection {
                             target,
@@ -2335,7 +2335,7 @@ impl EditorSession {
                             target,
                             message: error.to_string(),
                         })?;
-                    let rectangles = self.authored_rectangle_exports_v1()?;
+                    let rectangles = self.authored_rectangle_exports_v1(target)?;
                     add_authored_rectangles_to_odg(&plan, &mut package, &rectangles).map_err(
                         |error| EditorExportError::Projection {
                             target,
@@ -2395,7 +2395,7 @@ impl EditorSession {
                         message: error.to_string(),
                     },
                 )?;
-                let rectangles = self.authored_rectangle_exports_v1()?;
+                let rectangles = self.authored_rectangle_exports_v1(target)?;
                 add_authored_rectangles_to_idml(&plan, &mut package, &rectangles).map_err(
                     |error| EditorExportError::Projection {
                         target,
@@ -2430,7 +2430,7 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
-                let rectangles = self.authored_rectangle_exports_v1()?;
+                let rectangles = self.authored_rectangle_exports_v1(target)?;
                 add_authored_rectangles_to_odg(&plan, &mut package, &rectangles).map_err(
                     |error| EditorExportError::Projection {
                         target,
@@ -2641,12 +2641,13 @@ impl EditorSession {
 
     fn authored_rectangle_exports_v1(
         &self,
+        target: EditorEditableTarget,
     ) -> Result<Vec<AuthoredRectangleExportV1>, EditorExportError> {
         let mut result = Vec::with_capacity(self.authored_shapes.len());
         for shape in self.authored_shapes.values() {
             validate_authored_shape_runtime_v1(shape).map_err(|error| {
                 EditorExportError::Projection {
-                    target: EditorEditableTarget::Idml,
+                    target,
                     message: format!(
                         "authored shape {} failed runtime validation: {error:?}",
                         shape.node_id.as_canonical()
@@ -2655,7 +2656,7 @@ impl EditorSession {
             })?;
             let page = self.graph.pages.get(&shape.page_id).ok_or_else(|| {
                 EditorExportError::Projection {
-                    target: EditorEditableTarget::Idml,
+                    target,
                     message: format!(
                         "authored shape {} parent page {} is missing",
                         shape.node_id.as_canonical(),
