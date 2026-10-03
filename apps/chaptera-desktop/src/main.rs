@@ -4447,31 +4447,35 @@ impl ViewerApp {
     }
 
     fn nudge_selected_object(&mut self, dx_emu: i64, dy_emu: i64, rebind_text: bool) {
-        let outcome = self.selected_direct_move_target().and_then(|(node_id, before)| {
-            let x = before
-                .x
-                .checked_add(pub_editor::LengthEmu::new(dx_emu))
-                .ok_or_else(|| "Object nudge overflowed X geometry.".to_owned())?;
-            let y = before
-                .y
-                .checked_add(pub_editor::LengthEmu::new(dy_emu))
-                .ok_or_else(|| "Object nudge overflowed Y geometry.".to_owned())?;
-            let editor = self
-                .editor
-                .as_mut()
-                .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
-            let before_operations = editor.operations().len();
-            editor
-                .can_move_node_to(node_id, x, y)
-                .map_err(|error| format!("Nudge unavailable: {} ({})", error, error.code()))?;
-            editor
-                .move_node_to(node_id, x, y)
-                .map_err(|error| format!("Nudge rejected: {} ({})", error, error.code()))?;
-            if editor.operations().len() != before_operations + 1 {
-                return Err("Object nudge must append exactly one MoveNode operation.".to_owned());
-            }
-            Ok(())
-        });
+        let outcome = self
+            .selected_direct_move_target()
+            .and_then(|(node_id, before)| {
+                let x = before
+                    .x
+                    .checked_add(pub_editor::LengthEmu::new(dx_emu))
+                    .ok_or_else(|| "Object nudge overflowed X geometry.".to_owned())?;
+                let y = before
+                    .y
+                    .checked_add(pub_editor::LengthEmu::new(dy_emu))
+                    .ok_or_else(|| "Object nudge overflowed Y geometry.".to_owned())?;
+                let editor = self
+                    .editor
+                    .as_mut()
+                    .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+                let before_operations = editor.operations().len();
+                editor
+                    .can_move_node_to(node_id, x, y)
+                    .map_err(|error| format!("Nudge unavailable: {} ({})", error, error.code()))?;
+                editor
+                    .move_node_to(node_id, x, y)
+                    .map_err(|error| format!("Nudge rejected: {} ({})", error, error.code()))?;
+                if editor.operations().len() != before_operations + 1 {
+                    return Err(
+                        "Object nudge must append exactly one MoveNode operation.".to_owned()
+                    );
+                }
+                Ok(())
+            });
 
         match outcome {
             Ok(()) => {
@@ -4631,11 +4635,7 @@ impl ViewerApp {
                                 self.active_story_owns_selected_object(),
                             );
                             if decision.route == selection_keyboard::ArrowRouteV1::MoveObject {
-                                self.nudge_selected_object(
-                                    decision.dx_emu,
-                                    decision.dy_emu,
-                                    true,
-                                );
+                                self.nudge_selected_object(decision.dx_emu, decision.dy_emu, true);
                             }
                         }
                         continue;
@@ -9383,7 +9383,13 @@ mod tests {
         harness.step();
         harness.step();
 
-        let after = harness.state().editor.as_ref().expect("editor").graph().nodes[&node_id]
+        let after = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .graph()
+            .nodes[&node_id]
             .header
             .bounds;
         assert_eq!(
@@ -9551,8 +9557,7 @@ mod tests {
                         .enumerate()
                         .find(|(_, page)| node.parent_origin == page.id.into_canonical())?;
                     let page_id_text = page.id.as_canonical().to_string();
-                    let instance =
-                        direct_scene_instance(editor, &page_id_text, fragment.frame_id)?;
+                    let instance = direct_scene_instance(editor, &page_id_text, fragment.frame_id)?;
                     let admission =
                         admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
                     if !admission.admitted
@@ -9611,7 +9616,13 @@ mod tests {
             "ordinary Story Arrow must stay transient text navigation"
         );
         assert_eq!(
-            harness.state().editor.as_ref().expect("editor").graph().nodes[&frame_id]
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&frame_id]
                 .header
                 .bounds,
             before,
@@ -9631,7 +9642,13 @@ mod tests {
         harness.step();
         harness.step();
 
-        let after = harness.state().editor.as_ref().expect("editor").graph().nodes[&frame_id]
+        let after = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .graph()
+            .nodes[&frame_id]
             .header
             .bounds;
         assert_eq!(
@@ -9677,7 +9694,10 @@ mod tests {
             let app = harness.state();
             let mode = app.text_mode.as_ref().expect("Story mode");
             assert_eq!(mode.session.selection.anchor_scalar, 0);
-            assert_eq!(mode.session.selection.focus_scalar, mode.domain.raw_scalar_len);
+            assert_eq!(
+                mode.session.selection.focus_scalar,
+                mode.domain.raw_scalar_len
+            );
             assert_eq!(
                 app.editor.as_ref().expect("editor").operations().len(),
                 operations_after_nudge,
