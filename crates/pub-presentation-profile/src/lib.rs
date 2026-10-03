@@ -1210,6 +1210,115 @@ mod tests {
         assert!(select_legacy22_customer_page_indices_v1(bad_ordinal).is_none());
     }
 
+    fn mature_terminal_service_input(
+        customer_count: usize,
+        special: bool,
+        scenario_count: usize,
+    ) -> StandardPrintServiceTailProfileInputV1 {
+        let leader_seq = 500_u32;
+        let mut pages = vec![StandardPrintServiceTailPageEvidenceV1 {
+            document_ordinal: 0,
+            contents_seq_num: leader_seq,
+            oid_dword0: Some(2),
+            oid_dword1: Some(9),
+            applied_master_seq_num: None,
+        }];
+        for index in 0..customer_count {
+            pages.push(StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: index + 1,
+                contents_seq_num: 600 + index as u32,
+                oid_dword0: Some(if index < 2 { 1 } else { 2 }),
+                oid_dword1: Some(index as u32),
+                applied_master_seq_num: Some(leader_seq),
+            });
+        }
+        let service_ordinal = customer_count + 1;
+        pages.push(StandardPrintServiceTailPageEvidenceV1 {
+            document_ordinal: service_ordinal,
+            contents_seq_num: 700,
+            oid_dword0: Some(2),
+            oid_dword1: Some(1),
+            applied_master_seq_num: Some(leader_seq),
+        });
+        if special {
+            pages.push(StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: service_ordinal + 2,
+                contents_seq_num: 701,
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(leader_seq),
+            });
+            pages.push(StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: service_ordinal + 3,
+                contents_seq_num: 702,
+                oid_dword0: Some(0),
+                oid_dword1: Some(0),
+                applied_master_seq_num: Some(leader_seq),
+            });
+        } else {
+            for offset in 1..=3 {
+                pages.push(StandardPrintServiceTailPageEvidenceV1 {
+                    document_ordinal: service_ordinal + offset,
+                    contents_seq_num: 700 + offset as u32,
+                    oid_dword0: Some(0),
+                    oid_dword1: Some(0),
+                    applied_master_seq_num: Some(leader_seq),
+                });
+            }
+        }
+
+        StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: pages.len() + usize::from(special),
+            confirmed_page_count: pages.len(),
+            special_entry_count: usize::from(special),
+            scenario_evidence_list_count: scenario_count,
+            observed_scenario_page_count: scenario_count,
+            pages,
+        }
+    }
+
+    #[test]
+    fn mature_terminal_service_profile_accepts_all_page_suffix() {
+        let selection =
+            select_mature_terminal_service_tail_customer_page_seq_nums_v1(
+                mature_terminal_service_input(2, false, 0),
+            )
+            .unwrap();
+        assert_eq!(
+            selection.profile_id,
+            MATURE_TERMINAL_SERVICE_TAIL_PROFILE_ID_V1
+        );
+        assert_eq!(selection.customer_page_seq_nums, vec![600, 601]);
+        assert_eq!(selection.service_page_seq_nums, vec![700, 701, 702, 703]);
+    }
+
+    #[test]
+    fn mature_terminal_service_profile_accepts_special_suffix_and_scenario_evidence() {
+        let selection =
+            select_mature_terminal_service_tail_customer_page_seq_nums_v1(
+                mature_terminal_service_input(3, true, 13),
+            )
+            .unwrap();
+        assert_eq!(selection.customer_page_seq_nums, vec![600, 601, 602]);
+        assert_eq!(selection.service_page_seq_nums, vec![700, 701, 702]);
+    }
+
+    #[test]
+    fn mature_terminal_service_profile_fails_open_on_relation_or_suffix_drift() {
+        let mut bad_relation = mature_terminal_service_input(2, false, 0);
+        bad_relation.pages[2].applied_master_seq_num = Some(999);
+        assert!(
+            select_mature_terminal_service_tail_customer_page_seq_nums_v1(bad_relation).is_none()
+        );
+
+        let mut bad_suffix = mature_terminal_service_input(2, true, 0);
+        bad_suffix.pages.last_mut().unwrap().document_ordinal += 1;
+        assert!(
+            select_mature_terminal_service_tail_customer_page_seq_nums_v1(bad_suffix).is_none()
+        );
+    }
+
     #[test]
     fn standard_print_profile_selects_virginia_style_customer_middle() {
         let input = standard_print_input(&[266, 301, 312, 323, 336, 339]);
