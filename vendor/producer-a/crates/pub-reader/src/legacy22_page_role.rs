@@ -38,29 +38,16 @@ pub fn select_legacy_0x22_page_list_presentation_v1<R: Read + Seek>(
     let mut pub_bytes = Vec::new();
     reader.read_to_end(&mut pub_bytes)?;
 
+    // Product admission is intentionally stricter than the low-family SourceGraph
+    // recovery path. The 650-file recurrence authority was established only on
+    // strict CFB + legacy directory/PageList parses; a recovery-only file must
+    // retain the generic no-loss Viewer projection until independently proven.
     let contents = match pub_cfb::read_stream_reader(
         Cursor::new(pub_bytes.as_slice()),
         CONTENTS_STREAM_PATH,
     ) {
         Ok(contents) => contents,
-        Err(strict_error) if dialect == Legacy22PageListDialectV1::NoQuill => {
-            let recovered = pub_cfb::recover_root_regular_stream_reader(
-                Cursor::new(pub_bytes.as_slice()),
-                CONTENTS_STREAM_PATH,
-            )
-            .with_context(|| {
-                format!(
-                    "strict CFB read failed ({strict_error}); bounded root Contents recovery failed"
-                )
-            })?;
-            if recovered.root_entry_names.iter().any(|name| {
-                name.eq_ignore_ascii_case("Quill") || name.eq_ignore_ascii_case("Escher")
-            }) {
-                return Ok(None);
-            }
-            recovered.bytes
-        }
-        Err(error) => return Err(error).with_context(|| format!("read {CONTENTS_STREAM_PATH}")),
+        Err(_) => return Ok(None),
     };
 
     let stream = StreamPath(CONTENTS_STREAM_PATH.into());
