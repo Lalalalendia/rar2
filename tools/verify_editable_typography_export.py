@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 import re
@@ -208,7 +209,53 @@ def scribus_family_name(value: str) -> str:
     return normalized
 
 
-def verify_scribus(path: Path, items: list[dict]) -> dict:
+def expected_family_size_counts(items: list[dict]) -> collections.Counter[tuple[str, int]]:
+    return collections.Counter(
+        (norm_family(item["font_family"]), int(item["font_size_emu"]))
+        for item in items
+    )
+
+
+def scribus_story_family_size_counts(
+    path: Path,
+) -> collections.Counter[tuple[str, int]]:
+    root = ET.parse(path).getroot()
+    document = next((node for node in root.iter() if local(node.tag) == "DOCUMENT"), None)
+    doc_font = document.attrib.get("DFONT") if document is not None else None
+    doc_size = parse_points(document.attrib.get("DSIZE")) if document is not None else None
+    counts: collections.Counter[tuple[str, int]] = collections.Counter()
+
+    for story in (node for node in root.iter() if local(node.tag) == "StoryText"):
+        default = next(
+            (node for node in list(story) if local(node.tag) == "DefaultStyle"),
+            None,
+        )
+        family = default.attrib.get("FONT", doc_font) if default is not None else doc_font
+        size = (
+            parse_points(default.attrib.get("FONTSIZE"))
+            if default is not None and default.attrib.get("FONTSIZE") is not None
+            else doc_size
+        )
+        effective: set[tuple[str, float]] = set()
+        for text in (node for node in story.iter() if local(node.tag) == "ITEXT"):
+            effective_family = text.attrib.get("FONT", family)
+            effective_size = parse_points(text.attrib.get("FONTSIZE"))
+            if effective_size is None:
+                effective_size = size
+            if effective_family and effective_size is not None:
+                effective.add((scribus_family_name(effective_family), effective_size))
+        if len(effective) != 1:
+            continue
+        effective_family, effective_size = next(iter(effective))
+        counts[(effective_family, int(round(effective_size * 12_700.0)))] += 1
+    return counts
+
+
+def verify_scribus(
+    path: Path,
+    items: list[dict],
+    require_carrier_counts: bool = False,
+) -> dict:
     pairs = scribus_pairs(path)
     for item in items:
         wanted_family = norm_family(item["font_family"])
@@ -223,7 +270,25 @@ def verify_scribus(path: Path, items: list[dict]) -> dict:
                 f"family={item['font_family']!r} size={wanted_size}; "
                 f"observed={sorted(pairs)[:80]!r}"
             )
-    return {"scribus_pair_count": len(pairs)}
+    result = {"scribus_pair_count": len(pairs)}
+    if require_carrier_counts:
+        expected_counts = expected_family_size_counts(items)
+        observed_counts = scribus_story_family_size_counts(path)
+        relevant = collections.Counter(
+            {
+                key: observed_counts.get(key, 0)
+                for key in expected_counts
+            }
+        )
+        if relevant != expected_counts:
+            raise AssertionError(
+                "Scribus save/reopen StoryText carrier counts differ from source: "
+                f"expected={dict(sorted(expected_counts.items()))!r} "
+                f"observed={dict(sorted(relevant.items()))!r}"
+            )
+        result["scribus_story_carrier_count"] = sum(relevant.values())
+        result["scribus_story_size_counts_match"] = True
+    return result
 
 
 def libreoffice_pairs(path: Path) -> set[tuple[str, float]]:
@@ -252,7 +317,11 @@ def libreoffice_pairs(path: Path) -> set[tuple[str, float]]:
     return pairs
 
 
-def verify_libreoffice(path: Path, items: list[dict]) -> dict:
+def verify_libreoffice(
+    path: Path,
+    items: list[dict],
+    require_carrier_counts: bool = False,
+) -> dict:
     pairs = libreoffice_pairs(path)
     for item in items:
         assert_pair(
@@ -261,7 +330,57 @@ def verify_libreoffice(path: Path, items: list[dict]) -> dict:
             float(item["font_size_pt"]),
             "LibreOffice save/reopen",
         )
-    return {"libreoffice_pair_count": len(pairs)}
+    result = {"libreoffice_pair_count": len(pairs)}
+    if require_carrier_counts:
+        root = ET.parse(path).getroot()
+        span_styles = {
+            node.attrib.get(f"{{{TEXT_NS}}}style-name")
+            for node in root.iter()
+            if local(node.tag) == "span"
+        }
+        styles = {
+            node.attrib.get(f"{{{STYLE_NS}}}name"): node
+            for node in root.iter()
+            if local(node.tag) == "style"
+            and node.attrib.get(f"{{{STYLE_NS}}}name")
+        }
+        verified = 0
+        for item in items:
+            story_hex = item["story_id"].replace("-", "").lower()
+            style_name = f"PubStoryT_{story_hex}"
+            style = styles.get(style_name)
+            if style is None:
+                raise AssertionError(
+                    f"LibreOffice fresh reopen lost exact Story style {style_name}"
+                )
+            props = next(
+                (node for node in style.iter() if local(node.tag) == "text-properties"),
+                None,
+            )
+            if props is None:
+                raise AssertionError(
+                    f"LibreOffice Story style {style_name} has no text-properties"
+                )
+            family = props.attrib.get(f"{{{FO_NS}}}font-family")
+            size = parse_points(props.attrib.get(f"{{{FO_NS}}}font-size"))
+            if family is None or size is None:
+                raise AssertionError(
+                    f"LibreOffice Story style {style_name} lost family/size"
+                )
+            assert_pair(
+                {(family, size)},
+                item["font_family"],
+                float(item["font_size_pt"]),
+                f"LibreOffice Story {item['story_id']}",
+            )
+            if style_name not in span_styles:
+                raise AssertionError(
+                    f"LibreOffice Story style {style_name} is no longer referenced"
+                )
+            verified += 1
+        result["libreoffice_exact_story_style_count"] = verified
+        result["libreoffice_exact_story_styles_match"] = verified == len(items)
+    return result
 
 
 def main() -> int:
@@ -271,6 +390,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--require-carrier-counts", action="store_true")
     args = parser.parse_args()
 
     items = expected(args.expected)
@@ -281,11 +401,19 @@ def main() -> int:
     elif args.mode == "scribus":
         if args.input is None:
             parser.error("scribus mode requires --input")
-        result = verify_scribus(args.input, items)
+        result = verify_scribus(
+            args.input,
+            items,
+            require_carrier_counts=args.require_carrier_counts,
+        )
     else:
         if args.input is None:
             parser.error("libreoffice mode requires --input")
-        result = verify_libreoffice(args.input, items)
+        result = verify_libreoffice(
+            args.input,
+            items,
+            require_carrier_counts=args.require_carrier_counts,
+        )
 
     payload = {
         "schema": "chaptera.editable-typography-consumer-check.v1",
