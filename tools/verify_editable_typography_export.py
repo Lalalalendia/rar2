@@ -48,6 +48,88 @@ def expected(path: Path) -> list[dict]:
     return items
 
 
+def verify_report(root: Path, expected_path: Path) -> dict:
+    data = json.loads(expected_path.read_text())
+    all_items = data.get("all_items")
+    if not all_items:
+        raise AssertionError("scoped LossReport proof requires all_items census for the witness source")
+
+    proven_origins = {
+        item["story_id"]
+        for item in all_items
+        if norm_family(item.get("font_family")) == "montserrat"
+    }
+    if not proven_origins:
+        raise AssertionError("witness source has no consumer-proven Montserrat Story")
+
+    target_results = {}
+    family_feature = "story.typography.font_family"
+    size_feature = "story.typography.font_size"
+    color_feature = "story.typography.color"
+    alignment_feature = "story.paragraph_alignment"
+    scoped_features = {family_feature, size_feature}
+
+    for target in ("idml", "odg"):
+        report_path = root / f"{target}.report.json"
+        if not report_path.is_file():
+            raise AssertionError(f"missing {target} LossReport: {report_path}")
+        report = json.loads(report_path.read_text())
+
+        observed = {
+            (item.get("origin"), item["feature"]): item["disposition"]
+            for item in report.get("items", [])
+            if item["feature"] in scoped_features
+        }
+
+        for origin in sorted(proven_origins):
+            for feature in sorted(scoped_features):
+                disposition = observed.get((origin, feature))
+                if disposition != "preserved":
+                    raise AssertionError(
+                        f"{target}: proven {feature} @ {origin} is {disposition!r}, "
+                        "expected preserved"
+                    )
+
+        leaked = sorted(
+            (origin, feature, disposition)
+            for (origin, feature), disposition in observed.items()
+            if disposition == "preserved" and origin not in proven_origins
+        )
+        if leaked:
+            raise AssertionError(
+                f"{target}: scoped typography preservation leaked to unproven origins: {leaked[:40]!r}"
+            )
+
+        unrelated_preserved = [
+            item
+            for item in report.get("items", [])
+            if item["feature"] in {color_feature, alignment_feature}
+            and item["disposition"] == "preserved"
+        ]
+        if unrelated_preserved:
+            raise AssertionError(
+                f"{target}: color/alignment were unexpectedly promoted: "
+                f"{unrelated_preserved[:20]!r}"
+            )
+
+        promoted = sum(
+            disposition == "preserved"
+            for (origin, _feature), disposition in observed.items()
+            if origin in proven_origins
+        )
+        target_results[target] = {
+            "proven_story_count": len(proven_origins),
+            "promoted_feature_count": promoted,
+            "unexpected_preserved_origin_count": len(leaked),
+            "color_alignment_preserved_count": len(unrelated_preserved),
+        }
+
+    return {
+        "proven_story_count": len(proven_origins),
+        "targets": target_results,
+    }
+
+
 def assert_pair(pairs: set[tuple[str, float]], family: str, size: float, label: str) -> None:
     wanted = norm_family(family)
     for actual_family, actual_size in pairs:
@@ -266,7 +348,7 @@ def verify_libreoffice(path: Path, items: list[dict]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("wire", "scribus", "libreoffice"))
+    parser.add_argument("mode", choices=("wire", "report", "scribus", "libreoffice"))
     parser.add_argument("--expected", required=True, type=Path)
     parser.add_argument("--root", type=Path)
     parser.add_argument("--input", type=Path)
@@ -278,6 +360,10 @@ def main() -> int:
         if args.root is None:
             parser.error("wire mode requires --root")
         result = verify_wire(args.root, items)
+    elif args.mode == "report":
+        if args.root is None:
+            parser.error("report mode requires --root")
+        result = verify_report(args.root, args.expected)
     elif args.mode == "scribus":
         if args.input is None:
             parser.error("scribus mode requires --input")
