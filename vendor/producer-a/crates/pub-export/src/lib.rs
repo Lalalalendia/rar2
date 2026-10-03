@@ -5,6 +5,7 @@
 //! PUB source parser crates.
 
 mod conversion;
+pub mod feature;
 mod persistence;
 mod report;
 

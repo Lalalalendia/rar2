@@ -1,13 +1,14 @@
 use crate::{OdgPackage, OdgPart, OdgPartKind};
 use pub_export::{CapabilityLevel, ExportPlan};
+pub use pub_export::feature::{
+    IMAGE_BYTES as IMAGE_BYTES_FEATURE,
+    IMAGE_CONTENT_TRANSFORM as IMAGE_CONTENT_TRANSFORM_FEATURE,
+    IMAGE_FRAME_GEOMETRY as IMAGE_FRAME_GEOMETRY_FEATURE,
+};
 use pub_model::{CanonicalId, NodeId, PageId, RectEmu, ResourceId};
 use std::collections::BTreeSet;
 use std::fmt;
 use std::fmt::Write as _;
-
-pub const IMAGE_BYTES_FEATURE: &str = "image.bytes";
-pub const IMAGE_FRAME_GEOMETRY_FEATURE: &str = "image.frame_geometry";
-pub const IMAGE_CONTENT_TRANSFORM_FEATURE: &str = "image.content_transform";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OdgEmbeddedImagePlacement {

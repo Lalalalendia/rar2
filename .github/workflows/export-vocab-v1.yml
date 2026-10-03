@@ -1,0 +1,41 @@
+name: Export Vocabulary V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/export-vocab-v1.yml"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/src/image.rs"
+      - "vendor/producer-a/crates/pub-odg/src/image.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vocabulary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Format owned files
+        run: |
+          rustfmt --edition 2024 --check \
+            vendor/producer-a/crates/pub-export/src/lib.rs \
+            vendor/producer-a/crates/pub-export/src/feature.rs \
+            vendor/producer-a/crates/pub-idml/src/image.rs \
+            vendor/producer-a/crates/pub-odg/src/image.rs
+
+      - name: Prove target-neutral vocabulary
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-export feature::tests::
+          cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-idml -p pub-odg
