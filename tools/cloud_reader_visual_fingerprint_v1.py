@@ -17,6 +17,28 @@ GRID_W = 64
 GRID_H = 64
 CELL_DELTA = 12
 EMU_PER_POINT = 12700.0
+REFERENCE_SURFACE_STAGES = (
+    "logical_page",
+    "production_sheet",
+    "viewport_spread",
+    "unknown",
+)
+
+
+def reference_surface_stage(value: object) -> str:
+    if value is None:
+        return "unknown"
+    if not isinstance(value, str) or value not in REFERENCE_SURFACE_STAGES:
+        raise ValueError(f"unsupported reference_surface_stage: {value!r}")
+    return value
+
+
+def reference_surface_stage_counts(rows: list[dict]) -> dict[str, int]:
+    counts = {stage: 0 for stage in REFERENCE_SURFACE_STAGES}
+    for row in rows:
+        counts[reference_surface_stage(row.get("reference_surface_stage"))] += 1
+    return counts
+
 
 
 def sha256(path: Path) -> str:
@@ -136,6 +158,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
     page_count_mismatch = 0
 
     for pair in reference["pairs"]:
+        surface_stage = reference_surface_stage(pair.get("reference_surface_stage"))
         fixture = find_fixture(browser, pair["basename"])
         if fixture.get("source_sha256") != pair["pub_sha256"]:
             raise ValueError(f"source identity drift for {pair['basename']}")
@@ -154,6 +177,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
                 "classification": fixture.get("classification"),
                 "terminal_code": fixture.get("terminal_code"),
                 "reference_state": pair["reference_state"],
+                "reference_surface_stage": surface_stage,
             })
         else:
             shots = fixture.get("screenshots", [])
@@ -167,8 +191,12 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
                 or any(ch not in "0123456789abcdef" for ch in identity)
                 for identity in page_identity_hashes
             ):
-                raise ValueError(f"missing canonical source PAGE identity fingerprint for {pair['basename']}")
-            canonical_identities = "".join(identity + "\n" for identity in page_identity_hashes).encode("ascii")
+                raise ValueError(
+                    f"missing canonical source PAGE identity fingerprint for {pair['basename']}"
+                )
+            canonical_identities = "".join(
+                identity + "\n" for identity in page_identity_hashes
+            ).encode("ascii")
             candidate_page_identity_order_sha256 = (
                 "sha256:" + hashlib.sha256(canonical_identities).hexdigest()
             )
@@ -193,6 +221,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
                     "fixture": pair["basename"],
                     "page": index + 1,
                     "reference_state": pair["reference_state"],
+                    "reference_surface_stage": surface_stage,
                     "candidate_page_identity_sha256": page_geometry.get("page_identity_sha256"),
                     **metrics,
                     "reference_media_extent_delta": media_delta,
@@ -205,6 +234,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             "source_sha256": pair["pub_sha256"],
             "candidate_page_identity_order_sha256": candidate_page_identity_order_sha256,
             "reference_state": pair["reference_state"],
+            "reference_surface_stage": surface_stage,
             "rendered": rendered,
             "candidate_pages": candidate_pages,
             "reference_pages": expected_pages,
@@ -226,6 +256,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
         "compared_page_count": len(page_rows),
         "unsupported_pair_count": len(unsupported),
         "page_count_mismatch_pair_count": page_count_mismatch,
+        "reference_surface_stage_counts": reference_surface_stage_counts(pair_rows),
         "corpus_mean_changed_cell_fraction": sum(fractions) / len(fractions) if fractions else None,
         "worst_pages": page_rows[:25],
         "pages": page_rows,
@@ -243,6 +274,8 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             "pixel_exact_visual_parity": False,
             "pdf_used_as_visual_authority_only": True,
             "fingerprint_used_as_semantic_authority": False,
+            "missing_reference_surface_stage_defaults_to_unknown": True,
+            "reference_surface_stage_inference_from_raster": False,
             "raw_pub_bytes_emitted": False,
             "raw_pdf_bytes_emitted": False,
             "raw_story_text_emitted": False,
@@ -350,6 +383,10 @@ def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) ->
         "page_count_mismatch_pair_count": {
             "baseline": baseline.get("page_count_mismatch_pair_count"),
             "current": current.get("page_count_mismatch_pair_count"),
+        },
+        "reference_surface_stage_counts": {
+            "baseline": reference_surface_stage_counts(baseline.get("pairs", [])),
+            "current": reference_surface_stage_counts(current.get("pairs", [])),
         },
         "largest_improvements": improved[:25],
         "largest_regressions": regressed[:25],
