@@ -264,7 +264,7 @@ def detect_generator(text):
 def publisher_major(generator):
     if not generator:
         return None
-    m = re.search(r"\\bMicrosoft\\s+Publisher\\s+(\\d+)\\b", generator, re.I)
+    m = re.search(r"\bMicrosoft\s+Publisher\s+(\d+)\b", generator, re.I)
     return int(m.group(1)) if m else None
 
 def build_version_diff(properties):
