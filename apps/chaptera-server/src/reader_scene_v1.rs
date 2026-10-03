@@ -685,6 +685,8 @@ pub fn from_viewer_geometry_with_fonts(
         .map(|font| (font.normalized_source_family(), font))
         .collect::<HashMap<_, _>>();
     let mut used_configured_font_ids = HashSet::<String>::new();
+    let mut missing_configured_font_families = HashSet::<String>::new();
+    let mut source_font_family_unresolved = false;
     let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
     let mut text_bounds_by_node = HashMap::<String, ReaderRectV1>::new();
@@ -723,6 +725,23 @@ pub fn from_viewer_geometry_with_fonts(
             let Some(text) = node.text.as_ref() else {
                 continue;
             };
+            if let Some(source_family) = effective_source_font_family_v1(geometry, text) {
+                let normalized = source_family.trim().to_lowercase();
+                if !normalized.is_empty() && !configured_fonts_by_family.contains_key(&normalized) {
+                    missing_configured_font_families.insert(normalized);
+                }
+            } else if text.typography.is_empty() {
+                source_font_family_unresolved = true;
+            } else {
+                for run in &text.typography {
+                    let normalized = run.source_font_name.trim().to_lowercase();
+                    if normalized.is_empty() {
+                        source_font_family_unresolved = true;
+                    } else if !configured_fonts_by_family.contains_key(&normalized) {
+                        missing_configured_font_families.insert(normalized);
+                    }
+                }
+            }
             if let Some(resource_id) = text.backend_font_resource_id.as_ref() {
                 used_configured_font_ids.insert(resource_id.clone());
             }
@@ -1042,6 +1061,38 @@ pub fn from_viewer_geometry_with_fonts(
             message: diagnostic.message.clone(),
         });
     }
+    if source_font_family_unresolved {
+        diagnostics.push(ReaderDiagnosticV1 {
+            code: "source_font_family_unresolved".to_owned(),
+            severity: "warning",
+            origin_id: None,
+            message:
+                "Source typography contains an explicit font run without a stable family identity."
+                    .to_owned(),
+        });
+    }
+    if !missing_configured_font_families.is_empty() {
+        diagnostics.push(ReaderDiagnosticV1 {
+            code: "source_font_resource_unavailable".to_owned(),
+            severity: "warning",
+            origin_id: None,
+            message: format!(
+                "{} resolved source font family/families have no configured physical resource",
+                missing_configured_font_families.len()
+            ),
+        });
+    }
+    if !used_configured_font_ids.is_empty() {
+        diagnostics.push(ReaderDiagnosticV1 {
+            code: "source_font_resource_admitted".to_owned(),
+            severity: "info",
+            origin_id: None,
+            message: format!(
+                "{} configured exact font resource(s) were admitted into Reader Scene",
+                used_configured_font_ids.len()
+            ),
+        });
+    }
 
     let mut reasons = Vec::new();
     if !nodes.is_empty() && !stacking_known {
@@ -1058,6 +1109,12 @@ pub fn from_viewer_geometry_with_fonts(
     }
     if text_layout_partial {
         reasons.push("text_layout_partial");
+    }
+    if source_font_family_unresolved {
+        reasons.push("source_font_family_unresolved");
+    }
+    if !missing_configured_font_families.is_empty() {
+        reasons.push("source_font_resource_unavailable");
     }
     if diagnostics
         .iter()
