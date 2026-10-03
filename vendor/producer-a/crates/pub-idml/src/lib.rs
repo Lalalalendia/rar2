@@ -10,12 +10,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
 
+mod authored_shape;
 mod image;
 mod package_writer;
 mod semantic;
 mod table;
 mod typography;
 
+pub use authored_shape::{IdmlAuthoredShapeError, add_authored_rectangles_to_idml};
 pub use image::{
     IMAGE_BYTES_FEATURE, IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE,
     IdmlEmbeddedImagePlacement, IdmlImageError, add_embedded_images_to_idml,
