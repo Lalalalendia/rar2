@@ -48,6 +48,8 @@ OBSERVATION_VERSION = "chaptera.editor-desktop-vertical-observation.v1"
 RECEIPT_VERSION = "chaptera.editor-desktop-vertical-acceptance.v1"
 MAX_PROJECT_BYTES = 64 * 1024 * 1024
 MAX_EXPORT_BYTES = 512 * 1024 * 1024
+MIN_EDITOR_PROJECT_SCHEMA_VERSION = 2
+MAX_EDITOR_PROJECT_SCHEMA_VERSION = 14
 
 
 class DesktopVerticalError(RuntimeError):
@@ -275,20 +277,29 @@ def load_and_verify_project(
     if project.get("source_hash") != source_hash:
         raise DesktopVerticalError("EditorProject source identity mismatch")
     schema_version = project.get("schema_version")
-    supported_schema_versions = {
-        f"pub-editor-v0.{version}" for version in range(2, 12)
-    }
-    if schema_version not in supported_schema_versions:
+    if not isinstance(schema_version, str) or not schema_version.startswith("pub-editor-v0."):
         raise DesktopVerticalError("unsupported EditorProject schema_version")
-    if schema_version == "pub-editor-v0.11":
+    try:
+        schema_number = int(schema_version.removeprefix("pub-editor-v0."))
+    except ValueError as error:
+        raise DesktopVerticalError("unsupported EditorProject schema_version") from error
+    if not (
+        MIN_EDITOR_PROJECT_SCHEMA_VERSION
+        <= schema_number
+        <= MAX_EDITOR_PROJECT_SCHEMA_VERSION
+    ):
+        raise DesktopVerticalError("unsupported EditorProject schema_version")
+    if schema_number >= 11:
         identity = project.get("identity")
         if not isinstance(identity, dict):
-            raise DesktopVerticalError("pub-editor-v0.11 EditorProject must carry durable identity")
+            raise DesktopVerticalError(
+                "durable EditorProject schema must carry durable identity"
+            )
         for field in ("project_id", "document_id", "history_id", "genesis_revision_id"):
             value = identity.get(field)
             if not isinstance(value, str) or not value:
                 raise DesktopVerticalError(
-                    f"pub-editor-v0.11 EditorProject identity missing {field}"
+                    f"durable EditorProject identity missing {field}"
                 )
     operations = project.get("operations")
     if not isinstance(operations, list):
