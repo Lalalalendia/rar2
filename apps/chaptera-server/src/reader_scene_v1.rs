@@ -1068,7 +1068,9 @@ pub fn from_viewer_geometry_with_fonts(
             code: "source_font_family_unresolved".to_owned(),
             severity: "warning",
             origin_id: None,
-            message: "one or more visible text fragments have no bounded source font family authority".to_owned(),
+            message:
+                "one or more visible text fragments have no bounded source font family authority"
+                    .to_owned(),
         });
     }
     if !missing_configured_font_families.is_empty() {
