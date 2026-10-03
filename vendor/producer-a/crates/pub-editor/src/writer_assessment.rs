@@ -138,7 +138,8 @@ impl EditorSession {
                 | EditOperation::ResizeNode { .. }
                 | EditOperation::ResizeNodes { .. }
                 | EditOperation::CreateTextBox { .. }
-                | EditOperation::CreateShape { .. } => {}
+                | EditOperation::CreateShape { .. }
+                | EditOperation::DeleteNode { .. } => {}
             }
         }
 
@@ -232,7 +233,8 @@ impl EditorSession {
                 | EditOperation::ResizeNode { .. }
                 | EditOperation::ResizeNodes { .. }
                 | EditOperation::CreateTextBox { .. }
-                | EditOperation::CreateShape { .. } => {
+                | EditOperation::CreateShape { .. }
+                | EditOperation::DeleteNode { .. } => {
                     requirements.extend(operation.persistence_requirements());
                 }
             }
