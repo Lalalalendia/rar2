@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use pub_viewer::{open_mature_0x2c_geometry, viewer_geometry_environment_v0_1};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{env, fs, path::PathBuf};
 
 fn main() -> Result<()> {
@@ -76,9 +77,12 @@ fn main() -> Result<()> {
                 })
                 .sum::<usize>();
 
+            let page_identity_fingerprint_sha256 =
+                format!("{:x}", Sha256::digest(page.id.as_canonical().as_bytes()));
+
             json!({
                 "viewer_page_index": page.index,
-                "document_ordinal_zero_based": page.index - 1,
+                "page_identity_fingerprint_sha256": page_identity_fingerprint_sha256,
                 "direct_scene_node_count": direct_scene_node_count,
                 "story_frame_count": story_frame_count,
                 "text_fragment_count": text_fragment_count,
@@ -99,6 +103,7 @@ fn main() -> Result<()> {
         "diagnostic_codes": visual.document.diagnostics.iter().map(|diagnostic| diagnostic.code.clone()).collect::<Vec<_>>(),
         "claims": {
             "page_identity_emitted": false,
+            "page_identity_fingerprint_emitted": true,
             "node_identity_emitted": false,
             "story_text_emitted": false,
             "counts_are_direct_page_local_scene_membership_only": true,
