@@ -30,9 +30,9 @@ pub use create_shape_runtime_v1::{
     CreateShapeRuntimeValidationError, Srgb8V1, validate_authored_shape_runtime_v1,
 };
 pub use duplicate_authored_rectangle_v1::{
-    DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1,
-    DuplicateAuthoredRectangleErrorV1, DuplicateAuthoredRectanglePlanV1,
-    plan_duplicate_authored_rectangle_v1, validate_duplicate_authored_rectangle_source_v1,
+    DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
+    DuplicateAuthoredRectanglePlanV1, plan_duplicate_authored_rectangle_v1,
+    validate_duplicate_authored_rectangle_source_v1,
 };
 pub use writer_assessment::{
     EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
