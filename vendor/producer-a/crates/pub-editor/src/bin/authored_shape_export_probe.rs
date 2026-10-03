@@ -4,8 +4,8 @@ use pub_editor::{
     Srgb8V1, open_mature_0x2c_editor,
 };
 use pub_export::{
-    AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
-    AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE, CapabilityLevel,
+    AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE, AUTHORED_SHAPE_STROKE_FEATURE,
+    AUTHORED_SHAPE_Z_ORDER_FEATURE, CapabilityLevel,
 };
 use pub_model::CanonicalId;
 use serde_json::json;
@@ -21,18 +21,15 @@ fn source_hash(bytes: &[u8]) -> Sha256Digest {
 
 fn authored_node_id() -> NodeId {
     let mut bytes = [
-        0x01, 0x9a, 0x2d, 0x80, 0x11, 0x12, 0x70, 0x01, 0x80, 0x01, 0xaa, 0xbb, 0xcc, 0xdd,
-        0xee, 0x01,
+        0x01, 0x9a, 0x2d, 0x80, 0x11, 0x12, 0x70, 0x01, 0x80, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+        0x01,
     ];
     bytes[6] = (bytes[6] & 0x0f) | 0x70;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     NodeId::from_canonical(CanonicalId::from_bytes(bytes))
 }
 
-fn verify_report(
-    report: &pub_export::ExportReport,
-    node_id: NodeId,
-) -> Result<(), Box<dyn Error>> {
+fn verify_report(report: &pub_export::ExportReport, node_id: NodeId) -> Result<(), Box<dyn Error>> {
     let origin = node_id.as_canonical();
     for feature in [
         AUTHORED_SHAPE_GEOMETRY_FEATURE,
@@ -51,10 +48,7 @@ fn verify_report(
     let z_order = report
         .items
         .iter()
-        .find(|item| {
-            item.origin == Some(origin)
-                && item.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE
-        })
+        .find(|item| item.origin == Some(origin) && item.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE)
         .ok_or("missing authored_shape.z_order report item")?;
     if z_order.disposition != CapabilityLevel::Unsupported {
         return Err(format!("z-order unexpectedly {:?}", z_order.disposition).into());
@@ -89,8 +83,14 @@ fn export_target(
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args().skip(1);
-    let input = PathBuf::from(args.next().ok_or("usage: authored_shape_export_probe INPUT OUT_DIR")?);
-    let out = PathBuf::from(args.next().ok_or("usage: authored_shape_export_probe INPUT OUT_DIR")?);
+    let input = PathBuf::from(
+        args.next()
+            .ok_or("usage: authored_shape_export_probe INPUT OUT_DIR")?,
+    );
+    let out = PathBuf::from(
+        args.next()
+            .ok_or("usage: authored_shape_export_probe INPUT OUT_DIR")?,
+    );
     if args.next().is_some() {
         return Err("unexpected extra argument".into());
     }
@@ -152,20 +152,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("source.pub");
-    let idml = export_target(
-        &reopened,
-        EditorEditableTarget::Idml,
-        label,
-        &out,
-        node_id,
-    )?;
-    let odg = export_target(
-        &reopened,
-        EditorEditableTarget::Odg,
-        label,
-        &out,
-        node_id,
-    )?;
+    let idml = export_target(&reopened, EditorEditableTarget::Idml, label, &out, node_id)?;
+    let odg = export_target(&reopened, EditorEditableTarget::Odg, label, &out, node_id)?;
 
     println!(
         "{}",
