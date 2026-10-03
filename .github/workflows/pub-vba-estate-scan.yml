@@ -33,7 +33,7 @@ jobs:
       - name: Unit and syntax contracts
         run: |
           set -euo pipefail
-          python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py tools/materialize_reader_corpus_v1.py
+          python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py tools/pub_vba_migration_plan.py tools/test_pub_vba_migration_plan.py tools/materialize_reader_corpus_v1.py
           python tools/test_pub_vba_estate_scan.py
       - name: Materialize exact SHA-pinned 22-file PUB corpus
         run: |
@@ -59,6 +59,19 @@ jobs:
           assert data["claims"]["ole_com_activated"] is False
           assert data["claims"]["source_text_emitted"] is False
           print(json.dumps(data["totals"], indent=2, sort_keys=True))
+          PY
+          python tools/pub_vba_migration_plan.py \
+            --scan target/pub-vba-estate/receipt.json \
+            --output target/pub-vba-estate/migration-plan.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          plan = json.loads(Path("target/pub-vba-estate/migration-plan.json").read_text())
+          assert plan["schema"] == "chaptera.pub-vba-migration-plan.v1"
+          assert plan["claims"]["migration_plan_executes_code"] is False
+          assert plan["summary"]["file_count"] == 22
+          assert plan["summary"]["call_bearing_files"] == 0
+          print(json.dumps(plan["summary"], indent=2, sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
         if: always()
