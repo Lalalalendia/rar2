@@ -4787,7 +4787,8 @@ fn editable_export_plan(
         });
     }
 
-    let font_family_stories = typography.source_typography_runs
+    let font_family_stories = typography
+        .source_typography_runs
         .iter()
         .filter_map(|run| {
             graph
@@ -4796,20 +4797,28 @@ fn editable_export_plan(
                 .then_some(run.story_id)
         })
         .collect::<BTreeSet<_>>();
-    let font_size_stories = typography.source_typography_runs
+    let font_size_stories = typography
+        .source_typography_runs
         .iter()
         .map(|run| run.story_id)
-        .chain(typography.source_typography_size_runs.iter().map(|run| run.story_id))
+        .chain(
+            typography
+                .source_typography_size_runs
+                .iter()
+                .map(|run| run.story_id),
+        )
         .filter(|story_id| graph.stories.contains_key(story_id))
         .collect::<BTreeSet<_>>();
-    let color_stories = typography.source_typography_runs
+    let color_stories = typography
+        .source_typography_runs
         .iter()
         .filter_map(|run| {
             (run.color_rgb.is_some() && graph.stories.contains_key(&run.story_id))
                 .then_some(run.story_id)
         })
         .collect::<BTreeSet<_>>();
-    let alignment_stories = typography.source_paragraph_alignments
+    let alignment_stories = typography
+        .source_paragraph_alignments
         .iter()
         .filter_map(|run| {
             graph
