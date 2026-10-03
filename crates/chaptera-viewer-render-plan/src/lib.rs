@@ -1587,11 +1587,11 @@ fn resolve_mixed_size_text_layout_v1(
 
     while cursor < fragment.scalar_end {
         let mut chosen = None;
-        let mut candidate_ordinal = 0_usize;
-        for candidate in policy
+        for (candidate_ordinal, candidate) in policy
             .candidates
             .iter()
             .filter(|candidate| candidate.scalar_boundary > cursor)
+            .enumerate()
         {
             eprintln!(
                 "CHAPTERA_READER_PERF mixed_layout:line:{line_index}:candidate:{candidate_ordinal}:total:{}:safe:{}:reshape_total:{}:requires_reshape:{}:start",
@@ -1626,7 +1626,6 @@ fn resolve_mixed_size_text_layout_v1(
                 reshape_candidate_count,
                 u8::from(candidate.requires_reshaping)
             );
-            candidate_ordinal += 1;
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
             }
