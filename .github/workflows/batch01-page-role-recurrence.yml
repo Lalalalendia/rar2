@@ -1,0 +1,322 @@
+name: Batch01 page-role recurrence census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/batch01-page-role-recurrence.yml"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-page-count-mismatch-cohort-v1.json"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: batch01-page-role-recurrence-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/batch01-page-role
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
+      - name: Materialize exact 31 mismatch witnesses
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/batch01-page-role"
+          mkdir -p "$RUNNER_TEMP/batch01-page-role/fixtures" target/batch01-page-role
+          python - <<'PY'
+          import csv, hashlib, json, os, shutil
+          from pathlib import Path
+
+          cohort = json.loads(Path(
+              "tools/corpus/receipts/publisher-visual-golden-batch-01-page-count-mismatch-cohort-v1.json"
+          ).read_text())
+          assert cohort["mismatch_pair_count"] == 31
+          assert cohort["claims"]["reference_page_count_used_as_product_authority"] is False
+
+          with Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              pair_rows = {row["basename"]: row for row in csv.DictReader(handle)}
+
+          source_root = Path("out/pinned1050/materialized/native")
+          out_root = Path(os.environ["RUNNER_TEMP"]) / "batch01-page-role" / "fixtures"
+          manifest_rows = []
+          for row in cohort["rows"]:
+              fixture = row["fixture"]
+              pair = pair_rows[fixture]
+              sha = pair["pub_sha256"].casefold()
+              source = source_root / f"{sha}.pub"
+              data = source.read_bytes()
+              assert hashlib.sha256(data).hexdigest() == sha
+              target = out_root / f"{fixture}.pub"
+              shutil.copyfile(source, target)
+              manifest_rows.append({
+                  **row,
+                  "source_sha256": sha,
+                  "source_bytes": len(data),
+              })
+
+          manifest = {
+              "schema": "chaptera.batch01-page-role-census-input.v1",
+              "source_1050_digest": "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43",
+              "fixture_count": len(manifest_rows),
+              "rows": manifest_rows,
+              "claims": {
+                  "reference_page_count_used_as_product_authority": False,
+                  "pdf_bytes_present": False,
+                  "story_text_emitted": False,
+              },
+          }
+          Path("target/batch01-page-role/input-manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+          )
+          print("materialized", len(manifest_rows), "exact mismatch witnesses")
+          PY
+
+      - name: Build source-semantic page analyzers
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt --jobs 2
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin page-projection-receipt --jobs 2
+
+      - name: Analyze exact mismatch cohort
+        run: |
+          set -euo pipefail
+          mkdir -p target/batch01-page-role/raw target/batch01-page-role/projection target/batch01-page-role/status
+          for pub in "$RUNNER_TEMP"/batch01-page-role/fixtures/*.pub; do
+            name="$(basename "$pub" .pub)"
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-role-receipt"               "$pub" "target/batch01-page-role/raw/$name.json"; then
+              echo 0 > "target/batch01-page-role/status/$name.raw.exit"
+            else
+              code=$?
+              echo "$code" > "target/batch01-page-role/status/$name.raw.exit"
+            fi
+
+            if timeout 45s "$CARGO_TARGET_DIR/debug/page-projection-receipt"               "$pub" "target/batch01-page-role/projection/$name.json"; then
+              echo 0 > "target/batch01-page-role/status/$name.projection.exit"
+            else
+              code=$?
+              echo "$code" > "target/batch01-page-role/status/$name.projection.exit"
+            fi
+          done
+
+      - name: Build source-safe recurrence clusters
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import collections, hashlib, json
+          from pathlib import Path
+
+          root = Path("target/batch01-page-role")
+          manifest = json.loads((root / "input-manifest.json").read_text())
+
+          def oid_class(page):
+              a = page.get("oid_dword0")
+              b = page.get("oid_dword1")
+              if a is None or b is None:
+                  return "absent"
+              return "zero" if a == 0 and b == 0 else "nonzero"
+
+          def child_counts(page):
+              return {int(k): int(v) for k, v in page.get("child_raw_type_counts", {}).items()}
+
+          rows = []
+          clusters = collections.defaultdict(list)
+          excess_hist = collections.Counter()
+
+          for input_row in manifest["rows"]:
+              fixture = input_row["fixture"]
+              raw_path = root / "raw" / f"{fixture}.json"
+              projection_path = root / "projection" / f"{fixture}.json"
+              raw_exit = int((root / "status" / f"{fixture}.raw.exit").read_text())
+              projection_exit = int((root / "status" / f"{fixture}.projection.exit").read_text())
+
+              row = {
+                  "fixture": fixture,
+                  "source_sha256": input_row["source_sha256"],
+                  "candidate_pages": input_row["candidate_pages"],
+                  "reference_pages": input_row["reference_pages"],
+                  "excess_pages": input_row["excess_pages"],
+                  "reference_state": input_row["reference_state"],
+                  "raw_analysis_exit_code": raw_exit,
+                  "projection_exit_code": projection_exit,
+              }
+              excess_hist[input_row["excess_pages"]] += 1
+
+              signature_id = None
+              if raw_exit == 0 and raw_path.is_file():
+                  raw = json.loads(raw_path.read_text())
+                  pages = sorted(raw.get("pages", []), key=lambda p: p["document_ordinal"])
+                  leader_seq = pages[0].get("contents_seq_num") if pages else None
+                  page_tokens = []
+                  for page in pages:
+                      counts = child_counts(page)
+                      applied = page.get("applied_master_seq_num")
+                      relation = (
+                          "none" if applied is None
+                          else "leader" if applied == leader_seq
+                          else "other"
+                      )
+                      page_tokens.append({
+                          "oid_class": oid_class(page),
+                          "master_relation": relation,
+                          "shape_children": int(page.get("shape_child_count", 0)),
+                          "group_children": int(page.get("group_child_count", 0)),
+                          "table_children": int(counts.get(16, 0)),
+                          "payload_present": (
+                              int(counts.get(1, 0))
+                              + int(counts.get(16, 0))
+                              + int(counts.get(48, 0))
+                          ) > 0,
+                          "child_raw_types": sorted(k for k, v in counts.items() if v > 0),
+                      })
+
+                  pgid_count = sum(
+                      len(field.get("pgids", []))
+                      for item in raw.get("controlling", [])
+                      for field in item.get("fields", [])
+                  )
+                  signature = {
+                      "document_page_list_entry_count": raw.get("document_page_list_entry_count"),
+                      "confirmed_page_count": raw.get("confirmed_page_count"),
+                      "special_entry_count": raw.get("special_entry_count"),
+                      "scenario_pgid_count": pgid_count,
+                      "pages": page_tokens,
+                  }
+                  encoded = json.dumps(signature, sort_keys=True, separators=(",", ":")).encode()
+                  signature_id = hashlib.sha256(encoded).hexdigest()[:16]
+                  row.update({
+                      "structural_signature_id": signature_id,
+                      "document_page_list_entry_count": raw.get("document_page_list_entry_count"),
+                      "confirmed_page_count": raw.get("confirmed_page_count"),
+                      "special_entry_count": raw.get("special_entry_count"),
+                      "scenario_pgid_count": pgid_count,
+                      "page_role_tokens": page_tokens,
+                  })
+                  clusters[signature_id].append(fixture)
+
+              if projection_exit == 0 and projection_path.is_file():
+                  projection = json.loads(projection_path.read_text())
+                  codes = sorted(projection.get("diagnostic_codes", []))
+                  viewer_pages = projection.get("viewer_page_count")
+                  row.update({
+                      "viewer_page_count": viewer_pages,
+                      "scene_surface_count": projection.get("scene_surface_count"),
+                      "diagnostic_codes": codes,
+                      "family_profile_applied": "viewer.page_projection.family_profile_applied" in codes,
+                      "roles_unresolved": "viewer.page_projection.roles_unresolved" in codes,
+                      "viewer_matches_batch_candidate_count": viewer_pages == input_row["candidate_pages"],
+                      "viewer_matches_reference_count_validation_only": viewer_pages == input_row["reference_pages"],
+                  })
+
+              rows.append(row)
+
+          cluster_rows = []
+          for signature_id, fixtures in clusters.items():
+              members = [row for row in rows if row.get("structural_signature_id") == signature_id]
+              cluster_rows.append({
+                  "signature_id": signature_id,
+                  "count": len(fixtures),
+                  "fixtures": sorted(fixtures),
+                  "excess_page_histogram": dict(sorted(collections.Counter(
+                      row["excess_pages"] for row in members
+                  ).items())),
+                  "confirmed_page_counts": sorted(set(
+                      row.get("confirmed_page_count") for row in members
+                  )),
+                  "special_entry_counts": sorted(set(
+                      row.get("special_entry_count") for row in members
+                  )),
+                  "scenario_pgid_counts": sorted(set(
+                      row.get("scenario_pgid_count") for row in members
+                  )),
+              })
+          cluster_rows.sort(key=lambda row: (-row["count"], row["signature_id"]))
+
+          summary = {
+              "schema": "chaptera.batch01-page-role-recurrence-census.v1",
+              "fixture_count": len(rows),
+              "raw_analysis_success_count": sum(row["raw_analysis_exit_code"] == 0 for row in rows),
+              "projection_success_count": sum(row["projection_exit_code"] == 0 for row in rows),
+              "family_profile_applied_count": sum(bool(row.get("family_profile_applied")) for row in rows),
+              "roles_unresolved_count": sum(bool(row.get("roles_unresolved")) for row in rows),
+              "structural_signature_count": len(cluster_rows),
+              "excess_page_histogram": dict(sorted(excess_hist.items())),
+              "clusters": cluster_rows,
+              "rows": rows,
+              "claims": {
+                  "measurement_only": True,
+                  "pdf_used_as_visual_validation_only": True,
+                  "reference_page_count_used_as_product_authority": False,
+                  "source_seq_nums_emitted": False,
+                  "story_text_emitted": False,
+                  "raw_pub_bytes_emitted": False,
+              },
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          print(json.dumps({
+              "fixture_count": summary["fixture_count"],
+              "raw_analysis_success_count": summary["raw_analysis_success_count"],
+              "projection_success_count": summary["projection_success_count"],
+              "family_profile_applied_count": summary["family_profile_applied_count"],
+              "roles_unresolved_count": summary["roles_unresolved_count"],
+              "structural_signature_count": summary["structural_signature_count"],
+              "excess_page_histogram": summary["excess_page_histogram"],
+              "clusters": summary["clusters"][:12],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe recurrence receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: batch01-page-role-recurrence-census
+          path: |
+            target/batch01-page-role/input-manifest.json
+            target/batch01-page-role/summary.json
+            target/batch01-page-role/raw/
+            target/batch01-page-role/projection/
+            target/batch01-page-role/status/
+          if-no-files-found: error
+          retention-days: 30
