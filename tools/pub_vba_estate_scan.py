@@ -56,6 +56,11 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     ],
     "pages": [
         ("Pages", re.compile(r"(?i)(?:\.|\b)pages\b")),
+        ("MasterPages", re.compile(r"(?i)\bmasterpages\b")),
+    ],
+    "page_identity": [
+        ("PageID", re.compile(r"(?i)\bpageid\b")),
+        ("PageNumber", re.compile(r"(?i)\bpagenumber\b")),
     ],
     "page_lifecycle": [
         ("Pages.Add", re.compile(r"(?i)\bpages\s*\.\s*add\b")),
@@ -63,14 +68,21 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("Page.Delete", re.compile(r"(?i)\b(?:page|pages\s*\([^\)]*\))\s*\.\s*delete\b")),
         ("Page.Move", re.compile(r"(?i)\b(?:page|pages\s*\([^\)]*\))\s*\.\s*move\b")),
     ],
+    "scratch_area": [
+        ("ScratchArea", re.compile(r"(?i)\bscratcharea\b")),
+    ],
     "shapes": [
         ("Shapes", re.compile(r"(?i)(?:\.|\b)shapes\b")),
         ("ShapeRange", re.compile(r"(?i)\bshaperange\b")),
         ("GroupItems", re.compile(r"(?i)\bgroupitems\b")),
     ],
+    "selection": [
+        ("Selection", re.compile(r"(?i)\bselection\b")),
+    ],
     "text": [
         ("TextFrame", re.compile(r"(?i)\btextframe\b")),
         ("TextRange", re.compile(r"(?i)\btextrange\b")),
+        ("HasTextFrame", re.compile(r"(?i)\bhastextframe\b")),
         ("FindReplace", re.compile(r"(?i)\bfindreplace\b")),
         ("Find", re.compile(r"(?i)(?:\.|\b)find\b")),
     ],
@@ -105,7 +117,11 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("ExportEmailHTML", re.compile(r"(?i)\bexportemailhtml\b")),
         ("WebPagePreview", re.compile(r"(?i)\bwebpagepreview\b")),
     ],
-    "hyperlinks": [("Hyperlinks", re.compile(r"(?i)\bhyperlinks?\b"))],
+    "hyperlinks": [
+        ("Hyperlinks", re.compile(r"(?i)\bhyperlinks?\b")),
+        ("TargetType", re.compile(r"(?i)\btargettype\b")),
+        ("TextToDisplay", re.compile(r"(?i)\btexttodisplay\b")),
+    ],
     "linked_text": [
         ("NextLinkedTextFrame", re.compile(r"(?i)\bnextlinkedtextframe\b")),
         ("PreviousLinkedTextFrame", re.compile(r"(?i)\bpreviouslinkedtextframe\b")),
