@@ -11,7 +11,7 @@ Set-Location $RepoRoot
 $Packet = Join-Path $RepoRoot "tools/research-runner/experiments/borderart-auth-01.packet.json"
 $Operation = Join-Path $RepoRoot "tools/research-runner/operations/publisher_borderart_auth_01.ps1"
 $ExpectedPacketBlob = "234d200ccadeedbc1ed12b2d43cbc15e853ca1fc"
-$ExpectedOperationBlob = "8e105d054085793853676c0ad7c19e8586b3769e"
+$ExpectedOperationBlob = "28ceb201c0910ef52b11ab2c1e737607d57dde2d"
 
 if (-not (Test-Path -LiteralPath $Packet)) { throw "BorderArt packet missing: $Packet" }
 if (-not (Test-Path -LiteralPath $Operation)) { throw "BorderArt operation missing: $Operation" }
