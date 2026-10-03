@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::Cursor;
@@ -54,6 +54,13 @@ struct Report {
     differing_node_header_byte_count: usize,
     differing_descriptor_metadata_byte_count: usize,
     differing_interstitial_byte_count: usize,
+    interstitial_diff_run_count: usize,
+    interstitial_diff_run_lengths: Vec<usize>,
+    source_interstitial_diff_ff_count: usize,
+    variant_interstitial_diff_ff_count: usize,
+    source_interstitial_diff_all_ff: bool,
+    variant_interstitial_diff_all_ff: bool,
+    interstitial_diff_gap_bytes: BTreeMap<String, usize>,
     descriptor_presence_diff_count: usize,
     descriptor_name_diff_count: usize,
     descriptor_opt_a_diff_count: usize,
@@ -200,6 +207,64 @@ fn mask_payloads(bytes: &[u8], regions: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+fn interstitial_run_lengths(indices: &[usize]) -> Vec<usize> {
+    if indices.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut run = 1usize;
+    for pair in indices.windows(2) {
+        if pair[1] == pair[0] + 1 {
+            run += 1;
+        } else {
+            out.push(run);
+            run = 1;
+        }
+    }
+    out.push(run);
+    out
+}
+
+fn interstitial_gap_bytes(
+    indices: &[usize],
+    directory: &Directory,
+) -> Result<BTreeMap<String, usize>> {
+    let mut payloads = directory
+        .descriptors
+        .iter()
+        .map(|descriptor| {
+            let start =
+                usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
+            let len =
+                usize::try_from(descriptor.data_length).context("descriptor length too large")?;
+            let end = start
+                .checked_add(len)
+                .context("descriptor payload range overflow")?;
+            Ok((start, end, descriptor_name(&descriptor.name)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    payloads.sort_by_key(|row| row.0);
+
+    let mut out = BTreeMap::new();
+    for index in indices {
+        let mut previous = "START".to_owned();
+        let mut next = "END".to_owned();
+        for (start, end, name) in &payloads {
+            if *end <= *index {
+                previous = name.clone();
+                continue;
+            }
+            if *start > *index {
+                next = name.clone();
+            }
+            break;
+        }
+        *out.entry(format!("{previous}->{next}")).or_insert(0) += 1;
+    }
+    Ok(out)
+}
+
 fn field_diff(
     source: &[u8],
     variant: &[u8],
@@ -255,9 +320,13 @@ fn main() -> Result<()> {
     let mut differing_node_header_byte_count = 0usize;
     let mut differing_descriptor_metadata_byte_count = 0usize;
     let mut differing_interstitial_byte_count = 0usize;
+    let mut interstitial_diff_indices = Vec::new();
     if source_quill.len() == variant_quill.len() && region_layout_equal {
-        for ((source_byte, variant_byte), region) in
-            source_quill.iter().zip(&variant_quill).zip(&source_regions)
+        for (index, ((source_byte, variant_byte), region)) in source_quill
+            .iter()
+            .zip(&variant_quill)
+            .zip(&source_regions)
+            .enumerate()
         {
             if source_byte == variant_byte || *region == REGION_PAYLOAD {
                 continue;
@@ -265,7 +334,10 @@ fn main() -> Result<()> {
             match *region {
                 REGION_NODE_HEADER => differing_node_header_byte_count += 1,
                 REGION_DESCRIPTOR_METADATA => differing_descriptor_metadata_byte_count += 1,
-                REGION_INTERSTITIAL => differing_interstitial_byte_count += 1,
+                REGION_INTERSTITIAL => {
+                    differing_interstitial_byte_count += 1;
+                    interstitial_diff_indices.push(index);
+                }
                 _ => {}
             }
         }
@@ -274,6 +346,21 @@ fn main() -> Result<()> {
     let differing_non_payload_byte_count = differing_node_header_byte_count
         + differing_descriptor_metadata_byte_count
         + differing_interstitial_byte_count;
+    let interstitial_diff_run_lengths = interstitial_run_lengths(&interstitial_diff_indices);
+    let source_interstitial_diff_ff_count = interstitial_diff_indices
+        .iter()
+        .filter(|index| source_quill[**index] == 0xff)
+        .count();
+    let variant_interstitial_diff_ff_count = interstitial_diff_indices
+        .iter()
+        .filter(|index| variant_quill[**index] == 0xff)
+        .count();
+    let source_interstitial_diff_all_ff =
+        source_interstitial_diff_ff_count == interstitial_diff_indices.len();
+    let variant_interstitial_diff_all_ff =
+        variant_interstitial_diff_ff_count == interstitial_diff_indices.len();
+    let interstitial_diff_gap_bytes =
+        interstitial_gap_bytes(&interstitial_diff_indices, &source_directory)?;
 
     let mut descriptor_presence_diff_count = 0usize;
     let mut descriptor_name_diff_count = 0usize;
@@ -368,6 +455,13 @@ fn main() -> Result<()> {
         differing_node_header_byte_count,
         differing_descriptor_metadata_byte_count,
         differing_interstitial_byte_count,
+        interstitial_diff_run_count: interstitial_diff_run_lengths.len(),
+        interstitial_diff_run_lengths,
+        source_interstitial_diff_ff_count,
+        variant_interstitial_diff_ff_count,
+        source_interstitial_diff_all_ff,
+        variant_interstitial_diff_all_ff,
+        interstitial_diff_gap_bytes,
         descriptor_presence_diff_count,
         descriptor_name_diff_count,
         descriptor_opt_a_diff_count,
