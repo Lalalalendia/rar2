@@ -124,7 +124,15 @@ jobs:
           records = []
           pub_paths = []
 
-          def record_bytes(source_id: str, label: str, origin_url: str, data: bytes, *, member: str | None = None):
+          def record_bytes(
+              source_id: str,
+              label: str,
+              origin_url: str,
+              data: bytes,
+              *,
+              member: str | None = None,
+              allow_text_classification: bool = True,
+          ):
               item = {
                   "source_id": source_id,
                   "label": label,
@@ -149,7 +157,16 @@ jobs:
                               if zi.is_dir() or zi.file_size > MAX_MEMBER:
                                   continue
                               child = zf.read(zi)
-                              record_bytes(source_id, Path(zi.filename).name or "zip-member", origin_url, child, member=zi.filename)
+                              member_label = Path(zi.filename).name or "zip-member"
+                              member_ext = Path(member_label).suffix.casefold()
+                              record_bytes(
+                                  source_id,
+                                  member_label,
+                                  origin_url,
+                                  child,
+                                  member=zi.filename,
+                                  allow_text_classification=member_ext in {".bas", ".vbs", ".vb", ".ps1", ".txt"},
+                              )
                   except zipfile.BadZipFile:
                       item["zip_status"] = "bad_zip"
               elif data.startswith(b"MZ"):
@@ -157,7 +174,7 @@ jobs:
               elif data.lstrip().startswith((b"<!DOCTYPE", b"<html", b"<HTML")):
                   item["container_type"] = "html"
               else:
-                  text_class = classify_text(data)
+                  text_class = classify_text(data) if allow_text_classification else None
                   if text_class:
                       item["container_type"] = "text"
                       item["source_classification"] = text_class
@@ -211,7 +228,14 @@ jobs:
                       label = urllib.parse.unquote(name_match.group(1)) if name_match else Path(urllib.parse.urlparse(resolved).path).name
                       if not label:
                           label = f"candidate-{i}"
-                      record_bytes("pubfilerescue", label, resolved, data)
+                      ext = Path(label).suffix.casefold()
+                      record_bytes(
+                          "pubfilerescue",
+                          label,
+                          resolved,
+                          data,
+                          allow_text_classification=ext in {".bas", ".vbs", ".vb", ".ps1", ".txt"},
+                      )
                   except Exception as exc:
                       rescue["errors"].append({"url": url, "error": type(exc).__name__ + ":" + str(exc)})
           except Exception as exc:
