@@ -204,8 +204,22 @@ def main() -> int:
                     "no UNO text-bearing shape matched the expected consumer typography"
                 )
         else:
-            if not marker_present(doc, args.marker):
+            marker_shapes = [
+                shape
+                for shape in shapes
+                if (text := shape_text(shape)) is not None and args.marker in text
+            ]
+            if not marker_shapes:
                 raise RuntimeError("fresh LibreOffice reopen did not retain edit marker")
+            if not any(
+                shape_matches_typography(
+                    shape, args.expected_font_family, args.expected_font_size_pt
+                )
+                for shape in marker_shapes
+            ):
+                raise RuntimeError(
+                    "fresh LibreOffice reopen retained marker but lost expected typography"
+                )
 
         save_odg(doc, args.output)
     finally:
