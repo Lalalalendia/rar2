@@ -2,6 +2,9 @@ name: Diagnostic Typography 770daf Scribus A/B
 # A/B current typography writer against exact pre-change base.
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/diagnostic-typography-770daf-scribus-ab.yml"
   push:
     branches:
       - diagnostic/typography-770daf-scribus-ab-01
