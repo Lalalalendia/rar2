@@ -83,6 +83,20 @@ mod tests {
         typography_golden=False,
     )
     assert_scope(
+        ["vendor/producer-a/crates/pub-quill/src/typography.rs"],
+        tier_a=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=True,
+        typography_golden=True,
+        android_core=True,
+        android=False,
+        web=False,
+        local_portable=False,
+    )
+
+    assert_scope(
         ["crates/pub-model/src/lib.rs"],
         tier_a=False,
         visual_oracle=True,
