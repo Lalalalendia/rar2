@@ -3341,6 +3341,31 @@ mod tests {
         let implicit_style_zero_applied =
             apply_bounded_implicit_style_zero(&mut ranges, &character_defaults);
 
+        let mut target_story_labels = std::collections::BTreeMap::<u32, &'static str>::new();
+        for story in &story_catalog.stories {
+            let text = String::from_utf16(
+                &story
+                    .utf16le
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .collect::<Vec<_>>(),
+            )
+            .expect("exact Carlton Story must decode as UTF-16");
+            let label = match text.as_str() {
+                "Year 1\r" => Some("year1_heading"),
+                "Year 2\r" => Some("year2_heading"),
+                _ => None,
+            };
+            if let Some(label) = label {
+                target_story_labels.insert(story.index, label);
+            }
+        }
+        assert_eq!(
+            target_story_labels.len(),
+            2,
+            "exact Carlton must expose exactly the two bounded heading targets"
+        );
+
         let mut no_selector = 0_usize;
         let mut default_missing = 0_usize;
         let mut default_duplicate = 0_usize;
@@ -3430,6 +3455,25 @@ mod tests {
                 selector_source,
                 default_class,
             );
+
+            for story in &story_extents {
+                let Some(label) = target_story_labels.get(&story.story_index) else {
+                    continue;
+                };
+                let start = range.global_start_utf16.max(story.global_start_utf16);
+                let end = range.global_end_utf16.min(story.global_end_utf16);
+                if start < end {
+                    eprintln!(
+                        "heading_target target={} story_index={} range_ordinal={} utf16_len={} selector_source={} default_class={}",
+                        label,
+                        story.story_index,
+                        ordinal,
+                        end.saturating_sub(start),
+                        selector_source,
+                        default_class,
+                    );
+                }
+            }
         }
 
         let mut resolved_ranges = ranges.clone();
