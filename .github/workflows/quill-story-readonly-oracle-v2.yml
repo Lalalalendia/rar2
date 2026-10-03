@@ -69,7 +69,7 @@ jobs:
 
       - name: Rustfmt resolver
         run: |
-          rustfmt --edition 2024 --check \
+          rustfmt --edition 2021 --check \
             vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs
 
       - name: Test resolver
