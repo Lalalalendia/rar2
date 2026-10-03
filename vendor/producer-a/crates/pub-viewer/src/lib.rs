@@ -44,10 +44,9 @@ use pub_presentation_profile::{
     Legacy22PageListEntryEvidenceV1, Legacy22PageListProfileInputV1,
     MATURE_SPREAD_PAIR_AB_PROFILE_ID_V1, MatureSpreadPairDocumentEntryEvidenceV1,
     MatureSpreadPairProfileInputV1, STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1,
-    StandardPrintServiceTailPageEvidenceV1,
-    StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
-    reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
-    select_legacy22_customer_page_indices_v1,
+    StandardPrintServiceTailPageEvidenceV1, StandardPrintServiceTailProfileInputV1,
+    carlton_admitted_carrier_page_seq_nums_v1, reference_fixture_profile_known_v1,
+    select_carlton_customer_page_seq_nums_v1, select_legacy22_customer_page_indices_v1,
     select_mature_detached_post_special_tail_customer_page_seq_nums_v1,
     select_mature_spread_pair_half_page_seq_nums_ab_v1,
     select_mature_terminal_service_tail_customer_page_seq_nums_v1,
@@ -2317,10 +2316,7 @@ pub fn open_mature_0x2c_geometry(
     Ok(open_mature_0x2c_bundle(bytes, environment)?.geometry)
 }
 
-fn translate_transform_x_for_spread_ab_v1(
-    transform: &mut Affine2D,
-    dx: LengthEmu,
-) -> Result<()> {
+fn translate_transform_x_for_spread_ab_v1(transform: &mut Affine2D, dx: LengthEmu) -> Result<()> {
     transform.tx = transform
         .tx
         .checked_add(dx)
@@ -2383,12 +2379,15 @@ fn compose_mature_spread_pairs_secondary_left_ab_v1(
         if left.height_emu != right.height_emu || left.width_emu != right.width_emu {
             return Err(anyhow!("spread A/B half-PAGE geometry drift"));
         }
-        let left_surface = surface_by_page
-            .get(&left.id)
-            .with_context(|| format!("spread A/B missing left surface {}", left.id.as_canonical()))?;
-        let right_surface = surface_by_page
-            .get(&right.id)
-            .with_context(|| format!("spread A/B missing right surface {}", right.id.as_canonical()))?;
+        let left_surface = surface_by_page.get(&left.id).with_context(|| {
+            format!("spread A/B missing left surface {}", left.id.as_canonical())
+        })?;
+        let right_surface = surface_by_page.get(&right.id).with_context(|| {
+            format!(
+                "spread A/B missing right surface {}",
+                right.id.as_canonical()
+            )
+        })?;
         if left_surface.size != right_surface.size {
             return Err(anyhow!("spread A/B source surfaces have different sizes"));
         }
@@ -2424,10 +2423,7 @@ fn compose_mature_spread_pairs_secondary_left_ab_v1(
         );
         parent_projection.insert(
             right.id.into_canonical(),
-            (
-                spread_id.into_canonical(),
-                LengthEmu::new(left.width_emu),
-            ),
+            (spread_id.into_canonical(), LengthEmu::new(left.width_emu)),
         );
     }
 
@@ -3195,12 +3191,12 @@ fn select_viewer_pages(
             };
         }
 
-        if let Some(selection) = select_mature_spread_pair_half_page_seq_nums_ab_v1(
-            MatureSpreadPairProfileInputV1 {
+        if let Some(selection) =
+            select_mature_spread_pair_half_page_seq_nums_ab_v1(MatureSpreadPairProfileInputV1 {
                 base: input.clone(),
                 document_entries: spread_document_entries,
-            },
-        ) {
+            })
+        {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
                 let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
@@ -4610,7 +4606,12 @@ mod tests {
                 .all(|page| page.width_emu == 2 * half_width && page.height_emu == height)
         );
         assert_eq!(
-            visual.scene.nodes.iter().map(|node| node.origin).collect::<Vec<_>>(),
+            visual
+                .scene
+                .nodes
+                .iter()
+                .map(|node| node.origin)
+                .collect::<Vec<_>>(),
             node_ids
         );
 
