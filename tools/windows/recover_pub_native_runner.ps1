@@ -73,7 +73,7 @@ $receipt = [ordered]@{
     repository_root = $repoRoot
     expected_environment = $ExpectedEnvironment
     packet = [ordered]@{ path = $packetAbs; sha256 = (Get-FileHash -LiteralPath $packetAbs -Algorithm SHA256).Hash.ToLowerInvariant() }
-    runner = [ordered]@{ service_count = 0; selected_service = $null; service_status_before = $null; service_status_after = $null; executable = $null; root = $null; runner_file = $null; agent_name = $null; github_url = $null; listener_present = $false }
+    runner = [ordered]@{ service_count = 0; selected_service = $null; service_status_before = $null; service_status_after = $null; service_start_mode = $null; recovery_action = "none"; executable = $null; root = $null; runner_file = $null; agent_name = $null; github_url = $null; listener_present = $false }
     packet_validation = [ordered]@{ status = "not_run"; exit_code = $null }
     environment_validation = [ordered]@{ status = "not_run"; output_root = $prepareRoot; error = $null }
     verdict = "unknown"
@@ -105,6 +105,7 @@ try {
     $serviceName = [string]$selected.service.Name
     $receipt.runner.selected_service = $serviceName
     $receipt.runner.service_status_before = [string]$selected.service.State
+    $receipt.runner.service_start_mode = [string]$selected.service.StartMode
     $receipt.runner.executable = $selected.executable
     $receipt.runner.root = $selected.root
     $receipt.runner.runner_file = $selected.runner_file
@@ -118,6 +119,7 @@ try {
             exit 4
         }
         Write-Host "Starting self-hosted runner service: $serviceName"
+        $receipt.runner.recovery_action = "start"
         Start-Service -Name $serviceName
         $deadline = [DateTime]::UtcNow.AddSeconds(20)
         do {
@@ -134,8 +136,29 @@ try {
 
     $serviceNow = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     $receipt.runner.service_status_after = [string]$serviceNow.State
-    $listener = @(Get-Process -Name "Runner.Listener" -ErrorAction SilentlyContinue)
+
+    $listenerDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $listener = @(Get-Process -Name "Runner.Listener" -ErrorAction SilentlyContinue)
+        if ($listener.Count -gt 0) { break }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $listenerDeadline)
     $receipt.runner.listener_present = ($listener.Count -gt 0)
+
+    if (-not [bool]$receipt.runner.listener_present -and -not $NoStartService) {
+        Write-Host "Runner service is Running but Runner.Listener is absent; restarting once."
+        $receipt.runner.recovery_action = "restart"
+        Restart-Service -Name $serviceName -Force
+        $listenerDeadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            Start-Sleep -Milliseconds 500
+            $serviceNow = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+            $listener = @(Get-Process -Name "Runner.Listener" -ErrorAction SilentlyContinue)
+            if ($serviceNow.State -eq "Running" -and $listener.Count -gt 0) { break }
+        } while ([DateTime]::UtcNow -lt $listenerDeadline)
+        $receipt.runner.service_status_after = [string]$serviceNow.State
+        $receipt.runner.listener_present = ($listener.Count -gt 0)
+    }
 
     Push-Location $repoRoot
     try {
