@@ -46,9 +46,9 @@ use pub_odg::{
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
-    PubResolvedStoryFrame, PubTypographyRun, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, materialize_bounded_simple_table_cells,
-    resolve_pub_source_graph,
+    PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
+    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1441,6 +1441,7 @@ pub fn open_mature_0x2c_editor(
         .map_err(|error| EditorOpenError::Resolve(error.to_string()))?;
     let mut session = EditorSession::new(resolved.graph).map_err(EditorOpenError::Session)?;
     session.source_typography_runs = source.typography_runs;
+    session.source_typography_size_runs = source.typography_size_runs;
     session.source_paragraph_alignments = source.paragraph_alignments;
     if let Some(bundle) = source_images {
         let (assets, nodes) = source_image_context_from_bundle(bundle);
@@ -1571,6 +1572,7 @@ pub struct EditorSession {
     source_image_assets: BTreeMap<ResourceId, EditorSourceImageAsset>,
     source_image_nodes: BTreeMap<NodeId, ResourceId>,
     source_typography_runs: Vec<PubTypographyRun>,
+    source_typography_size_runs: Vec<PubTypographySizeRun>,
     source_paragraph_alignments: Vec<PubParagraphAlignmentRun>,
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
@@ -1593,6 +1595,7 @@ impl EditorSession {
             source_image_assets: BTreeMap::new(),
             source_image_nodes: BTreeMap::new(),
             source_typography_runs: Vec::new(),
+            source_typography_size_runs: Vec::new(),
             source_paragraph_alignments: Vec::new(),
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
@@ -2288,6 +2291,7 @@ impl EditorSession {
             &self.image_replacements,
             &self.source_image_nodes,
             &self.source_typography_runs,
+            &self.source_typography_size_runs,
             &self.source_paragraph_alignments,
         );
         let report = build_export_report(
@@ -4019,6 +4023,7 @@ fn editable_export_plan(
     image_replacements: &BTreeMap<NodeId, Sha256Digest>,
     source_image_nodes: &BTreeMap<NodeId, ResourceId>,
     source_typography_runs: &[PubTypographyRun],
+    source_typography_size_runs: &[PubTypographySizeRun],
     source_paragraph_alignments: &[PubParagraphAlignmentRun],
 ) -> ExportPlan {
     let mut features = BTreeMap::new();
@@ -4089,7 +4094,7 @@ fn editable_export_plan(
         });
     }
 
-    let typography_stories = source_typography_runs
+    let font_family_stories = source_typography_runs
         .iter()
         .filter_map(|run| {
             graph
@@ -4097,6 +4102,12 @@ fn editable_export_plan(
                 .contains_key(&run.story_id)
                 .then_some(run.story_id)
         })
+        .collect::<BTreeSet<_>>();
+    let font_size_stories = source_typography_runs
+        .iter()
+        .map(|run| run.story_id)
+        .chain(source_typography_size_runs.iter().map(|run| run.story_id))
+        .filter(|story_id| graph.stories.contains_key(story_id))
         .collect::<BTreeSet<_>>();
     let color_stories = source_typography_runs
         .iter()
@@ -4115,13 +4126,15 @@ fn editable_export_plan(
         })
         .collect::<BTreeSet<_>>();
 
-    for story_id in typography_stories {
+    for story_id in font_family_stories {
         requests.push(SemanticFeatureRequest {
             feature: STORY_FONT_FAMILY_FEATURE.into(),
             origin: Some(story_id.into_canonical()),
             property_path: Some("story.typography.font_family".into()),
             require_preserved: false,
         });
+    }
+    for story_id in font_size_stories {
         requests.push(SemanticFeatureRequest {
             feature: STORY_FONT_SIZE_FEATURE.into(),
             origin: Some(story_id.into_canonical()),
