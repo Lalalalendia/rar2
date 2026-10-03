@@ -48,6 +48,7 @@ pub struct ViewerDecorativeBorderV1 {
     pub corner_extent_emu: u32,
     pub horizontal_extent_emu: u32,
     pub vertical_extent_emu: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stretch_pictures: Option<bool>,
     pub slots: Vec<ViewerDecorativeBorderSlotRefV1>,
 }
