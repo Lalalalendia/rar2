@@ -49,6 +49,15 @@ RECEIPT_VERSION = "chaptera.editor-desktop-vertical-acceptance.v1"
 MAX_PROJECT_BYTES = 64 * 1024 * 1024
 MAX_EXPORT_BYTES = 512 * 1024 * 1024
 
+SUPPORTED_EDITOR_PROJECT_SCHEMA_VERSIONS = {
+    f"pub-editor-v0.{version}" for version in range(2, 14)
+}
+IDENTITY_REQUIRED_EDITOR_PROJECT_SCHEMA_VERSIONS = {
+    "pub-editor-v0.11",
+    "pub-editor-v0.12",
+    "pub-editor-v0.13",
+}
+
 
 class DesktopVerticalError(RuntimeError):
     pass
@@ -275,12 +284,9 @@ def load_and_verify_project(
     if project.get("source_hash") != source_hash:
         raise DesktopVerticalError("EditorProject source identity mismatch")
     schema_version = project.get("schema_version")
-    supported_schema_versions = {
-        f"pub-editor-v0.{version}" for version in range(2, 12)
-    }
-    if schema_version not in supported_schema_versions:
+    if schema_version not in SUPPORTED_EDITOR_PROJECT_SCHEMA_VERSIONS:
         raise DesktopVerticalError("unsupported EditorProject schema_version")
-    if schema_version == "pub-editor-v0.11":
+    if schema_version in IDENTITY_REQUIRED_EDITOR_PROJECT_SCHEMA_VERSIONS:
         identity = project.get("identity")
         if not isinstance(identity, dict):
             raise DesktopVerticalError("pub-editor-v0.11 EditorProject must carry durable identity")
