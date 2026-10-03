@@ -150,7 +150,10 @@ fn main() -> Result<()> {
     }
 
     let pub_bytes = fs::read(&source).with_context(|| format!("read {:?}", source))?;
-    let source_sha256 = format!("{:x}", Sha256::digest(&pub_bytes));
+    let source_sha256 = Sha256::digest(&pub_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let contents =
         pub_cfb::read_stream_reader(Cursor::new(pub_bytes.as_slice()), CONTENTS_STREAM_PATH)
             .context("read /Contents")?;
