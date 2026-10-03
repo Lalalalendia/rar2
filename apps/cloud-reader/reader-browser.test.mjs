@@ -17,7 +17,7 @@ const text = "😀 Привет 🌍 ПРИВЕТ\nLiteral [a]+ stays literal.\n
 function fixture(label = text) {
   return {
     protocol_version: "chaptera.reader-scene.v1", document_id: "synthetic", source_hash: sourceSha, revision_id: "synthetic-ui-only",
-    fidelity: { state: "partial", reasons: ["stacking_order_unavailable", "text_layout_partial"] },
+    fidelity: { state: "partial", reasons: ["stacking_order_unavailable", "text_layout_partial", "source_font_resource_unavailable"] },
     pages: [{ page_id: "p2", order: 1, width_emu: emu(600), height_emu: emu(760) },
       { page_id: "p1", order: 0, width_emu: emu(600), height_emu: emu(760) }],
     nodes: [
@@ -29,7 +29,10 @@ function fixture(label = text) {
     stories: [{ story_id: "s1", text: label, text_fidelity: "partial" }, { story_id: "s2", text: "Second section.", text_fidelity: "partial" }],
     resources: [{ resource_id: "r1", mime: "image/png", availability: "inline_data_url", inline_data_url: png },
       { resource_id: "r2", mime: "image/svg+xml", availability: "descriptor_only" }],
-    diagnostics: [{ message: "Synthetic UI fixture; this is not real-PUB fidelity evidence." }]
+    diagnostics: [
+      { severity: "warning", message: "Synthetic UI fixture; this is not real-PUB fidelity evidence." },
+      { severity: "info", message: "One exact configured font resource was admitted into Reader Scene." }
+    ]
   };
 }
 
@@ -58,7 +61,10 @@ function compatibilityReport(classification, sha = sourceSha) {
     state: states[classification],
     engine_classification: classification,
     limitations: classification === "partial"
-      ? [{ code: "text_layout_may_differ", message: "Some text layout may differ from Microsoft Publisher." }]
+      ? [
+          { code: "text_layout_may_differ", message: "Some text layout may differ from Microsoft Publisher." },
+          { code: "font_resource_unavailable", message: "A source font family is known, but its exact configured font resource is unavailable." }
+        ]
       : classification === "salvage"
         ? [{ code: "recovery_mode", message: "Only source-backed recovered facts are available; normal page layout is not claimed." }]
         : classification === "unsupported"
@@ -214,6 +220,7 @@ try {
     assert.equal(await page.locator("#compatibility-state").textContent(), "Needs review");
     assert.match(await page.locator("#compatibility-summary").textContent(), new RegExp(sourceSha));
     assert.match(await page.locator("#compatibility-routes").textContent(), /not advertised/);
+    assert.match(await page.locator("#compatibility-limitations").textContent(), /exact configured font resource is unavailable/);
     assert.equal(await page.locator("#pages svg").count(), 2);
     assert.equal(await page.locator("#pages svg").first().getAttribute("data-page-id"), "p1");
     const guest = requests.filter((request) => request.path.startsWith("/v1/reader/guest-sessions"));
@@ -279,7 +286,9 @@ try {
     assert.deepEqual(await readFile(join(output, "synthetic-image.png")), Buffer.from(png.split(",")[1], "base64"));
     await page.locator("#diagnostics").click();
     assert.match(await page.locator("#limitations").textContent(), /stacking order/);
+    assert.match(await page.locator("#limitations").textContent(), /exact configured resource is unavailable/);
     assert.match(await page.locator("#limitations").textContent(), /Synthetic UI fixture/);
+    assert.doesNotMatch(await page.locator("#limitations").textContent(), /configured font resource was admitted/);
     await page.locator("#text-panel > summary").click();
     await page.locator("#reader").scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(output, "desktop.png"), fullPage: true });

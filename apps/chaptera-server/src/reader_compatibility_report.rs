@@ -298,6 +298,14 @@ fn scene_limitations(scene: &Value) -> Vec<ReaderCompatibilityLimitationV1> {
                 "text_layout_may_differ",
                 "Some text layout may differ from Microsoft Publisher.",
             ),
+            Some("source_font_family_unresolved") => (
+                "source_font_family_unresolved",
+                "Some source text has no stable font-family identity, so exact source typography cannot be selected.",
+            ),
+            Some("source_font_resource_unavailable") => (
+                "font_resource_unavailable",
+                "A source font family is known, but its exact configured font resource is unavailable.",
+            ),
             Some("explicit_fallback_font_substitution") => (
                 "font_substitution",
                 "Some text uses a substitute font and may wrap or size differently.",
@@ -440,6 +448,8 @@ mod tests {
                 "state": "partial",
                 "reasons": [
                     "text_layout_partial",
+                    "source_font_family_unresolved",
+                    "source_font_resource_unavailable",
                     "viewer_fidelity_warnings",
                     "new_internal_reason"
                 ]
@@ -460,6 +470,8 @@ mod tests {
             codes,
             vec![
                 "text_layout_may_differ",
+                "source_font_family_unresolved",
+                "font_resource_unavailable",
                 "preview_fidelity_warning",
                 "preview_limitation_other"
             ]

@@ -288,7 +288,9 @@ const reasonLabels = {
   viewer_fidelity_warnings: "The document has display limitations described below.",
   shared_text_layout_unavailable: "Some text uses an approximate preview layout.",
   text_layout_partial: "Some text does not yet have fully supported page layout.",
-  explicit_fallback_font_substitution: "Text uses a substitute font; its appearance can differ from Publisher."
+  explicit_fallback_font_substitution: "Text uses a substitute font; its appearance can differ from Publisher.",
+  source_font_family_unresolved: "Some source text has no stable font-family identity.",
+  source_font_resource_unavailable: "A source font family is known, but its exact configured resource is unavailable."
 };
 
 function showDetails() {
@@ -327,7 +329,9 @@ function showDetails() {
 
   const limitations = new Set((scene.fidelity?.reasons ?? []).map((reason) => reasonLabels[reason] ?? String(reason).replaceAll("_", " ")));
   for (const diagnostic of scene.diagnostics ?? []) {
-    if (typeof diagnostic.message === "string") limitations.add(diagnostic.message);
+    if (diagnostic.severity !== "info" && typeof diagnostic.message === "string") {
+      limitations.add(diagnostic.message);
+    }
   }
   if (scene.nodes.some((node) => node.text && !node.text_layout)) {
     limitations.add("Some text is shown as an approximate preview; full recovered text is available in the text panel.");
