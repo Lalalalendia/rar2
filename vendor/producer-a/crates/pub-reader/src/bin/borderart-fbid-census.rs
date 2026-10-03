@@ -17,6 +17,7 @@ use std::{
 const CONTENTS_STREAM_PATH: &str = "/Contents";
 const RAW_TYPE_SHAPE: u16 = 0x01;
 const RAW_TYPE_FANCY_BORDERS: u16 = 0x46;
+const OPLPO_DONT_STRETCH_BORDERART_FIELD: u16 = 0x07;
 const OPLPO_FBID_FIELD: u16 = 0x09;
 const OPLPLBFB_IFBMAX_FIELD: u16 = 0x01;
 
@@ -24,6 +25,14 @@ const OPLPLBFB_IFBMAX_FIELD: u16 = 0x01;
 struct ScalarObservation {
     seq_num: usize,
     value: u32,
+    source_offset: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ShapeFieldObservation {
+    seq_num: usize,
+    wire_type: u8,
+    value_u32: Option<u32>,
     source_offset: u64,
 }
 
@@ -37,6 +46,7 @@ struct FileReceipt {
     shape_chunks_with_opaque_tail: usize,
     shape_fbid_wrong_wire_count: usize,
     shape_fbid_observations: Vec<ScalarObservation>,
+    shape_fbid_field07_observations: Vec<ShapeFieldObservation>,
     fancy_borders_object_count: usize,
     fancy_borders_chunks_with_opaque_tail: usize,
     ifbmax_wrong_wire_count: usize,
@@ -57,6 +67,9 @@ struct CorpusReceipt {
     files_with_nonzero_shape_fbid: usize,
     max_shape_fbid: Option<u32>,
     shape_fbid_value_counts: BTreeMap<u32, usize>,
+    fbid_shape_field07_observation_count: usize,
+    files_with_fbid_shape_field07: usize,
+    shape_fbid_field07_wire_counts: BTreeMap<u8, usize>,
     files_with_fancy_borders_object: usize,
     files_with_ifbmax: usize,
     files_with_ifbmax_gt1: usize,
@@ -108,6 +121,7 @@ fn scan_file(path: &Path) -> FileReceipt {
                 shape_chunks_with_opaque_tail: 0,
                 shape_fbid_wrong_wire_count: 0,
                 shape_fbid_observations: Vec::new(),
+                shape_fbid_field07_observations: Vec::new(),
                 fancy_borders_object_count: 0,
                 fancy_borders_chunks_with_opaque_tail: 0,
                 ifbmax_wrong_wire_count: 0,
@@ -138,6 +152,7 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
             shape_chunks_with_opaque_tail: 0,
             shape_fbid_wrong_wire_count: 0,
             shape_fbid_observations: Vec::new(),
+            shape_fbid_field07_observations: Vec::new(),
             fancy_borders_object_count: 0,
             fancy_borders_chunks_with_opaque_tail: 0,
             ifbmax_wrong_wire_count: 0,
@@ -157,6 +172,7 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
     let mut shape_chunks_with_opaque_tail = 0usize;
     let mut shape_fbid_wrong_wire_count = 0usize;
     let mut shape_fbid_observations = Vec::new();
+    let mut shape_fbid_field07_observations = Vec::new();
     let mut fancy_borders_object_count = 0usize;
     let mut fancy_borders_chunks_with_opaque_tail = 0usize;
     let mut ifbmax_wrong_wire_count = 0usize;
@@ -187,6 +203,7 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
                 if chunk.unsupported_tail.is_some() {
                     shape_chunks_with_opaque_tail += 1;
                 }
+                let mut exact_fbid_seen = false;
                 for field in chunk
                     .fields
                     .iter()
@@ -204,11 +221,31 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
                         shape_fbid_wrong_wire_count += 1;
                         continue;
                     };
+                    exact_fbid_seen = true;
                     shape_fbid_observations.push(ScalarObservation {
                         seq_num,
                         value: u32::from(*value),
                         source_offset: value_source.offset,
                     });
+                }
+                if exact_fbid_seen {
+                    for field in chunk
+                        .fields
+                        .iter()
+                        .filter(|field| field.id == OPLPO_DONT_STRETCH_BORDERART_FIELD)
+                    {
+                        let value_u32 = match &field.body {
+                            RawContentsBlockBody::U16 { value, .. } => Some(u32::from(*value)),
+                            RawContentsBlockBody::U32 { value, .. } => Some(*value),
+                            _ => None,
+                        };
+                        shape_fbid_field07_observations.push(ShapeFieldObservation {
+                            seq_num,
+                            wire_type: field.block_type,
+                            value_u32,
+                            source_offset: field.source.offset,
+                        });
+                    }
                 }
             }
             RAW_TYPE_FANCY_BORDERS => {
@@ -263,6 +300,7 @@ fn scan_file_inner(path: &Path, file_name: String) -> Result<FileReceipt> {
         shape_chunks_with_opaque_tail,
         shape_fbid_wrong_wire_count,
         shape_fbid_observations,
+        shape_fbid_field07_observations,
         fancy_borders_object_count,
         fancy_borders_chunks_with_opaque_tail,
         ifbmax_wrong_wire_count,
@@ -307,6 +345,7 @@ fn main() -> Result<()> {
 
     let mut shape_fbid_value_counts = BTreeMap::<u32, usize>::new();
     let mut ifbmax_value_counts = BTreeMap::<u32, usize>::new();
+    let mut shape_fbid_field07_wire_counts = BTreeMap::<u8, usize>::new();
     for row in &rows {
         for observation in &row.shape_fbid_observations {
             *shape_fbid_value_counts
@@ -315,6 +354,11 @@ fn main() -> Result<()> {
         }
         for observation in &row.ifbmax_observations {
             *ifbmax_value_counts.entry(observation.value).or_default() += 1;
+        }
+        for observation in &row.shape_fbid_field07_observations {
+            *shape_fbid_field07_wire_counts
+                .entry(observation.wire_type)
+                .or_default() += 1;
         }
     }
 
@@ -330,6 +374,14 @@ fn main() -> Result<()> {
         .iter()
         .flat_map(|row| row.shape_fbid_observations.iter().map(|obs| obs.value))
         .max();
+    let fbid_shape_field07_observation_count = rows
+        .iter()
+        .map(|row| row.shape_fbid_field07_observations.len())
+        .sum();
+    let files_with_fbid_shape_field07 = rows
+        .iter()
+        .filter(|row| !row.shape_fbid_field07_observations.is_empty())
+        .count();
 
     let files_with_fancy_borders_object = rows
         .iter()
@@ -370,6 +422,9 @@ fn main() -> Result<()> {
         files_with_nonzero_shape_fbid,
         max_shape_fbid,
         shape_fbid_value_counts,
+        fbid_shape_field07_observation_count,
+        files_with_fbid_shape_field07,
+        shape_fbid_field07_wire_counts,
         files_with_fancy_borders_object,
         files_with_ifbmax,
         files_with_ifbmax_gt1,
@@ -391,7 +446,7 @@ fn main() -> Result<()> {
             .map(|row| row.fancy_borders_chunks_with_opaque_tail)
             .sum(),
         rows,
-        evidence_boundary: "Exact mature-0x2C directory/raw-type/bounded-chunk census only. OplPo field0x09/wire0x18 is counted as the physically exact candidate corresponding to Publisher11 XML Fbid priv=0903; OplPlbFb field0x01/wire0x20 is the exact IfbMax coordinate. This census does not infer BorderArt names, does not scan opaque tails for byte patterns, and does not by itself prove that Fbid is universally a zero-based catalog index.",
+        evidence_boundary: "Exact mature-0x2C directory/raw-type/bounded-chunk census only. OplPo field0x09/wire0x18 is counted as the physically exact candidate corresponding to Publisher11 XML Fbid priv=0903; for those exact Fbid-bearing shapes, field0x07 is inventoried without yet assigning StretchPictures semantics. OplPlbFb field0x01/wire0x20 is the exact IfbMax coordinate. This census does not scan opaque tails for byte patterns and does not infer mutation causality.",
     };
 
     if let Some(parent) = out_path.parent() {
