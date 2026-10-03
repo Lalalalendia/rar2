@@ -3181,8 +3181,8 @@ impl EditorSession {
         let transition = plan_create_shape_append_v1(&before_stack, &shape).map_err(|_| {
             EditorError::StaleAuthoredStack {
                 page_id: shape.page_id,
-            },
-        )?;
+            }
+        })?;
         let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
             .map_err(|_| EditorError::StaleAuthoredStack {
                 page_id: shape.page_id,
@@ -3365,8 +3365,8 @@ impl EditorSession {
                 | AuthoredStackReorderErrorV1::TransitionMismatch => {
                     EditorError::StaleAuthoredStack { page_id }
                 }
-            }
-        })?;
+            },
+        )?;
         self.consume_canonical_reorder_authored_stack(EditOperation::ReorderAuthoredStack {
             transition,
         })
