@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 mod asset_export;
 mod assets;
+mod borderart;
 #[cfg(feature = "cmo-authority-bridge")]
 mod cmo_bridge;
 mod failure_envelope;
@@ -39,6 +40,10 @@ pub use assets::{
     PubAssetManifest, PubAssetManifestDiagnostic, PubAssetManifestEntry, PubAssetUse,
     PubImageAlpha, PubImageBlobRef, PubImageResource, PubImageResourceCatalog,
     PubImageResourceDiagnostic, build_pub_asset_manifest, build_pub_image_resource_catalog,
+};
+pub use borderart::{
+    PubBorderArtCatalogDiagnosticV1, PubBorderArtCatalogEntryV1, PubBorderArtCatalogReadV1,
+    PubBorderArtCatalogV1, PubBorderArtShapeUseV1, read_mature_0x2c_borderart_catalog_v1,
 };
 #[cfg(feature = "cmo-authority-bridge")]
 pub use cmo_bridge::{PubCmoProjectionBridgeV1, build_mature_0x2c_cmo_projection_bridge_v1};
