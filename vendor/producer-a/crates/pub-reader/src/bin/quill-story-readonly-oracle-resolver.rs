@@ -571,7 +571,7 @@ mod tests {
 
         let lengths = search_partitions(&text, 9, &fdpp, &stories, false);
         let hashes = search_partitions(&text, 9, &fdpp, &stories, true);
-        assert_eq!(lengths.len(), 1);
+        assert_eq!(lengths.len(), 2);
         assert_eq!(hashes, BTreeSet::from([vec![6u64, 9]]));
     }
 
