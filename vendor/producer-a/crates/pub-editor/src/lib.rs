@@ -9,6 +9,7 @@
 mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
+mod native_pub;
 mod writer_assessment;
 
 pub use authored_stack_lifecycle_v1::{
@@ -28,6 +29,7 @@ pub use create_shape_runtime_v1::{
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     CreateShapeRuntimeValidationError, Srgb8V1, validate_authored_shape_runtime_v1,
 };
+pub use native_pub::{EditorNativePubCandidate, EditorNativePubMaterializationBlocked};
 pub use writer_assessment::{
     EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
     EditorPubWriterAssessment, EditorPubWriterAssessmentError, EditorStoryWriterProbeResult,

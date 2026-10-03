@@ -3,9 +3,10 @@
 
 This reuses the public RevisionKernel/HTTP protocol and the already-proven
 Rar-owned bounded producers:
-- Producer B for canonical MoveNode semantics;
+- canonical pub-editor operations through the pinned Rust producer;
 - LAYOUT-RESOLVED-SCENE-01 for current resolved-graph -> Scene;
-- the bounded editable-export authority for IDML/ODG.
+- the bounded editable-export authority for IDML/ODG;
+- the gated native-PUB writer for proven final Editor states.
 
 It is task-local integration glue, not a second document model.
 """
@@ -32,15 +33,12 @@ from resolved_graph_scene_bridge_v1 import (
     compare_viewer_and_adapter_scene,
     project_resolved_graph_scene,
 )
-from sample_newsletter_move_producer import (
-    SampleNewsletterMoveSession,
-    load_baseline,
-)
 from validate_export_preview import validate_schema as validate_export_preview_schema
 from validate_export_preview import validate_semantics as validate_export_preview_semantics
 from verify_editable_export_geometry import RectEmu, verify_export
 
 from revision_store import RevisionKernel
+from story_range_v1 import replace_story_range_v1
 from security.authz_v1 import AuthzDenied, AuthzKernel, CAP_EXPORT, CAP_VIEW
 from security.authorized_revision_gateway import AuthorizedRevisionGateway
 
@@ -203,6 +201,7 @@ class RealAcceptanceState:
         self.last_operation = None
         self.reopen_count = 0
         self.export_cache = {}
+        self.native_pub_cache = {}
 
         baseline_scene = self._scene_from_project(
             self.baseline_project,
@@ -242,26 +241,121 @@ class RealAcceptanceState:
             compare_viewer_and_adapter_scene(viewer, source_scene)
         current_viewer = copy.deepcopy(viewer)
         current_viewer["scene"] = source_scene
+
+        # Story text in the browser snapshot follows the canonical edited
+        # resolved graph. Geometry still comes from the same Viewer/Scene path;
+        # this does not introduce browser text layout authority.
+        graph_stories = current_graph.get("stories")
+        viewer_stories = current_viewer.get("document", {}).get("stories")
+        if not isinstance(graph_stories, dict) or not isinstance(viewer_stories, list):
+            raise RuntimeError("resolved/viewer Story collections are required")
+        for story in viewer_stories:
+            if not isinstance(story, dict) or not isinstance(story.get("id"), str):
+                raise RuntimeError("Viewer Story identity is required")
+            graph_story = graph_stories.get(story["id"])
+            if not isinstance(graph_story, dict) or not isinstance(graph_story.get("text"), str):
+                raise RuntimeError("Viewer Story is missing from edited resolved graph")
+            story["text"] = graph_story["text"]
+
         return adapt_viewer_geometry(current_viewer, self.document_id, revision_id)
+
+    def _run_editor_command(self, mode: str, project: dict, command: dict) -> dict:
+        token = hashlib.sha256(
+            canonical_json({"mode": mode, "project": project, "command": command})
+        ).hexdigest()[:20]
+        project_path = self.work_dir / f"{token}.editor-project.json"
+        command_path = self.work_dir / f"{token}.editor-command.json"
+        project_path.write_bytes(canonical_json(project) + b"\n")
+        command_path.write_bytes(canonical_json(command) + b"\n")
+        completed = subprocess.run(
+            [
+                str(self.exporter),
+                mode,
+                str(self.fixture),
+                str(project_path),
+                str(command_path),
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(f"canonical editor command rejected ({mode})")
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("canonical editor command returned invalid JSON") from error
+        if not isinstance(result, dict) or result.get("source_hash") != self.source_hash:
+            raise RuntimeError("canonical editor command source identity mismatch")
+        if not isinstance(result.get("project"), dict):
+            raise RuntimeError("canonical editor command project missing")
+        return result
 
     def executor(self, project: dict, command: dict):
         self.executor_calls += 1
         self.redo_stack.clear()
-        session = SampleNewsletterMoveSession(load_baseline())
-        session.apply_project(copy.deepcopy(project))
-        if not isinstance(command, dict) or command.get("kind") != "move_node_to":
-            raise ValueError("unsupported real acceptance command")
-        operation = session.move_node_to(
-            command.get("node_id"),
-            command.get("x_emu"),
-            command.get("y_emu"),
-        )
-        self.last_operation = copy.deepcopy(operation)
-        return (
-            operation,
-            session.project(),
-            [{"key": "node.geometry.position", "state": "supported", "note": None}],
-        )
+        if not isinstance(command, dict):
+            raise ValueError("editor command must be an object")
+
+        kind = command.get("kind")
+        if kind == "move_node_to":
+            result = self._run_editor_command("editor-move-node", project, command)
+            operation = result.get("operation")
+            if not isinstance(operation, dict) or operation.get("kind") != "move_node":
+                raise RuntimeError("Rust editor returned non-MoveNode operation")
+            self.last_operation = copy.deepcopy(operation)
+            return (
+                copy.deepcopy(operation),
+                copy.deepcopy(result["project"]),
+                [{"key": "node.geometry.position", "state": "supported", "note": None}],
+            )
+
+        if kind == "replace_story_range":
+            result = self._run_editor_command("editor-story-range", project, command)
+            before_text = result.get("before_text")
+            after_text = result.get("after_text")
+            if not isinstance(before_text, str) or not isinstance(after_text, str):
+                raise RuntimeError("Rust editor Story result is incomplete")
+
+            canonical = replace_story_range_v1(
+                story_id=command.get("story_id"),
+                story_text=before_text,
+                start_scalar=command.get("start_scalar"),
+                end_scalar=command.get("end_scalar"),
+                expected_before=command.get("expected_before"),
+                replacement_text=command.get("replacement_text"),
+            )
+            if canonical.after_text != after_text:
+                raise RuntimeError("Rust/Python canonical Story result differs")
+
+            rust_operation = result.get("operation")
+            if not isinstance(rust_operation, dict):
+                raise RuntimeError("Rust editor Story operation missing")
+            for field in (
+                "kind",
+                "story_id",
+                "start_scalar",
+                "end_scalar",
+                "expected_before",
+                "replacement_text",
+                "before_story_state_id",
+                "after_story_state_id",
+            ):
+                if rust_operation.get(field) != canonical.operation.get(field):
+                    raise RuntimeError(
+                        f"Rust/Python canonical Story operation differs at {field}"
+                    )
+
+            self.last_operation = copy.deepcopy(canonical.operation)
+            return (
+                copy.deepcopy(canonical.operation),
+                copy.deepcopy(result["project"]),
+                [{"key": "story.text", "state": "supported", "note": None}],
+            )
+
+        raise ValueError("unsupported real editor command")
 
     def history_executor(self, base_project: dict, transition_kind: str):
         self.history_executor_calls += 1
@@ -278,12 +372,23 @@ class RealAcceptanceState:
         else:
             raise ValueError("unsupported history transition")
         project["operations"] = operations
-        project["schema_version"] = "pub-editor-v0.4" if operations else "pub-editor-v0.2"
+        project["schema_version"] = (
+            "pub-editor-v0.4"
+            if any(
+                isinstance(operation, dict)
+                and operation.get("kind") == "move_node"
+                for operation in operations
+            )
+            else "pub-editor-v0.2"
+        )
         return project, [{"key": "history." + transition_kind, "state": "supported", "note": None}]
 
     def commit(self, request: dict, principal_id: str) -> dict:
         protocol = request.get("protocol_version")
-        if protocol == "chaptera.commit-request.v1":
+        if protocol in {
+            "chaptera.commit-request.v1",
+            "chaptera.story-range-intent.v1",
+        }:
             result = self.gateway.commit(
                 request,
                 principal_id=principal_id,
@@ -417,6 +522,138 @@ class RealAcceptanceState:
             rect,
         )
 
+    def editor_capabilities(self) -> dict:
+        current = self.kernel.current_revision(self.document_id)
+        record = self.kernel.read_revision(
+            document_id=self.document_id,
+            revision_id=current.revision_id,
+        )
+        token = current.revision_id.removeprefix("sha256:")[:20]
+        project_path = self.work_dir / f"{token}.capabilities.project.json"
+        project_path.write_bytes(canonical_json(record.project) + b"\n")
+        completed = subprocess.run(
+            [
+                str(self.exporter),
+                "editor-capabilities",
+                str(self.fixture),
+                str(project_path),
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("editor capabilities producer failed")
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("editor capabilities producer returned invalid JSON") from error
+        editable = result.get("editable_story_ids")
+        if (
+            not isinstance(result, dict)
+            or result.get("protocol_version") != "chaptera.editor-capabilities.v1"
+            or result.get("source_hash") != self.source_hash
+            or not isinstance(editable, list)
+            or any(not isinstance(story_id, str) for story_id in editable)
+            or editable != sorted(set(editable))
+        ):
+            raise RuntimeError("editor capabilities result is invalid")
+        return {
+            "protocol_version": "chaptera.editor-capabilities.v1",
+            "document_id": self.document_id,
+            "source_hash": self.source_hash,
+            "revision_id": current.revision_id,
+            "editable_story_ids": editable,
+        }
+
+    def _native_pub_for_revision(self, revision_id: str) -> dict:
+        if revision_id in self.native_pub_cache:
+            return self.native_pub_cache[revision_id]
+
+        record = self.kernel.read_revision(
+            document_id=self.document_id,
+            revision_id=revision_id,
+        )
+        token = revision_id.removeprefix("sha256:")[:20]
+        project_path = self.work_dir / f"{token}.native-pub.project.json"
+        artifact_path = self.work_dir / f"{token}.edited.pub"
+        report_path = self.work_dir / f"{token}.native-pub.report.json"
+        project_path.write_bytes(canonical_json(record.project) + b"\n")
+        artifact_path.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
+
+        completed = subprocess.run(
+            [
+                str(self.exporter),
+                "native-pub-save",
+                str(self.fixture),
+                str(project_path),
+                str(artifact_path),
+                str(report_path),
+            ],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("native PUB save producer failed")
+        report = load_json(report_path)
+        if (
+            report.get("protocol_version") != "chaptera.native-pub-save.v1"
+            or report.get("source_hash") != self.source_hash
+            or not isinstance(report.get("can_serialize"), bool)
+        ):
+            raise RuntimeError("native PUB save report identity/schema mismatch")
+
+        can_serialize = report["can_serialize"]
+        if can_serialize:
+            if not artifact_path.is_file():
+                raise RuntimeError("native PUB save report is ready but artifact is missing")
+            output_hash = sha256_path(artifact_path)
+            if report.get("output_hash") != output_hash:
+                raise RuntimeError("native PUB artifact hash differs from save report")
+            if report.get("byte_len") != artifact_path.stat().st_size:
+                raise RuntimeError("native PUB artifact length differs from save report")
+        elif artifact_path.exists():
+            raise RuntimeError("blocked native PUB save emitted an artifact")
+
+        preview = {
+            "protocol_version": "chaptera.native-pub-save-preview.v1",
+            "document_id": self.document_id,
+            "source_hash": self.source_hash,
+            "revision_id": revision_id,
+            "can_serialize": can_serialize,
+            "blocker_code": report.get("blocker_code"),
+            "output_hash": report.get("output_hash"),
+            "byte_len": report.get("byte_len"),
+            "chaptera_reopen_verified": report.get("chaptera_reopen_verified") is True,
+            "native_publisher_acceptance": report.get("native_publisher_acceptance"),
+        }
+        value = {
+            "preview": preview,
+            "artifact": artifact_path if can_serialize else None,
+            "report": report,
+        }
+        self.native_pub_cache[revision_id] = value
+        return value
+
+    def native_pub_preview(self) -> dict:
+        current = self.kernel.current_revision(self.document_id)
+        return copy.deepcopy(
+            self._native_pub_for_revision(current.revision_id)["preview"]
+        )
+
+    def native_pub_artifact(self) -> tuple[pathlib.Path, dict]:
+        current = self.kernel.current_revision(self.document_id)
+        value = self._native_pub_for_revision(current.revision_id)
+        if not value["preview"]["can_serialize"] or value["artifact"] is None:
+            raise ValueError("native_pub_save_blocked")
+        return value["artifact"], copy.deepcopy(value["preview"])
+
     def reopen(self) -> dict:
         current = self.kernel.current_revision(self.document_id)
         record = self.kernel.read_revision(
@@ -480,6 +717,20 @@ class Handler(BaseHTTPRequestHandler):
             json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
         )
 
+    def _pub_file(self, path: pathlib.Path):
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("content-type", "application/x-mspublisher")
+        self.send_header("content-length", str(len(data)))
+        self.send_header(
+            "content-disposition",
+            'attachment; filename="chaptera-edited.pub"',
+        )
+        self.send_header("cache-control", "no-store")
+        self.send_header("access-control-allow-origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _principal_id(self):
         value = self.headers.get("x-chaptera-principal-id")
         if not value:
@@ -510,10 +761,23 @@ class Handler(BaseHTTPRequestHandler):
                     "product_acceptance": STATE.strict_acceptance,
                 })
                 return
+            if path == "/v1/pub-save/preview":
+                self._authorize(CAP_EXPORT)
+                self._json(STATE.native_pub_preview())
+                return
+            if path == "/v1/pub-save/download":
+                self._authorize(CAP_EXPORT)
+                artifact, _preview = STATE.native_pub_artifact()
+                self._pub_file(artifact)
+                return
             if path == "/v1/export/preview":
                 self._authorize(CAP_EXPORT)
                 target = query.get("target", [""])[0]
                 self._json(STATE.export_preview(target))
+                return
+            if path == "/v1/editor/capabilities":
+                self._authorize(CAP_VIEW)
+                self._json(STATE.editor_capabilities())
                 return
             if path == "/v1/scenes/current":
                 self._authorize(CAP_VIEW)
