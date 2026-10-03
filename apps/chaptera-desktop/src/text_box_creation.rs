@@ -198,18 +198,18 @@ impl TextBoxCreateSessionV1 {
     }
 
     pub fn cancel(&mut self) -> Result<(), String> {
-        if self.gesture_token.is_none() {
-            self.draw = None;
-            self.page_id = None;
-            return Ok(());
+        if self.gesture_token.is_some() {
+            let transition =
+                chaptera_canvas_creation_interaction::escape_canvas_tool_v1(&self.tool_state)
+                    .map_err(|error| error.to_string())?;
+            self.tool_state = transition.state;
         }
-        let transition =
-            chaptera_canvas_creation_interaction::escape_canvas_tool_v1(&self.tool_state)
-                .map_err(|error| error.to_string())?;
-        self.tool_state = transition.state;
         self.gesture_token = None;
         self.page_id = None;
         self.draw = None;
+        if self.active() {
+            self.deactivate_to_select()?;
+        }
         Ok(())
     }
 
@@ -317,6 +317,7 @@ mod tests {
         session.cancel().unwrap();
         assert_eq!(session.preview().unwrap(), TextBoxCreatePreviewV1::None);
         assert!(session.gesture_token.is_none());
+        assert!(!session.active(), "cancelled one-shot returns to Select");
     }
 
     #[test]
