@@ -114,8 +114,7 @@ fn mask_payloads(bytes: &[u8], descriptors: &[Descriptor]) -> Result<Vec<u8>> {
     for descriptor in descriptors {
         let start =
             usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
-        let len =
-            usize::try_from(descriptor.data_length).context("descriptor length too large")?;
+        let len = usize::try_from(descriptor.data_length).context("descriptor length too large")?;
         let end = start
             .checked_add(len)
             .context("descriptor payload range overflow")?;
