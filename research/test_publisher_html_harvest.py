@@ -73,6 +73,28 @@ class PublisherHtmlPrivInferenceTests(unittest.TestCase):
         self.assertEqual(meta2["inferred"], 0)
         self.assertEqual(meta2["unresolved"], 1)
 
+    def test_publisher_major_parser(self):
+        self.assertEqual(harvest.publisher_major("Microsoft Publisher 10"), 10)
+        self.assertEqual(harvest.publisher_major("Microsoft Publisher 11"), 11)
+        self.assertIsNone(harvest.publisher_major("Publisher.Document"))
+
+    def test_version_diff_is_owner_aware_and_fail_closed(self):
+        props = [
+            {"source_publisher_major": 10, "owner_type": "OplA", "name": "Color", "priv": "104"},
+            {"source_publisher_major": 11, "owner_type": "OplA", "name": "Color", "priv": "104"},
+            {"source_publisher_major": 10, "owner_type": "OplB", "name": "Color", "priv": "204"},
+            {"source_publisher_major": 11, "owner_type": "OplB", "name": "Color", "priv": "304"},
+            {"source_publisher_major": 11, "owner_type": "OplC", "name": "Only11", "priv": "404"},
+        ]
+        diff = harvest.build_version_diff(props)
+        self.assertEqual(diff["versions"], [10, 11])
+        comp = diff["comparisons"][0]
+        self.assertEqual(comp["exact_coordinate_intersection"], 1)
+        self.assertEqual(comp["stable_singleton_keys"], 1)
+        self.assertEqual(comp["differing_priv_set_keys"], 1)
+        self.assertEqual(comp["a_only_coordinates"], 1)
+        self.assertEqual(comp["b_only_coordinates"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
