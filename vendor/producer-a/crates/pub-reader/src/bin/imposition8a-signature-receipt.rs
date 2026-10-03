@@ -3,7 +3,7 @@ use pub_contents::{
     BLOCK_TYPE_CONTAINER_88, BLOCK_TYPE_CONTAINER_90, BLOCK_TYPE_CONTAINER_A0, BLOCK_TYPE_DUMMY,
     BLOCK_TYPE_EMPTY, BLOCK_TYPE_FIXED_8, BLOCK_TYPE_FIXED_16, BLOCK_TYPE_HANDLE_U32,
     BLOCK_TYPE_REFERENCE_U32, BLOCK_TYPE_U16, BLOCK_TYPE_U16_SERVICE, BLOCK_TYPE_U32,
-    DOCUMENT_PAGE_LIST_ID, Contents0x2cChunkReference, RawContentsBlockBody,
+    Contents0x2cChunkReference, DOCUMENT_PAGE_LIST_ID, RawContentsBlockBody,
     decode_packed_field_tag, parse_0x2c_header, parse_confirmed_0x2c_chunk,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
     parse_confirmed_document_page_list,
@@ -248,7 +248,10 @@ fn top_level_field_receipt(
         RawContentsBlockBody::Empty => json!({"kind": "empty"}),
         RawContentsBlockBody::U16 { .. } => json!({"kind": "u16", "value_retained": false}),
         RawContentsBlockBody::U32 { value, .. } => {
-            if matches!(field.block_type, BLOCK_TYPE_REFERENCE_U32 | BLOCK_TYPE_HANDLE_U32) {
+            if matches!(
+                field.block_type,
+                BLOCK_TYPE_REFERENCE_U32 | BLOCK_TYPE_HANDLE_U32
+            ) {
                 json!({
                     "kind": "u32_relation",
                     "target_class": relation_class(
@@ -321,8 +324,8 @@ fn main() -> Result<()> {
             .context("read /Contents")?;
     let header = parse_0x2c_header(StreamPath(CONTENTS_STREAM_PATH.into()), &contents)
         .context("parse mature 0x2C header")?;
-    let trailer = parse_confirmed_0x2c_trailer_root(&contents, &header)
-        .context("parse mature trailer")?;
+    let trailer =
+        parse_confirmed_0x2c_trailer_root(&contents, &header).context("parse mature trailer")?;
     let references = build_reference_index(&contents, &trailer.directory)?;
 
     let documents = references
@@ -348,9 +351,7 @@ fn main() -> Result<()> {
                 parse_confirmed_document_page_list(&contents, (**page_list_block).clone())
             {
                 for (document_ordinal, entry) in page_list.entries.iter().enumerate() {
-                    if references
-                        .get(&entry.handle)
-                        .and_then(single_raw_type)
+                    if references.get(&entry.handle).and_then(single_raw_type)
                         == Some(RAW_TYPE_PAGE)
                     {
                         page_ordinals.insert(entry.handle, document_ordinal);
@@ -371,13 +372,7 @@ fn main() -> Result<()> {
             .fields
             .iter()
             .map(|field| {
-                top_level_field_receipt(
-                    field,
-                    &contents,
-                    &references,
-                    &page_ordinals,
-                    document_seq,
-                )
+                top_level_field_receipt(field, &contents, &references, &page_ordinals, document_seq)
             })
             .collect::<Result<Vec<_>>>()?;
         objects.push(json!({
@@ -411,8 +406,7 @@ fn main() -> Result<()> {
         },
     });
 
-    let file = File::create(Path::new(&output))
-        .with_context(|| format!("create {:?}", output))?;
+    let file = File::create(Path::new(&output)).with_context(|| format!("create {:?}", output))?;
     serde_json::to_writer_pretty(BufWriter::new(file), &receipt)?;
     Ok(())
 }
