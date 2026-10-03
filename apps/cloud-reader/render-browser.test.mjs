@@ -11,6 +11,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const output = resolve(process.env.READER_RENDER_OUTPUT ?? join(root, "../../target/cloud-reader-render"));
 const emu = (px) => px * 9525;
 const rectangle = (x, y, width, height) => ({ x: emu(x), y: emu(y), width: emu(width), height: emu(height) });
+const pixelPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
 // The existing server fallback provider pins these public bytes; this fixture
 // exercises a loaded font, without adding fonts to the static release.
 const fontId = "chaptera.desktop.fallback-font.ubuntu-light.v1";
@@ -35,6 +36,11 @@ const scene = {
         { cell_id: "b", row: 0, column: 1, bounds: rectangle(290, 130, 240, 80), text: "Second cell" }
       ]
     } },
+    { node_id: "border", page_id: "p", kind: "shape", bounds: rectangle(350, 250, 200, 100),
+      paint: { line: { rgb: [255, 0, 0], width_emu: emu(4) } },
+      decorative_border: { placements: [
+        { slot: "top_left", resource_id: "border-r", bounds: rectangle(350, 250, 20, 20) }
+      ] } },
     { node_id: "unresolved-font", page_id: "p", kind: "text", bounds: rectangle(30, 260, 300, 80), text: "Fallback after unavailable font", text_layout: {
       disposition: "shared_resolved", font_resource_id: "missing", font_size_emu: emu(16), line_height_emu: emu(20),
       lines: [{ line_index: 0, text: "Fallback after unavailable font", measured_width_emu: emu(240), line_height_emu: emu(20) }]
@@ -46,7 +52,9 @@ const scene = {
           { line_index: 1, text: "Server line B", measured_width_emu: emu(120), line_height_emu: emu(20) }]
       }
     }
-  ], stories: [], resources: [], fonts: [{ resource_id: fontId, expected_sha256: fontSha,
+  ], stories: [], resources: [
+    { resource_id: "border-r", mime: "image/png", availability: "inline_data_url", inline_data_url: pixelPng }
+  ], fonts: [{ resource_id: fontId, expected_sha256: fontSha,
     availability: "inline_data_url", inline_data_url: "data:font/ttf;base64," + fontBytes.toString("base64") }]
 };
 const server = createServer(async (request, response) => {
@@ -113,6 +121,18 @@ try {
     return ["x", "y", "width", "height"].map((key) => Number(bounds.getAttribute(key)));
   });
   assert.deepEqual(clip, [emu(350), emu(30), emu(220), emu(80)], "clip remains in canonical node space");
+  const borderArt = page.locator('[data-node-id="border"] [data-decorative-border-slot="top_left"]');
+  assert.equal(await borderArt.count(), 1, "source-backed decorative border placement must paint as an image");
+  assert.deepEqual(
+    await borderArt.evaluate((element) => ["x", "y", "width", "height"].map((key) => Number(element.getAttribute(key)))),
+    [emu(350), emu(250), emu(20), emu(20)]
+  );
+  assert.equal(
+    await page.locator('[data-node-id="border"] rect').count(),
+    0,
+    "ordinary line stroke must not paint when decorative BorderArt is present"
+  );
+
   const before = await page.locator("svg").getAttribute("viewBox");
   const sharedMatrixBefore = await page.locator('[data-text-authority="server-shared-resolved"]').first().evaluate((element) => {
     const matrix = element.getScreenCTM(); return [matrix.a, matrix.b, matrix.c, matrix.d];
