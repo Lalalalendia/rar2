@@ -38,16 +38,24 @@ def strip_vba_comments(source: str) -> str:
     return "\n".join(lines)
 
 
+CALL_CLASSIFIER_VERSION = "v2"
+
 CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "application_lifecycle": [
         ("CreateObject(Publisher.Application)", re.compile(r"(?i)createobject\s*\(\s*\"publisher\.application\"")),
+        ("GetObject(Publisher.Application)", re.compile(r"(?i)getobject\s*\([^\)]*\"publisher\.application\"")),
         ("Publisher.Application", re.compile(r"(?i)\bpublisher\.application\b")),
-        ("Documents.Open", re.compile(r"(?i)\bdocuments\s*\.\s*open\b")),
         ("Application.Quit", re.compile(r"(?i)\bapplication\s*\.\s*quit\b|\.quit\b")),
+    ],
+    "documents": [
+        ("ActiveDocument", re.compile(r"(?i)\bactivedocument\b")),
+        ("ThisDocument", re.compile(r"(?i)\bthisdocument\b")),
+        ("Documents", re.compile(r"(?i)(?:\.|\b)documents\b")),
+        ("Documents.Add", re.compile(r"(?i)\bdocuments\s*\.\s*add\b")),
+        ("Documents.Open", re.compile(r"(?i)\bdocuments\s*\.\s*open\b")),
     ],
     "pages": [
         ("Pages", re.compile(r"(?i)(?:\.|\b)pages\b")),
-        ("ActiveDocument", re.compile(r"(?i)\bactivedocument\b")),
     ],
     "page_lifecycle": [
         ("Pages.Add", re.compile(r"(?i)\bpages\s*\.\s*add\b")),
@@ -86,11 +94,20 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("FirstRecord", re.compile(r"(?i)\bfirstrecord\b")),
         ("LastRecord", re.compile(r"(?i)\blastrecord\b")),
     ],
+    "layout": [
+        ("LayoutGuides", re.compile(r"(?i)\blayoutguides\b")),
+        ("RulerGuides", re.compile(r"(?i)\brulerguides\b")),
+        ("Align", re.compile(r"(?i)(?:\.|\b)align\b")),
+        ("Distribute", re.compile(r"(?i)(?:\.|\b)distribute\b")),
+    ],
     "output": [
         ("ExportAsFixedFormat", re.compile(r"(?i)\bexportasfixedformat\b")),
         ("PrintOutEx", re.compile(r"(?i)\bprintoutex\b")),
         ("PrintOut", re.compile(r"(?i)\bprintout\b")),
         ("SaveAsPicture", re.compile(r"(?i)\bsaveaspicture\b")),
+        ("SaveAs", re.compile(r"(?i)(?:\.|\b)saveas\b")),
+        ("ExportEmailHTML", re.compile(r"(?i)\bexportemailhtml\b")),
+        ("WebPagePreview", re.compile(r"(?i)\bwebpagepreview\b")),
     ],
     "hyperlinks": [("Hyperlinks", re.compile(r"(?i)\bhyperlinks?\b"))],
     "linked_text": [
@@ -105,7 +122,13 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "ole_links": [
         ("LinkFormat", re.compile(r"(?i)\blinkformat\b")),
         ("OLEFormat", re.compile(r"(?i)\boleformat\b")),
+        ("UpdateOLEObjects", re.compile(r"(?i)\bupdateoleobjects\b")),
     ],
+}
+
+STRING_BEARING_SYMBOLS = {
+    "CreateObject(Publisher.Application)",
+    "GetObject(Publisher.Application)",
 }
 
 
@@ -143,7 +166,7 @@ def classify_calls(source: str) -> tuple[dict[str, int], dict[str, int]]:
     for family, patterns in CALL_PATTERNS.items():
         family_total = 0
         for symbol, pattern in patterns:
-            haystack = cleaned if symbol == "CreateObject(Publisher.Application)" else stringless
+            haystack = cleaned if symbol in STRING_BEARING_SYMBOLS else stringless
             count = len(pattern.findall(haystack))
             if count:
                 family_total += count
@@ -352,6 +375,7 @@ def build_receipt(files: list[pathlib.Path], *, include_paths: bool = False) -> 
     rows.sort(key=lambda row: (row["sha256"] or "~", row.get("path", "")))
     return {
         "schema": "chaptera.pub-vba-estate-scan.v1",
+        "call_classifier_version": CALL_CLASSIFIER_VERSION,
         "claims": {
             "vba_executed": False,
             "ole_com_activated": False,
