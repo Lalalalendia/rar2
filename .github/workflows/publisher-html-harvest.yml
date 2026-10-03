@@ -8,6 +8,8 @@ on:
       - ".github/workflows/publisher-html-harvest.yml"
       - "research/publisher_html_harvest.py"
       - "research/publisher_html_seed_urls.json"
+      - "research/publisher_html_borderart_join.py"
+      - "research/publisher_borderart_catalog_usage_census.py"
   workflow_dispatch:
 
 concurrency:
@@ -51,6 +53,13 @@ jobs:
             --objects out/publisher-html-harvest/objects.json \
             --out out/publisher-html-harvest/borderart-fbid-join.json
 
+      - name: Separate document BorderArt catalog from shape usage
+        run: |
+          python research/publisher_borderart_catalog_usage_census.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-catalog-usage-census.json
+
       - name: Publish summary
         if: always()
         run: |
@@ -93,6 +102,22 @@ jobs:
                   f.write(f"- `{row['property_name']} {row['priv']}`: **{mark}**, sources={row['source_count']}\n")
           PY
           fi
+          if [ -f out/publisher-html-harvest/borderart-catalog-usage-census.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-catalog-usage-census.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt catalog vs usage census\n\n")
+              f.write(f"- catalog-only sources: `{d['catalog_only_source_count']}`\n")
+              f.write(f"- catalog+usage sources: `{d['catalog_and_usage_source_count']}`\n")
+              f.write(f"- usage-without-catalog sources: `{d['usage_without_catalog_source_count']}`\n")
+              f.write(f"- catalog presence is not usage evidence: `{d['catalog_presence_is_not_usage_evidence']}`\n")
+              for row in d["rows"]:
+                  if row["state"] != "neither":
+                      f.write(f"- `{row['source_id']}`: {row['state']} / catalog={row['catalog_names']} / FBID={row['usage_fbid_values']}\n")
+          PY
+          fi
           if [ -f out/publisher-html-harvest/borderart-fbid-join.json ]; then
             python - <<'PY'
           import json, os
@@ -123,5 +148,6 @@ jobs:
             out/publisher-html-harvest/version-diff.json
             out/publisher-html-harvest/legacy-odpo-frontier.json
             out/publisher-html-harvest/borderart-fbid-join.json
+            out/publisher-html-harvest/borderart-catalog-usage-census.json
           if-no-files-found: error
           retention-days: 30
