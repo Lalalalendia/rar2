@@ -180,12 +180,27 @@ def parse_publisher_xml(text, source_id):
         node = stack[match_index]
         del stack[match_index:]
         attrs = node["attrs"]
-        if "priv" not in attrs:
+        owner = nearest_owner(stack)
+        explicit_priv = attrs.get("priv")
+        if explicit_priv is None and owner is None:
             continue
+
         property_seq += 1
         value = clean_value(text[node["open_end"]:m.start()])
-        owner = nearest_owner(stack)
-        decoded = priv_decode(attrs["priv"], value)
+        if explicit_priv is not None:
+            decoded = priv_decode(explicit_priv, value)
+            priv_origin = "explicit"
+        else:
+            decoded = {
+                "priv": None,
+                "priv_u32": None,
+                "opyid": None,
+                "descriptor_type": None,
+                "wire_type": None,
+                "raw_tag": None,
+            }
+            priv_origin = "missing"
+
         properties.append({
             "source_id": source_id,
             "property_index": property_seq,
@@ -196,9 +211,51 @@ def parse_publisher_xml(text, source_id):
             "owner_oh": owner["attrs"].get("oh") if owner else None,
             "name": tag,
             "value": value,
+            "priv_origin": priv_origin,
             **decoded,
         })
-    return objects, properties
+
+    explicit_by_key = defaultdict(set)
+    for prop in properties:
+        if prop.get("priv") is None:
+            continue
+        owner_type = prop.get("owner_type")
+        name = prop.get("name")
+        if owner_type and name:
+            explicit_by_key[(owner_type, name)].add(prop["priv"].upper())
+
+    inferred = 0
+    unresolved = 0
+    for prop in properties:
+        if prop.get("priv") is not None:
+            continue
+        key = (prop.get("owner_type"), prop.get("name"))
+        candidates = explicit_by_key.get(key, set()) if key[0] and key[1] else set()
+        if len(candidates) == 1:
+            inferred_priv = next(iter(candidates))
+            prop.update(priv_decode(inferred_priv, prop.get("value") or ""))
+            prop["priv_origin"] = "inferred_same_source_owner_name"
+            inferred += 1
+        else:
+            prop["priv_origin"] = "unresolved_missing"
+            unresolved += 1
+
+    ambiguous = [
+        {
+            "owner_type": owner_type,
+            "property_name": name,
+            "explicit_privs": sorted(values),
+        }
+        for (owner_type, name), values in sorted(explicit_by_key.items())
+        if len(values) > 1
+    ]
+    inference = {
+        "explicit": sum(1 for p in properties if p.get("priv_origin") == "explicit"),
+        "inferred": inferred,
+        "unresolved": unresolved,
+        "ambiguous_keys": ambiguous,
+    }
+    return objects, properties, inference
 
 def detect_generator(text):
     m = META_GENERATOR_RE.search(text) or META_GENERATOR_RE_REV.search(text)
@@ -240,8 +297,9 @@ def main():
             if raw.startswith(b"%PDF") or "application/pdf" in (receipt.get("content_type") or "").lower():
                 candidates.extend(pdf_text_candidates(raw))
             mode, text = max(candidates, key=lambda item: score_candidate(item[1]))
-            objects, properties = parse_publisher_xml(text, source_id)
-            phash = payload_hash(objects, properties)
+            objects, properties, inference = parse_publisher_xml(text, source_id)
+            resolved_properties = [p for p in properties if p.get("priv") is not None]
+            phash = payload_hash(objects, resolved_properties)
             duplicate_of = first_payload_source.get(phash)
             if duplicate_of is None:
                 first_payload_source[phash] = source_id
@@ -256,7 +314,12 @@ def main():
                 "generator": detect_generator(text),
                 "publisher_marker_score": score_candidate(text),
                 "object_count": len(objects),
-                "property_count": len(properties),
+                "property_count": len(resolved_properties),
+                "property_candidate_count": len(properties),
+                "property_explicit_count": inference["explicit"],
+                "property_inferred_count": inference["inferred"],
+                "property_unresolved_count": inference["unresolved"],
+                "ambiguous_inference_keys": inference["ambiguous_keys"],
                 "payload_sha256": phash,
                 "duplicate_of": duplicate_of,
             })
@@ -266,12 +329,18 @@ def main():
             doc["error"] = "%s: %s" % (type(exc).__name__, exc)
         documents.append(doc)
 
-    aggregate = defaultdict(lambda: {"source_ids": set(), "observations": 0, "values": Counter(), "oty_values": Counter()})
+    aggregate = defaultdict(lambda: {"source_ids": set(), "observations": 0, "explicit_observations": 0, "inferred_observations": 0, "values": Counter(), "oty_values": Counter()})
     for prop in all_properties:
+        if prop.get("priv") is None:
+            continue
         key = (prop.get("owner_type") or "", prop.get("name") or "", prop.get("priv") or "", prop.get("opyid"), prop.get("descriptor_type"), prop.get("wire_type"), prop.get("raw_tag"))
         rec = aggregate[key]
         rec["source_ids"].add(prop["source_id"])
         rec["observations"] += 1
+        if prop.get("priv_origin") == "explicit":
+            rec["explicit_observations"] += 1
+        elif prop.get("priv_origin") == "inferred_same_source_owner_name":
+            rec["inferred_observations"] += 1
         if prop.get("value"):
             rec["values"][prop["value"]] += 1
         if prop.get("owner_oty"):
@@ -290,14 +359,29 @@ def main():
             "raw_tag": raw_tag,
             "source_count": len(rec["source_ids"]),
             "observations": rec["observations"],
+            "explicit_observations": rec["explicit_observations"],
+            "inferred_observations": rec["inferred_observations"],
             "source_ids": sorted(rec["source_ids"]),
             "common_values": [{"value": v, "count": c} for v, c in rec["values"].most_common(5)],
             "owner_oty_values": [{"oty": v, "count": c} for v, c in rec["oty_values"].most_common(5)],
         })
     registry.sort(key=lambda r: (r["owner_type"] or "", r["opyid"] if r["opyid"] is not None else 1 << 30, r["property_name"]))
 
+    resolved_properties = [p for p in all_properties if p.get("priv") is not None]
+    explicit_properties = [p for p in all_properties if p.get("priv_origin") == "explicit"]
+    inferred_properties = [p for p in all_properties if p.get("priv_origin") == "inferred_same_source_owner_name"]
+    unresolved_properties = [p for p in all_properties if p.get("priv_origin") == "unresolved_missing"]
+    ambiguous_keys = [
+        {
+            "source_id": d["source_id"],
+            **item,
+        }
+        for d in documents
+        for item in d.get("ambiguous_inference_keys", [])
+    ]
+
     unique_classes = sorted({o["type"] for o in all_objects if o.get("type") and o.get("type").lower().startswith("opl")})
-    unique_properties = sorted({p["name"] for p in all_properties})
+    unique_properties = sorted({p["name"] for p in resolved_properties})
     summary = {
         "schema": "publisher-html-harvest.v1",
         "seed_count": len(seeds),
@@ -306,7 +390,13 @@ def main():
         "sources_with_properties": sum(d.get("property_count", 0) > 0 for d in documents),
         "deduplicated_payloads": len(first_payload_source),
         "object_observations": len(all_objects),
-        "property_observations": len(all_properties),
+        "property_candidates_total": len(all_properties),
+        "property_observations": len(resolved_properties),
+        "property_observations_explicit": len(explicit_properties),
+        "property_observations_inferred": len(inferred_properties),
+        "property_observations_unresolved": len(unresolved_properties),
+        "ambiguous_inference_key_count": len(ambiguous_keys),
+        "ambiguous_inference_keys": ambiguous_keys,
         "registry_entries": len(registry),
         "unique_opl_classes": len(unique_classes),
         "unique_property_names": len(unique_properties),
@@ -318,8 +408,8 @@ def main():
     (out_dir / "harvest.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "objects.json").write_text(json.dumps(all_objects, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "properties.json").write_text(json.dumps(all_properties, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_tsv(out_dir / "properties.tsv", all_properties, ["source_id","property_index","owner_object_index","owner_tag","owner_type","owner_oty","owner_oh","name","priv","priv_u32","opyid","descriptor_type","wire_type","raw_tag","value"])
-    write_tsv(out_dir / "registry.tsv", registry, ["owner_type","property_name","priv","opyid","descriptor_type","wire_type","raw_tag","source_count","observations"])
+    write_tsv(out_dir / "properties.tsv", all_properties, ["source_id","property_index","owner_object_index","owner_tag","owner_type","owner_oty","owner_oh","name","priv","priv_origin","priv_u32","opyid","descriptor_type","wire_type","raw_tag","value"])
+    write_tsv(out_dir / "registry.tsv", registry, ["owner_type","property_name","priv","opyid","descriptor_type","wire_type","raw_tag","source_count","observations","explicit_observations","inferred_observations"])
 
     print(json.dumps({k:v for k,v in summary.items() if k not in ("documents","registry")}, ensure_ascii=False, indent=2))
     if not all_properties:
