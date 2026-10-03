@@ -189,7 +189,8 @@ def main() -> int:
         report_targets.append(
             {
                 "source_sha256": source_sha,
-                "collections_queried": len(crawls),\n                "index_query_count": len(query_specs),
+                "collections_queried": len(crawls),
+                "index_query_count": len(query_specs),
                 "index_capture_count": len(discovered),
                 "downloaded_cfb_count": sum(
                     row.get("download_status") == "cfb" for row in captures
