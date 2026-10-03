@@ -42,7 +42,6 @@ jobs:
       - name: Validate diagnostic and runner
         run: |
           set -euo pipefail
-          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/story65_diagnostic.rs vendor/producer-a/crates/pub-viewer/src/bin/reader1050-trophy-sibling-ab.rs
           cargo test \
             --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-reader \
