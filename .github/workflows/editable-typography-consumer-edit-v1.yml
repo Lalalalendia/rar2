@@ -1,4 +1,5 @@
 name: Editable Typography Consumer Edit V1
+# Exact real-consumer edit proof for #999.
 
 on:
   push:
