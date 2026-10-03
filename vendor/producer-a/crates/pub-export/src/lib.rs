@@ -98,10 +98,16 @@ impl std::fmt::Display for ScopedCapabilityError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DuplicateOverride { origin, feature } => {
-                write!(formatter, "duplicate scoped capability override {feature} @ {origin}")
+                write!(
+                    formatter,
+                    "duplicate scoped capability override {feature} @ {origin}"
+                )
             }
             Self::UnusedOverride { origin, feature } => {
-                write!(formatter, "unused scoped capability override {feature} @ {origin}")
+                write!(
+                    formatter,
+                    "unused scoped capability override {feature} @ {origin}"
+                )
             }
         }
     }
