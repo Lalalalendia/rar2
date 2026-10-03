@@ -5596,11 +5596,7 @@ impl ViewerApp {
                         next_canvas_resize = None;
                         let result = if self.text_box_creation.gesture_token.is_none() {
                             self.text_box_creation
-                                .pointer_down(
-                                    page.id,
-                                    pointer_start,
-                                    "textbox-draw-v1".to_owned(),
-                                )
+                                .pointer_down(page.id, pointer_start, "textbox-draw-v1".to_owned())
                                 .and_then(|()| {
                                     self.text_box_creation
                                         .pointer_move(pointer_current)
@@ -11734,8 +11730,7 @@ mod tests {
                 "second Undo removes its created Story atomically"
             );
             assert!(
-                !app
-                    .visual
+                !app.visual
                     .as_ref()
                     .expect("visual")
                     .scene
