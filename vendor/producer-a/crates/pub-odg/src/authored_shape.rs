@@ -256,3 +256,131 @@ fn format_emu_points(value: LengthEmu) -> String {
     }
     result
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgPart};
+    use pub_export::{
+        AUTHORED_SHAPE_FILL_FEATURE, AUTHORED_SHAPE_GEOMETRY_FEATURE,
+        AUTHORED_SHAPE_STROKE_FEATURE, AUTHORED_SHAPE_Z_ORDER_FEATURE,
+        ExportSolidPaintV1, ExportSolidStrokeV1, SemanticFeatureRequest,
+        TargetCapabilityManifest, TargetProfile, plan_export,
+    };
+    use pub_model::{CanonicalId, RectEmu, Size2D};
+    use std::collections::BTreeMap;
+
+    fn id(byte: u8) -> CanonicalId {
+        CanonicalId::from_bytes([byte; 16])
+    }
+
+    fn rectangle() -> AuthoredRectangleExportV1 {
+        AuthoredRectangleExportV1 {
+            node_id: NodeId::from_canonical(id(2)),
+            page_id: PageId::from_canonical(id(1)),
+            page_size: Size2D::new(LengthEmu::new(7_620_000), LengthEmu::new(9_906_000)),
+            bounds: RectEmu::new(
+                LengthEmu::new(1_270_000),
+                LengthEmu::new(2_540_000),
+                LengthEmu::new(2_540_000),
+                LengthEmu::new(1_270_000),
+            ),
+            fill: ExportSolidPaintV1 {
+                visible: true,
+                color: ExportSrgb8V1 { r: 0x12, g: 0x34, b: 0x56 },
+            },
+            stroke: ExportSolidStrokeV1 {
+                visible: true,
+                color: ExportSrgb8V1 { r: 0xAA, g: 0xBB, b: 0xCC },
+                width_emu: LengthEmu::new(12_700),
+            },
+        }
+    }
+
+    fn plan(item: &AuthoredRectangleExportV1) -> ExportPlan {
+        let mut features = BTreeMap::new();
+        for feature in [
+            AUTHORED_SHAPE_GEOMETRY_FEATURE,
+            AUTHORED_SHAPE_FILL_FEATURE,
+            AUTHORED_SHAPE_STROKE_FEATURE,
+        ] {
+            features.insert(feature.into(), CapabilityLevel::Preserved);
+        }
+        let manifest = TargetCapabilityManifest {
+            target: TargetProfile {
+                format: "odg".into(),
+                adapter_version: ODG_ADAPTER_VERSION_V0_1.into(),
+                profile: "bounded-editable".into(),
+                schema_fence: Some(ODG_SCHEMA_FENCE_ODF_1_4.into()),
+            },
+            features,
+        };
+        let request = |feature: &str, required| SemanticFeatureRequest {
+            feature: feature.into(),
+            origin: Some(item.node_id.into_canonical()),
+            property_path: None,
+            require_preserved: required,
+        };
+        plan_export(
+            &manifest,
+            vec![
+                request(AUTHORED_SHAPE_GEOMETRY_FEATURE, true),
+                request(AUTHORED_SHAPE_FILL_FEATURE, true),
+                request(AUTHORED_SHAPE_STROKE_FEATURE, true),
+                request(AUTHORED_SHAPE_Z_ORDER_FEATURE, false),
+            ],
+        )
+    }
+
+    fn package(item: &AuthoredRectangleExportV1, plan: &ExportPlan) -> OdgPackage {
+        let content = format!(
+            "<?xml version=\"1.0\"?><office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\">\n  <office:automatic-styles/>\n  <office:body><office:drawing><draw:page draw:name=\"{}\">\n      </draw:page></office:drawing></office:body></office:document-content>",
+            page_name(item.page_id)
+        );
+        OdgPackage {
+            target: plan.target.clone(),
+            conversion_fence: None,
+            parts: vec![OdgPart {
+                path: ODG_CONTENT_PATH.into(),
+                kind: OdgPartKind::Content,
+                media_type: "text/xml".into(),
+                content: content.into_bytes(),
+            }],
+        }
+    }
+
+    #[test]
+    fn writes_native_graphic_style_rectangle_and_no_fake_z_index() {
+        let item = rectangle();
+        let plan = plan(&item);
+        assert!(plan.losses.iter().any(|loss| {
+            loss.origin == Some(item.node_id.into_canonical())
+                && loss.feature == AUTHORED_SHAPE_Z_ORDER_FEATURE
+        }));
+        let mut package = package(&item, &plan);
+        add_authored_rectangles_to_odg(&plan, &mut package, std::slice::from_ref(&item))
+            .expect("authored rectangle");
+        let xml = std::str::from_utf8(&package.parts[0].content).unwrap();
+        assert!(xml.contains("style:family=\"graphic\""));
+        assert!(xml.contains("draw:fill=\"solid\" draw:fill-color=\"#123456\""));
+        assert!(xml.contains("draw:stroke=\"solid\" svg:stroke-color=\"#AABBCC\" svg:stroke-width=\"1pt\""));
+        assert!(xml.contains("<draw:rect draw:name=\"AuthoredRect_"));
+        assert!(xml.contains("svg:x=\"100pt\" svg:y=\"200pt\" svg:width=\"200pt\" svg:height=\"100pt\""));
+        assert!(!xml.contains("draw:z-index="));
+    }
+
+    #[test]
+    fn invisible_fill_and_stroke_remain_explicit_none() {
+        let mut item = rectangle();
+        item.fill.visible = false;
+        item.stroke.visible = false;
+        let plan = plan(&item);
+        let mut package = package(&item, &plan);
+        add_authored_rectangles_to_odg(&plan, &mut package, std::slice::from_ref(&item))
+            .expect("authored rectangle");
+        let xml = std::str::from_utf8(&package.parts[0].content).unwrap();
+        assert!(xml.contains("draw:fill=\"none\""));
+        assert!(xml.contains("draw:stroke=\"none\""));
+    }
+}
