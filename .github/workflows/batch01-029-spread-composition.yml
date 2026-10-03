@@ -54,6 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
           rm -rf "$RUNNER_TEMP/batch01-029-spread"
           mkdir -p "$RUNNER_TEMP/batch01-029-spread"
           python - <<'PY'
@@ -85,7 +86,6 @@ jobs:
 
       - name: Install exact visual runtime
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
           python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
           python -m py_compile tools/research_batch01_029_spread_composition_v1.py
           npm install --no-save playwright@1.55.0
