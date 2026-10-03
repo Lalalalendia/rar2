@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -10,12 +9,6 @@ from PIL import Image
 
 SCHEMA = "chaptera.batch01-033-identity-join.v1"
 THRESHOLDS = (12, 24, 48)
-
-
-def fingerprint_page_id(page_id: str) -> str:
-    if not isinstance(page_id, str) or not page_id:
-        raise ValueError("browser page_id must be non-empty")
-    return hashlib.sha256(page_id.encode("utf-8")).hexdigest()
 
 
 def foreground_counts(path: Path) -> dict[str, int]:
@@ -36,12 +29,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("browser_receipt", type=Path)
     ap.add_argument("page_role_receipt", type=Path)
+    ap.add_argument("viewer_projection_receipt", type=Path)
     ap.add_argument("fixture")
     ap.add_argument("output", type=Path)
     args = ap.parse_args()
 
     browser = json.loads(args.browser_receipt.read_text(encoding="utf-8"))
     roles = json.loads(args.page_role_receipt.read_text(encoding="utf-8"))
+    projection = json.loads(args.viewer_projection_receipt.read_text(encoding="utf-8"))
 
     matches = [row for row in browser.get("results", []) if row.get("fixture") == args.fixture]
     if len(matches) != 1:
@@ -93,13 +88,26 @@ def main() -> None:
     screenshots = sorted(fixture.get("screenshots", []), key=lambda row: row.get("page", -1))
     if len(geometry) != 12 or len(screenshots) != 12:
         raise ValueError("browser PAGE receipt cardinality drift")
+    if projection.get("schema") != "chaptera.viewer-page-fingerprint-receipt.v1":
+        raise ValueError("unsupported Viewer PAGE fingerprint receipt")
+    projection_rows = sorted(
+        projection.get("per_page", []),
+        key=lambda row: row.get("viewer_page_index", -1),
+    )
+    if int(projection.get("viewer_page_count", -1)) != 12 or len(projection_rows) != 12:
+        raise ValueError("Viewer PAGE fingerprint receipt cardinality drift")
 
     joined = []
     seen_ordinals = set()
-    for output_page, (geo, shot) in enumerate(zip(geometry, screenshots), start=1):
-        if shot.get("page") != output_page:
-            raise ValueError("screenshot order drift")
-        fingerprint = fingerprint_page_id(geo.get("page_id"))
+    for output_page, (geo, shot, projected) in enumerate(
+        zip(geometry, screenshots, projection_rows),
+        start=1,
+    ):
+        if shot.get("page") != output_page or projected.get("viewer_page_index") != output_page:
+            raise ValueError("Viewer/browser output order drift")
+        fingerprint = projected.get("page_identity_fingerprint_sha256")
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise ValueError("Viewer PAGE fingerprint missing")
         source = source_by_fingerprint.get(fingerprint)
         if source is None:
             raise ValueError("browser PAGE identity missing from source receipt")
