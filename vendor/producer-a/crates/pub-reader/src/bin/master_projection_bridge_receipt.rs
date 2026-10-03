@@ -27,8 +27,11 @@ fn main() -> Result<()> {
     source_hash_bytes.copy_from_slice(&digest);
     let source_hash = Sha256Digest::from_bytes(source_hash_bytes);
 
-    let source = build_mature_0x2c_source_graph(Cursor::new(bytes.as_slice()), source_hash)
-        .context("build active mature SourceGraph")?;
+    let source = build_mature_0x2c_source_graph(
+        Cursor::new(bytes.as_slice()),
+        source_hash.clone(),
+    )
+    .context("build active mature SourceGraph")?;
     let bridge = build_mature_0x2c_master_projection_bridge_v1(
         &bytes,
         source_hash,
@@ -49,10 +52,11 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
     relation_pairs.sort();
-    let relation_identity_digest = format!(
-        "sha256:{:x}",
-        Sha256::digest(relation_pairs.concat().as_bytes())
-    );
+    let relation_identity_digest = "sha256:".to_owned()
+        + &Sha256::digest(relation_pairs.concat().as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
 
     let receipt = json!({
         "schema": SCHEMA,
