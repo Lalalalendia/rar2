@@ -10,6 +10,7 @@ on:
       - "apps/chaptera-mobile-android/**"
       - "apps/chaptera-rescue/**"
       - "apps/chaptera-server/**"
+      - "apps/cloud-reader/**"
       - "apps/web/**"
       - "crates/chaptera-mobile-reader-core/**"
       - "crates/chaptera-mobile-reader-jni/**"
@@ -60,6 +61,15 @@ on:
       - "tools/run_local_editor_desktop_vertical.py"
       - "tools/validate_chaptera_desktop_suite_manifest.py"
       - "tools/acquire_carlton_march_pair.py"
+      - "tools/acquire_virginia_pub_pdf_pairs.py"
+      - "tools/cloud_reader_reference_pdf_raster_v1.py"
+      - "tools/cloud_reader_manual_oracle_bundle_v1.py"
+      - "tools/test_cloud_reader_manual_oracle_bundle_v1.py"
+      - "tools/cloud_reader_visual_fingerprint_v1.py"
+      - "tools/census_embedded_eot.py"
+      - "tools/validate_virginia_page_roles.py"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
       - "tools/pdf_reference_diff_v1.py"
       - "tools/reader_reference_pdf_raster_v1.py"
       - "tools/run_web_editor_real_acceptance.mjs"
@@ -82,6 +92,9 @@ on:
       - ".github/workflows/chaptera-desktop-windows.yml"
       - ".github/workflows/chaptera-local-portable-windows.yml"
       - ".github/workflows/carlton-reader-visual-oracle.yml"
+      - ".github/workflows/cloud-reader-reference-pairs.yml"
+      - ".github/workflows/viewer-page-role-virginia.yml"
+      - ".github/workflows/publisher-visual-golden-batch01.yml"
       - ".github/workflows/mobile-reader-android-core-portability.yml"
       - ".github/workflows/mobile-reader-android-local-open.yml"
       - ".github/workflows/mobile-reader-android-render.yml"
@@ -99,6 +112,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   classify:
@@ -110,6 +124,9 @@ jobs:
       reader_windows: ${{ steps.scope.outputs.reader_windows }}
       editor_windows: ${{ steps.scope.outputs.editor_windows }}
       visual_oracle: ${{ steps.scope.outputs.visual_oracle }}
+      cloud_reference: ${{ steps.scope.outputs.cloud_reference }}
+      virginia_page_role: ${{ steps.scope.outputs.virginia_page_role }}
+      visual_batch01: ${{ steps.scope.outputs.visual_batch01 }}
       typography_golden: ${{ steps.scope.outputs.typography_golden }}
       android_core: ${{ steps.scope.outputs.android_core }}
       android: ${{ steps.scope.outputs.android }}
@@ -259,6 +276,24 @@ jobs:
     with:
       run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
       run_windows_shared_core_smoke: ${{ needs.classify.outputs.reader_windows_smoke == 'true' }}
+
+  cloud-reference:
+    name: Cloud exact PUB-PDF reference
+    needs: [classify, tier-a]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.cloud_reference == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/cloud-reader-reference-pairs.yml
+
+  virginia-page-role:
+    name: Virginia page-role acceptance
+    needs: [classify, tier-a, cloud-reference]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.virginia_page_role == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/viewer-page-role-virginia.yml
+
+  publisher-visual-batch01:
+    name: Publisher visual golden Batch 01
+    needs: [classify, tier-a, cloud-reference, virginia-page-role]
+    if: ${{ !cancelled() && always() && needs.classify.outputs.visual_batch01 == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    uses: ./.github/workflows/publisher-visual-golden-batch01.yml
 
   typography-golden:
     name: Reader typography golden
