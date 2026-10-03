@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(&input)?;
     let hash = source_hash(&bytes);
 
-    let session = match open_mature_0x2c_editor(&bytes, hash) {
+    let mut session = match open_mature_0x2c_editor(&bytes, hash) {
         Ok(session) => session,
         Err(_) => {
             println!(
@@ -40,9 +40,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let items = session
-        .full_story_typography_v1()
-        .into_iter()
+    let typography = session.full_story_typography_v1();
+    let items = typography
+        .iter()
         .map(|item| {
             json!({
                 "story_id": item.story_id.as_canonical().to_string(),
@@ -53,6 +53,55 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect::<Vec<Value>>();
 
+    let mut same_length_edit_invalidation_proven = None;
+    if let Some(item) = typography.first() {
+        let story_id = item.story_id;
+        let before = session
+            .graph()
+            .stories
+            .get(&story_id)
+            .ok_or("eligible typography Story disappeared")?
+            .text
+            .clone();
+        let replacement = before
+            .chars()
+            .map(|character| {
+                if character.len_utf16() == 2 {
+                    if character == '😀' { '😃' } else { '😀' }
+                } else if character == 'x' {
+                    'y'
+                } else {
+                    'x'
+                }
+            })
+            .collect::<String>();
+        if replacement == before
+            || replacement.chars().count() != before.chars().count()
+            || replacement.encode_utf16().count() != before.encode_utf16().count()
+        {
+            return Err("could not construct same-length typography invalidation edit".into());
+        }
+
+        session.replace_story_text(story_id, replacement)?;
+        if session
+            .full_story_typography_v1()
+            .iter()
+            .any(|candidate| candidate.story_id == story_id)
+        {
+            return Err("source typography survived a same-length Story edit".into());
+        }
+
+        session.undo()?;
+        if !session
+            .full_story_typography_v1()
+            .iter()
+            .any(|candidate| candidate == item)
+        {
+            return Err("source typography did not return after exact Story undo".into());
+        }
+        same_length_edit_invalidation_proven = Some(true);
+    }
+
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
@@ -61,6 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "source_bytes": bytes.len(),
             "open_state": "admitted",
             "eligible_count": items.len(),
+            "same_length_edit_invalidation_proven": same_length_edit_invalidation_proven,
             "items": items,
         }))?
     );
