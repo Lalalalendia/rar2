@@ -300,6 +300,120 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     })
 }
 
+pub const MATURE_DETACHED_POST_SPECIAL_TAIL_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/detached-post-special-tail/v1";
+
+/// Admits the mature detached post-special topology isolated by #977.
+///
+/// The selected customer set is source-semantic: one nonzero no-master leader,
+/// a contiguous nonzero block applying that leader, the final nonzero PAGE as
+/// terminal service, one interleaved special entry, then two zero-OID PAGEs
+/// whose applied-master relation is absent. Structural drift returns `None`.
+pub fn select_mature_detached_post_special_tail_customer_page_seq_nums_v1(
+    mut input: StandardPrintServiceTailProfileInputV1,
+) -> Option<StandardPrintServiceTailSelectionV1> {
+    if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
+        || input.confirmed_page_count != input.pages.len()
+        || input.special_entry_count != 1
+        || input.document_page_list_entry_count
+            != input.confirmed_page_count.checked_add(1)?
+    {
+        return None;
+    }
+
+    input.pages.sort_by_key(|page| page.document_ordinal);
+    let mut ordinals = BTreeSet::new();
+    let mut seq_nums = BTreeSet::new();
+    for page in &input.pages {
+        if page.document_ordinal >= input.document_page_list_entry_count
+            || !ordinals.insert(page.document_ordinal)
+            || !seq_nums.insert(page.contents_seq_num)
+        {
+            return None;
+        }
+    }
+
+    let oid_is_zero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        page.oid_dword0 == Some(0) && page.oid_dword1 == Some(0)
+    };
+    let oid_is_nonzero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        matches!(
+            (page.oid_dword0, page.oid_dword1),
+            (Some(d0), Some(d1)) if d0 != 0 || d1 != 0
+        )
+    };
+
+    let leader = input.pages.first()?;
+    if leader.document_ordinal != 0
+        || !oid_is_nonzero(leader)
+        || leader.applied_master_seq_num.is_some()
+    {
+        return None;
+    }
+    let leader_seq = leader.contents_seq_num;
+
+    let mut nonzero_end = 1usize;
+    while let Some(page) = input.pages.get(nonzero_end) {
+        if !oid_is_nonzero(page) {
+            break;
+        }
+        if page.document_ordinal != nonzero_end
+            || page.applied_master_seq_num != Some(leader_seq)
+        {
+            return None;
+        }
+        nonzero_end = nonzero_end.checked_add(1)?;
+    }
+
+    if nonzero_end < 3 {
+        return None;
+    }
+    let customer_pages = input.pages.get(1..nonzero_end.checked_sub(1)?)?;
+    let terminal_service = input.pages.get(nonzero_end.checked_sub(1)?)?;
+    let tail_pages = input.pages.get(nonzero_end..)?;
+    if customer_pages.is_empty()
+        || tail_pages.len() != 2
+        || !tail_pages
+            .iter()
+            .all(|page| oid_is_zero(page) && page.applied_master_seq_num.is_none())
+    {
+        return None;
+    }
+
+    let last_customer_ordinal = customer_pages.last()?.document_ordinal;
+    if input
+        .document_page_list_entry_count
+        .checked_sub(last_customer_ordinal.checked_add(1)?)?
+        != 4
+        || terminal_service.document_ordinal != last_customer_ordinal.checked_add(1)?
+        || tail_pages
+            .iter()
+            .map(|page| page.document_ordinal)
+            .collect::<Vec<_>>()
+            != vec![
+                last_customer_ordinal.checked_add(3)?,
+                last_customer_ordinal.checked_add(4)?,
+            ]
+    {
+        return None;
+    }
+
+    let mut service_page_seq_nums = Vec::with_capacity(3);
+    service_page_seq_nums.push(terminal_service.contents_seq_num);
+    service_page_seq_nums.extend(tail_pages.iter().map(|page| page.contents_seq_num));
+
+    Some(StandardPrintServiceTailSelectionV1 {
+        profile_id: MATURE_DETACHED_POST_SPECIAL_TAIL_PROFILE_ID_V1.to_owned(),
+        raw_page_count: input.pages.len(),
+        customer_page_seq_nums: customer_pages
+            .iter()
+            .map(|page| page.contents_seq_num)
+            .collect(),
+        master_page_seq_num: leader_seq,
+        service_page_seq_nums,
+    })
+}
+
 pub const MATURE_TERMINAL_SERVICE_TAIL_PROFILE_ID_V1: &str =
     "publisher-mature-0x2c/terminal-nonzero-service-tail/v1";
 
