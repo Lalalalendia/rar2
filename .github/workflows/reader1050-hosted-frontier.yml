@@ -6,7 +6,7 @@ on:
       - ".github/workflows/reader1050-hosted-frontier.yml"
       - "tools/research-runner/reader1050_frontier.py"
       - "tools/research-runner/reader1050_offline_discriminator.py"
-      - "tools/research-runner/reader1050-evidence-registry.json"
+      - "vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json"
       - "tools/research-runner/reader1050-research-ledger.json"
       - "tools/research-runner/tests/test_reader1050_frontier.py"
       - "tools/research-runner/tests/test_reader1050_offline_discriminator.py"
@@ -113,7 +113,7 @@ jobs:
             --out out/reader1050-frontier \
             --source-run-id "$READER_RUN_ID" \
             --source-sha "$READER_SOURCE_SHA" \
-            --evidence-registry tools/research-runner/reader1050-evidence-registry.json \
+            --evidence-registry vendor/producer-a/crates/pub-reader/data/reader-evidence-registry.json \
             --research-ledger tools/research-runner/reader1050-research-ledger.json
 
           cat out/reader1050-frontier/frontier.md >> "$GITHUB_STEP_SUMMARY"
