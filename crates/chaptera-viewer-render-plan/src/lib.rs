@@ -24,8 +24,8 @@ use pub_model::{
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
 use pub_viewer::{
-    ViewerGeometryDocument, ViewerParagraphAlignment, ViewerScriptFontEntryDisposition,
-    ViewerStoryFrame, ViewerTextVerticalAlignment,
+    ViewerDecorativeBorderSlotV1, ViewerGeometryDocument, ViewerParagraphAlignment,
+    ViewerScriptFontEntryDisposition, ViewerStoryFrame, ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -60,6 +60,8 @@ pub struct NodeRenderPlanV1 {
     pub solid_fill_rgb: Option<[u8; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_line: Option<RenderSolidLineV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decorative_border: Option<RenderDecorativeBorderV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<RenderImageRefV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,6 +131,307 @@ fn render_table_span_is_one(value: &u32) -> bool {
 pub struct RenderSolidLineV1 {
     pub rgb: [u8; 3],
     pub width_emu: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderDecorativeBorderSlotV1 {
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDecorativeBorderSlotRefV1 {
+    pub slot: RenderDecorativeBorderSlotV1,
+    pub resource_id: ResourceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDecorativeBorderV1 {
+    pub name: String,
+    pub corner_extent_emu: u32,
+    pub horizontal_extent_emu: u32,
+    pub vertical_extent_emu: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stretch_pictures: Option<bool>,
+    pub slots: Vec<RenderDecorativeBorderSlotRefV1>,
+}
+
+fn render_decorative_border_slot_v1(
+    slot: ViewerDecorativeBorderSlotV1,
+) -> RenderDecorativeBorderSlotV1 {
+    match slot {
+        ViewerDecorativeBorderSlotV1::TopLeft => RenderDecorativeBorderSlotV1::TopLeft,
+        ViewerDecorativeBorderSlotV1::Top => RenderDecorativeBorderSlotV1::Top,
+        ViewerDecorativeBorderSlotV1::TopRight => RenderDecorativeBorderSlotV1::TopRight,
+        ViewerDecorativeBorderSlotV1::Right => RenderDecorativeBorderSlotV1::Right,
+        ViewerDecorativeBorderSlotV1::BottomRight => RenderDecorativeBorderSlotV1::BottomRight,
+        ViewerDecorativeBorderSlotV1::Bottom => RenderDecorativeBorderSlotV1::Bottom,
+        ViewerDecorativeBorderSlotV1::BottomLeft => RenderDecorativeBorderSlotV1::BottomLeft,
+        ViewerDecorativeBorderSlotV1::Left => RenderDecorativeBorderSlotV1::Left,
+    }
+}
+
+fn render_decorative_border_v1(
+    visual: &ViewerGeometryDocument,
+    node_id: NodeId,
+) -> Option<RenderDecorativeBorderV1> {
+    let border = visual
+        .decorative_borders
+        .iter()
+        .find(|border| border.node_id == node_id)?;
+    (border.slots.len() == 8).then(|| RenderDecorativeBorderV1 {
+        name: border.name.clone(),
+        corner_extent_emu: border.corner_extent_emu,
+        horizontal_extent_emu: border.horizontal_extent_emu,
+        vertical_extent_emu: border.vertical_extent_emu,
+        stretch_pictures: border.stretch_pictures,
+        slots: border
+            .slots
+            .iter()
+            .map(|slot| RenderDecorativeBorderSlotRefV1 {
+                slot: render_decorative_border_slot_v1(slot.slot),
+                resource_id: slot.resource_id,
+            })
+            .collect(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDecorativeBorderPlacementV1 {
+    pub slot: RenderDecorativeBorderSlotV1,
+    pub resource_id: ResourceId,
+    pub bounds: RectEmu,
+}
+
+fn decorative_border_slot_rank_v1(slot: RenderDecorativeBorderSlotV1) -> u8 {
+    match slot {
+        RenderDecorativeBorderSlotV1::TopLeft => 0,
+        RenderDecorativeBorderSlotV1::Top => 1,
+        RenderDecorativeBorderSlotV1::TopRight => 2,
+        RenderDecorativeBorderSlotV1::Right => 3,
+        RenderDecorativeBorderSlotV1::BottomRight => 4,
+        RenderDecorativeBorderSlotV1::Bottom => 5,
+        RenderDecorativeBorderSlotV1::BottomLeft => 6,
+        RenderDecorativeBorderSlotV1::Left => 7,
+    }
+}
+
+fn decorative_border_resource_v1(
+    border: &RenderDecorativeBorderV1,
+    slot: RenderDecorativeBorderSlotV1,
+) -> Option<ResourceId> {
+    let mut matches = border.slots.iter().filter(|entry| entry.slot == slot);
+    let resource_id = matches.next()?.resource_id;
+    matches.next().is_none().then_some(resource_id)
+}
+
+fn rect_emu_v1(x: i64, y: i64, width: i64, height: i64) -> Option<RectEmu> {
+    (width > 0 && height > 0).then(|| {
+        RectEmu::new(
+            LengthEmu::new(x),
+            LengthEmu::new(y),
+            LengthEmu::new(width),
+            LengthEmu::new(height),
+        )
+    })
+}
+
+fn rounded_positive_tile_count_v1(interior: i64, border_width: i64) -> Option<i64> {
+    if interior <= 0 || border_width <= 0 {
+        return None;
+    }
+    Some(((interior + border_width / 2) / border_width).max(1))
+}
+
+/// Resolves only the source-neutral destination rectangles for one decorative border.
+///
+/// This deliberately consumes the already-admitted border width only as placement
+/// geometry. It does not turn BorderArt into an ordinary stroke and does not infer
+/// any authoring semantics. stretch_pictures must come from the bounded Reader
+/// marker projection; callers must fail closed when that state is unknown.
+pub fn layout_decorative_border_v1(
+    border: &RenderDecorativeBorderV1,
+    bounds: RectEmu,
+    border_width_emu: i64,
+    stretch_pictures: bool,
+) -> Option<Vec<RenderDecorativeBorderPlacementV1>> {
+    let width = bounds.width.get();
+    let height = bounds.height.get();
+    let x = bounds.x.get();
+    let y = bounds.y.get();
+    let b = border_width_emu;
+
+    if b <= 0 || width < 2 * b || height < 2 * b {
+        return None;
+    }
+
+    let ordered_slots = [
+        RenderDecorativeBorderSlotV1::TopLeft,
+        RenderDecorativeBorderSlotV1::Top,
+        RenderDecorativeBorderSlotV1::TopRight,
+        RenderDecorativeBorderSlotV1::Right,
+        RenderDecorativeBorderSlotV1::BottomRight,
+        RenderDecorativeBorderSlotV1::Bottom,
+        RenderDecorativeBorderSlotV1::BottomLeft,
+        RenderDecorativeBorderSlotV1::Left,
+    ];
+    let resources = ordered_slots
+        .iter()
+        .copied()
+        .map(|slot| decorative_border_resource_v1(border, slot).map(|resource| (slot, resource)))
+        .collect::<Option<Vec<_>>>()?;
+    if border.slots.len() != ordered_slots.len() {
+        return None;
+    }
+    let resource = |slot| {
+        resources
+            .iter()
+            .find(|(candidate, _)| *candidate == slot)
+            .map(|(_, resource_id)| *resource_id)
+    };
+
+    let mut placements = Vec::new();
+    let mut push = |slot, px, py, pw, ph| -> Option<()> {
+        placements.push(RenderDecorativeBorderPlacementV1 {
+            slot,
+            resource_id: resource(slot)?,
+            bounds: rect_emu_v1(px, py, pw, ph)?,
+        });
+        Some(())
+    };
+
+    push(RenderDecorativeBorderSlotV1::TopLeft, x, y, b, b)?;
+    push(
+        RenderDecorativeBorderSlotV1::TopRight,
+        x + width - b,
+        y,
+        b,
+        b,
+    )?;
+    push(
+        RenderDecorativeBorderSlotV1::BottomRight,
+        x + width - b,
+        y + height - b,
+        b,
+        b,
+    )?;
+    push(
+        RenderDecorativeBorderSlotV1::BottomLeft,
+        x,
+        y + height - b,
+        b,
+        b,
+    )?;
+
+    let horizontal_interior = width - 2 * b;
+    let vertical_interior = height - 2 * b;
+
+    if stretch_pictures {
+        if horizontal_interior > 0 {
+            let count = rounded_positive_tile_count_v1(horizontal_interior, b)?;
+            for index in 0..count {
+                let start = b + index * horizontal_interior / count;
+                let end = b + (index + 1) * horizontal_interior / count;
+                let tile_width = end - start;
+                push(
+                    RenderDecorativeBorderSlotV1::Top,
+                    x + start,
+                    y,
+                    tile_width,
+                    b,
+                )?;
+                push(
+                    RenderDecorativeBorderSlotV1::Bottom,
+                    x + width - end,
+                    y + height - b,
+                    tile_width,
+                    b,
+                )?;
+            }
+        }
+        if vertical_interior > 0 {
+            let count = rounded_positive_tile_count_v1(vertical_interior, b)?;
+            for index in 0..count {
+                let start = b + index * vertical_interior / count;
+                let end = b + (index + 1) * vertical_interior / count;
+                let tile_height = end - start;
+                push(
+                    RenderDecorativeBorderSlotV1::Right,
+                    x + width - b,
+                    y + start,
+                    b,
+                    tile_height,
+                )?;
+                push(
+                    RenderDecorativeBorderSlotV1::Left,
+                    x,
+                    y + height - end,
+                    b,
+                    tile_height,
+                )?;
+            }
+        }
+    } else {
+        let horizontal_count = width / b;
+        let vertical_count = height / b;
+        if horizontal_count < 2 || vertical_count < 2 {
+            return None;
+        }
+
+        if horizontal_count > 2 {
+            let residual = width - horizontal_count * b;
+            let gaps = horizontal_count - 1;
+            for index in 1..horizontal_count - 1 {
+                let offset = index * b + (index * residual + gaps / 2) / gaps;
+                push(
+                    RenderDecorativeBorderSlotV1::Top,
+                    x + offset,
+                    y,
+                    b,
+                    b,
+                )?;
+                push(
+                    RenderDecorativeBorderSlotV1::Bottom,
+                    x + width - b - offset,
+                    y + height - b,
+                    b,
+                    b,
+                )?;
+            }
+        }
+
+        if vertical_count > 2 {
+            let residual = height - vertical_count * b;
+            let gaps = vertical_count - 1;
+            for index in 1..vertical_count - 1 {
+                let offset = index * b + (index * residual + gaps / 2) / gaps;
+                push(
+                    RenderDecorativeBorderSlotV1::Right,
+                    x + width - b,
+                    y + offset,
+                    b,
+                    b,
+                )?;
+                push(
+                    RenderDecorativeBorderSlotV1::Left,
+                    x,
+                    y + height - b - offset,
+                    b,
+                    b,
+                )?;
+            }
+        }
+    }
+
+    placements.sort_by_key(|placement| decorative_border_slot_rank_v1(placement.slot));
+    Some(placements)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -792,6 +1095,7 @@ pub fn apply_authored_page_render_lane_v1(
             transform: Affine2D::identity(),
             solid_fill_rgb: authored.solid_fill_rgb,
             solid_line: authored.solid_line.clone(),
+            decorative_border: None,
             image: None,
             text: None,
             table: None,
@@ -971,6 +1275,7 @@ pub fn build_page_render_plan_v1(
                         rgb: line.rgb,
                         width_emu: line.width_emu,
                     }),
+                decorative_border: render_decorative_border_v1(visual, node.origin),
                 image,
                 text,
                 table,
@@ -1028,6 +1333,7 @@ pub fn build_page_render_plan_v1(
                     rgb: line.rgb,
                     width_emu: line.width_emu,
                 }),
+            decorative_border: render_decorative_border_v1(visual, origin_node_id),
             image,
             text: projected_text(visual, projected)?,
             table: None,
@@ -2321,6 +2627,150 @@ mod tests {
         CanonicalId::from_bytes([byte; 16])
     }
 
+    fn decorative_border_fixture() -> RenderDecorativeBorderV1 {
+        let slots = [
+            RenderDecorativeBorderSlotV1::TopLeft,
+            RenderDecorativeBorderSlotV1::Top,
+            RenderDecorativeBorderSlotV1::TopRight,
+            RenderDecorativeBorderSlotV1::Right,
+            RenderDecorativeBorderSlotV1::BottomRight,
+            RenderDecorativeBorderSlotV1::Bottom,
+            RenderDecorativeBorderSlotV1::BottomLeft,
+            RenderDecorativeBorderSlotV1::Left,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, slot)| RenderDecorativeBorderSlotRefV1 {
+            slot,
+            resource_id: ResourceId::from_canonical(canonical(
+                u8::try_from(index + 20).expect("fixture id"),
+            )),
+        })
+        .collect();
+
+        RenderDecorativeBorderV1 {
+            name: "fixture-border".to_owned(),
+            corner_extent_emu: 20,
+            horizontal_extent_emu: 20,
+            vertical_extent_emu: 20,
+            stretch_pictures: Some(true),
+            slots,
+        }
+    }
+
+    #[test]
+    fn decorative_border_stretch_partitions_edge_interiors_exactly() {
+        let border = decorative_border_fixture();
+        let bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(100),
+            LengthEmu::new(80),
+        );
+        let placements =
+            layout_decorative_border_v1(&border, bounds, 20, true).expect("stretch layout");
+
+        let slots = placements.iter().map(|row| row.slot).collect::<Vec<_>>();
+        assert_eq!(slots[0], RenderDecorativeBorderSlotV1::TopLeft);
+        assert_eq!(slots[1], RenderDecorativeBorderSlotV1::Top);
+        assert_eq!(slots[4], RenderDecorativeBorderSlotV1::TopRight);
+        assert_eq!(slots[5], RenderDecorativeBorderSlotV1::Right);
+        assert_eq!(slots[7], RenderDecorativeBorderSlotV1::BottomRight);
+        assert_eq!(slots[8], RenderDecorativeBorderSlotV1::Bottom);
+        assert_eq!(slots[11], RenderDecorativeBorderSlotV1::BottomLeft);
+        assert_eq!(slots[12], RenderDecorativeBorderSlotV1::Left);
+
+        let top = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Top)
+            .collect::<Vec<_>>();
+        assert_eq!(top.len(), 3);
+        assert_eq!(top.first().expect("first top").bounds.x.get(), 30);
+        let top_end = top
+            .last()
+            .expect("last top")
+            .bounds
+            .x
+            .get()
+            + top.last().expect("last top").bounds.width.get();
+        assert_eq!(top_end, 90);
+
+        let right = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Right)
+            .collect::<Vec<_>>();
+        assert_eq!(right.len(), 2);
+        assert_eq!(right.first().expect("first right").bounds.y.get(), 40);
+        let right_end = right
+            .last()
+            .expect("last right")
+            .bounds
+            .y
+            .get()
+            + right.last().expect("last right").bounds.height.get();
+        assert_eq!(right_end, 80);
+    }
+
+    #[test]
+    fn decorative_border_repeat_distributes_residual_space_deterministically() {
+        let border = decorative_border_fixture();
+        let bounds = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(105),
+            LengthEmu::new(85),
+        );
+        let placements =
+            layout_decorative_border_v1(&border, bounds, 20, false).expect("repeat layout");
+
+        let top = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Top)
+            .collect::<Vec<_>>();
+        assert_eq!(top.len(), 3);
+        assert_eq!(
+            top.iter().map(|row| row.bounds.x.get()).collect::<Vec<_>>(),
+            vec![21, 43, 64]
+        );
+        assert!(
+            top.iter()
+                .all(|row| row.bounds.width.get() == 20 && row.bounds.height.get() == 20)
+        );
+
+        let left = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Left)
+            .collect::<Vec<_>>();
+        assert_eq!(left.len(), 2);
+        assert!(
+            left[0].bounds.y.get() > left[1].bounds.y.get(),
+            "left edge must preserve bottom-to-top traversal"
+        );
+    }
+
+    #[test]
+    fn decorative_border_layout_fails_closed_for_degenerate_or_ambiguous_input() {
+        let border = decorative_border_fixture();
+        let small = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(30),
+            LengthEmu::new(40),
+        );
+        assert!(layout_decorative_border_v1(&border, small, 20, true).is_none());
+        assert!(layout_decorative_border_v1(&border, small, 0, true).is_none());
+
+        let mut ambiguous = border.clone();
+        ambiguous.slots.push(ambiguous.slots[0].clone());
+        let regular = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(100),
+            LengthEmu::new(100),
+        );
+        assert!(layout_decorative_border_v1(&ambiguous, regular, 20, true).is_none());
+    }
+
     fn fixture() -> ViewerGeometryDocument {
         let page_id = PageId::from_canonical(canonical(1));
         let node_id = NodeId::from_canonical(canonical(2));
@@ -2428,6 +2878,8 @@ mod tests {
                 }],
                 bytes: vec![0x89, b'P', b'N', b'G'],
             }],
+            decorative_borders: Vec::new(),
+            decorative_border_resources: Vec::new(),
         }
     }
 

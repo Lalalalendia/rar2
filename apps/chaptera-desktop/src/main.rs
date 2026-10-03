@@ -32,9 +32,9 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     AuthoredPageRenderLaneV1, AuthoredPageRenderNodeV1, ExplicitRenderTextFontResourceV1,
-    PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1, apply_authored_page_render_lane_v1,
-    build_page_render_plan_with_text_layout_resolver_v1,
-    build_page_render_plan_with_text_layout_v1,
+    NodeRenderPlanV1, PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1,
+    apply_authored_page_render_lane_v1, build_page_render_plan_with_text_layout_resolver_v1,
+    build_page_render_plan_with_text_layout_v1, layout_decorative_border_v1,
 };
 use eframe::egui;
 use pub_interaction::{
@@ -126,6 +126,50 @@ fn build_desktop_page_render_plan_with_source_fonts(
     build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
         source_fonts.resource_for_fragment(fragment)
     })
+}
+
+fn paint_document_node_decorative_border(
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    node: &NodeRenderPlanV1,
+    image_textures: &BTreeMap<String, CachedImageTexture>,
+) {
+    let (Some(border), Some(line)) = (node.decorative_border.as_ref(), node.solid_line.as_ref())
+    else {
+        return;
+    };
+    let Some(stretch_pictures) = border.stretch_pictures else {
+        return;
+    };
+    let Some(placements) =
+        layout_decorative_border_v1(border, node.bounds, line.width_emu, stretch_pictures)
+    else {
+        return;
+    };
+
+    for placement in placements {
+        let key = format!("{:?}", placement.resource_id);
+        let Some(texture) = image_textures.get(&key) else {
+            continue;
+        };
+        let Some(rect) = render_backend::physical_rect_to_egui(
+            page_rect,
+            scene_scale,
+            placement.bounds.x.get(),
+            placement.bounds.y.get(),
+            placement.bounds.width.get(),
+            placement.bounds.height.get(),
+        ) else {
+            continue;
+        };
+        painter.image(
+            texture.texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
 }
 
 fn editor_authored_page_render_lane(
@@ -4772,6 +4816,43 @@ impl ViewerApp {
             }
         }
 
+        for resource in &visual.decorative_border_resources {
+            let key = format!("{:?}", resource.resource_id);
+            if self.image_textures.contains_key(&key)
+                || self.image_decode_diagnostics.contains_key(&key)
+            {
+                continue;
+            }
+
+            let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+            match image_decode_adapter::decode_texture_image_v1(
+                &resource.bytes,
+                &resource.mime,
+                &expected_sha256,
+            ) {
+                Ok(admitted) => {
+                    let texture = ctx.load_texture(
+                        format!("pub-borderart-{key}"),
+                        admitted.color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.image_textures.insert(
+                        key,
+                        CachedImageTexture {
+                            texture,
+                            _cache_identity_sha256: admitted.cache_identity_sha256,
+                        },
+                    );
+                }
+                Err(error) => {
+                    self.image_decode_diagnostics.insert(
+                        key.clone(),
+                        image_decode_adapter::diagnostic_for(key, resource.mime.clone(), &error),
+                    );
+                }
+            }
+        }
+
         if let Some(editor) = &self.editor {
             for asset in editor.replacement_assets() {
                 let key = format!("replacement:{:?}", asset.sha256);
@@ -5458,6 +5539,13 @@ impl ViewerApp {
                         replacement_texture
                             .or(source_texture)
                             .map(|cached| cached.texture.id()),
+                    );
+                    paint_document_node_decorative_border(
+                        &painter,
+                        page_rect,
+                        scene_scale,
+                        render_node,
+                        &self.image_textures,
                     );
 
                     painter.rect_stroke(
@@ -10024,6 +10112,42 @@ mod tests {
                     },
                 );
             }
+
+            for resource in &self.visual.decorative_border_resources {
+                let key = format!("{:?}", resource.resource_id);
+                if self.image_textures.contains_key(&key) {
+                    continue;
+                }
+                let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+                let admitted = image_decode_adapter::decode_texture_image_v1(
+                    &resource.bytes,
+                    &resource.mime,
+                    &expected_sha256,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "clean golden BorderArt decode failed for {} / {}: {error}",
+                        key, resource.mime
+                    )
+                });
+                let [width, height] = admitted.color_image.size;
+                assert!(
+                    width <= max_texture_side && height <= max_texture_side,
+                    "BorderArt golden image {width}x{height} exceeds active egui texture limit {max_texture_side}"
+                );
+                let texture = ctx.load_texture(
+                    format!("borderart-golden-{key}"),
+                    admitted.color_image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.image_textures.insert(
+                    key,
+                    CachedImageTexture {
+                        texture,
+                        _cache_identity_sha256: admitted.cache_identity_sha256,
+                    },
+                );
+            }
         }
     }
 
@@ -10068,6 +10192,13 @@ mod tests {
                             node,
                             node_rect,
                             texture.map(|cached| cached.texture.id()),
+                        );
+                        paint_document_node_decorative_border(
+                            &painter,
+                            page_rect,
+                            scene_scale,
+                            node,
+                            &self.image_textures,
                         );
                         let outcome = render_backend::paint_document_node_foreground(
                             &painter,
