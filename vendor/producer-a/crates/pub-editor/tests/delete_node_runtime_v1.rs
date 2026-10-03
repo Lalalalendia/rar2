@@ -387,9 +387,7 @@ fn forked_project_preserves_delete_node_under_v0_12() {
 fn delete_node_remains_an_explicit_native_pub_persistence_requirement() {
     let mut session = EditorSession::new(graph()).expect("session");
     create_authored_rectangle(&mut session);
-    session
-        .delete_node(authored_node_id())
-        .expect("DeleteNode");
+    session.delete_node(authored_node_id()).expect("DeleteNode");
 
     let requirements = session
         .effective_pub_persistence_requirements()
