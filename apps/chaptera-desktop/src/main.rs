@@ -6437,9 +6437,10 @@ mod tests {
     #[test]
     fn source_pub_is_not_a_write_target_by_construction() {
         let source = include_str!("main.rs");
-        let production_source = source
-            .split_once("#[cfg(test)]")
-            .map_or(source, |(production, _)| production);
+        let normalized_source = source.replace("\r\n", "\n");
+        let production_source = normalized_source
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .map_or(normalized_source.as_str(), |(production, _)| production);
 
         assert!(production_source.contains("fs::read(&path)"));
         assert!(production_source.contains("fs::write(&sidecar"));

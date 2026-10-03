@@ -1573,6 +1573,8 @@ fn reuse_mixed_line_candidate_v1(
             x_offset_emu: measured_width_emu,
             measured_width_emu: span_width_emu,
             font_size_emu: run.font_size_emu,
+            font_resource_id: None,
+            font_fingerprint_sha256: None,
         });
         measured_width_emu = measured_width_emu
             .checked_add(span_width_emu)
