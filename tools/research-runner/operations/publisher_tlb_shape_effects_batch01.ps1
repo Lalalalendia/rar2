@@ -648,6 +648,7 @@ function Invoke-BlastRadius {
     $slug = ([string]$Spec.id -replace '[^A-Za-z0-9]+','-').Trim('-').ToLowerInvariant()
     $evidencePath = Join-Path $privateDir "$slug/$Mode-blast-evidence.json"
     $receiptPath = Join-Path $blastDir "$slug-$Mode.json"
+    Write-Progress -CandidateId ([string]$Spec.id) -ArmName $Mode -Step "blast-start"
     New-BlastEvidence -Spec $Spec -Mode $Mode -Path $evidencePath
 
     $controlPub = Join-Path $privateDir "$slug/control/output.pub"
@@ -667,6 +668,7 @@ function Invoke-BlastRadius {
     }
 
     $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    Write-Progress -CandidateId ([string]$Spec.id) -ArmName $Mode -Step "blast-done"
     return [ordered]@{
         receipt_path = ("analysis/blast-radius/{0}-{1}.json" -f $slug,$Mode)
         changed_stream_count = @($receipt.cfb.control_mutation_stream_delta).Count
@@ -751,20 +753,32 @@ function Classify-Candidate {
 }
 
 $baselinePath = Join-Path $privateDir "baseline.pub"
+Write-Progress -Step "baseline-create-start"
 New-BaselinePublication -Path $baselinePath
+Write-Progress -Step "baseline-create-done"
 $baselineHash = (Get-FileHash -LiteralPath $baselinePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $baselineApp = $null
 $baselineDoc = $null
 $baselineSnapshot = $null
 try {
+    Write-Progress -Step "baseline-reopen-publisher-create-start"
     $baselineApp = New-PubPublisherApplication
+    Write-Progress -Step "baseline-reopen-publisher-create-done"
+    Write-Progress -Step "baseline-reopen-document-start"
     $baselineDoc = $baselineApp.Open($baselinePath, $true, $false)
+    Write-Progress -Step "baseline-reopen-document-done"
+    Write-Progress -Step "baseline-snapshot-start"
     $baselineSnapshot = Get-ShapeEffectsSnapshot -Document $baselineDoc
+    Write-Progress -Step "baseline-snapshot-done"
 }
 finally {
+    Write-Progress -Step "baseline-reopen-document-close-start"
     Close-Document $baselineDoc
+    Write-Progress -Step "baseline-reopen-document-close-done"
+    Write-Progress -Step "baseline-reopen-publisher-close-start"
     Close-PubPublisherApplication $baselineApp
+    Write-Progress -Step "baseline-reopen-publisher-close-done"
 }
 
 $results = @()
@@ -775,6 +789,7 @@ $logLines = @(
 )
 
 foreach ($candidateId in $CandidateIds) {
+    Write-Progress -CandidateId $candidateId -Step "candidate-start"
     $spec = $packet.factory.candidates | Where-Object { [string]$_.id -eq $candidateId } | Select-Object -First 1
     if ($null -eq $spec) { throw "Missing packet metadata for $candidateId" }
 
@@ -809,6 +824,7 @@ foreach ($candidateId in $CandidateIds) {
     }
 
     $logLines += "$candidateId classification=$classification same_streams=$($sameComparison.changed_streams -join ',') changed_streams=$($changedComparison.changed_streams -join ',') same_ranges=$($sameBlast.changed_range_count) changed_ranges=$($changedBlast.changed_range_count)"
+    Write-Progress -CandidateId $candidateId -Step "candidate-done"
 }
 
 $result = [ordered]@{
@@ -834,3 +850,4 @@ $result = [ordered]@{
 
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "tlb-shape-effects-batch01.json")
 $logLines | Set-Content -LiteralPath (Join-Path $logDir "tlb-shape-effects-batch01.txt") -Encoding ASCII
+Write-Progress -Step "batch-done"
