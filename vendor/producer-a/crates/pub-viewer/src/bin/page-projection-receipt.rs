@@ -78,7 +78,10 @@ fn main() -> Result<()> {
                 .sum::<usize>();
 
             let page_identity_fingerprint_sha256 =
-                format!("{:x}", Sha256::digest(page.id.as_canonical().as_bytes()));
+                Sha256::digest(page.id.as_canonical().as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
 
             json!({
                 "viewer_page_index": page.index,
