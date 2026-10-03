@@ -1,0 +1,118 @@
+name: Publisher VBA hsvba positive measurement
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-vba-hsvba-positive-measure.yml"
+      - "tools/pub_vba_cfb.py"
+      - "tools/pub_vba_estate_scan.py"
+  workflow_dispatch:
+
+concurrency:
+  group: pub-vba-hsvba-positive-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout rar2 scanner
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: rar2
+
+      - name: Checkout exact hsvba fixture estate
+        uses: actions/checkout@v5
+        with:
+          repository: saitoha/hsvba
+          ref: e539218175ab04820b65bad3d13aa4da14030e49
+          path: hsvba
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify exact upstream fixture identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C hsvba rev-parse HEAD)" = "e539218175ab04820b65bad3d13aa4da14030e49"
+
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          fixtures = [
+              ("testdata/mso/publisher_office2003-11.5608_pub_ja-JP_001.pub", "81c67389da2e9e4725dbb315ece6b8c090899fe9", 102400),
+              ("testdata/mso/publisher_office2007-12.0.6735.5000_pub-tmpl_ja-jp_001.pub", "bac724414b6278a66fc90612f08806dc40df2aaf", 77824),
+              ("testdata/mso/publisher_office2007-12.0.6735.5000_pub_ja-jp_001.pub", "34acc66272b3152c02caa368ee6acd110f2b9610", 77824),
+              ("testdata/mso/publisher_office365-2506_pub_ja-JP_001.pub", "8ac6bcfb96dc3f045209558eb5ceb172a9d2a6ba", 98304),
+          ]
+          out = []
+          for rel, expected_blob, expected_size in fixtures:
+              path = Path("hsvba") / rel
+              assert path.is_file(), rel
+              assert path.stat().st_size == expected_size, (rel, path.stat().st_size, expected_size)
+              blob = subprocess.check_output(["git", "-C", "hsvba", "hash-object", rel], text=True).strip()
+              assert blob == expected_blob, (rel, blob, expected_blob)
+              out.append({"path": rel, "git_blob_sha": blob, "byte_len": expected_size})
+
+          target = Path("rar2/target/pub-vba-hsvba-positive")
+          target.mkdir(parents=True, exist_ok=True)
+          (target / "upstream-provenance.json").write_text(
+              json.dumps({
+                  "schema": "chaptera.pub-vba-hsvba-fixture-provenance.v1",
+                  "repository": "saitoha/hsvba",
+                  "commit": "e539218175ab04820b65bad3d13aa4da14030e49",
+                  "fixtures": out,
+              }, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(out, indent=2))
+          PY
+
+      - name: Inert scan of four Publisher fixtures
+        working-directory: rar2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/pub_vba_estate_scan.py scan \
+            --input ../hsvba/testdata/mso/publisher_office2003-11.5608_pub_ja-JP_001.pub \
+            --input ../hsvba/testdata/mso/publisher_office2007-12.0.6735.5000_pub-tmpl_ja-jp_001.pub \
+            --input ../hsvba/testdata/mso/publisher_office2007-12.0.6735.5000_pub_ja-jp_001.pub \
+            --input ../hsvba/testdata/mso/publisher_office365-2506_pub_ja-JP_001.pub \
+            --output target/pub-vba-hsvba-positive/receipt.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("target/pub-vba-hsvba-positive/receipt.json")
+          data = json.loads(p.read_text())
+          assert data["totals"]["file_count"] == 4, data["totals"]
+          assert data["totals"]["read_failed"] == 0, data["totals"]
+          assert data["claims"]["vba_executed"] is False
+          assert data["claims"]["ole_com_activated"] is False
+          assert data["claims"]["source_text_emitted"] is False
+          print(json.dumps({
+              "totals": data["totals"],
+              "call_family_histogram": data.get("call_family_histogram", {}),
+              "symbol_histogram": data.get("symbol_histogram", {}),
+          }, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-hsvba-positive-measurement
+          path: |
+            rar2/target/pub-vba-hsvba-positive/receipt.json
+            rar2/target/pub-vba-hsvba-positive/upstream-provenance.json
+          if-no-files-found: error
+          retention-days: 90
