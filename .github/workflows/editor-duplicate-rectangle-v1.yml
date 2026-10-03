@@ -50,6 +50,9 @@ jobs:
           --test create_shape_runtime_v1
           --test authored_stack_runtime_v1
 
+      - name: Check Desktop Duplicate formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
       - name: Check Desktop Duplicate integration
         run: cargo check -p chaptera-desktop --all-targets
 
