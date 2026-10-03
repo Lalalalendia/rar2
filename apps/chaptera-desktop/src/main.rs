@@ -10209,9 +10209,8 @@ mod tests {
                 let frame_width_emu = node.bounds.width.get();
                 let measured_width_emu = first_line.map(|line| line.measured_width_emu);
                 let width_ratio_ppm = measured_width_emu.and_then(|width| {
-                    (frame_width_emu > 0).then_some(
-                        width.saturating_mul(1_000_000) / frame_width_emu
-                    )
+                    (frame_width_emu > 0)
+                        .then_some(width.saturating_mul(1_000_000) / frame_width_emu)
                 });
                 heading_geometry_receipts.push(serde_json::json!({
                     "target": target,
@@ -10371,9 +10370,7 @@ mod tests {
             }));
         }
 
-        heading_geometry_receipts.sort_by(|a, b| {
-            a["target"].as_str().cmp(&b["target"].as_str())
-        });
+        heading_geometry_receipts.sort_by(|a, b| a["target"].as_str().cmp(&b["target"].as_str()));
         assert_eq!(
             heading_geometry_receipts.len(),
             2,
