@@ -17,6 +17,15 @@ const output = resolve(process.env.READER_REAL_OUTPUT ?? join(repo, "target/clou
 const worker = resolve(process.env.READER_WORKER_BINARY ?? join(repo, "target/debug/chaptera"));
 const run = promisify(execFile);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const readerPhaseFromStderr = (stderrTail) => {
+  const prefix = "CHAPTERA_READER_PHASE ";
+  const phases = String(stderrTail ?? "")
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => line.slice(prefix.length).trim())
+    .filter((phase) => /^[a-z0-9_:.-]{1,96}$/.test(phase));
+  return phases.length > 0 ? phases.at(-1) : null;
+};
 const defaultFixtures = [
   { name: "SampleNewsletter", sha256: "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf", bytes: 291840, pages: 4, require_render: true, require_shared_text: true },
   { name: "SampleBrochure", sha256: "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87", bytes: 161792, pages: 2, require_render: true, require_shared_text: true }
@@ -168,6 +177,7 @@ try {
       try {
         failure = JSON.parse(String(error.stdout ?? ""));
       } catch {}
+      const lastReaderPhase = readerPhaseFromStderr(failure?.stderr_tail);
       results.push({
         fixture: fixture.name,
         source_sha256: fixture.sha256,
@@ -179,6 +189,7 @@ try {
           status: failure.status ?? null,
           exit_code: failure.exit_code ?? null,
           timed_out: failure.timed_out ?? null,
+          last_reader_phase: lastReaderPhase,
         } : null,
         filesystem_confinement: null,
         network_policy: failure?.network_policy ?? "seccomp_default_deny",
@@ -188,7 +199,8 @@ try {
         fixture: fixture.name,
         classification: "unsupported",
         terminal_code: "reader_worker_isolation_failed",
-        worker_exit_code: failure?.exit_code ?? null
+        worker_exit_code: failure?.exit_code ?? null,
+        last_reader_phase: lastReaderPhase
       }));
       continue;
     }
