@@ -66,7 +66,8 @@ pub const EDITOR_PROJECT_VERSION_V0_8: &str = "pub-editor-v0.8";
 pub const EDITOR_PROJECT_VERSION_V0_9: &str = "pub-editor-v0.9";
 pub const EDITOR_PROJECT_VERSION_V0_10: &str = "pub-editor-v0.10";
 pub const EDITOR_PROJECT_VERSION_V0_11: &str = "pub-editor-v0.11";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_11;
+pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_12;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -81,6 +82,23 @@ pub fn story_state_id_v1(story_id: StoryId, text: &str) -> String {
     });
     let bytes =
         serde_json::to_vec(&payload).expect("canonical Story state JSON serialization cannot fail");
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing lowercase hex into String cannot fail");
+    }
+    format!("sha256:{encoded}")
+}
+
+/// Canonical authored-shape state identity used by persisted DeleteNode V1.
+pub fn authored_shape_state_id_v1(shape: &AuthoredShapeRuntimeV1) -> String {
+    let payload = serde_json::json!({
+        "protocol_version": "chaptera.authored-shape-state.v1",
+        "shape": shape,
+    });
+    let bytes = serde_json::to_vec(&payload)
+        .expect("canonical authored-shape state JSON serialization cannot fail");
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(64);
     for byte in digest {
@@ -253,6 +271,12 @@ pub enum EditOperation {
         paint: AuthoredShapePaintV1,
         provenance: AuthoredEntityProvenanceV1,
     },
+    DeleteNode {
+        node_id: NodeId,
+        page_id: PageId,
+        before: AuthoredShapeRuntimeV1,
+        before_state_id: String,
+    },
 }
 
 impl EditOperation {
@@ -286,7 +310,8 @@ impl EditOperation {
             | Self::ResizeNode { .. }
             | Self::ResizeNodes { .. }
             | Self::CreateTextBox { .. }
-            | Self::CreateShape { .. } => Vec::new(),
+            | Self::CreateShape { .. }
+            | Self::DeleteNode { .. } => Vec::new(),
         }
     }
 }
@@ -410,6 +435,11 @@ impl PersistenceRequirements for EditOperation {
                     property_path: Some("node.paint".into()),
                 },
             ],
+            Self::DeleteNode { node_id, .. } => vec![PersistenceRequirement {
+                feature: "node.deleted_identity".into(),
+                origin: Some(node_id.into_canonical()),
+                property_path: Some("node".into()),
+            }],
         }
     }
 }
@@ -753,6 +783,16 @@ pub enum EditorError {
     CreateShapeMalformed {
         node_id: NodeId,
     },
+    NodeDeleteUnsupported {
+        node_id: NodeId,
+    },
+    NodeDeletePageMismatch {
+        node_id: NodeId,
+        page_id: PageId,
+    },
+    StaleNodeDelete {
+        node_id: NodeId,
+    },
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -986,6 +1026,22 @@ impl fmt::Display for EditorError {
                 "CreateShape node {} violates the bounded rectangle/identity/page contract",
                 node_id.as_canonical()
             ),
+            Self::NodeDeleteUnsupported { node_id } => write!(
+                formatter,
+                "node {} is not an admitted author-created direct page-owned Rectangle",
+                node_id.as_canonical()
+            ),
+            Self::NodeDeletePageMismatch { node_id, page_id } => write!(
+                formatter,
+                "DeleteNode node {} does not belong to persisted page {}",
+                node_id.as_canonical(),
+                page_id.as_canonical()
+            ),
+            Self::StaleNodeDelete { node_id } => write!(
+                formatter,
+                "node {} no longer matches the DeleteNode authored-state precondition",
+                node_id.as_canonical()
+            ),
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1130,6 +1186,9 @@ impl EditorError {
             Self::CreateShapeInvalidPaint { .. } => "create_shape_invalid_paint",
             Self::CreateShapeInvalidProvenance { .. } => "create_shape_invalid_provenance",
             Self::CreateShapeMalformed { .. } => "create_shape_malformed",
+            Self::NodeDeleteUnsupported { .. } => "node_delete_unsupported",
+            Self::NodeDeletePageMismatch { .. } => "node_delete_page_mismatch",
+            Self::StaleNodeDelete { .. } => "stale_node_delete",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
@@ -1220,6 +1279,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
+    LegacyProjectCarriesDeleteNodeOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTableGrids,
     LegacyProjectCarriesIdentity,
     MissingProjectIdentity,
@@ -1268,7 +1330,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, or {EDITOR_PROJECT_VERSION_V0_11:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, or {EDITOR_PROJECT_VERSION_V0_12:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -1311,6 +1373,10 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses CreateTextBox but the project schema predates pub-editor-v0.11"
+            ),
+            Self::LegacyProjectCarriesDeleteNodeOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses DeleteNode but the project schema predates pub-editor-v0.12"
             ),
             Self::LegacyProjectCarriesTableGrids => formatter.write_str(
                 "editor projects before pub-editor-v0.6 cannot carry EffectiveTableGridV1 state",
@@ -1740,7 +1806,16 @@ impl EditorSession {
     pub fn try_project(&self) -> Result<EditorProject, EditorProjectError> {
         let table_grids = effective_table_grids(&self.graph);
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
-            (EDITOR_PROJECT_VERSION_V0_11, Some(identity.clone()))
+            let schema_version = if self
+                .undo
+                .iter()
+                .any(|operation| matches!(operation, EditOperation::DeleteNode { .. }))
+            {
+                EDITOR_PROJECT_VERSION_V0_12
+            } else {
+                EDITOR_PROJECT_VERSION_V0_11
+            };
+            (schema_version, Some(identity.clone()))
         } else {
             let legacy_schema = if self
                 .undo
@@ -1857,6 +1932,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -1884,6 +1960,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
         {
             if let Some(index) = project
                 .operations
@@ -1900,6 +1977,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
         {
             if let Some(index) = project
                 .operations
@@ -1915,6 +1993,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -1924,6 +2003,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -1935,6 +2015,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
         {
             if let Some(index) = project
                 .operations
@@ -1947,6 +2028,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
         {
             if let Some(index) = project
                 .operations
@@ -1958,6 +2040,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
         {
             if let Some(index) = project
                 .operations
@@ -1967,7 +2050,9 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+        {
             if let Some(index) = project
                 .operations
                 .iter()
@@ -1978,10 +2063,25 @@ impl EditorSession {
                 );
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11 && project.identity.is_some() {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_12 {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::DeleteNode { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesDeleteNodeOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.identity.is_some()
+        {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
         }
-        if project.schema_version == EDITOR_PROJECT_VERSION_V0_11 && project.identity.is_none() {
+        if (project.schema_version == EDITOR_PROJECT_VERSION_V0_11
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12)
+            && project.identity.is_none()
+        {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
         if project.source_hash != self.source_hash {
@@ -1999,7 +2099,9 @@ impl EditorSession {
             return Err(EditorProjectError::SessionNotEmpty);
         }
 
-        if project.schema_version == EDITOR_PROJECT_VERSION_V0_11 {
+        if project.schema_version == EDITOR_PROJECT_VERSION_V0_11
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
+        {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
                 .collect::<Vec<_>>();
@@ -2062,6 +2164,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_9
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_10
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_11
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
         {
             let actual_grids = effective_table_grids(&candidate.graph);
             if actual_grids != project.table_grids {
@@ -2775,6 +2878,80 @@ impl EditorSession {
         }
     }
 
+    /// Bounded DeleteNode V1 capability: only a current author-created,
+    /// direct page-owned ordinary Rectangle in the authored overlay is admitted.
+    pub fn can_delete_node(&self, node_id: NodeId) -> Result<(), EditorError> {
+        self.validate_source_identity()?;
+        if self.graph.nodes.contains_key(&node_id) {
+            return Err(EditorError::NodeDeleteUnsupported { node_id });
+        }
+        let shape = self
+            .authored_shapes
+            .get(&node_id)
+            .ok_or(EditorError::NodeDeleteUnsupported { node_id })?;
+        if !self.graph.pages.contains_key(&shape.page_id)
+            || shape.parent_id != shape.page_id
+            || shape.shape_kind != AuthoredShapeKindV1::Rectangle
+            || shape.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || shape.paint.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || validate_authored_shape_runtime_v1(shape).is_err()
+        {
+            return Err(EditorError::NodeDeleteUnsupported { node_id });
+        }
+        Ok(())
+    }
+
+    pub fn delete_node(&mut self, node_id: NodeId) -> Result<EditOperation, EditorError> {
+        self.can_delete_node(node_id)?;
+        let before = self
+            .authored_shapes
+            .get(&node_id)
+            .expect("DeleteNode capability verified authored shape")
+            .clone();
+        let operation = EditOperation::DeleteNode {
+            node_id,
+            page_id: before.page_id,
+            before_state_id: authored_shape_state_id_v1(&before),
+            before,
+        };
+        self.consume_canonical_delete_node(operation)
+    }
+
+    fn consume_canonical_delete_node(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let EditOperation::DeleteNode {
+            node_id,
+            page_id,
+            before,
+            before_state_id,
+        } = &operation
+        else {
+            unreachable!("consume_canonical_delete_node receives DeleteNode")
+        };
+
+        if before.node_id != *node_id
+            || before.page_id != *page_id
+            || before.parent_id != *page_id
+        {
+            return Err(EditorError::NodeDeletePageMismatch {
+                node_id: *node_id,
+                page_id: *page_id,
+            });
+        }
+        if authored_shape_state_id_v1(before) != *before_state_id {
+            return Err(EditorError::StaleNodeDelete { node_id: *node_id });
+        }
+        self.can_delete_node(*node_id)?;
+        apply_authored_shape_delete_forward(&mut self.authored_shapes, &operation)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
     pub fn can_move_node_to(
         &self,
         node_id: NodeId,
@@ -3199,6 +3376,8 @@ impl EditorSession {
             apply_image_inverse(&mut self.image_replacements, &operation)?;
         } else if matches!(operation, EditOperation::CreateShape { .. }) {
             apply_authored_shape_inverse(&mut self.authored_shapes, &operation)?;
+        } else if matches!(operation, EditOperation::DeleteNode { .. }) {
+            apply_authored_shape_delete_inverse(&mut self.authored_shapes, &operation)?;
         } else {
             apply_inverse(&mut self.graph, &operation)?;
         }
@@ -3216,6 +3395,8 @@ impl EditorSession {
                 .expect("CreateShape operation reconstructs authored shape");
             self.validate_create_shape_candidate(&shape)?;
             self.authored_shapes.insert(shape.node_id, shape);
+        } else if matches!(operation, EditOperation::DeleteNode { .. }) {
+            apply_authored_shape_delete_forward(&mut self.authored_shapes, &operation)?;
         } else {
             apply_forward(&mut self.graph, &operation)?;
         }
@@ -3399,6 +3580,9 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::CreateShape { .. } => session
             .consume_canonical_create_shape(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteNode { .. } => session
+            .consume_canonical_delete_node(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
     }
 }
@@ -4300,6 +4484,9 @@ fn apply_forward(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is applied to the authored overlay state")
         }
+        EditOperation::DeleteNode { .. } => {
+            unreachable!("DeleteNode is applied to the authored overlay state")
+        }
     }
     Ok(())
 }
@@ -4536,6 +4723,9 @@ fn apply_inverse(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is reverted in the authored overlay state")
         }
+        EditOperation::DeleteNode { .. } => {
+            unreachable!("DeleteNode is reverted in the authored overlay state")
+        }
     }
     Ok(())
 }
@@ -4577,6 +4767,70 @@ fn apply_authored_shape_inverse(
         });
     }
     authored_shapes.remove(&shape.node_id);
+    Ok(())
+}
+
+fn apply_authored_shape_delete_forward(
+    authored_shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let EditOperation::DeleteNode {
+        node_id,
+        page_id,
+        before,
+        before_state_id,
+    } = operation
+    else {
+        unreachable!("DeleteNode forward receives DeleteNode operation")
+    };
+
+    if before.node_id != *node_id
+        || before.page_id != *page_id
+        || before.parent_id != *page_id
+    {
+        return Err(EditorError::NodeDeletePageMismatch {
+            node_id: *node_id,
+            page_id: *page_id,
+        });
+    }
+    if authored_shape_state_id_v1(before) != *before_state_id
+        || authored_shapes.get(node_id) != Some(before)
+    {
+        return Err(EditorError::StaleNodeDelete { node_id: *node_id });
+    }
+    authored_shapes.remove(node_id);
+    Ok(())
+}
+
+fn apply_authored_shape_delete_inverse(
+    authored_shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let EditOperation::DeleteNode {
+        node_id,
+        page_id,
+        before,
+        before_state_id,
+    } = operation
+    else {
+        unreachable!("DeleteNode inverse receives DeleteNode operation")
+    };
+
+    if before.node_id != *node_id
+        || before.page_id != *page_id
+        || before.parent_id != *page_id
+    {
+        return Err(EditorError::NodeDeletePageMismatch {
+            node_id: *node_id,
+            page_id: *page_id,
+        });
+    }
+    if authored_shape_state_id_v1(before) != *before_state_id
+        || authored_shapes.contains_key(node_id)
+    {
+        return Err(EditorError::StaleNodeDelete { node_id: *node_id });
+    }
+    authored_shapes.insert(*node_id, before.clone());
     Ok(())
 }
 
