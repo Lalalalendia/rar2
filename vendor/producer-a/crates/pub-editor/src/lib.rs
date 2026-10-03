@@ -5602,6 +5602,42 @@ mod asset_reachability_tests {
     }
 
     #[test]
+    fn consumer_proven_typography_override_is_montserrat_only() {
+        let montserrat_story =
+            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x31; 16]));
+        let arial_story =
+            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x32; 16]));
+        let typography = vec![
+            FullStoryTypographyV1 {
+                story_id: montserrat_story,
+                font_family: "Montserrat".into(),
+                font_size_emu: LengthEmu::new(304_800),
+            },
+            FullStoryTypographyV1 {
+                story_id: arial_story,
+                font_family: "Arial".into(),
+                font_size_emu: LengthEmu::new(152_400),
+            },
+        ];
+
+        for target in [EditorEditableTarget::Idml, EditorEditableTarget::Odg] {
+            let overrides = consumer_proven_typography_overrides_v1(target, &typography);
+            assert_eq!(overrides.len(), 2);
+            assert!(overrides.iter().all(|item| {
+                item.origin == montserrat_story.into_canonical()
+                    && matches!(
+                        item.feature.as_str(),
+                        STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
+                    )
+                    && item.disposition == CapabilityLevel::Preserved
+            }));
+            assert!(overrides.iter().all(|item| {
+                item.origin != arial_story.into_canonical()
+            }));
+        }
+    }
+
+    #[test]
     fn non_asset_operations_emit_no_durable_asset_refs() {
         let operation = EditOperation::MoveNode {
             node_id: serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
