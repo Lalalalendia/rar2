@@ -261,6 +261,83 @@ def detect_generator(text):
     m = META_GENERATOR_RE.search(text) or META_GENERATOR_RE_REV.search(text)
     return clean_value(m.group(1)) if m else None
 
+def publisher_major(generator):
+    if not generator:
+        return None
+    m = re.search(r"\\bMicrosoft\\s+Publisher\\s+(\\d+)\\b", generator, re.I)
+    return int(m.group(1)) if m else None
+
+def build_version_diff(properties):
+    version_sets = defaultdict(set)
+    owner_name_sets = defaultdict(lambda: defaultdict(set))
+    for prop in properties:
+        major = prop.get("source_publisher_major")
+        priv = prop.get("priv")
+        owner_type = prop.get("owner_type")
+        name = prop.get("name")
+        if major is None or not priv or not owner_type or not name:
+            continue
+        version_sets[major].add((owner_type, name, priv.upper()))
+        owner_name_sets[major][(owner_type, name)].add(priv.upper())
+
+    versions = sorted(version_sets)
+    per_version = {}
+    for major in versions:
+        coords = sorted(version_sets[major])
+        per_version[str(major)] = {
+            "coordinate_count": len(coords),
+            "coordinates": [
+                {"owner_type": owner, "property_name": name, "priv": priv}
+                for owner, name, priv in coords
+            ],
+        }
+
+    comparisons = []
+    for i, a in enumerate(versions):
+        for b in versions[i + 1:]:
+            set_a = version_sets[a]
+            set_b = version_sets[b]
+            common_owner_names = sorted(set(owner_name_sets[a]) & set(owner_name_sets[b]))
+            stable_singletons = []
+            differing_sets = []
+            for key in common_owner_names:
+                a_privs = owner_name_sets[a][key]
+                b_privs = owner_name_sets[b][key]
+                if len(a_privs) == 1 and a_privs == b_privs:
+                    stable_singletons.append({
+                        "owner_type": key[0],
+                        "property_name": key[1],
+                        "priv": next(iter(a_privs)),
+                    })
+                elif a_privs != b_privs:
+                    differing_sets.append({
+                        "owner_type": key[0],
+                        "property_name": key[1],
+                        "a_privs": sorted(a_privs),
+                        "b_privs": sorted(b_privs),
+                    })
+            comparisons.append({
+                "a": a,
+                "b": b,
+                "a_coordinate_count": len(set_a),
+                "b_coordinate_count": len(set_b),
+                "exact_coordinate_intersection": len(set_a & set_b),
+                "a_only_coordinates": len(set_a - set_b),
+                "b_only_coordinates": len(set_b - set_a),
+                "common_owner_property_keys": len(common_owner_names),
+                "stable_singleton_keys": len(stable_singletons),
+                "differing_priv_set_keys": len(differing_sets),
+                "stable_singletons": stable_singletons,
+                "differing_priv_sets": differing_sets,
+            })
+
+    return {
+        "schema": "publisher-html-version-diff.v1",
+        "versions": versions,
+        "per_version": per_version,
+        "comparisons": comparisons,
+    }
+
 def payload_hash(objects, properties):
     canonical = {
         "objects": [{k: o.get(k) for k in ("tag","type","oty","oh","priv","parent_object_index","parent_type")} for o in objects],
@@ -298,6 +375,14 @@ def main():
                 candidates.extend(pdf_text_candidates(raw))
             mode, text = max(candidates, key=lambda item: score_candidate(item[1]))
             objects, properties, inference = parse_publisher_xml(text, source_id)
+            generator = detect_generator(text)
+            major = publisher_major(generator)
+            for obj in objects:
+                obj["source_generator"] = generator
+                obj["source_publisher_major"] = major
+            for prop in properties:
+                prop["source_generator"] = generator
+                prop["source_publisher_major"] = major
             resolved_properties = [p for p in properties if p.get("priv") is not None]
             phash = payload_hash(objects, resolved_properties)
             duplicate_of = first_payload_source.get(phash)
@@ -311,7 +396,8 @@ def main():
                 "raw_size": len(raw),
                 "raw_sha256": sha256_bytes(raw),
                 "decode_mode": mode,
-                "generator": detect_generator(text),
+                "generator": generator,
+                "publisher_major": major,
                 "publisher_marker_score": score_candidate(text),
                 "object_count": len(objects),
                 "property_count": len(resolved_properties),
@@ -380,6 +466,7 @@ def main():
         for item in d.get("ambiguous_inference_keys", [])
     ]
 
+    version_diff = build_version_diff(resolved_properties)
     unique_classes = sorted({o["type"] for o in all_objects if o.get("type") and o.get("type").lower().startswith("opl")})
     unique_properties = sorted({p["name"] for p in resolved_properties})
     summary = {
@@ -400,6 +487,15 @@ def main():
         "registry_entries": len(registry),
         "unique_opl_classes": len(unique_classes),
         "unique_property_names": len(unique_properties),
+        "publisher_versions": version_diff["versions"],
+        "version_comparisons": [
+            {
+                k: v
+                for k, v in comp.items()
+                if k not in ("stable_singletons", "differing_priv_sets")
+            }
+            for comp in version_diff["comparisons"]
+        ],
         "classes": unique_classes,
         "documents": documents,
         "registry": registry,
@@ -408,7 +504,8 @@ def main():
     (out_dir / "harvest.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "objects.json").write_text(json.dumps(all_objects, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "properties.json").write_text(json.dumps(all_properties, ensure_ascii=False, indent=2), encoding="utf-8")
-    write_tsv(out_dir / "properties.tsv", all_properties, ["source_id","property_index","owner_object_index","owner_tag","owner_type","owner_oty","owner_oh","name","priv","priv_origin","priv_u32","opyid","descriptor_type","wire_type","raw_tag","value"])
+    (out_dir / "version-diff.json").write_text(json.dumps(version_diff, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_tsv(out_dir / "properties.tsv", all_properties, ["source_id","source_generator","source_publisher_major","property_index","owner_object_index","owner_tag","owner_type","owner_oty","owner_oh","name","priv","priv_origin","priv_u32","opyid","descriptor_type","wire_type","raw_tag","value"])
     write_tsv(out_dir / "registry.tsv", registry, ["owner_type","property_name","priv","opyid","descriptor_type","wire_type","raw_tag","source_count","observations","explicit_observations","inferred_observations"])
 
     print(json.dumps({k:v for k,v in summary.items() if k not in ("documents","registry")}, ensure_ascii=False, indent=2))
