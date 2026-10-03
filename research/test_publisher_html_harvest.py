@@ -73,6 +73,21 @@ class PublisherHtmlPrivInferenceTests(unittest.TestCase):
         self.assertEqual(meta2["inferred"], 0)
         self.assertEqual(meta2["unresolved"], 1)
 
+    def test_self_container_never_infers_index(self):
+        text = """
+        <b:Root type="OplOt">
+          <b:OplOt type="OplOt" priv="11"><b:OhTrack priv="10D">1</b:OhTrack></b:OplOt>
+          <b:OplOt type="OplOt"><b:OhTrack>2</b:OhTrack></b:OplOt>
+        </b:Root>
+        """
+        _, props, meta = harvest.parse_publisher_xml(text, "s")
+        rows = [p for p in props if p["owner_type"] == "OplOt" and p["name"] == "OplOt"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["priv"], "11")
+        self.assertIsNone(rows[1]["priv"])
+        self.assertEqual(rows[1]["priv_origin"], "unresolved_missing")
+        self.assertGreaterEqual(meta["unresolved"], 1)
+
     def test_publisher_major_parser(self):
         self.assertEqual(harvest.publisher_major("Microsoft Publisher 10"), 10)
         self.assertEqual(harvest.publisher_major("Microsoft Publisher 11"), 11)
