@@ -88,6 +88,7 @@ pub struct GuestSceneWorkerReceiptV1 {
     pub source_byte_len: u64,
     pub classification: String,
     pub terminal_code: Option<String>,
+    pub projection_failure_class: Option<String>,
     pub scene: Option<Value>,
     pub salvage: Option<Value>,
     pub failure_classification: Option<FailureClassificationV1>,
@@ -477,6 +478,7 @@ pub fn run_guest_scene_worker(
     let (
         classification,
         terminal_code,
+        projection_failure_class,
         scene,
         salvage,
         structural_scan_duration_us,
@@ -508,15 +510,17 @@ pub fn run_guest_scene_worker(
                     (
                         classification.to_owned(),
                         None,
+                        None,
                         Some(scene),
                         None,
                         structural_scan_duration_us,
                         Some(duration_us(scene_started.elapsed())),
                     )
                 }
-                Err(_) => (
+                Err(error) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_projection_failed".to_owned()),
+                    Some(classify_projection_failure(&error).to_owned()),
                     None,
                     None,
                     structural_scan_duration_us,
@@ -539,6 +543,7 @@ pub fn run_guest_scene_worker(
                         "salvage".to_owned(),
                         None,
                         None,
+                        None,
                         Some(observation),
                         structural_scan_duration_us,
                         None,
@@ -547,6 +552,7 @@ pub fn run_guest_scene_worker(
                 Ok(ViewerProductOpenOutcome::Normal(_)) | Err(_) => (
                     "unsupported".to_owned(),
                     Some("reader_scene_open_failed".to_owned()),
+                    None,
                     None,
                     None,
                     structural_scan_duration_us,
@@ -567,6 +573,7 @@ pub fn run_guest_scene_worker(
         source_byte_len: expected_byte_len,
         classification,
         terminal_code,
+        projection_failure_class,
         scene,
         salvage,
         failure_classification,
@@ -575,6 +582,41 @@ pub fn run_guest_scene_worker(
         scene_duration_us,
     };
     write_receipt(output, &receipt)
+}
+
+fn classify_projection_failure(error: &str) -> &'static str {
+    if error.contains("projected Scene") || error.contains("projected instance") {
+        "projected_instance"
+    } else if error.contains("image resource")
+        || error.contains("image placement")
+        || error.contains("image source window")
+        || error.contains("image recolor")
+    {
+        "image_binding"
+    } else if error.contains("table") {
+        "table_binding"
+    } else if error.contains("story frame")
+        || error.contains("text fragment")
+        || error.contains("text bounds")
+        || error.contains("text layout")
+    {
+        "text_binding"
+    } else if error.contains("page") {
+        "page_binding"
+    } else if error.contains("Viewer node")
+        || error.contains("parent")
+        || error.contains("node id")
+    {
+        "node_geometry"
+    } else if error.contains("paint") {
+        "paint_binding"
+    } else if error.contains("source hash") {
+        "source_identity"
+    } else if error.contains("fallback font") || error.contains("font resource") {
+        "font_binding"
+    } else {
+        "other"
+    }
 }
 
 fn configured_font_resource_id(expected_sha256: &str, face_index: u32) -> String {
@@ -764,6 +806,14 @@ fn validate_receipt(
     }
     let scene_timing_expected = matches!(receipt.classification.as_str(), "supported" | "partial")
         || receipt.terminal_code.as_deref() == Some("reader_scene_projection_failed");
+    let projection_failure_expected =
+        receipt.terminal_code.as_deref() == Some("reader_scene_projection_failed");
+    if receipt.projection_failure_class.is_some() != projection_failure_expected {
+        return Err(GuestSceneWorkerError::new(
+            "guest_scene_receipt_identity_mismatch",
+            "isolated guest scene projection failure class differs from terminal authority",
+        ));
+    }
     if receipt.scene_duration_us.is_some() != scene_timing_expected {
         return Err(GuestSceneWorkerError::new(
             "guest_scene_receipt_identity_mismatch",
@@ -789,6 +839,7 @@ fn validate_receipt(
             }
             if receipt.salvage.is_some()
                 || receipt.terminal_code.is_some()
+                || receipt.projection_failure_class.is_some()
                 || receipt.failure_classification.is_some()
             {
                 return Err(GuestSceneWorkerError::new(
@@ -820,6 +871,7 @@ fn validate_receipt(
             }
             if observation.get("source_sha256").and_then(Value::as_str) != Some(expected_sha256)
                 || receipt.terminal_code.is_some()
+                || receipt.projection_failure_class.is_some()
                 || receipt.failure_classification.is_some()
             {
                 return Err(GuestSceneWorkerError::new(
@@ -1010,6 +1062,7 @@ mod tests {
             source_byte_len: 1,
             classification: "salvage".to_owned(),
             terminal_code: None,
+            projection_failure_class: None,
             scene: None,
             salvage: Some(serde_json::json!({
                 "schema_version":"chaptera.reader-partial-source-graph.v1",
@@ -1034,6 +1087,33 @@ mod tests {
     }
 
     #[test]
+    fn projection_failure_classifier_is_source_neutral() {
+        assert_eq!(
+            classify_projection_failure(
+                "projected Scene instance abc targets unknown Viewer frame def"
+            ),
+            "projected_instance"
+        );
+        assert_eq!(
+            classify_projection_failure("image placement references unknown node secret"),
+            "image_binding"
+        );
+        assert_eq!(
+            classify_projection_failure("table secret cell has non-positive resolved bounds"),
+            "table_binding"
+        );
+        assert_eq!(
+            classify_projection_failure("story frame references unknown node secret"),
+            "text_binding"
+        );
+        assert_eq!(
+            classify_projection_failure("duplicate Viewer page id secret"),
+            "page_binding"
+        );
+        assert_eq!(classify_projection_failure("unclassified secret"), "other");
+    }
+
+    #[test]
     fn worker_receipt_rejects_scene_for_unsupported_classification() {
         let receipt = GuestSceneWorkerReceiptV1 {
             protocol_version: GUEST_SCENE_WORKER_V1.to_owned(),
@@ -1042,6 +1122,7 @@ mod tests {
             source_byte_len: 1,
             classification: "unsupported".to_owned(),
             terminal_code: Some("reader_scene_open_failed".to_owned()),
+            projection_failure_class: None,
             scene: Some(serde_json::json!({"protocol_version":"chaptera.reader-scene.v1"})),
             salvage: None,
             failure_classification: None,
