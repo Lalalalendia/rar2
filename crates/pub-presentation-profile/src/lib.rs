@@ -273,6 +273,147 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     })
 }
 
+pub const LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1: &str =
+    "chaptera.legacy22-page-list-profile-input.v1";
+pub const LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1: &str = "publisher-legacy22/noquill-middle-pages/v1";
+pub const LEGACY22_QUILL_PAGE_PROFILE_ID_V1: &str = "publisher-legacy22/quill-middle-pages/v1";
+
+const LEGACY22_PAGE_RAW_TYPE_V1: u16 = 0x0014;
+const LEGACY22_PAGE_LIST_SPECIAL_RAW_TYPE_V1: u16 = 0x0041;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Legacy22PageListDialectV1 {
+    NoQuill,
+    Quill,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Legacy22PageListEntryEvidenceV1 {
+    pub document_ordinal: usize,
+    pub raw_type: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Legacy22PageListProfileInputV1 {
+    pub schema_version: String,
+    pub dialect: Legacy22PageListDialectV1,
+    pub document_page_list_entry_count: usize,
+    pub physical_page_count: usize,
+    pub entries: Vec<Legacy22PageListEntryEvidenceV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Legacy22PageListPresentationSelectionV1 {
+    pub profile_id: String,
+    pub raw_page_list_entry_count: usize,
+    pub materialized_page_count: usize,
+    pub customer_page_indices: Vec<usize>,
+}
+
+/// Admits only the old-0x22 PageList envelopes proven by the strict 650-file
+/// recurrence census and independent Publisher controls.
+///
+/// The input is source-semantic topology only. External PDF/page counts, source
+/// hashes, filenames, text/payload presence, and mature-0x2C PAGE fields are
+/// deliberately absent. Any structural drift returns `None`, preserving the
+/// Viewer's generic no-loss PageList projection.
+pub fn select_legacy22_customer_page_indices_v1(
+    mut input: Legacy22PageListProfileInputV1,
+) -> Option<Legacy22PageListPresentationSelectionV1> {
+    if input.schema_version != LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1
+        || input.document_page_list_entry_count != input.entries.len()
+        || input.entries.is_empty()
+    {
+        return None;
+    }
+
+    input.entries.sort_by_key(|entry| entry.document_ordinal);
+    if input
+        .entries
+        .iter()
+        .enumerate()
+        .any(|(expected, entry)| entry.document_ordinal != expected)
+    {
+        return None;
+    }
+
+    let entry_types = input
+        .entries
+        .iter()
+        .map(|entry| entry.raw_type)
+        .collect::<Vec<_>>();
+    let materialized_page_count = entry_types
+        .iter()
+        .filter(|raw_type| **raw_type == LEGACY22_PAGE_RAW_TYPE_V1)
+        .count();
+    if input.physical_page_count != materialized_page_count.checked_add(1)? {
+        return None;
+    }
+
+    match input.dialect {
+        Legacy22PageListDialectV1::NoQuill => {
+            if entry_types.len() < 4
+                || entry_types
+                    .iter()
+                    .any(|raw_type| *raw_type != LEGACY22_PAGE_RAW_TYPE_V1)
+            {
+                return None;
+            }
+            let customer_end = entry_types.len().checked_sub(1)?;
+            if customer_end <= 2 {
+                return None;
+            }
+            Some(Legacy22PageListPresentationSelectionV1 {
+                profile_id: LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1.to_owned(),
+                raw_page_list_entry_count: entry_types.len(),
+                materialized_page_count,
+                customer_page_indices: (2..customer_end).collect(),
+            })
+        }
+        Legacy22PageListDialectV1::Quill => {
+            if entry_types.len() < 6
+                || entry_types[0] != LEGACY22_PAGE_RAW_TYPE_V1
+                || entry_types[1] != LEGACY22_PAGE_RAW_TYPE_V1
+            {
+                return None;
+            }
+
+            let tail_start = entry_types.len().checked_sub(3)?;
+            if tail_start <= 2
+                || entry_types[2..tail_start]
+                    .iter()
+                    .any(|raw_type| *raw_type != LEGACY22_PAGE_RAW_TYPE_V1)
+            {
+                return None;
+            }
+            let tail = &entry_types[tail_start..];
+            let all_page_tail = tail
+                == [
+                    LEGACY22_PAGE_RAW_TYPE_V1,
+                    LEGACY22_PAGE_RAW_TYPE_V1,
+                    LEGACY22_PAGE_RAW_TYPE_V1,
+                ];
+            let special_tail = tail
+                == [
+                    LEGACY22_PAGE_RAW_TYPE_V1,
+                    LEGACY22_PAGE_LIST_SPECIAL_RAW_TYPE_V1,
+                    LEGACY22_PAGE_RAW_TYPE_V1,
+                ];
+            if !all_page_tail && !special_tail {
+                return None;
+            }
+
+            Some(Legacy22PageListPresentationSelectionV1 {
+                profile_id: LEGACY22_QUILL_PAGE_PROFILE_ID_V1.to_owned(),
+                raw_page_list_entry_count: entry_types.len(),
+                materialized_page_count,
+                customer_page_indices: (2..tail_start).collect(),
+            })
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReferenceFixturePresentationSelectionV1 {
     pub profile_id: String,
@@ -818,6 +959,119 @@ mod tests {
             observed_scenario_page_count: 0,
             pages,
         }
+    }
+
+    fn legacy22_input(
+        dialect: Legacy22PageListDialectV1,
+        physical_page_count: usize,
+        raw_types: &[u16],
+    ) -> Legacy22PageListProfileInputV1 {
+        Legacy22PageListProfileInputV1 {
+            schema_version: LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1.to_owned(),
+            dialect,
+            document_page_list_entry_count: raw_types.len(),
+            physical_page_count,
+            entries: raw_types
+                .iter()
+                .copied()
+                .enumerate()
+                .map(
+                    |(document_ordinal, raw_type)| Legacy22PageListEntryEvidenceV1 {
+                        document_ordinal,
+                        raw_type,
+                    },
+                )
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn legacy22_noquill_profile_selects_only_middle_pages() {
+        let selection = select_legacy22_customer_page_indices_v1(legacy22_input(
+            Legacy22PageListDialectV1::NoQuill,
+            5,
+            &[LEGACY22_PAGE_RAW_TYPE_V1; 4],
+        ))
+        .unwrap();
+        assert_eq!(selection.profile_id, LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1);
+        assert_eq!(selection.materialized_page_count, 4);
+        assert_eq!(selection.customer_page_indices, vec![2]);
+    }
+
+    #[test]
+    fn legacy22_noquill_profile_fails_open_on_physical_page_drift() {
+        assert!(
+            select_legacy22_customer_page_indices_v1(legacy22_input(
+                Legacy22PageListDialectV1::NoQuill,
+                4,
+                &[LEGACY22_PAGE_RAW_TYPE_V1; 4],
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn legacy22_quill_profile_accepts_current_special_tail() {
+        let selection = select_legacy22_customer_page_indices_v1(legacy22_input(
+            Legacy22PageListDialectV1::Quill,
+            6,
+            &[
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_LIST_SPECIAL_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+            ],
+        ))
+        .unwrap();
+        assert_eq!(selection.profile_id, LEGACY22_QUILL_PAGE_PROFILE_ID_V1);
+        assert_eq!(selection.materialized_page_count, 5);
+        assert_eq!(selection.customer_page_indices, vec![2]);
+    }
+
+    #[test]
+    fn legacy22_quill_profile_accepts_historical_all_page_tail() {
+        let selection = select_legacy22_customer_page_indices_v1(legacy22_input(
+            Legacy22PageListDialectV1::Quill,
+            8,
+            &[
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+            ],
+        ))
+        .unwrap();
+        assert_eq!(selection.customer_page_indices, vec![2, 3]);
+    }
+
+    #[test]
+    fn legacy22_quill_profile_rejects_unproven_tail_or_ordinal_drift() {
+        let bad_tail = legacy22_input(
+            Legacy22PageListDialectV1::Quill,
+            6,
+            &[
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_LIST_SPECIAL_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+                LEGACY22_PAGE_RAW_TYPE_V1,
+            ],
+        );
+        assert!(select_legacy22_customer_page_indices_v1(bad_tail).is_none());
+
+        let mut bad_ordinal = legacy22_input(
+            Legacy22PageListDialectV1::NoQuill,
+            5,
+            &[LEGACY22_PAGE_RAW_TYPE_V1; 4],
+        );
+        bad_ordinal.entries[2].document_ordinal = 7;
+        assert!(select_legacy22_customer_page_indices_v1(bad_ordinal).is_none());
     }
 
     #[test]
