@@ -12,6 +12,8 @@ on:
       - "research/publisher_borderart_catalog_usage_census.py"
       - "research/publisher_borderart_static_projection.py"
       - "research/publisher_borderart_fbid_index_join.py"
+      - "research/publisher_borderart_payload_layout.py"
+      - "research/publisher_borderart_external_slot_join.py"
   workflow_dispatch:
 
 concurrency:
@@ -76,6 +78,20 @@ jobs:
             --objects out/publisher-html-harvest/objects.json \
             --out out/publisher-html-harvest/borderart-fbid-index-join.json
 
+      - name: Prove BorderArt eight-slot catalog payload layout
+        run: |
+          python research/publisher_borderart_payload_layout.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-payload-layout.json
+
+      - name: Join Publisher BorderArt slots to pinned external WMFs
+        run: |
+          python research/publisher_borderart_external_slot_join.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-external-slot-join.json
+
       - name: Publish summary
         if: always()
         run: |
@@ -116,6 +132,42 @@ jobs:
               for row in d["rows"]:
                   mark = "present" if row["present"] else "missing"
                   f.write(f"- `{row['property_name']} {row['priv']}`: **{mark}**, sources={row['source_count']}\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-external-slot-join.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-external-slot-join.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt exact directional WMF join\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write(f"- slot order: `{','.join(d['slot_order'])}`\n")
+              f.write(f"- exact byte matches: `{d['byte_identical_slot_count']}/{d['slot_comparison_count']}`\n")
+              f.write(f"- geometry unit: `{d['emu_per_twip']} EMU/twip`\n")
+              for row in d["rows"]:
+                  f.write(
+                      f"- `{row['source_id']}` / `{row['publisher_name']}`: "
+                      f"external={row['external_definition']['name']}#{row['external_definition']['id']} / "
+                      f"verdict={row['verdict']}\n"
+                  )
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-payload-layout.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-payload-layout.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt eight-slot payload layout\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              for row in d["rows"]:
+                  f.write(
+                      f"- `{row['source_id']}` / `{row['catalog_name']}`: "
+                      f"offsets={row['metadata_offsets']} / cb={row['payload_blob_sizes']}\n"
+                  )
+              f.write("- invariant: 8 offsets, 8 payload blobs, base=108, exact prefix-sum offsets\n")
+              f.write("- bounded clue: alternating 4+4 payload-size classes; corner/edge semantics remain unproven\n")
           PY
           fi
           if [ -f out/publisher-html-harvest/borderart-fbid-index-join.json ]; then
@@ -195,5 +247,7 @@ jobs:
             out/publisher-html-harvest/borderart-catalog-usage-census.json
             out/publisher-html-harvest/borderart-static-projection.json
             out/publisher-html-harvest/borderart-fbid-index-join.json
+            out/publisher-html-harvest/borderart-payload-layout.json
+            out/publisher-html-harvest/borderart-external-slot-join.json
           if-no-files-found: error
           retention-days: 30
