@@ -7,7 +7,11 @@ on:
       - "tools/research-runner/**"
       - "tools/pub_operation_algebra_fingerprint.py"
       - "tools/test_pub_operation_algebra_fingerprint.py"
+      - "tools/t891_evidence_classifier.py"
+      - "tools/test_t891_evidence_classifier.py"
       - "tools/windows/pub-runtime/**"
+      - "tools/windows/recover_pub_native_runner.ps1"
+      - "tools/windows/run_t891_direct.ps1"
   workflow_dispatch:
 
 concurrency:
@@ -50,6 +54,8 @@ jobs:
               Select-Object -ExpandProperty FullName
           )
           $files += (Resolve-Path "tools/windows/pub-runtime/PubRuntime.psm1").Path
+          $files += (Resolve-Path "tools/windows/recover_pub_native_runner.ps1").Path
+          $files += (Resolve-Path "tools/windows/run_t891_direct.ps1").Path
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null
@@ -69,6 +75,12 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m unittest -v tools.test_pub_operation_algebra_fingerprint
+
+      - name: Validate T891 evidence classifier
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m unittest -v tools.test_t891_evidence_classifier
 
       - name: Exercise Structured Storage deletion helper
         shell: pwsh
