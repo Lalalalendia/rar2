@@ -11,6 +11,7 @@ $ExpectedFixtureSha256 = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc
 $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
 
 $Targets = @(
+    [pscustomobject]@{ label = "reception_heading"; text = "Reception" },
     [pscustomobject]@{ label = "year1_heading"; text = "Year 1" },
     [pscustomobject]@{ label = "year2_heading"; text = "Year 2" }
 )
@@ -175,7 +176,7 @@ if ($fixtureHashAfter -ne $fixtureHash) {
 $alignmentStates = @($targets | ForEach-Object {
     if ($_.effective_alignment.state -eq "value") { [int]$_.effective_alignment.value } else { $null }
 })
-$verdict = if ($alignmentStates.Count -eq 2 -and $null -notin $alignmentStates) {
+$verdict = if ($alignmentStates.Count -eq 3 -and $null -notin $alignmentStates) {
     "effective-alignment-observed"
 } else {
     "inconclusive"
@@ -195,7 +196,7 @@ $result = [ordered]@{
     }
     targets = $targets
     verdict = $verdict
-    evidence_boundary = "Read-only Publisher2019 COM observation on the exact public Carlton source. Target text is used only internally to identify the two known heading shapes; evidence emits semantic labels, effective ParagraphFormat.Alignment and shape geometry, not Story text or PUB bytes."
+    evidence_boundary = "Read-only Publisher2019 COM observation on the exact public Carlton source. Target text is used only internally to identify the Reception, Year 1 and Year 2 heading shapes; evidence emits semantic labels, effective ParagraphFormat.Alignment and shape geometry, not Story text or PUB bytes."
 }
 
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "carlton-heading-alignment-readonly-01.json")
@@ -203,8 +204,9 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "carlton-heading-alig
     "experiment=$ExpectedExperiment",
     "fixture_sha256=$fixtureHash",
     "source_unchanged=$($fixtureHashAfter -eq $fixtureHash)",
-    "year1_alignment=$(if ($targets[0].effective_alignment.state -eq 'value') { $targets[0].effective_alignment.value } else { 'unavailable' })",
-    "year2_alignment=$(if ($targets[1].effective_alignment.state -eq 'value') { $targets[1].effective_alignment.value } else { 'unavailable' })",
+    "reception_alignment=$(if ($targets[0].effective_alignment.state -eq 'value') { $targets[0].effective_alignment.value } else { 'unavailable' })",
+    "year1_alignment=$(if ($targets[1].effective_alignment.state -eq 'value') { $targets[1].effective_alignment.value } else { 'unavailable' })",
+    "year2_alignment=$(if ($targets[2].effective_alignment.state -eq 'value') { $targets[2].effective_alignment.value } else { 'unavailable' })",
     "verdict=$verdict"
 ) | Set-Content -LiteralPath (Join-Path $logDir "carlton-heading-alignment-readonly-01.txt") -Encoding ASCII
 
