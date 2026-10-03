@@ -1,0 +1,10 @@
+{
+  "schema": "chaptera.publisher-page-membership-authority.v1",
+  "authorities": [],
+  "guardrails": [
+    "page count equality is validation only and is not customer PAGE membership authority",
+    "visual fingerprints are acceptance evidence only and are not PUB semantic selector inputs",
+    "raw PageId values are not retained in this registry",
+    "each authority binds exact source SHA, count transition, ordered PAGE-identity digests, selector profile, evidence issue and evidence digest"
+  ]
+}
