@@ -1461,6 +1461,60 @@ mod tests {
         assert!(select_legacy22_customer_page_indices_v1(bad_ordinal).is_none());
     }
 
+    fn mature_zero_leader_detached_input(
+        customer_count: usize,
+    ) -> StandardPrintServiceTailProfileInputV1 {
+        let leader_seq = 263_u32;
+        let mut pages = vec![StandardPrintServiceTailPageEvidenceV1 {
+            document_ordinal: 0,
+            contents_seq_num: leader_seq,
+            oid_dword0: Some(0),
+            oid_dword1: Some(0),
+            applied_master_seq_num: None,
+        }];
+        for index in 0..customer_count {
+            pages.push(StandardPrintServiceTailPageEvidenceV1 {
+                document_ordinal: index + 1,
+                contents_seq_num: 300 + index as u32,
+                oid_dword0: Some(1),
+                oid_dword1: Some(index as u32),
+                applied_master_seq_num: Some(leader_seq),
+            });
+        }
+        let service_ordinal = customer_count + 1;
+        pages.push(StandardPrintServiceTailPageEvidenceV1 {
+            document_ordinal: service_ordinal,
+            contents_seq_num: 400,
+            oid_dword0: Some(0),
+            oid_dword1: Some(0),
+            applied_master_seq_num: Some(leader_seq),
+        });
+        pages.push(StandardPrintServiceTailPageEvidenceV1 {
+            document_ordinal: service_ordinal + 2,
+            contents_seq_num: 401,
+            oid_dword0: Some(0),
+            oid_dword1: Some(0),
+            applied_master_seq_num: None,
+        });
+        pages.push(StandardPrintServiceTailPageEvidenceV1 {
+            document_ordinal: service_ordinal + 3,
+            contents_seq_num: 402,
+            oid_dword0: Some(0),
+            oid_dword1: Some(0),
+            applied_master_seq_num: None,
+        });
+
+        StandardPrintServiceTailProfileInputV1 {
+            schema_version: STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1.to_owned(),
+            document_page_list_entry_count: pages.len() + 1,
+            confirmed_page_count: pages.len(),
+            special_entry_count: 1,
+            scenario_evidence_list_count: 0,
+            observed_scenario_page_count: 0,
+            pages,
+        }
+    }
+
     fn mature_terminal_service_input(
         customer_count: usize,
         special: bool,
