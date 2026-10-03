@@ -10212,12 +10212,38 @@ mod tests {
                     (frame_width_emu > 0)
                         .then_some(width.saturating_mul(1_000_000) / frame_width_emu)
                 });
+                let (layout_kind, fallback_reason) = match layout.map(|layout| &layout.disposition) {
+                    Some(
+                        chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::SharedResolved {
+                            ..
+                        },
+                    ) => ("shared_resolved", None),
+                    Some(
+                        chaptera_viewer_render_plan::RenderTextLayoutDispositionV1::BackendFallback {
+                            reason,
+                        },
+                    ) => ("backend_fallback", Some(reason.code())),
+                    None => ("absent", None),
+                };
+                let distinct_text_size_count = fragment
+                    .typography
+                    .iter()
+                    .map(|run| run.text_size_emu)
+                    .collect::<BTreeSet<_>>()
+                    .len();
                 heading_geometry_receipts.push(serde_json::json!({
                     "target": target,
                     "page_number": page_index + 1,
                     "frame_x_emu": node.bounds.x.get(),
                     "frame_width_emu": frame_width_emu,
                     "paragraph_alignment_run_count": fragment.paragraph_alignments.len(),
+                    "typography_run_count": fragment.typography.len(),
+                    "distinct_text_size_count": distinct_text_size_count,
+                    "font_inherited_any": fragment.typography.iter().any(|run| run.font_inherited),
+                    "size_inherited_any": fragment.typography.iter().any(|run| run.size_inherited),
+                    "backend_font_resource_present": fragment.backend_font_resource_id.is_some(),
+                    "layout_kind": layout_kind,
+                    "fallback_reason": fallback_reason,
                     "resolved_line_count": layout.map_or(0, |layout| layout.lines.len()),
                     "first_line_measured_width_emu": measured_width_emu,
                     "first_line_x_offset_emu": first_line.map(|line| line.x_offset_emu),
