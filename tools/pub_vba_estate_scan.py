@@ -50,7 +50,7 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "documents": [
         ("ActiveDocument", re.compile(r"(?i)\bactivedocument\b")),
         ("ThisDocument", re.compile(r"(?i)\bthisdocument\b")),
-        ("Documents", re.compile(r"(?i)(?:\.|\b)documents\b")),
+        ("Documents", re.compile(r"(?i)(?:\.|\b)documents\b(?!\s*\.\s*(?:add|open)\b)")),
         ("Documents.Add", re.compile(r"(?i)\bdocuments\s*\.\s*add\b")),
         ("Documents.Open", re.compile(r"(?i)\bdocuments\s*\.\s*open\b")),
     ],
@@ -80,10 +80,6 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("AddPicture", re.compile(r"(?i)\baddpicture\b")),
     ],
     "tables": [
-        ("Table", re.compile(r"(?i)(?:\.|\b)table\b")),
-        ("Rows", re.compile(r"(?i)(?:\.|\b)rows\b")),
-        ("Columns", re.compile(r"(?i)(?:\.|\b)columns\b")),
-        ("Cells", re.compile(r"(?i)(?:\.|\b)cells\b")),
         ("AddTable", re.compile(r"(?i)\baddtable\b")),
     ],
     "mail_merge": [
