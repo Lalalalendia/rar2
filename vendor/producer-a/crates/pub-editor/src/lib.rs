@@ -6,9 +6,17 @@
 //! resolved authoring graph. Native PUB materialization remains a separate
 //! writer gate.
 
+mod authored_stack_lifecycle_v1;
 mod create_shape_runtime_v1;
 mod writer_assessment;
 
+pub use authored_stack_lifecycle_v1::{
+    AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
+    AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
+    validate_authored_stack_v1,
+};
 pub use create_shape_runtime_v1::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
