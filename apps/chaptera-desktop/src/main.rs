@@ -8780,7 +8780,7 @@ mod tests {
         let project = app.editor.as_ref().expect("editor").project();
         assert_eq!(
             project.schema_version,
-            pub_editor::EDITOR_PROJECT_VERSION_V0_11
+            pub_editor::EDITOR_PROJECT_VERSION_V0_12
         );
         assert_eq!(project.assets.len(), 1);
         let asset_bytes = app
