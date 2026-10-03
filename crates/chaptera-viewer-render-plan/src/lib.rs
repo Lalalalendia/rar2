@@ -1199,11 +1199,15 @@ fn resolve_text_layout_v1(
     }
 
     let font_size_emu = match admitted_font_size_emu(fragment, font.default_font_size_emu) {
-        Ok(size) => size,
+        Ok(size) => {
+            eprintln!("CHAPTERA_READER_PHASE text_layout_single_size:admitted");
+            size
+        }
         Err(RenderTextLayoutFallbackReasonV1::MixedTypographySize)
             if projected_target_frame_node_id.is_none() =>
         {
-            return resolve_mixed_size_text_layout_v1(
+            eprintln!("CHAPTERA_READER_PHASE text_layout_mixed_size:start");
+            let layout = resolve_mixed_size_text_layout_v1(
                 fragment,
                 font,
                 node_id,
@@ -1211,6 +1215,8 @@ fn resolve_text_layout_v1(
                 &fingerprint,
                 vertical_alignment,
             );
+            eprintln!("CHAPTERA_READER_PHASE text_layout_mixed_size:done");
+            return layout;
         }
         Err(reason) => return fallback_layout(reason),
     };
@@ -1267,9 +1273,12 @@ fn resolve_text_layout_v1(
         line_height: LengthEmu::new(line_height_emu),
     };
 
+    eprintln!("CHAPTERA_READER_PHASE text_layout_single_size:shaped_flow:start");
     let Ok(scene) = resolve_bounded_shaped_flow(&projection, &runtime) else {
+        eprintln!("CHAPTERA_READER_PHASE text_layout_single_size:shaped_flow:error");
         return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
     };
+    eprintln!("CHAPTERA_READER_PHASE text_layout_single_size:shaped_flow:done");
     let projected_explicit_overset = projected_incomplete_layout_is_explicit_overset(
         projected_target_frame_node_id,
         &scene.diagnostics,
@@ -1495,10 +1504,12 @@ fn resolve_mixed_size_text_layout_v1(
     fingerprint: &str,
     vertical_alignment: Option<ViewerTextVerticalAlignment>,
 ) -> RenderTextLayoutV1 {
+    eprintln!("CHAPTERA_READER_PHASE mixed_layout:runs:start");
     let runs = match admitted_typography_runs_v1(fragment, font.default_font_size_emu) {
         Ok(runs) => runs,
         Err(reason) => return fallback_layout(reason),
     };
+    eprintln!("CHAPTERA_READER_PHASE mixed_layout:runs:done");
     if runs.len() < 2
         || runs
             .iter()
@@ -1517,6 +1528,7 @@ fn resolve_mixed_size_text_layout_v1(
     }
 
     let mut policy_glyphs = Vec::new();
+    eprintln!("CHAPTERA_READER_PHASE mixed_layout:policy_shape:start");
     for run in &runs {
         let Some(run_text) = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)
         else {
@@ -1538,10 +1550,12 @@ fn resolve_mixed_size_text_layout_v1(
         };
         policy_glyphs.extend(shaped.glyphs);
     }
+    eprintln!("CHAPTERA_READER_PHASE mixed_layout:policy_shape:done");
     let policy = match break_policy_for_shaped_text(&fragment.text, &policy_glyphs) {
         Ok(policy) => policy,
         Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
     };
+    eprintln!("CHAPTERA_READER_PHASE mixed_layout:break_policy:done");
 
     let mut cursor = fragment.scalar_start;
     let mut used_height_emu = 0_i64;
@@ -1549,6 +1563,7 @@ fn resolve_mixed_size_text_layout_v1(
     let mut lines = Vec::new();
 
     while cursor < fragment.scalar_end {
+        eprintln!("CHAPTERA_READER_PHASE mixed_layout:line:{line_index}:start");
         let mut chosen = None;
         for candidate in policy
             .candidates
@@ -1607,6 +1622,7 @@ fn resolve_mixed_size_text_layout_v1(
             spans: chosen.spans,
         });
         cursor = chosen.consumed_scalar_end;
+        eprintln!("CHAPTERA_READER_PHASE mixed_layout:line:{line_index}:done");
         line_index = match line_index.checked_add(1) {
             Some(value) => value,
             None => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
