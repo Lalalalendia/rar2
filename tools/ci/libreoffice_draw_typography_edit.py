@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
+import re
 import time
 
 import uno
@@ -82,6 +84,30 @@ def marker_present(document, marker: str) -> bool:
     )
 
 
+def normalized_family(value: str) -> str:
+    value = re.sub(r"\s+", " ", value.strip().strip("'\"")).casefold()
+    if value.endswith(" regular"):
+        value = value[: -len(" regular")]
+    return value
+
+
+def shape_matches_typography(shape, family: str, size_pt: float) -> bool:
+    text = shape_text(shape)
+    if not text:
+        return False
+    try:
+        cursor = shape.createTextCursor()
+        cursor.gotoStart(False)
+        cursor.goRight(1, True)
+        actual_family = str(cursor.CharFontName)
+        actual_size = float(cursor.CharHeight)
+    except Exception:
+        return False
+    return normalized_family(actual_family) == normalized_family(family) and math.isclose(
+        actual_size, size_pt, rel_tol=0.0, abs_tol=0.02
+    )
+
+
 def load_document(ctx, input_path: Path):
     desktop = ctx.ServiceManager.createInstanceWithContext(
         "com.sun.star.frame.Desktop", ctx
@@ -127,6 +153,8 @@ def main() -> int:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--marker", required=True)
+    parser.add_argument("--expected-font-family", required=True)
+    parser.add_argument("--expected-font-size-pt", type=float, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
@@ -151,7 +179,9 @@ def main() -> int:
 
             for index, shape in enumerate(shapes):
                 text = shape_text(shape)
-                if not text:
+                if not text or not shape_matches_typography(
+                    shape, args.expected_font_family, args.expected_font_size_pt
+                ):
                     continue
                 before_length = len(text)
                 try:
@@ -170,7 +200,9 @@ def main() -> int:
                 break
 
             if edited_shape_index is None:
-                raise RuntimeError("no non-empty UNO text-bearing shape was editable")
+                raise RuntimeError(
+                    "no UNO text-bearing shape matched the expected consumer typography"
+                )
         else:
             if not marker_present(doc, args.marker):
                 raise RuntimeError("fresh LibreOffice reopen did not retain edit marker")
@@ -184,6 +216,8 @@ def main() -> int:
         "mode": args.mode,
         "marker_sha256": hashlib.sha256(args.marker.encode("utf-8")).hexdigest(),
         "marker_observed": True,
+        "expected_font_family": args.expected_font_family,
+        "expected_font_size_pt": args.expected_font_size_pt,
         "edited_shape_index": edited_shape_index,
         "before_text_length": before_length,
         "after_text_length": after_length,
