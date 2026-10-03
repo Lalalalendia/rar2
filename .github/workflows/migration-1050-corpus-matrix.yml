@@ -318,7 +318,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb fonts-montserrat
 
       - name: Materialize independently validated target sample
         run: |
