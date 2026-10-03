@@ -861,6 +861,15 @@ pub enum EditorError {
     StaleNodeDelete {
         node_id: NodeId,
     },
+    AuthoredStackReorderUnsupported {
+        node_id: NodeId,
+    },
+    AuthoredStackReorderNoChange {
+        node_id: NodeId,
+    },
+    StaleAuthoredStack {
+        page_id: PageId,
+    },
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -1109,6 +1118,21 @@ impl fmt::Display for EditorError {
                 formatter,
                 "node {} no longer matches the DeleteNode authored-state precondition",
                 node_id.as_canonical()
+            ),
+            Self::AuthoredStackReorderUnsupported { node_id } => write!(
+                formatter,
+                "node {} is not an admitted author-created member of the authored stack",
+                node_id.as_canonical()
+            ),
+            Self::AuthoredStackReorderNoChange { node_id } => write!(
+                formatter,
+                "node {} is already at the requested authored-stack position",
+                node_id.as_canonical()
+            ),
+            Self::StaleAuthoredStack { page_id } => write!(
+                formatter,
+                "authored stack for page {} no longer matches the persisted transition precondition",
+                page_id.as_canonical()
             ),
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
