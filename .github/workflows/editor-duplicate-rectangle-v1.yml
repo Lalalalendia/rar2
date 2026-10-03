@@ -1,0 +1,50 @@
+name: Editor Duplicate Rectangle V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/src/duplicate_authored_rectangle_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/duplicate_authored_rectangle_v1.rs"
+      - ".github/workflows/editor-duplicate-rectangle-v1.yml"
+  push:
+    branches:
+      - editor-desktop-duplicate-restore-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check pub-editor formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Check pub-editor
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
+
+      - name: Lint pub-editor
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Prove Duplicate Rectangle core
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test duplicate_authored_rectangle_v1
+
+      - name: Re-prove CreateShape and authored lane runtime
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+          --test create_shape_runtime_v1
+          --test authored_stack_runtime_v1
