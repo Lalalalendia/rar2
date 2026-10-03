@@ -91,6 +91,7 @@ jobs:
           assert data["source_sha256"] == "4029d4a1bf5be89d745c079b9c06ab33e5bdceb997a4761c5e11238110d879c9"
           assert data["document_page_count"] == 12, data["document_page_count"]
           assert data["viewer_page_count"] == 12, data["viewer_page_count"]
+          assert data["source_page_role_observation_count"] == 12, data["source_page_role_observation_count"]
           assert len(data["pages"]) == 12
           claims = data["claims"]
           for key in (
@@ -118,9 +119,15 @@ jobs:
                   "desc": row["descendant_node_count"],
                   "scene": row["scene_node_count"],
                   "paint": row["paint_node_count"],
-                  "story": row["story_frame_count"],
-                  "table": row["table_node_count"],
-                  "image": row["image_bound_node_count"],
+                  "story": [row["story_frame_count"], row["viewer_story_frame_count"], row["viewer_text_fragment_count"]],
+                  "table": [row["table_node_count"], row["viewer_table_count"]],
+                  "image": [row["image_bound_node_count"], row["viewer_image_node_count"]],
+                  "paint_order": [
+                      row["source_paint_order_node_count"],
+                      row["source_paint_order_scene_covered_count"],
+                      row["source_paint_order_paint_covered_count"],
+                  ],
+                  "raw_children": row["direct_child_raw_type_histogram"],
                   "kinds": row["node_kind_histogram"],
               }, sort_keys=True))
           PY
