@@ -436,6 +436,18 @@ pub fn run_guest_scene_worker(
                 "guest scene worker result file could not be created",
             )
         })?;
+    let mut progress = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(output_root.join("progress.jsonl"))
+        .map(BufWriter::new)
+        .map_err(|_| {
+            GuestSceneWorkerError::new(
+                "guest_scene_worker_output_failed",
+                "guest scene worker progress file could not be created",
+            )
+        })?;
+    write_progress_stage(&mut progress, "worker_output_ready")?;
 
     let metadata = stdfs::metadata(&input_path).map_err(|_| {
         GuestSceneWorkerError::new(
@@ -462,7 +474,9 @@ pub fn run_guest_scene_worker(
             "authorized guest scene input hash differs from expected identity",
         ));
     }
+    write_progress_stage(&mut progress, "source_verified")?;
     let configured_fonts = load_worker_font_manifest(font_registry_path)?;
+    write_progress_stage(&mut progress, "fonts_loaded")?;
 
     install_post_read_filesystem_default_deny().map_err(|_| {
         GuestSceneWorkerError::new(
@@ -470,9 +484,12 @@ pub fn run_guest_scene_worker(
             "post-read filesystem default-deny could not be installed",
         )
     })?;
+    write_progress_stage(&mut progress, "sandbox_installed")?;
 
     let structural_scan_started = Instant::now();
+    write_progress_stage(&mut progress, "open_pub_bundle_started")?;
     let normal_open = open_pub_bundle(&source_bytes, viewer_geometry_environment_v0_1());
+    write_progress_stage(&mut progress, "open_pub_bundle_returned")?;
 
     let (
         classification,
@@ -485,14 +502,17 @@ pub fn run_guest_scene_worker(
         Ok(bundle) => {
             let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
             let scene_started = Instant::now();
-            match from_viewer_geometry_with_fonts(
+            write_progress_stage(&mut progress, "scene_projection_started")?;
+            let projected = from_viewer_geometry_with_fonts(
                 session_id.to_owned(),
                 expected_sha256.to_owned(),
                 "guest:source".to_owned(),
                 &bundle.geometry,
                 &bundle.source_page_paint_orders,
                 &configured_fonts,
-            ) {
+            );
+            write_progress_stage(&mut progress, "scene_projection_returned")?;
+            match projected {
                 Ok(scene) => {
                     let classification = if scene.fidelity.state == "supported" {
                         "supported"
@@ -525,7 +545,9 @@ pub fn run_guest_scene_worker(
             }
         }
         Err(_) => {
+            write_progress_stage(&mut progress, "salvage_open_started")?;
             let fallback = open_pub_or_salvage(&source_bytes, viewer_geometry_environment_v0_1());
+            write_progress_stage(&mut progress, "salvage_open_returned")?;
             let structural_scan_duration_us = duration_us(structural_scan_started.elapsed());
             match fallback {
                 Ok(ViewerProductOpenOutcome::Salvage(partial_graph)) => {
@@ -863,6 +885,24 @@ fn validate_receipt(
         }
     }
     Ok(())
+}
+
+fn write_progress_stage(
+    progress: &mut BufWriter<File>,
+    stage: &'static str,
+) -> Result<(), GuestSceneWorkerError> {
+    writeln!(progress, "{{\"stage\":\"{stage}\"}}").map_err(|_| {
+        GuestSceneWorkerError::new(
+            "guest_scene_worker_output_failed",
+            "guest scene worker progress write failed",
+        )
+    })?;
+    progress.flush().map_err(|_| {
+        GuestSceneWorkerError::new(
+            "guest_scene_worker_output_failed",
+            "guest scene worker progress flush failed",
+        )
+    })
 }
 
 fn duration_us(duration: Duration) -> u64 {
