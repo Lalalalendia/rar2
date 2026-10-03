@@ -197,7 +197,7 @@ def sample_receipt():
             "replacement_binding_preserved": True,
         },
         "project": {
-            "schema_version": "pub-editor-v0.11",
+            "schema_version": "pub-editor-v0.12",
             "sha256": h("9"),
             "byte_len": 4096,
             "operation_count": 4,

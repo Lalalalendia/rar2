@@ -1,0 +1,69 @@
+name: Authoring DeleteNode Runtime V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/writer_assessment.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/delete_node_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/create_shape_runtime_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/project_fork_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/asset_reachability_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/break_text_frame_forward_link_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/effective_table_grid_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/move_nodes_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/resize_node_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/resize_nodes_v1.rs"
+      - ".github/workflows/authoring-delete-node-runtime-v1.yml"
+  push:
+    branches:
+      - authoring-delete-node-runtime-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check pub-editor formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Check pub-editor
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
+
+      - name: Lint pub-editor
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Prove DeleteNode runtime
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test delete_node_runtime_v1
+
+      - name: Re-run CreateShape runtime
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test create_shape_runtime_v1
+
+      - name: Re-run project identity/fork
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test project_fork_v1
+
+      - name: Re-run schema inheritance regressions
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+          --test asset_reachability_v1
+          --test break_text_frame_forward_link_v1
+          --test effective_table_grid_v1
+          --test move_nodes_v1
+          --test resize_node_v1
+          --test resize_nodes_v1

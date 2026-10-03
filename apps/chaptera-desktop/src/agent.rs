@@ -2195,6 +2195,17 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "paint":paint,
             "provenance":provenance
         }),
+        EditOperation::DeleteNode {
+            node_id,
+            page_id,
+            before_state_id,
+            ..
+        } => json!({
+            "kind":"delete_node",
+            "node_id":node_id.as_canonical().to_string(),
+            "page_id":page_id.as_canonical().to_string(),
+            "before_state_id":before_state_id
+        }),
     }
 }
 
