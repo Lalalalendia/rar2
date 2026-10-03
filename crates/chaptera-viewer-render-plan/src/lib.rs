@@ -390,13 +390,7 @@ pub fn layout_decorative_border_v1(
             let gaps = horizontal_count - 1;
             for index in 1..horizontal_count - 1 {
                 let offset = index * b + (index * residual + gaps / 2) / gaps;
-                push(
-                    RenderDecorativeBorderSlotV1::Top,
-                    x + offset,
-                    y,
-                    b,
-                    b,
-                )?;
+                push(RenderDecorativeBorderSlotV1::Top, x + offset, y, b, b)?;
                 push(
                     RenderDecorativeBorderSlotV1::Bottom,
                     x + width - b - offset,
@@ -2686,12 +2680,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(top.len(), 3);
         assert_eq!(top.first().expect("first top").bounds.x.get(), 30);
-        let top_end = top
-            .last()
-            .expect("last top")
-            .bounds
-            .x
-            .get()
+        let top_end = top.last().expect("last top").bounds.x.get()
             + top.last().expect("last top").bounds.width.get();
         assert_eq!(top_end, 90);
 
@@ -2701,12 +2690,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(right.len(), 2);
         assert_eq!(right.first().expect("first right").bounds.y.get(), 40);
-        let right_end = right
-            .last()
-            .expect("last right")
-            .bounds
-            .y
-            .get()
+        let right_end = right.last().expect("last right").bounds.y.get()
             + right.last().expect("last right").bounds.height.get();
         assert_eq!(right_end, 80);
     }
