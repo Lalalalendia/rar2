@@ -87,6 +87,10 @@ pub const VIEWER_GEOMETRY_SCHEMA_V0_1: &str = "0.1";
 
 pub const VIEWER_FAILURE_REPORT_SCHEMA_V0_1: &str = "chaptera-viewer-failure-report/v0.1";
 pub const VIEWER_FALLBACK_TEXT_METRICS_REVISION_V0_1: &str = "viewer-fallback-text-metrics-v0.1";
+
+fn batch01_phase_trace(marker: &str) {
+    eprintln!("CHAPTERA_READER_PHASE {marker}");
+}
 const VIEWER_FALLBACK_SCALAR_ADVANCE_EMU_V0_1: i64 = 57_150;
 const VIEWER_FALLBACK_LINE_HEIGHT_EMU_V0_1: i64 = 142_875;
 const MAX_LEGACY_OLE_PREVIEW_PNG_BYTES: usize = 8 * 1024 * 1024;
@@ -1879,11 +1883,22 @@ pub fn open_pub_bundle(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerOpenBundle> {
+    batch01_phase_trace("pub_family_classify:start");
     let classification = classify_pub_family(bytes);
+    batch01_phase_trace("pub_family_classify:done");
     match classification.route {
-        PubReaderRoute::Mature2c => open_mature_0x2c_bundle(bytes, environment),
-        PubReaderRoute::Legacy22Quill => open_legacy_0x22_quill_bundle(bytes, environment),
-        PubReaderRoute::Legacy22LowText => open_legacy_0x22_noquill_bundle(bytes, environment),
+        PubReaderRoute::Mature2c => {
+            batch01_phase_trace("route:mature_0x2c");
+            open_mature_0x2c_bundle(bytes, environment)
+        }
+        PubReaderRoute::Legacy22Quill => {
+            batch01_phase_trace("route:legacy_0x22_quill");
+            open_legacy_0x22_quill_bundle(bytes, environment)
+        }
+        PubReaderRoute::Legacy22LowText => {
+            batch01_phase_trace("route:legacy_0x22_low_text");
+            open_legacy_0x22_noquill_bundle(bytes, environment)
+        }
         PubReaderRoute::Unsupported => Err(anyhow!(
             "unsupported PUB family/profile: family={:?}, profile={}, route={}",
             classification.family,
@@ -2177,16 +2192,22 @@ fn open_mature_0x2c_bundle(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
 ) -> Result<ViewerOpenBundle> {
+    batch01_phase_trace("mature_pipeline:start");
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
+    batch01_phase_trace("mature_pipeline:done");
+    batch01_phase_trace("mature_document:start");
     let mut document = viewer_document_from_pipeline(bytes.len(), &pipeline)?;
+    batch01_phase_trace("mature_document:done");
     let effective_page_ids = document
         .pages
         .iter()
         .map(|page| page.id)
         .collect::<Vec<_>>();
+    batch01_phase_trace("mature_projection:start");
     let authoring =
         bounded_authoring_slice_from_resolved_pages(&pipeline.resolved.graph, &effective_page_ids)?;
     let projection = project_bounded(authoring);
+    batch01_phase_trace("mature_projection:done");
 
     document
         .diagnostics
@@ -2209,7 +2230,9 @@ fn open_mature_0x2c_bundle(
         .map(|frame| viewer_story_frame_from_projection(frame, &pipeline.resolved.graph))
         .collect::<Vec<_>>();
 
+    batch01_phase_trace("mature_text_flow:start");
     let (text_fragments, text_flow_diagnostics) = resolve_viewer_text_fragments(&projection)?;
+    batch01_phase_trace("mature_text_flow:done");
     document
         .diagnostics
         .extend(text_flow_diagnostics.iter().map(map_scene_diagnostic));
@@ -2374,10 +2397,13 @@ fn open_mature_0x2c_bundle(
         });
     }
 
+    batch01_phase_trace("mature_tables:start");
     let (tables, table_diagnostics) =
         viewer_tables_from_resolved(&pipeline.resolved.graph, &projection);
+    batch01_phase_trace("mature_tables:done");
     document.diagnostics.extend(table_diagnostics);
 
+    batch01_phase_trace("mature_exact_assets:start");
     let mut images = match build_mature_0x2c_asset_export_bundle_from_bytes(
         bytes,
         &pipeline.source.graph,
@@ -2466,7 +2492,9 @@ fn open_mature_0x2c_bundle(
             Vec::new()
         }
     };
+    batch01_phase_trace("mature_exact_assets:done");
 
+    batch01_phase_trace("mature_geometry:start");
     let mut scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
         let codes = blocked
             .projection_errors
@@ -2477,6 +2505,7 @@ fn open_mature_0x2c_bundle(
         anyhow!("Viewer geometry resolution blocked by layout projection errors: {codes}")
     })?;
 
+    batch01_phase_trace("mature_geometry:done");
     document.diagnostics.extend(
         scene
             .diagnostics
@@ -2485,6 +2514,7 @@ fn open_mature_0x2c_bundle(
             .map(map_scene_diagnostic),
     );
 
+    batch01_phase_trace("mature_wmf_preview:start");
     images.extend(viewer_mature_officeart_wmf_preview_images(
         bytes,
         &pipeline.source_hash,
@@ -2493,6 +2523,7 @@ fn open_mature_0x2c_bundle(
         &scene,
         &mut document.diagnostics,
     ));
+    batch01_phase_trace("mature_wmf_preview:done");
 
     #[cfg(feature = "cmo-slot-compose")]
     let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
@@ -2529,10 +2560,12 @@ fn open_mature_0x2c_bundle(
         .filter(|order| selected_pages.contains(&order.page_id))
         .map(viewer_page_paint_order_from_source)
         .collect::<Vec<_>>();
+    batch01_phase_trace("mature_source_order:start");
     let source_order_stats = apply_known_source_page_paint_orders_to_scene_nodes_v1(
         &mut scene.nodes,
         &source_page_paint_orders,
     );
+    batch01_phase_trace("mature_source_order:done");
     if source_order_stats.known_node_count > 0 {
         document.diagnostics.push(ViewerDiagnostic {
             code: "viewer.stacking.source_order_partial_applied".to_owned(),
@@ -2570,6 +2603,7 @@ fn open_mature_0x2c_bundle(
         projected_instances,
         images,
     };
+    batch01_phase_trace("mature_bundle:done");
     Ok(ViewerOpenBundle {
         geometry,
         resolved_graph: pipeline.resolved.graph,
@@ -2653,12 +2687,20 @@ pub fn viewer_geometry_environment_v0_1() -> BoundedLayoutEnvironment {
 }
 
 fn build_mature_0x2c_pipeline(bytes: &[u8]) -> Result<Mature0x2cPipeline> {
+    batch01_phase_trace("mature_source_hash:start");
     let source_hash = sha256_digest(bytes)?;
+    batch01_phase_trace("mature_source_hash:done");
+    batch01_phase_trace("mature_source_graph:start");
     let source = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
         .context("build mature-0x2C PUB source graph for Viewer")?;
+    batch01_phase_trace("mature_source_graph:done");
+    batch01_phase_trace("mature_resolve_graph:start");
     let resolved =
         resolve_pub_source_graph(&source.graph).context("resolve PUB source graph for Viewer")?;
+    batch01_phase_trace("mature_resolve_graph:done");
+    batch01_phase_trace("mature_page_selection:start");
     let page_selection = select_viewer_pages(bytes, source_hash, &source, &resolved);
+    batch01_phase_trace("mature_page_selection:done");
 
     Ok(Mature0x2cPipeline {
         source_hash,
