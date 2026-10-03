@@ -87,6 +87,42 @@ jobs:
           assert d["schema"] == "chaptera.borderart-fbid-corpus-census.v1", d["schema"]
           assert d["corpus_file_count"] == 1050, d["corpus_file_count"]
 
+          # Exact pinned-corpus proof. These are physical-coordinate facts, not
+          # an application-level BorderArt API assertion.
+          assert d["mature_0x2c_file_count"] == 396, d["mature_0x2c_file_count"]
+          assert d["files_with_shape_fbid"] == 20, d["files_with_shape_fbid"]
+          assert d["files_with_nonzero_shape_fbid"] == 11, d["files_with_nonzero_shape_fbid"]
+          assert d["max_shape_fbid"] == 5, d["max_shape_fbid"]
+          assert d["shape_fbid_value_counts"] == {
+              "0": 49, "1": 14, "2": 8, "3": 8, "4": 1, "5": 2,
+          }, d["shape_fbid_value_counts"]
+          assert d["files_with_ifbmax"] == 33, d["files_with_ifbmax"]
+          assert d["files_with_ifbmax_gt1"] == 17, d["files_with_ifbmax_gt1"]
+          assert d["max_ifbmax"] == 26, d["max_ifbmax"]
+          assert d["ifbmax_value_counts"] == {
+              "1": 16, "2": 5, "3": 2, "6": 2, "11": 6, "15": 1, "26": 1,
+          }, d["ifbmax_value_counts"]
+          assert d["files_with_fbid_and_single_ifbmax"] == 20, d["files_with_fbid_and_single_ifbmax"]
+          assert d["files_with_fbid_out_of_range_when_single_ifbmax"] == 0, d["files_with_fbid_out_of_range_when_single_ifbmax"]
+          assert sum(row["shape_fbid_wrong_wire_count"] for row in d["rows"]) == 0
+          assert sum(row["ifbmax_wrong_wire_count"] for row in d["rows"]) == 0
+
+          full_domain_sha = "3a49adaad5f701d14e16f1f901f0770c358407029040a8c18959c2abc39d88f2"
+          [full_domain] = [
+              row for row in d["rows"]
+              if row["source_sha256"] == full_domain_sha
+          ]
+          full_domain_values = [
+              item["value"] for item in full_domain["shape_fbid_observations"]
+          ]
+          assert full_domain["single_ifbmax"] == 6, full_domain
+          assert set(full_domain_values) == set(range(6)), full_domain_values
+          assert max(full_domain_values) == full_domain["single_ifbmax"] - 1, full_domain
+          assert full_domain["all_fbid_in_range_when_single_ifbmax"] is True, full_domain
+          assert full_domain["shape_chunks_with_opaque_tail"] == 0, full_domain
+          assert full_domain["shape_fbid_wrong_wire_count"] == 0, full_domain
+          assert full_domain["ifbmax_wrong_wire_count"] == 0, full_domain
+
           keys = [
               "mature_0x2c_file_count",
               "skipped_non_0x2c_count",
