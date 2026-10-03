@@ -207,6 +207,12 @@ jobs:
           cargo test --manifest-path vendor/producer-a/crates/pub-quill/Cargo.toml --test effective_typography_real real_carlton_paragraph_alignment_receipt_is_source_safe -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { throw "Carlton paragraph-alignment receipt failed" }
 
+      - name: Emit source-safe Carlton missing-alignment topology
+        shell: pwsh
+        run: |
+          cargo test --manifest-path vendor/producer-a/crates/pub-quill/Cargo.toml --lib carlton_missing_paragraph_alignment_topology_is_source_safe -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "Carlton paragraph-default topology receipt failed" }
+
       - name: Check shared render plan
         run: cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml
 
