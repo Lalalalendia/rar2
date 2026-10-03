@@ -1,0 +1,177 @@
+name: Reader 1050 trophy sibling A/B
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story65_diagnostic.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/reader1050-trophy-sibling-ab.rs"
+      - ".github/workflows/reader1050-trophy-sibling-ab.yml"
+  push:
+    branches: [main]
+    paths:
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story65_diagnostic.rs"
+      - "vendor/producer-a/crates/pub-viewer/src/bin/reader1050-trophy-sibling-ab.rs"
+      - ".github/workflows/reader1050-trophy-sibling-ab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: reader1050-trophy-sibling-ab-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+  TARGET_SHA: 32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027
+  CONTROL_SHA: 7a5393159155ad6b7e1e47fa2769e05ffdb7124298470bae15faa556b3c06cd6
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Validate diagnostic and runner
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -- --check
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            story65_diagnostic
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --bin reader1050-trophy-sibling-ab
+
+  exact-pair:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact pair identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path("out/pinned1050/materialized/native")
+          expected = {
+              os.environ["TARGET_SHA"]: 81408,
+              os.environ["CONTROL_SHA"]: 95232,
+          }
+          for sha, size in expected.items():
+              path = root / f"{sha}.pub"
+              data = path.read_bytes()
+              actual = hashlib.sha256(data).hexdigest()
+              assert actual == sha, (actual, sha)
+              assert len(data) == size, (sha, len(data), size)
+              assert data[:8] == bytes.fromhex("d0cf11e0a1b11ae1"), sha
+          print({"pair_count": len(expected), "identity_verified": True})
+          PY
+
+      - name: Build exact-pair runner
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin reader1050-trophy-sibling-ab
+
+      - name: Run post-STORY65 exact sibling A/B
+        run: |
+          set -euo pipefail
+          "${CARGO_TARGET_DIR}/release/reader1050-trophy-sibling-ab" \
+            "out/pinned1050/materialized/native/${TARGET_SHA}.pub" \
+            "out/pinned1050/materialized/native/${CONTROL_SHA}.pub" \
+            out/ab
+          cat out/ab/decision.json
+
+      - name: Enforce evidence boundary
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("out/ab/decision.json").read_text())
+          assert payload["target"]["reader"]["opened"] is False, payload["target"]["reader"]
+          assert payload["control"]["reader"]["opened"] is True, payload["control"]["reader"]
+          assert payload["decision"]["typed_corruption_authorized"] is False, payload["decision"]
+          assert payload["target"]["source_sha256"] == "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027"
+          assert payload["control"]["source_sha256"] == "7a5393159155ad6b7e1e47fa2769e05ffdb7124298470bae15faa556b3c06cd6"
+          PY
+
+          if find out/ab -type f \( -iname '*.pub' -o -iname '*.ole' -o -iname '*.bin' \) -print | grep -q .; then
+            echo "Source document bytes entered A/B artifact staging" >&2
+            exit 4
+          fi
+
+      - name: Write job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f out/ab/decision.md ]; then
+            cat out/ab/decision.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Write artifact manifest
+        if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("out/ab")
+          files = []
+          for path in sorted(p for p in root.rglob("*") if p.is_file()):
+              data = path.read_bytes()
+              files.append({
+                  "path": str(path.relative_to(root)),
+                  "byte_len": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              })
+          (root / "artifact-manifest.json").write_text(
+              json.dumps({
+                  "schema": "chaptera.reader1050-trophy-sibling-ab-artifact.v1",
+                  "contains_pub_payloads": False,
+                  "files": files,
+              }, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader1050-trophy-sibling-ab-${{ github.run_id }}
+          path: out/ab/**
+          if-no-files-found: error
+          retention-days: 30
