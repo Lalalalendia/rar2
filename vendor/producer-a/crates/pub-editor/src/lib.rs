@@ -25,8 +25,9 @@ use pub_export::{
     FormatRepresentability, LossItem, LossKind, LossSeverity, PersistenceCompatibilityAssessment,
     PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
     PersistenceTargetProfile, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
-    WriterCapabilityManifest, assess_persistence_compatibility, build_export_report, plan_export,
-    render_human_summary,
+    WriterCapabilityManifest, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
+    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, assess_persistence_compatibility,
+    build_export_report, plan_export, render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
@@ -44,9 +45,10 @@ use pub_odg::{
     add_embedded_images_to_odg, project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
-    PubAssetExportBundle, PubResolvedGraph, PubResolvedNodePayload, PubResolvedStoryFrame,
-    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    materialize_bounded_simple_table_cells, resolve_pub_source_graph,
+    PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
+    PubResolvedStoryFrame, PubTypographyRun, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, materialize_bounded_simple_table_cells,
+    resolve_pub_source_graph,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1438,6 +1440,8 @@ pub fn open_mature_0x2c_editor(
     let resolved = resolve_pub_source_graph(&source.graph)
         .map_err(|error| EditorOpenError::Resolve(error.to_string()))?;
     let mut session = EditorSession::new(resolved.graph).map_err(EditorOpenError::Session)?;
+    session.source_typography_runs = source.typography_runs;
+    session.source_paragraph_alignments = source.paragraph_alignments;
     if let Some(bundle) = source_images {
         let (assets, nodes) = source_image_context_from_bundle(bundle);
         session.source_image_assets = assets;
@@ -1566,6 +1570,8 @@ pub struct EditorSession {
     project_identity: Option<EditorProjectIdentity>,
     source_image_assets: BTreeMap<ResourceId, EditorSourceImageAsset>,
     source_image_nodes: BTreeMap<NodeId, ResourceId>,
+    source_typography_runs: Vec<PubTypographyRun>,
+    source_paragraph_alignments: Vec<PubParagraphAlignmentRun>,
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
@@ -1586,6 +1592,8 @@ impl EditorSession {
             project_identity: Some(new_project_identity()),
             source_image_assets: BTreeMap::new(),
             source_image_nodes: BTreeMap::new(),
+            source_typography_runs: Vec::new(),
+            source_paragraph_alignments: Vec::new(),
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
@@ -2279,6 +2287,8 @@ impl EditorSession {
             &self.graph,
             &self.image_replacements,
             &self.source_image_nodes,
+            &self.source_typography_runs,
+            &self.source_paragraph_alignments,
         );
         let report = build_export_report(
             &plan,
@@ -4008,6 +4018,8 @@ fn editable_export_plan(
     graph: &PubResolvedGraph,
     image_replacements: &BTreeMap<NodeId, Sha256Digest>,
     source_image_nodes: &BTreeMap<NodeId, ResourceId>,
+    source_typography_runs: &[PubTypographyRun],
+    source_paragraph_alignments: &[PubParagraphAlignmentRun],
 ) -> ExportPlan {
     let mut features = BTreeMap::new();
     features.insert("page.geometry".into(), CapabilityLevel::Preserved);
@@ -4074,6 +4086,53 @@ fn editable_export_plan(
             origin: Some(story_id.into_canonical()),
             property_path: Some("story.text".into()),
             require_preserved: true,
+        });
+    }
+
+    let typography_stories = source_typography_runs
+        .iter()
+        .filter_map(|run| graph.stories.contains_key(&run.story_id).then_some(run.story_id))
+        .collect::<BTreeSet<_>>();
+    let color_stories = source_typography_runs
+        .iter()
+        .filter_map(|run| {
+            (run.color_rgb.is_some() && graph.stories.contains_key(&run.story_id))
+                .then_some(run.story_id)
+        })
+        .collect::<BTreeSet<_>>();
+    let alignment_stories = source_paragraph_alignments
+        .iter()
+        .filter_map(|run| graph.stories.contains_key(&run.story_id).then_some(run.story_id))
+        .collect::<BTreeSet<_>>();
+
+    for story_id in typography_stories {
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_FONT_FAMILY_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.typography.font_family".into()),
+            require_preserved: false,
+        });
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_FONT_SIZE_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.typography.font_size".into()),
+            require_preserved: false,
+        });
+    }
+    for story_id in color_stories {
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_TEXT_COLOR_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.typography.color".into()),
+            require_preserved: false,
+        });
+    }
+    for story_id in alignment_stories {
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_PARAGRAPH_ALIGNMENT_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.paragraph_alignment".into()),
+            require_preserved: false,
         });
     }
 
