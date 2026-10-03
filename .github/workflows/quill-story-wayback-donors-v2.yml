@@ -1,7 +1,9 @@
 name: Quill exact-three Wayback donor sweep
 
 on:
-  pull_request:
+  push:
+    branches:
+      - research/quill-story-wayback-donors-v2
     paths:
       - ".github/workflows/quill-story-wayback-donors-v2.yml"
       - "tools/research/quill_story_wayback_donors_v2.py"
@@ -12,8 +14,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: quill-story-wayback-donors-v2-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: quill-story-wayback-donors-v2-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
