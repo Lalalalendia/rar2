@@ -146,9 +146,14 @@ jobs:
 
               if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
                   item["container_type"] = "cfb"
-                  p = PRIVATE / f"{source_id}-{item['sha256'][:16]}.pub"
-                  p.write_bytes(data)
-                  pub_paths.append(p)
+                  # Only externally named .pub members are Publisher fixture candidates.
+                  # Generic CFB members such as OOXML xl/vbaProject.bin are not PUB files
+                  # and must never inflate the Publisher estate count.
+                  public_name = member or label
+                  if Path(public_name).suffix.casefold() == ".pub":
+                      p = PRIVATE / f"{source_id}-{item['sha256'][:16]}.pub"
+                      p.write_bytes(data)
+                      pub_paths.append(p)
               elif data.startswith(b"PK\x03\x04"):
                   item["container_type"] = "zip"
                   try:
