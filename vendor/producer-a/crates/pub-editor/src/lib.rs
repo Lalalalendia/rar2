@@ -30,12 +30,11 @@ pub use writer_assessment::{
 
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, LossItem, LossKind, LossSeverity, PersistenceCompatibilityAssessment,
-    PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
-    FullStoryTypographyV1, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
+    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
+    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
+    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
     STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
-    SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
     assess_persistence_compatibility, build_export_report, plan_export, render_human_summary,
 };
 use pub_idml::{
@@ -52,8 +51,8 @@ use pub_model::{
 pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
-    OdgFullStoryTypographyPlacement, add_embedded_images_to_odg,
-    add_full_story_typography_to_odg, project_resolved_graph_to_odg, write_odg,
+    OdgFullStoryTypographyPlacement, add_embedded_images_to_odg, add_full_story_typography_to_odg,
+    project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
@@ -2312,15 +2311,11 @@ impl EditorSession {
                     let typography = self.full_story_typography_v1();
                     let typography_placements =
                         self.odg_full_story_typography_placements_v1(&typography);
-                    add_full_story_typography_to_odg(
-                        &plan,
-                        &mut package,
-                        &typography_placements,
-                    )
-                    .map_err(|error| EditorExportError::Projection {
-                        target,
-                        message: error.to_string(),
-                    })?;
+                    add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
+                        .map_err(|error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        })?;
                 }
             }
         }
@@ -2563,7 +2558,10 @@ impl EditorSession {
                 continue;
             };
             if frame.previous.is_none() && eligible.contains(&frame.story_id) {
-                roots.entry(frame.story_id).or_default().push(frame.frame_id);
+                roots
+                    .entry(frame.story_id)
+                    .or_default()
+                    .push(frame.frame_id);
             }
         }
 
