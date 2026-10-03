@@ -122,7 +122,7 @@ jobs:
 
           p = Path("out/borderart-fbid-corpus-census.json")
           d = json.loads(p.read_text(encoding="utf-8"))
-          assert d["schema"] == "chaptera.borderart-fbid-corpus-census.v1", d["schema"]
+          assert d["schema"] == "chaptera.borderart-fbid-corpus-census.v2", d["schema"]
           assert d["corpus_file_count"] == 1050, d["corpus_file_count"]
 
           # Exact pinned-corpus proof. These are physical-coordinate facts, not
@@ -157,9 +157,33 @@ jobs:
           assert set(full_domain_values) == set(range(6)), full_domain_values
           assert max(full_domain_values) == full_domain["single_ifbmax"] - 1, full_domain
           assert full_domain["all_fbid_in_range_when_single_ifbmax"] is True, full_domain
+          assert full_domain["catalog_name_count_matches_single_ifbmax"] is True, full_domain
+          assert [row["name"] for row in full_domain["catalog_names"]] == [
+              "Gingerbread Man",
+              "Confetti",
+              "Holly",
+              "Hearts",
+              "Poinsettias",
+              "Snowflakes",
+          ], full_domain["catalog_names"]
+          assert [
+              (row["seq_num"], row["value"], row["catalog_name"])
+              for row in full_domain["resolved_shape_fbid_observations"]
+          ] == [
+              (293, 0, "Gingerbread Man"),
+              (296, 1, "Confetti"),
+              (297, 2, "Holly"),
+              (298, 5, "Snowflakes"),
+              (299, 4, "Poinsettias"),
+              (300, 3, "Hearts"),
+              (301, 3, "Hearts"),
+              (303, 5, "Snowflakes"),
+          ], full_domain["resolved_shape_fbid_observations"]
+          assert full_domain["all_fbid_names_resolved"] is True, full_domain
           assert full_domain["shape_chunks_with_opaque_tail"] == 0, full_domain
           assert full_domain["shape_fbid_wrong_wire_count"] == 0, full_domain
           assert full_domain["ifbmax_wrong_wire_count"] == 0, full_domain
+          assert full_domain["catalog_name_wrong_wire_count"] == 0, full_domain
 
           keys = [
               "mature_0x2c_file_count",
@@ -176,6 +200,9 @@ jobs:
               "max_ifbmax",
               "files_with_fbid_and_single_ifbmax",
               "files_with_fbid_out_of_range_when_single_ifbmax",
+              "files_with_catalog_names",
+              "files_with_catalog_name_count_mismatch",
+              "files_with_unresolved_fbid_names",
           ]
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write("## BorderArt Fbid corpus census\n\n")
@@ -183,6 +210,10 @@ jobs:
                   f.write(f"- {key}: `{d.get(key)}`\n")
               f.write(f"- Fbid values: `{d['shape_fbid_value_counts']}`\n")
               f.write(f"- IfbMax values: `{d['ifbmax_value_counts']}`\n")
+              f.write(f"- distinct catalog names: `{len(d['catalog_name_counts'])}`\n")
+              f.write("\n### Full-domain BorderArt catalog\n\n")
+              for item in full_domain["catalog_names"]:
+                  f.write(f"- Fbid `{item['ordinal']}` -> `{item['name']}`\n")
 
               positives = [
                   row for row in d["rows"]
@@ -194,7 +225,8 @@ jobs:
                       f"- `{row['source_sha256']}`: "
                       f"Fbid={[x['value'] for x in row['shape_fbid_observations']]}; "
                       f"IfbMax={[x['value'] for x in row['ifbmax_observations']]}; "
-                      f"in_range={row['all_fbid_in_range_when_single_ifbmax']}\n"
+                      f"in_range={row['all_fbid_in_range_when_single_ifbmax']}; "
+                      f"names={[x['catalog_name'] for x in row['resolved_shape_fbid_observations']]}\n"
                   )
           print(json.dumps({key: d.get(key) for key in keys}, indent=2, sort_keys=True))
           print("Fbid values", d["shape_fbid_value_counts"])
