@@ -1,0 +1,156 @@
+name: Batch01 scene projection invariant trace
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/batch01-scene-projection-invariant.yml"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: batch01-scene-projection-invariant-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/batch01-scene-projection-invariant
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Build canonical Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Trace exact scene projection failures
+        run: |
+          set -euo pipefail
+          mkdir -p target/batch01-scene-projection-invariant
+          python - <<'PY'
+          import hashlib
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+
+          root = Path.cwd()
+          source_root = root / "out/pinned1050/materialized/native"
+          worker = root / "target/batch01-scene-projection-invariant/debug/chaptera"
+          harness = root / "tools/migration_pdf_worker_isolation.py"
+          out_root = root / "target/batch01-scene-projection-invariant"
+
+          fixtures = [
+              ("018", "48384326430f61ecd6b924d0010631eb72838b0ad09dc33e0e53f3998ff642fe", 343552),
+              ("023", "6bbfbf7b4c9b240026399fcc114ee0eb78fbc954c8f258f5baf3a388d3f188c8", 4573696),
+              ("072", "7860acc670667c456fb29048a4cfa1840e4a7d5b57b7b2a2975c8d76929063dc", 314880),
+          ]
+
+          marker = re.compile(r"^CHAPTERA_PROJECTION_INVARIANT ([a-z0-9_]+)$")
+          rows = []
+          for index, (fixture_id, sha, byte_len) in enumerate(fixtures, 1):
+              source = source_root / f"{sha}.pub"
+              data = source.read_bytes()
+              assert len(data) == byte_len
+              assert hashlib.sha256(data).hexdigest() == sha
+              output_dir = out_root / f"fixture-{fixture_id}"
+              command = [
+                  "python3", str(harness), "run",
+                  "--output-dir", str(output_dir),
+                  "--input", str(source),
+                  "--timeout", "120",
+                  "--address-space-mb", "768",
+                  "--cpu-seconds", "90",
+                  "--open-files", "64",
+                  "--output-file-mb", "32",
+                  "--clear-environment",
+                  "--",
+                  str(worker),
+                  "guest-reader-scene",
+                  "--session-id", "guest:" + str(index).zfill(32),
+                  "--expected-sha256", sha,
+                  "--expected-byte-len", str(byte_len),
+              ]
+              completed = subprocess.run(
+                  command,
+                  cwd=root,
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  timeout=135,
+                  check=False,
+              )
+              isolation = json.loads(completed.stdout)
+              invariants = []
+              for line in str(isolation.get("stderr_tail") or "").splitlines():
+                  m = marker.match(line)
+                  if m:
+                      invariants.append(m.group(1))
+              receipt = None
+              result_path = output_dir / "result.json"
+              if result_path.is_file():
+                  receipt = json.loads(result_path.read_text())
+              row = {
+                  "fixture_id": fixture_id,
+                  "source_sha256": sha,
+                  "source_byte_len": byte_len,
+                  "isolation_status": isolation.get("status"),
+                  "exit_code": isolation.get("exit_code"),
+                  "timed_out": isolation.get("timed_out"),
+                  "reader_classification": receipt.get("classification") if receipt else None,
+                  "reader_terminal_code": receipt.get("terminal_code") if receipt else None,
+                  "projection_invariant": invariants[-1] if invariants else None,
+              }
+              rows.append(row)
+              print(json.dumps(row, sort_keys=True))
+
+          assert all(row["isolation_status"] == "success" for row in rows), rows
+          assert all(row["reader_terminal_code"] == "reader_scene_projection_failed" for row in rows), rows
+          assert all(row["projection_invariant"] for row in rows), rows
+
+          payload = {
+              "schema": "chaptera.batch01-scene-projection-invariant.v1",
+              "repository_commit_sha": "${{ github.sha }}",
+              "worker_limits": {"wall_seconds": 120, "cpu_seconds": 90, "address_space_mb": 768},
+              "raw_stderr_emitted": False,
+              "source_text_emitted": False,
+              "raw_projection_error_emitted": False,
+              "fixtures": rows,
+          }
+          (out_root / "summary.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: batch01-scene-projection-invariant
+          path: target/batch01-scene-projection-invariant/summary.json
+          if-no-files-found: error
+          retention-days: 30
