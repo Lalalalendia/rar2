@@ -490,10 +490,7 @@ pub fn select_mature_master_bank_customer_page_seq_nums_v1(
     Some(StandardPrintServiceTailSelectionV1 {
         profile_id: MATURE_MASTER_BANK_PROFILE_ID_V1.to_owned(),
         raw_page_count: input.pages.len(),
-        customer_page_seq_nums: customers
-            .iter()
-            .map(|page| page.contents_seq_num)
-            .collect(),
+        customer_page_seq_nums: customers.iter().map(|page| page.contents_seq_num).collect(),
         master_page_seq_num: primary_master_seq,
         service_page_seq_nums: tail.iter().map(|page| page.contents_seq_num).collect(),
     })
