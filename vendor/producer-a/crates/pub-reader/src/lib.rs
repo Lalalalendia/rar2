@@ -132,6 +132,7 @@ pub use salvage::{
 };
 pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 pub use structural_base::{
