@@ -132,11 +132,12 @@ jobs:
           import json
           from pathlib import Path
           data = json.loads(Path("target/batch01-033-cross-page/summary.json").read_text())
-          assert data["schema"] == "chaptera.batch01-cross-page-matrix.v1"
+          assert data["schema"] == "chaptera.batch01-cross-page-matrix.v2"
           assert data["candidate_page_count"] == 12
           assert data["reference_page_count"] == 4
           assert data["claims"]["viewer_page_selection_changed"] is False
           assert data["claims"]["fingerprint_used_as_semantic_authority"] is False
+          assert data["claims"]["foreground_metric_used_as_semantic_authority"] is False
           print("cross-page measurement fences verified")
           PY
 
