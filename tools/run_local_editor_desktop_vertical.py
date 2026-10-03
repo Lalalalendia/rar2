@@ -294,7 +294,7 @@ def load_and_verify_project(
             value = identity.get(field)
             if not isinstance(value, str) or not value:
                 raise DesktopVerticalError(
-                    f"pub-editor-v0.11 EditorProject identity missing {field}"
+                    f"{schema_version} EditorProject identity missing {field}"
                 )
     operations = project.get("operations")
     if not isinstance(operations, list):
