@@ -120,6 +120,11 @@ class T891EvidenceClassifierTests(unittest.TestCase):
             self.assertEqual(27, summary["arm_count"])
             self.assertEqual(18, summary["blast_receipt_count"])
             self.assertTrue(all(not row["pub_law_promoted"] for row in summary["candidate_summaries"]))
+            for row in summary["candidate_summaries"]:
+                for side in ("same_vs_control", "changed_vs_control"):
+                    receipt_path = row[side]["blast"]["receipt_path"]
+                    self.assertTrue(receipt_path.startswith("analysis/blast-radius/"))
+                    self.assertNotIn(str(root), receipt_path)
 
     def test_missing_receipt_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
