@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import itertools
 import json
 from pathlib import Path
@@ -20,12 +19,6 @@ from cloud_reader_visual_fingerprint_v1 import (
 SCHEMA = "chaptera.batch01-029-spread-composition.v1"
 EMU_PER_POINT = 12700.0
 FOREGROUND_THRESHOLD = 24
-
-
-def fingerprint_page_id(page_id: str) -> str:
-    if not isinstance(page_id, str) or not page_id:
-        raise ValueError("browser page_id must be non-empty")
-    return hashlib.sha256(page_id.encode("utf-8")).hexdigest()
 
 
 def pil_grid(image: Image.Image) -> bytes:
@@ -65,6 +58,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("browser_receipt", type=Path)
     ap.add_argument("page_role_receipt", type=Path)
+    ap.add_argument("viewer_projection_receipt", type=Path)
     ap.add_argument("reference", type=Path)
     ap.add_argument("fixture")
     ap.add_argument("output", type=Path)
@@ -72,6 +66,7 @@ def main() -> None:
 
     browser = json.loads(args.browser_receipt.read_text(encoding="utf-8"))
     roles = json.loads(args.page_role_receipt.read_text(encoding="utf-8"))
+    projection = json.loads(args.viewer_projection_receipt.read_text(encoding="utf-8"))
     reference = json.loads(args.reference.read_text(encoding="utf-8"))
 
     fixtures = [row for row in browser.get("results", []) if row.get("fixture") == args.fixture]
@@ -87,6 +82,14 @@ def main() -> None:
     screenshots = sorted(fixture.get("screenshots", []), key=lambda row: row.get("page", -1))
     if len(geometry) != int(fixture.get("pages", -1)) or len(screenshots) != len(geometry):
         raise ValueError("browser PAGE geometry/screenshot cardinality mismatch")
+    if projection.get("schema") != "chaptera.viewer-page-fingerprint-receipt.v1":
+        raise ValueError("unsupported Viewer PAGE fingerprint receipt")
+    projection_rows = sorted(
+        projection.get("per_page", []),
+        key=lambda row: row.get("viewer_page_index", -1),
+    )
+    if int(projection.get("viewer_page_count", -1)) != len(geometry) or len(projection_rows) != len(geometry):
+        raise ValueError("Viewer/browser PAGE cardinality mismatch")
 
     role_rows = sorted(roles.get("pages", []), key=lambda row: row["document_ordinal"])
     by_fingerprint = {}
@@ -99,10 +102,15 @@ def main() -> None:
         by_fingerprint[fingerprint] = row
 
     joined = {}
-    for output_index, (page_geometry, shot) in enumerate(zip(geometry, screenshots), start=1):
-        if shot.get("page") != output_index:
-            raise ValueError("screenshot output order drift")
-        fingerprint = fingerprint_page_id(page_geometry.get("page_id"))
+    for output_index, (page_geometry, shot, projected) in enumerate(
+        zip(geometry, screenshots, projection_rows),
+        start=1,
+    ):
+        if shot.get("page") != output_index or projected.get("viewer_page_index") != output_index:
+            raise ValueError("Viewer/browser output order drift")
+        fingerprint = projected.get("page_identity_fingerprint_sha256")
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            raise ValueError("Viewer PAGE fingerprint missing")
         role = by_fingerprint.get(fingerprint)
         if role is None:
             raise ValueError("browser PAGE identity is not present in source-role receipt")
