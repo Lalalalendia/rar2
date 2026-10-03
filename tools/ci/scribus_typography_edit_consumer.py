@@ -44,8 +44,8 @@ def frame_text(frame: str) -> str:
         return scribus.getText(frame)
 
 
-def marker_present(frames: list[str], marker: str) -> bool:
-    return any(marker in frame_text(frame) for frame in frames)
+def frames_with_marker(frames: list[str], marker: str) -> list[str]:
+    return [frame for frame in frames if marker in frame_text(frame)]
 
 
 def normalized_family(value: str) -> str:
@@ -98,7 +98,7 @@ def main() -> int:
     after_length = None
 
     if mode == "edit":
-        if marker_present(frames, marker):
+        if frames_with_marker(frames, marker):
             print("edit marker already exists before requested edit", file=sys.stderr)
             return 5
 
@@ -130,13 +130,33 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 6
-        if not marker_present(all_text_frames(), marker):
+        marker_frames = frames_with_marker(all_text_frames(), marker)
+        if not marker_frames:
             print("scribus edit marker is not observable after insertText", file=sys.stderr)
             return 7
-    else:
-        if not marker_present(frames, marker):
-            print("scribus fresh reopen did not retain edit marker", file=sys.stderr)
+        if not any(
+            frame_matches_typography(frame, expected_family, expected_size_pt)
+            for frame in marker_frames
+        ):
+            print(
+                "scribus edited frame no longer matches expected typography after edit",
+                file=sys.stderr,
+            )
             return 8
+    else:
+        marker_frames = frames_with_marker(frames, marker)
+        if not marker_frames:
+            print("scribus fresh reopen did not retain edit marker", file=sys.stderr)
+            return 9
+        if not any(
+            frame_matches_typography(frame, expected_family, expected_size_pt)
+            for frame in marker_frames
+        ):
+            print(
+                "scribus fresh reopen retained marker but lost expected typography",
+                file=sys.stderr,
+            )
+            return 10
 
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
@@ -145,7 +165,7 @@ def main() -> int:
     scribus.closeDoc()
     if not output.is_file() or output.stat().st_size == 0:
         print("scribus produced no saved document", file=sys.stderr)
-        return 9
+        return 11
 
     receipt = {
         "schema": "chaptera.scribus-text-edit-consumer.v1",
