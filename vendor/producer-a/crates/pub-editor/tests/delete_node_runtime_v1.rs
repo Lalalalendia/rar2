@@ -377,3 +377,28 @@ fn forked_project_preserves_delete_node_under_v0_12() {
     assert!(reopened.authored_shape(authored_node_id()).is_none());
     assert_eq!(reopened.project(), forked);
 }
+
+#[test]
+fn delete_node_remains_an_explicit_native_pub_persistence_requirement() {
+    let mut session = EditorSession::new(graph()).expect("session");
+    create_authored_rectangle(&mut session);
+    session
+        .delete_node(authored_node_id())
+        .expect("DeleteNode");
+
+    let requirements = session
+        .effective_pub_persistence_requirements()
+        .expect("effective persistence requirements");
+    assert!(requirements.iter().any(|requirement| {
+        requirement.feature == "node.deleted_identity"
+            && requirement.origin == Some(authored_node_id().into_canonical())
+            && requirement.property_path.as_deref() == Some("node")
+    }));
+    assert!(
+        session
+            .effective_ordinary_story_text_mutations()
+            .expect("story mutations")
+            .is_empty(),
+        "DeleteNode must not be misclassified as a Story text mutation"
+    );
+}
