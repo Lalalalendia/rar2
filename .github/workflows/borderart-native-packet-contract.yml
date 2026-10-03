@@ -1,0 +1,59 @@
+name: BorderArt Native Packet Contract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "tools/research-runner/experiments/borderart-auth-01.packet.json"
+      - "tools/research-runner/operations/publisher_borderart_auth_01.ps1"
+      - "tools/windows/run_borderart_auth_direct.ps1"
+      - ".github/workflows/borderart-native-packet-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate experiment packet
+        run: |
+          python tools/research-runner/validate_packet.py             --packet tools/research-runner/experiments/borderart-auth-01.packet.json             --expected-environment publisher-2019
+
+      - name: Parse PowerShell syntax
+        shell: pwsh
+        run: |
+          $paths = @(
+            "tools/research-runner/operations/publisher_borderart_auth_01.ps1",
+            "tools/windows/run_borderart_auth_direct.ps1"
+          )
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path),
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$path :: $($_.Message)" }
+              throw "PowerShell parse failed: $path"
+            }
+            Write-Host "PASS $path"
+          }
+
+      - name: Verify direct-run blob gates
+        shell: pwsh
+        run: |
+          $helper = Get-Content tools/windows/run_borderart_auth_direct.ps1 -Raw
+          $packet = (git hash-object tools/research-runner/experiments/borderart-auth-01.packet.json).Trim()
+          $operation = (git hash-object tools/research-runner/operations/publisher_borderart_auth_01.ps1).Trim()
+          if ($helper -notmatch [regex]::Escape($packet)) { throw "Helper does not pin packet blob $packet" }
+          if ($helper -notmatch [regex]::Escape($operation)) { throw "Helper does not pin operation blob $operation" }
+          Write-Host "packet_blob=$packet"
+          Write-Host "operation_blob=$operation"
