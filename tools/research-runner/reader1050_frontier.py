@@ -82,7 +82,7 @@ def load_research_ledger(path: Path) -> dict[str, list[dict[str, Any]]]:
 def effective_reader_state(row: dict[str, Any]) -> dict[str, Any]:
     state = {
         "cfb_inventory_available": row.get("cfb_inventory_available"),
-        "contents_family": effective.get("contents_family"),
+        "contents_family": row.get("contents_family"),
         "has_surviving_evidence": row.get("has_surviving_evidence"),
     }
     probe = row.get("forced_trigger_probe")
@@ -370,7 +370,7 @@ def build_case(
         "outcome": row.get("outcome"),
         "reader_route": row.get("reader_route"),
         "pub_profile": row.get("pub_profile"),
-        "contents_family": row.get("contents_family"),
+        "contents_family": effective.get("contents_family"),
         "salvage_eligibility": row.get("salvage_eligibility"),
         "corruption_evidence": row.get("corruption_evidence"),
         "has_surviving_evidence": effective.get("has_surviving_evidence"),
