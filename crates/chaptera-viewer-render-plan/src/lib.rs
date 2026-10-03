@@ -2030,6 +2030,88 @@ mod tests {
     }
 
     #[test]
+    fn shaping_safe_mixed_candidate_reuse_matches_independent_reshape() {
+        let text = "Hello wide world";
+        let scalars = text.chars().collect::<Vec<_>>();
+        let font_bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = pub_layout::font_fingerprint_sha256(font_bytes);
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 14 * 12_700,
+            bytes: font_bytes,
+        };
+        let runs = vec![
+            AdmittedTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 6,
+                font_size_emu: 12 * 12_700,
+            },
+            AdmittedTypographyRunV1 {
+                scalar_start: 6,
+                scalar_end: 16,
+                font_size_emu: 18 * 12_700,
+            },
+        ];
+
+        let mut prepared = Vec::new();
+        let mut policy_glyphs = Vec::new();
+        for run in &runs {
+            let run_text =
+                scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end).unwrap();
+            let runtime = BoundedShapingRuntime {
+                layout: BoundedLayoutEnvironment {
+                    engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                    font_set_fingerprint: fingerprint.clone(),
+                    resource_fingerprint: font.resource_id.to_owned(),
+                },
+                face_index: font.face_index,
+                font_size_emu: LengthEmu::new(run.font_size_emu),
+                font_bytes,
+            };
+            let shaped =
+                shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).unwrap();
+            prepared.push(prepare_typography_run_v1(*run, &shaped.glyphs).unwrap());
+            policy_glyphs.extend(shaped.glyphs);
+        }
+
+        let policy = break_policy_for_shaped_text(text, &policy_glyphs).unwrap();
+        for (cursor, boundary) in [(0, 11), (6, 11)] {
+            let candidate = policy
+                .candidates
+                .iter()
+                .find(|candidate| candidate.scalar_boundary == boundary)
+                .expect("space boundary");
+            assert!(candidate.safe_without_reshaping);
+            assert!(!candidate.requires_reshaping);
+            assert_eq!(candidate.kind, BoundedBreakKind::Allowed);
+
+            let reshaped = shape_mixed_line_candidate_v1(
+                &scalars,
+                cursor,
+                boundary,
+                candidate.kind,
+                &runs,
+                &font,
+                &fingerprint,
+            )
+            .unwrap();
+            let reused =
+                reuse_mixed_line_candidate_v1(&scalars, cursor, boundary, &prepared, &font)
+                    .unwrap();
+
+            assert_eq!(reused.scalar_end, reshaped.scalar_end);
+            assert_eq!(reused.consumed_scalar_end, reshaped.consumed_scalar_end);
+            assert_eq!(reused.text, reshaped.text);
+            assert_eq!(reused.measured_width_emu, reshaped.measured_width_emu);
+            assert_eq!(reused.line_height_emu, reshaped.line_height_emu);
+            assert_eq!(reused.spans, reshaped.spans);
+        }
+    }
+
+    #[test]
     fn paragraph_alignment_line_offset_requires_one_complete_executable_range() {
         let story_id = StoryId::from_canonical(canonical(3));
         let node_id = NodeId::from_canonical(canonical(2));
