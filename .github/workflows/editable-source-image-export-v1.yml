@@ -34,7 +34,11 @@ jobs:
           python-version: "3.12"
 
       - name: Rust formatting
-        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -p pub-reader -- --check
+        run: |
+          rustfmt --edition 2024 --check \
+            vendor/producer-a/crates/pub-editor/src/lib.rs \
+            vendor/producer-a/crates/pub-editor/src/bin/editable_route_probe.rs \
+            vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs
 
       - name: Acquire pinned Apache POI SampleNewsletter
         shell: bash
