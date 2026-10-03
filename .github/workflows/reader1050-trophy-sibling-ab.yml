@@ -6,6 +6,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/story65_diagnostic.rs"
       - "vendor/producer-a/crates/pub-viewer/src/bin/reader1050-trophy-sibling-ab.rs"
+      - "tools/research-runner/reader1050_trophy_quill_census.py"
       - ".github/workflows/reader1050-trophy-sibling-ab.yml"
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
       - "vendor/producer-a/crates/pub-reader/src/story65_diagnostic.rs"
       - "vendor/producer-a/crates/pub-viewer/src/bin/reader1050-trophy-sibling-ab.rs"
+      - "tools/research-runner/reader1050_trophy_quill_census.py"
       - ".github/workflows/reader1050-trophy-sibling-ab.yml"
   workflow_dispatch:
 
@@ -172,5 +174,105 @@ jobs:
         with:
           name: reader1050-trophy-sibling-ab-${{ github.run_id }}
           path: out/ab/**
+          if-no-files-found: error
+          retention-days: 30
+
+
+  quill-census:
+    needs: exact-pair
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Download fresh-main Reader 1050 authority
+        uses: actions/download-artifact@v4
+        with:
+          name: reader-1050-corpus-baseline-37111581663
+          path: out/reader1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 37111581663
+
+      - name: Run Quill descriptor corpus census
+        run: |
+          set -euo pipefail
+          python tools/research-runner/reader1050_trophy_quill_census.py \
+            --corpus-root out/pinned1050/materialized/native \
+            --baseline-root out/reader1050 \
+            --out out/quill-census
+          cat out/quill-census/quill-census.json
+
+      - name: Enforce corruption authority gates
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("out/quill-census/quill-census.json").read_text())
+          assert payload["corpus_pub_count"] == 1050, payload["corpus_pub_count"]
+          assert payload["quill_stream_present_count"] == 399, payload["quill_stream_present_count"]
+          assert payload["same_root_envelope"]["witness_count"] == 8
+          assert payload["same_root_envelope"]["normal_open_control_count"] == 7
+          assert payload["same_root_envelope"]["invalid_marker_witness_count"] == 1
+          assert payload["target_prefix_match_count"] == 2
+          assert payload["decision"]["typed_corruption_authorized"] is True, payload
+          assert payload["decision"]["status"] == "typed_structural_corruption_evidence"
+          PY
+
+          if find out/quill-census -type f \( -iname '*.pub' -o -iname '*.ole' -o -iname '*.bin' \) -print | grep -q .; then
+            echo "Source document bytes entered Quill census artifact staging" >&2
+            exit 4
+          fi
+
+      - name: Write Quill census summary
+        if: always()
+        run: |
+          if [ -f out/quill-census/quill-census.md ]; then
+            cat out/quill-census/quill-census.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Write Quill census manifest
+        if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("out/quill-census")
+          files = []
+          for path in sorted(p for p in root.rglob("*") if p.is_file()):
+              data = path.read_bytes()
+              files.append({
+                  "path": str(path.relative_to(root)),
+                  "byte_len": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              })
+          (root / "artifact-manifest.json").write_text(
+              json.dumps({
+                  "schema": "chaptera.reader1050-trophy-quill-census-artifact.v1",
+                  "contains_pub_payloads": False,
+                  "files": files,
+              }, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader1050-trophy-quill-census-${{ github.run_id }}
+          path: out/quill-census/**
           if-no-files-found: error
           retention-days: 30
