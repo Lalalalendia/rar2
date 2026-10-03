@@ -23,6 +23,7 @@ mod source_font;
 mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
+mod text_box_creation;
 mod text_session;
 #[cfg(target_os = "windows")]
 mod windows_dll_search;
@@ -1388,6 +1389,7 @@ struct ViewerApp {
     canvas_drag: Option<MoveTransaction>,
     canvas_resize: Option<ResizeTransaction>,
     rectangle_creation: rectangle_creation::RectangleCreateSessionV1,
+    text_box_creation: text_box_creation::TextBoxCreateSessionV1,
     created_text_box_scene_nodes: BTreeSet<pub_editor::NodeId>,
     text_mode: Option<text_session::DesktopTextMode>,
     zoom: f32,
@@ -1453,6 +1455,7 @@ impl ViewerApp {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -1998,6 +2001,7 @@ impl ViewerApp {
 
     fn load_path(&mut self, path: PathBuf) {
         self.rectangle_creation = rectangle_creation::RectangleCreateSessionV1::default();
+        self.text_box_creation = text_box_creation::TextBoxCreateSessionV1::default();
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
         let generation = self.open_state.begin_attempt();
@@ -2318,6 +2322,9 @@ impl ViewerApp {
                         }
                     }
                 } else {
+                    if self.text_box_creation.active() {
+                        let _ = self.text_box_creation.deactivate_to_select();
+                    }
                     if self.text_mode.is_some() {
                         self.exit_canvas_text_mode("rectangle_tool_activation");
                     }
@@ -2331,6 +2338,46 @@ impl ViewerApp {
                         Err(error) => {
                             self.edit_status =
                                 Some(format!("Rectangle tool could not activate: {error}"));
+                        }
+                    }
+                }
+            }
+
+            let text_box_active = self.text_box_creation.active();
+            let text_box_response = ui.add_enabled(
+                editor_available && self.visual.is_some(),
+                egui::SelectableLabel::new(text_box_active, "Text Box"),
+            );
+            if text_box_response.clicked() {
+                self.canvas_drag = None;
+                self.canvas_resize = None;
+                if text_box_active {
+                    match self.text_box_creation.deactivate_to_select() {
+                        Ok(()) => {
+                            self.edit_status = Some("Text Box tool deactivated.".to_owned());
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Text Box tool could not deactivate: {error}"));
+                        }
+                    }
+                } else {
+                    if self.rectangle_creation.active() {
+                        let _ = self.rectangle_creation.deactivate_to_select();
+                    }
+                    if self.text_mode.is_some() {
+                        self.exit_canvas_text_mode("textbox_tool_activation");
+                    }
+                    match self.text_box_creation.activate() {
+                        Ok(()) => {
+                            self.edit_status = Some(
+                                "Text Box tool active. Drag on the page to create one empty Story."
+                                    .to_owned(),
+                            );
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Text Box tool could not activate: {error}"));
                         }
                     }
                 }
@@ -4751,7 +4798,30 @@ impl ViewerApp {
             };
 
             if key == egui::Key::Escape {
-                if self.rectangle_creation.active() {
+                if self.text_box_creation.active() {
+                    if self.text_box_creation.gesture_token.is_some() {
+                        match self.text_box_creation.cancel() {
+                            Ok(()) => {
+                                self.edit_status =
+                                    Some("Cancelled the Text Box draw gesture.".to_owned());
+                            }
+                            Err(error) => {
+                                self.edit_status =
+                                    Some(format!("Text Box gesture cancel failed: {error}"));
+                            }
+                        }
+                    } else {
+                        match self.text_box_creation.deactivate_to_select() {
+                            Ok(()) => {
+                                self.edit_status = Some("Text Box tool deactivated.".to_owned());
+                            }
+                            Err(error) => {
+                                self.edit_status =
+                                    Some(format!("Text Box tool could not deactivate: {error}"));
+                            }
+                        }
+                    }
+                } else if self.rectangle_creation.active() {
                     if self.rectangle_creation.gesture_token.is_some() {
                         match self.rectangle_creation.cancel() {
                             Ok(()) => {
@@ -5311,6 +5381,9 @@ impl ViewerApp {
         let mut resize_error = None;
         let mut rectangle_release = None;
         let mut rectangle_error = None;
+        let mut text_box_release = None;
+        let mut text_box_error = None;
+        let mut text_box_pointer_owned = false;
         let mut edit_text_request: Option<(pub_editor::StoryId, pub_editor::NodeId)> = None;
         let mut text_activation_request: Option<(
             pub_editor::StoryId,
@@ -5440,6 +5513,54 @@ impl ViewerApp {
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
+                    && self.text_box_creation.active()
+                {
+                    text_box_pointer_owned = true;
+                    if self.text_box_creation.gesture_token.is_none()
+                        && primary_pressed
+                        && let (Some(pointer_start_screen), Some(pointer_start)) =
+                            (press_screen, press_document)
+                        && page_rect.contains(pointer_start_screen)
+                        && let Err(error) = self.text_box_creation.pointer_down(
+                            page.id,
+                            pointer_start,
+                            "textbox-draw-v1".to_owned(),
+                        )
+                    {
+                        text_box_error = Some(format!("Text Box draw could not start: {error}"));
+                    }
+
+                    if self.text_box_creation.gesture_token.is_some()
+                        && primary_down
+                        && let Some(point) = pointer_document
+                        && let Err(error) = self.text_box_creation.pointer_move(point)
+                    {
+                        let _ = self.text_box_creation.cancel();
+                        text_box_error = Some(format!("Text Box preview cancelled: {error}"));
+                    }
+
+                    if self.text_box_creation.gesture_token.is_some() && primary_released {
+                        if let Some(point) = pointer_document {
+                            match self.text_box_creation.pointer_up(point) {
+                                Ok(release) => text_box_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.text_box_creation.cancel();
+                                    text_box_error =
+                                        Some(format!("Text Box draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error = Some(
+                                "Text Box draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
+
+                if !reader_only_mode()
+                    && self.text_mode.is_none()
                     && response.drag_started_by(egui::PointerButton::Primary)
                     && let (Some(pointer_start), Some(pointer_current)) =
                         (press_document, pointer_document)
@@ -5468,6 +5589,32 @@ impl ViewerApp {
                             let _ = self.rectangle_creation.cancel();
                             rectangle_error =
                                 Some(format!("Rectangle draw could not start: {error}"));
+                        }
+                    } else if self.text_box_creation.active() {
+                        text_box_pointer_owned = true;
+                        next_canvas_drag = None;
+                        next_canvas_resize = None;
+                        let result = if self.text_box_creation.gesture_token.is_none() {
+                            self.text_box_creation
+                                .pointer_down(
+                                    page.id,
+                                    pointer_start,
+                                    "textbox-draw-v1".to_owned(),
+                                )
+                                .and_then(|()| {
+                                    self.text_box_creation
+                                        .pointer_move(pointer_current)
+                                        .map(|_| ())
+                                })
+                        } else {
+                            self.text_box_creation
+                                .pointer_move(pointer_current)
+                                .map(|_| ())
+                        };
+                        if let Err(error) = result {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error =
+                                Some(format!("Text Box draw could not start: {error}"));
                         }
                     } else {
                         let mut resize_started = false;
@@ -5566,6 +5713,26 @@ impl ViewerApp {
                                     .to_owned(),
                             );
                         }
+                    } else if self.text_box_creation.active()
+                        && self.text_box_creation.gesture_token.is_some()
+                    {
+                        text_box_pointer_owned = true;
+                        if let Some(point) = pointer_document {
+                            match self.text_box_creation.pointer_up(point) {
+                                Ok(release) => text_box_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.text_box_creation.cancel();
+                                    text_box_error =
+                                        Some(format!("Text Box draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error = Some(
+                                "Text Box draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
                     } else if let (Some(mut resize), Some(point)) =
                         (next_canvas_resize.take(), pointer_document)
                     {
@@ -5611,6 +5778,14 @@ impl ViewerApp {
                             let _ = self.rectangle_creation.cancel();
                             rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
                         }
+                    } else if self.text_box_creation.active()
+                        && self.text_box_creation.gesture_token.is_some()
+                    {
+                        text_box_pointer_owned = true;
+                        if let Err(error) = self.text_box_creation.pointer_move(point) {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error = Some(format!("Text Box preview cancelled: {error}"));
+                        }
                     } else if let Some(mut resize) = next_canvas_resize {
                         match resize.update(point) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
@@ -5634,6 +5809,8 @@ impl ViewerApp {
 
                 if !reader_only_mode()
                     && !self.rectangle_creation.active()
+                    && !self.text_box_creation.active()
+                    && !text_box_pointer_owned
                     && response.clicked_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
@@ -5843,6 +6020,26 @@ impl ViewerApp {
                     );
                 }
 
+                if self.text_box_creation.page_id == Some(page.id)
+                    && let Ok(text_box_creation::TextBoxCreatePreviewV1::Bounds(bounds)) =
+                        self.text_box_creation.preview()
+                    && let Some(preview_rect) = render_backend::physical_rect_to_egui(
+                        page_rect,
+                        scene_scale,
+                        bounds.x.get(),
+                        bounds.y.get(),
+                        bounds.width.get(),
+                        bounds.height.get(),
+                    )
+                {
+                    painter.rect_stroke(
+                        preview_rect,
+                        0,
+                        egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(232, 126, 36)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
                 if let Some(mode) = self.text_mode.as_ref()
                     && let Some(stop) = text_session::focus_caret(mode)
                     && stop.page_id == page_id_text
@@ -6004,6 +6201,39 @@ impl ViewerApp {
                             }
                         }
                     }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.edit_status = Some(error);
+                }
+            }
+        }
+
+        if let Some(error) = text_box_error {
+            self.edit_status = Some(error);
+        }
+        if let Some(release) = text_box_release {
+            let outcome = match self.editor.as_mut() {
+                Some(editor) => self.text_box_creation.commit_release(editor, release),
+                None => Err("Editor session is unavailable.".to_owned()),
+            };
+            match outcome {
+                Ok(Some(created)) => {
+                    self.finish_authoring_change(
+                        "Created Text Box in the authoring session. One CreateTextBox operation was committed.",
+                    );
+                    match direct_page_local_instance_v1(
+                        &created.node_id.as_canonical().to_string(),
+                        &created.page_id.as_canonical().to_string(),
+                    ) {
+                        Ok(instance) => self.canvas_selection.select_only(instance.instance_id),
+                        Err(error) => {
+                            self.edit_status = Some(format!(
+                                "Text Box was created, but durable selection could not bind: {error}"
+                            ));
+                        }
+                    }
+                    self.enter_canvas_text_mode(created.story_id, created.node_id);
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -7221,6 +7451,7 @@ mod tests {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -7290,6 +7521,7 @@ mod tests {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -7574,6 +7806,7 @@ mod tests {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -11239,6 +11472,359 @@ mod tests {
             serde_json::to_vec_pretty(&receipt).expect("serialize golden receipt"),
         )
         .expect("write golden receipt");
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_textbox_tool_creates_focuses_types_and_replays_one_new_story() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let fixture_source = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter fixture");
+        let root = std::env::temp_dir().join(format!(
+            "chaptera-gui-textbox-create-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create TextBox GUI temp directory");
+        let fixture = root.join("SampleNewsletter.pub");
+        fs::write(&fixture, &original).expect("write TextBox GUI PUB fixture");
+
+        let fixture_for_app = fixture.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(80)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
+            });
+        harness.step();
+
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor loaded")
+            .operations()
+            .len();
+
+        let (zero_point, drag_start, drag_end) = {
+            let canvas = harness
+                .get_by_label("Document canvas")
+                .raw_bounds()
+                .expect("document canvas has screen bounds");
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let page = visual
+                .document
+                .pages
+                .get(app.selected_page)
+                .expect("selected page");
+            let surface = visual
+                .scene
+                .surfaces
+                .iter()
+                .find(|surface| surface.origin == page.id)
+                .expect("selected page has surface");
+            let viewport = egui::vec2(
+                (canvas.x1 - canvas.x0) as f32,
+                (canvas.y1 - canvas.y0) as f32,
+            );
+            let scene_scale = fitted_scale(
+                surface.size.width.get(),
+                surface.size.height.get(),
+                viewport,
+            )
+            .expect("selected page fits");
+            let page_width = surface.size.width.get() as f32 * scene_scale;
+            let page_height = surface.size.height.get() as f32 * scene_scale;
+            let page_left = ((canvas.x0 + canvas.x1) as f32 - page_width) / 2.0;
+            let page_top = ((canvas.y0 + canvas.y1) as f32 - page_height) / 2.0;
+
+            let doc_start_x = surface.size.width.get() / 5;
+            let doc_start_y = surface.size.height.get() / 5;
+            let doc_end_x = doc_start_x + surface.size.width.get() / 4;
+            let doc_end_y = doc_start_y + surface.size.height.get() / 8;
+            let start = egui::pos2(
+                page_left + doc_start_x as f32 * scene_scale,
+                page_top + doc_start_y as f32 * scene_scale,
+            );
+            let end = egui::pos2(
+                page_left + doc_end_x as f32 * scene_scale,
+                page_top + doc_end_y as f32 * scene_scale,
+            );
+            (start, start, end)
+        };
+
+        // A zero-size release is an explicit one-shot no-op and must return to Select.
+        harness.get_by_label("Text Box").click();
+        harness.step();
+        assert!(harness.state().text_box_creation.active());
+        harness.input_mut().events.extend([
+            egui::Event::PointerMoved(zero_point),
+            egui::Event::PointerButton {
+                pos: zero_point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]);
+        harness.step();
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: zero_point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before,
+            "zero-size TextBox gesture must not create a document revision"
+        );
+        assert!(
+            !harness.state().text_box_creation.active(),
+            "zero-size one-shot must return to Select"
+        );
+        assert!(harness.state().text_box_creation.gesture_token.is_none());
+
+        // Positive drag commits exactly one CreateTextBox and immediately focuses its empty Story.
+        harness.get_by_label("Text Box").click();
+        harness.step();
+        harness.input_mut().events.extend([
+            egui::Event::PointerMoved(drag_start),
+            egui::Event::PointerButton {
+                pos: drag_start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]);
+        harness.step();
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(drag_end));
+        harness.step();
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: drag_end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        harness.step();
+
+        let (created_node_id, created_story_id) = {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("editor");
+            assert_eq!(editor.operations().len(), operations_before + 1);
+            let (node_id, story_id) = match editor.operations().last() {
+                Some(pub_editor::EditOperation::CreateTextBox {
+                    node_id, story_id, ..
+                }) => (*node_id, *story_id),
+                other => panic!("expected one CreateTextBox operation, got {other:?}"),
+            };
+            assert_eq!(editor.graph().stories[&story_id].text, "");
+            assert!(
+                app.visual
+                    .as_ref()
+                    .expect("visual")
+                    .scene
+                    .nodes
+                    .iter()
+                    .any(|node| node.origin == node_id),
+                "accepted CreateTextBox must be materialized in the current Viewer scene"
+            );
+            let mode = app
+                .text_mode
+                .as_ref()
+                .expect("accepted TextBox enters direct text mode");
+            assert_eq!(mode.story_id, story_id);
+            assert_eq!(mode.frame_id, node_id);
+            assert_eq!(mode.session.selection.focus_scalar, 0);
+            assert!(
+                !app.text_box_creation.active(),
+                "accepted one-shot must return to Select"
+            );
+            assert!(app.text_box_creation.gesture_token.is_none());
+            (node_id, story_id)
+        };
+
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::Text("Hello".to_owned()));
+        harness.step();
+        harness.step();
+
+        {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("editor");
+            assert_eq!(editor.operations().len(), operations_before + 2);
+            assert!(matches!(
+                editor.operations().last(),
+                Some(pub_editor::EditOperation::ReplaceStoryRange {
+                    story_id,
+                    replacement_text,
+                    ..
+                }) if *story_id == created_story_id && replacement_text == "Hello"
+            ));
+            assert_eq!(editor.graph().stories[&created_story_id].text, "Hello");
+            assert!(
+                app.visual
+                    .as_ref()
+                    .expect("visual")
+                    .scene
+                    .nodes
+                    .iter()
+                    .any(|node| node.origin == created_node_id)
+            );
+        }
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        assert!(harness.state().text_mode.is_none());
+
+        harness
+            .get_all_by_label("Undo")
+            .next()
+            .expect("Undo created Story text")
+            .click();
+        harness.step();
+        {
+            let editor = harness.state().editor.as_ref().expect("editor");
+            assert_eq!(editor.graph().stories[&created_story_id].text, "");
+            assert!(editor.graph().nodes.contains_key(&created_node_id));
+        }
+
+        harness
+            .get_all_by_label("Undo")
+            .next()
+            .expect("Undo created TextBox")
+            .click();
+        harness.step();
+        {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("editor");
+            assert!(
+                !editor.graph().nodes.contains_key(&created_node_id),
+                "second Undo removes the created TextFrame"
+            );
+            assert!(
+                !editor.graph().stories.contains_key(&created_story_id),
+                "second Undo removes its created Story atomically"
+            );
+            assert!(
+                !app
+                    .visual
+                    .as_ref()
+                    .expect("visual")
+                    .scene
+                    .nodes
+                    .iter()
+                    .any(|node| node.origin == created_node_id),
+                "Scene removes the undone created TextBox"
+            );
+        }
+
+        harness
+            .get_all_by_label("Redo")
+            .next()
+            .expect("Redo created TextBox")
+            .click();
+        harness.step();
+        {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("editor");
+            assert!(editor.graph().nodes.contains_key(&created_node_id));
+            assert_eq!(editor.graph().stories[&created_story_id].text, "");
+            assert!(
+                app.visual
+                    .as_ref()
+                    .expect("visual")
+                    .scene
+                    .nodes
+                    .iter()
+                    .any(|node| node.origin == created_node_id),
+                "Redo restores the same TextBox identity in Scene"
+            );
+        }
+
+        harness
+            .get_all_by_label("Redo")
+            .next()
+            .expect("Redo created Story text")
+            .click();
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .stories[&created_story_id]
+                .text,
+            "Hello"
+        );
+
+        harness.get_by_label("Save Project").click();
+        harness.step();
+        harness.step();
+        harness.step();
+        {
+            let reopen = harness.get_by_label("Reopen Project");
+            assert!(!reopen.is_disabled(), "saved TextBox project can reopen");
+            reopen.click();
+        }
+        harness.step();
+        harness.step();
+        {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("fresh reopened editor");
+            assert!(editor.graph().nodes.contains_key(&created_node_id));
+            assert_eq!(
+                editor.graph().stories[&created_story_id].text,
+                "Hello",
+                "fresh replay restores the same created Story identity and content"
+            );
+            assert!(
+                app.visual
+                    .as_ref()
+                    .expect("visual")
+                    .scene
+                    .nodes
+                    .iter()
+                    .any(|node| node.origin == created_node_id),
+                "fresh replay restores created TextBox Scene visibility"
+            );
+        }
+
+        assert_eq!(
+            fs::read(&fixture).expect("re-read source PUB"),
+            original,
+            "TextBox authoring must not mutate source PUB bytes"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
