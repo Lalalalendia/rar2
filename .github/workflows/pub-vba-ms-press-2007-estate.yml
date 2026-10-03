@@ -1,0 +1,115 @@
+name: Publisher 2007 Step by Step VBA estate measurement
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-vba-ms-press-2007-estate.yml"
+      - "tools/pub_vba_estate_scan.py"
+      - "tools/pub_vba_cfb.py"
+  workflow_dispatch:
+
+concurrency:
+  group: pub-vba-ms-press-2007-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download official Microsoft Press companion files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-vba-ms-press-2007/download target/pub-vba-ms-press-2007/unpacked
+          curl --fail --location --retry 2 --connect-timeout 20 \
+            "https://www.microsoftpressstore.com/content/images/9780735622999/downloads/9780735622999_files.zip" \
+            --output target/pub-vba-ms-press-2007/download/9780735622999_files.zip
+          sha256sum target/pub-vba-ms-press-2007/download/9780735622999_files.zip \
+            | tee target/pub-vba-ms-press-2007/zip-sha256.txt
+          unzip -q target/pub-vba-ms-press-2007/download/9780735622999_files.zip \
+            -d target/pub-vba-ms-press-2007/unpacked
+
+      - name: Inert-scan Publisher practice files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t pubs < <(find target/pub-vba-ms-press-2007/unpacked -type f -iname '*.pub' -print | sort)
+          if [ "${#pubs[@]}" -eq 0 ]; then
+            echo "No Publisher files found in official companion ZIP" >&2
+            exit 1
+          fi
+          printf '%s\n' "${pubs[@]##*/}" > target/pub-vba-ms-press-2007/pub-leaf-names.txt
+          python tools/pub_vba_estate_scan.py scan \
+            --input target/pub-vba-ms-press-2007/unpacked \
+            --recursive \
+            --output target/pub-vba-ms-press-2007/scanner-receipt.json
+
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("target/pub-vba-ms-press-2007")
+          zip_path = root / "download" / "9780735622999_files.zip"
+          scan = json.loads((root / "scanner-receipt.json").read_text(encoding="utf-8"))
+          assert scan["call_classifier_version"] == "v2.1", scan["call_classifier_version"]
+
+          pubs = sorted(
+              p for p in (root / "unpacked").rglob("*")
+              if p.is_file() and p.suffix.casefold() == ".pub"
+          )
+          receipt = {
+              "schema": "chaptera.pub-vba-ms-press-2007-estate.v1",
+              "source": {
+                  "publisher": "Microsoft Press / Pearson",
+                  "book_isbn": "9780735622999",
+                  "url": "https://www.microsoftpressstore.com/content/images/9780735622999/downloads/9780735622999_files.zip",
+                  "zip_sha256": hashlib.sha256(zip_path.read_bytes()).hexdigest(),
+                  "zip_byte_len": zip_path.stat().st_size,
+              },
+              "claims": {
+                  "vba_executed": False,
+                  "ole_com_activated": False,
+                  "source_text_emitted": False,
+                  "practice_file_bytes_uploaded": False,
+                  "frequency_is_market_prevalence": False,
+              },
+              "pub_file_count": len(pubs),
+              "pub_leaf_names": [p.name for p in pubs],
+              "scanner_totals": scan["totals"],
+              "files": scan["files"],
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "zip_sha256": receipt["source"]["zip_sha256"],
+              "pub_file_count": receipt["pub_file_count"],
+              "scanner_totals": receipt["scanner_totals"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pub-vba-ms-press-2007-estate
+          path: |
+            target/pub-vba-ms-press-2007/receipt.json
+            target/pub-vba-ms-press-2007/scanner-receipt.json
+            target/pub-vba-ms-press-2007/zip-sha256.txt
+            target/pub-vba-ms-press-2007/pub-leaf-names.txt
+          if-no-files-found: error
+          retention-days: 90
