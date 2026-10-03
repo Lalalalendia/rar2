@@ -205,13 +205,19 @@ try {
         source_byte_len: fixture.bytes,
         classification: receipt.classification,
         terminal_code: receipt.terminal_code ?? null,
+        projection_failure_class: receipt.projection_failure_class ?? null,
         rendered: false,
         worker_receipt_sha256: sha256(receiptBytes),
         filesystem_confinement: true,
         network_policy: isolation.network_policy,
         screenshots: []
       });
-      console.log(JSON.stringify({ fixture: fixture.name, classification: receipt.classification, terminal_code: receipt.terminal_code ?? null }));
+      console.log(JSON.stringify({
+        fixture: fixture.name,
+        classification: receipt.classification,
+        terminal_code: receipt.terminal_code ?? null,
+        projection_failure_class: receipt.projection_failure_class ?? null
+      }));
       assert.equal(fixture.require_render === true, false, "required reference fixture must render");
       continue;
     }
