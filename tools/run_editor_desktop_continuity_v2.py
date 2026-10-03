@@ -335,13 +335,13 @@ def load_and_verify_project(
         raise ContinuityV2Error("EditorProject source identity mismatch")
 
     schema_version = project.get("schema_version")
-    supported = {f"pub-editor-v0.{version}" for version in range(3, 12)}
+    supported = {f"pub-editor-v0.{version}" for version in range(3, 13)}
     if schema_version not in supported:
         raise ContinuityV2Error("V2 EditorProject schema_version cannot carry required state")
-    if schema_version == "pub-editor-v0.11":
+    if schema_version in {"pub-editor-v0.11", "pub-editor-v0.12"}:
         identity = project.get("identity")
         if not isinstance(identity, dict):
-            raise ContinuityV2Error("pub-editor-v0.11 project must carry durable identity")
+            raise ContinuityV2Error(f"{schema_version} project must carry durable identity")
         for field in ("project_id", "document_id", "history_id", "genesis_revision_id"):
             if not isinstance(identity.get(field), str) or not identity[field]:
                 raise ContinuityV2Error(f"EditorProject identity missing {field}")
