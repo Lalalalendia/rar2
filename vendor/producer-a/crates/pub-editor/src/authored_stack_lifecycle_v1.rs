@@ -81,9 +81,8 @@ pub enum AuthoredStackLifecycleErrorV1 {
 impl fmt::Display for AuthoredStackLifecycleErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidAuthoredShape => formatter.write_str(
-                "authored-stack lifecycle requires a canonical AuthorCreated shape",
-            ),
+            Self::InvalidAuthoredShape => formatter
+                .write_str("authored-stack lifecycle requires a canonical AuthorCreated shape"),
             Self::StackPageMismatch {
                 stack_page_id,
                 shape_page_id,
@@ -98,7 +97,10 @@ impl fmt::Display for AuthoredStackLifecycleErrorV1 {
                 write!(formatter, "authored stack does not contain {node_id:?}")
             }
             Self::DuplicateLaneMember { node_id } => {
-                write!(formatter, "authored stack contains duplicate member {node_id:?}")
+                write!(
+                    formatter,
+                    "authored stack contains duplicate member {node_id:?}"
+                )
             }
             Self::TransitionPageMismatch => {
                 formatter.write_str("authored-stack transition page identity is inconsistent")
@@ -144,9 +146,7 @@ pub fn validate_authored_stack_v1(
     let mut seen = BTreeSet::new();
     for node_id in &stack.members {
         if !seen.insert(*node_id) {
-            return Err(AuthoredStackLifecycleErrorV1::DuplicateLaneMember {
-                node_id: *node_id,
-            });
+            return Err(AuthoredStackLifecycleErrorV1::DuplicateLaneMember { node_id: *node_id });
         }
     }
     Ok(())
@@ -201,7 +201,10 @@ pub fn plan_delete_shape_remove_v1(
     shape: &AuthoredShapeRuntimeV1,
 ) -> Result<AuthoredStackLifecycleTransitionV1, AuthoredStackLifecycleErrorV1> {
     validate_shape_for_stack(stack, shape)?;
-    let Some(member_index) = stack.members.iter().position(|node_id| *node_id == shape.node_id)
+    let Some(member_index) = stack
+        .members
+        .iter()
+        .position(|node_id| *node_id == shape.node_id)
     else {
         return Err(AuthoredStackLifecycleErrorV1::MissingMembership {
             node_id: shape.node_id,
