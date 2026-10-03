@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use pub_editor::{
-    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1,
-    AuthoredShapeRuntimeV1, AuthoredShapeTransformV1, AuthoredSolidFillV1,
-    AuthoredSolidStrokeV1, DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1,
-    DuplicateAuthoredRectangleErrorV1, EditOperation, EditorError, EditorSession, LengthEmu,
-    NodeId, PageId, RectEmu, Srgb8V1, plan_duplicate_authored_rectangle_v1,
+    AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
+    AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1, DUPLICATE_OFFSET_EMU_V1,
+    DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1, EditOperation, EditorError,
+    EditorSession, LengthEmu, NodeId, PageId, RectEmu, Srgb8V1,
+    plan_duplicate_authored_rectangle_v1,
 };
 use pub_model::{
     Affine2D, Document, DocumentId, Node, NodeHeader, NodeKind, Page, ResolvedGraph, Sha256Digest,
@@ -322,12 +322,7 @@ fn imported_collision_invalid_identity_policy_and_same_identity_fail_closed() {
     ));
 
     session
-        .create_shape(
-            duplicate_id(),
-            page_id(),
-            rect(500, 500, 300, 400),
-            paint(),
-        )
+        .create_shape(duplicate_id(), page_id(), rect(500, 500, 300, 400), paint())
         .expect("collision target");
     let operations_with_collision_target = session.operations().len();
     assert!(matches!(
