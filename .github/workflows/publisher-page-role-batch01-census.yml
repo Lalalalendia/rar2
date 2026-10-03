@@ -1,0 +1,179 @@
+name: Publisher page-role Batch01 census
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/publisher-page-role-batch01-census.yml"
+      - "tools/page_role_batch01_census_v1.py"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
+      - "vendor/producer-a/crates/pub-reader/src/bin/page-role-receipt.rs"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+      - "crates/pub-presentation-profile/src/lib.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publisher-page-role-batch01-census-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/page-role-batch01-census
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
+      - name: Download pinned green Batch01 visual baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: publisher-visual-golden-batch01-receipt
+          path: out/pinned-visual
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 37110491071
+
+      - name: Verify pinned visual baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "5a8110736dd5707402bc9f572f9603cb837bbb629d7e310cd957a4ae542a283f  out/pinned-visual/summary.json" | sha256sum -c -
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path("out/pinned-visual/summary.json").read_text())
+          assert summary["schema"] == "chaptera.publisher-visual-fingerprint-compare.v1"
+          mismatches = [
+              row for row in summary["pairs"]
+              if row.get("rendered") is True and row.get("candidate_pages") != row.get("reference_pages")
+          ]
+          assert len(mismatches) == 31, len(mismatches)
+          assert all(row["candidate_pages"] > row["reference_pages"] for row in mismatches)
+          print("pinned visual baseline verified: 31/31 Reader over-admission")
+          PY
+
+      - name: Materialize exact Batch01 PUB inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/page-role-batch01" "$RUNNER_TEMP/page-role-batch01-receipts" target/page-role-batch01
+          python - <<'PY'
+          import csv
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          corpus = Path("out/pinned1050/materialized/native")
+          by_sha = {path.stem.casefold(): path for path in corpus.glob("*.pub")}
+          rows = list(csv.DictReader(Path("tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv").open(newline="", encoding="utf-8-sig")))
+          assert len(rows) == 55, len(rows)
+          target = Path(os.environ["RUNNER_TEMP"]) / "page-role-batch01"
+          receipt = {"schema": "chaptera.batch01-page-role-acquisition.v1", "fixture_count": 55, "fixtures": []}
+          for row in rows:
+              digest = row["pub_sha256"].casefold()
+              source = by_sha.get(digest)
+              assert source is not None, digest
+              data = source.read_bytes()
+              assert len(data) == int(row["pub_bytes"])
+              assert hashlib.sha256(data).hexdigest() == digest
+              destination = target / f"{row['basename']}.pub"
+              shutil.copyfile(source, destination)
+              receipt["fixtures"].append({
+                  "fixture": row["basename"],
+                  "source_sha256": digest,
+                  "bytes": len(data),
+              })
+          Path("target/page-role-batch01/acquisition.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Build source-safe PAGE-role analyzer
+        run: cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt
+
+      - name: Analyze all 55 Batch01 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pub in "$RUNNER_TEMP"/page-role-batch01/*.pub; do
+            name="$(basename "$pub" .pub)"
+            cargo run --quiet --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin page-role-receipt --               "$pub" "$RUNNER_TEMP/page-role-batch01-receipts/$name.json"
+          done
+
+      - name: Build source-safe #451 census
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/page_role_batch01_census_v1.py             tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv             out/pinned-visual/summary.json             "$RUNNER_TEMP/page-role-batch01-receipts"             target/page-role-batch01/summary.json
+
+      - name: Assert census authority fences
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path("target/page-role-batch01/summary.json").read_text())
+          assert summary["schema"] == "chaptera.batch01-page-role-census.v1"
+          assert summary["pinned_visual_baseline"]["mismatch_pair_count"] == 31
+          assert summary["pinned_visual_baseline"]["over_admission_pair_count"] == 31
+          assert summary["pinned_visual_baseline"]["under_admission_pair_count"] == 0
+          claims = summary["claims"]
+          assert claims["measurement_only"] is True
+          assert claims["publisher_reference_page_count_used_as_product_authority"] is False
+          assert claims["research_candidate_promoted_to_product_rule"] is False
+          assert claims["raw_story_text_emitted"] is False
+          assert claims["raw_contents_seq_nums_emitted"] is False
+          print("#451 census fences verified")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publisher-page-role-batch01-census
+          path: target/page-role-batch01/
+          if-no-files-found: error
+          retention-days: 14
