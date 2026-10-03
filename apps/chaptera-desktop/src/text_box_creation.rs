@@ -50,13 +50,11 @@ pub struct CreatedTextBoxV1 {
 pub fn chaptera_text_box_preset_v1() -> AuthoringTextPresetV1 {
     AuthoringTextPresetV1 {
         resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID.to_owned(),
-        font_fingerprint_sha256:
-            chaptera_desktop_fallback_font_resource::EXPECTED_SHA256.to_owned(),
+        font_fingerprint_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256
+            .to_owned(),
         face_index: 0,
         font_size_emu: LengthEmu::new(chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU),
-        line_height_emu: LengthEmu::new(
-            chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
-        ),
+        line_height_emu: LengthEmu::new(chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU),
     }
 }
 
