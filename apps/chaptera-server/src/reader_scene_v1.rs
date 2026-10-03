@@ -71,6 +71,8 @@ pub struct ReaderNodeV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_source_window: Option<ReaderImageSourceWindowV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_content_rotation_degrees: Option<i16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image_recolor: Option<ReaderImageRecolorV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<ReaderTableV1>,
@@ -497,6 +499,7 @@ pub fn from_viewer_geometry_with_fonts(
 
     let mut resource_by_node = HashMap::new();
     let mut source_window_by_node = HashMap::new();
+    let mut image_content_rotation_by_node = HashMap::new();
     let mut recolor_by_node = HashMap::new();
     let mut resources = Vec::with_capacity(geometry.images.len());
     let mut resource_ids = HashSet::new();
@@ -529,6 +532,21 @@ pub fn from_viewer_geometry_with_fonts(
                     .is_some()
                 {
                     return Err(format!("duplicate image source window for node {node_id}"));
+                }
+            }
+            if let Some(rotation) = placement.content_rotation_degrees {
+                if !matches!(rotation, 90 | 180 | 270) {
+                    return Err(format!(
+                        "image placement for node {node_id} has unsupported content rotation"
+                    ));
+                }
+                if image_content_rotation_by_node
+                    .insert(node_id.clone(), rotation)
+                    .is_some()
+                {
+                    return Err(format!(
+                        "duplicate image content rotation for node {node_id}"
+                    ));
                 }
             }
             if let Some(recolor) = placement.recolor.as_ref() {
@@ -841,6 +859,7 @@ pub fn from_viewer_geometry_with_fonts(
                         paint,
                         resource_id,
                         image_source_window,
+                        image_content_rotation_degrees: None,
                         image_recolor: None,
                         table: None,
                         text: node.text.as_ref().map(|text| text.text.clone()),
@@ -909,6 +928,7 @@ pub fn from_viewer_geometry_with_fonts(
             paint: paint_by_node.remove(&node_id),
             resource_id: resource_by_node.remove(&node_id),
             image_source_window: source_window_by_node.remove(&node_id),
+            image_content_rotation_degrees: image_content_rotation_by_node.remove(&node_id),
             image_recolor: recolor_by_node.remove(&node_id),
             table: table_by_node.remove(&node_id),
             text: take_direct_render_text(&mut render_text_by_node, &text_by_node, &node_id),
@@ -2213,6 +2233,7 @@ mod tests {
             paint: None,
             resource_id: None,
             image_source_window: None,
+            image_content_rotation_degrees: None,
             image_recolor: None,
             table: None,
             text: None,
