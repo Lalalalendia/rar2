@@ -136,7 +136,9 @@ fn unique_descriptor(descriptors: &[Descriptor], name: [u8; 4]) -> Result<&Descr
 fn descriptor_range<'a>(bytes: &'a [u8], descriptor: &Descriptor) -> Result<&'a [u8]> {
     let start = usize::try_from(descriptor.data_offset).context("descriptor offset too large")?;
     let len = usize::try_from(descriptor.data_length).context("descriptor length too large")?;
-    let end = start.checked_add(len).context("descriptor range overflow")?;
+    let end = start
+        .checked_add(len)
+        .context("descriptor range overflow")?;
     bytes.get(start..end).context("descriptor outside Quill")
 }
 
@@ -165,17 +167,15 @@ fn grounded_contents_story_catalog(contents: &[u8]) -> Result<MatureStoryCatalog
     if found.len() != 1 {
         bail!("expected exactly one strict 0x65 Story catalog");
     }
-    let chunk =
-        parse_confirmed_0x2c_chunk(stream, contents, found[0].chunk_offsets[0].value)
-            .context("parse Story catalog chunk")?;
-    parse_confirmed_mature_story_catalog(contents, &chunk)
-        .context("parse grounded Story catalog")
+    let chunk = parse_confirmed_0x2c_chunk(stream, contents, found[0].chunk_offsets[0].value)
+        .context("parse Story catalog chunk")?;
+    parse_confirmed_mature_story_catalog(contents, &chunk).context("parse grounded Story catalog")
 }
 
 fn load(path: &Path) -> Result<Doc> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let contents =
-        pub_cfb::read_stream_reader(Cursor::new(&bytes), CONTENTS_STREAM).context("read Contents")?;
+    let contents = pub_cfb::read_stream_reader(Cursor::new(&bytes), CONTENTS_STREAM)
+        .context("read Contents")?;
     let quill =
         pub_cfb::read_stream_reader(Cursor::new(&bytes), QUILL_STREAM).context("read Quill")?;
     let story_catalog = grounded_contents_story_catalog(&contents)?;
@@ -261,11 +261,9 @@ fn main() -> Result<()> {
     let source_id_set = source_ids.iter().copied().collect::<BTreeSet<_>>();
     let variant_id_set = variant_ids.iter().copied().collect::<BTreeSet<_>>();
 
-    let ordinary = pub_quill::parse_confirmed_story_catalog(
-        StreamPath(QUILL_STREAM.into()),
-        &variant.quill,
-    )
-    .ok();
+    let ordinary =
+        pub_quill::parse_confirmed_story_catalog(StreamPath(QUILL_STREAM.into()), &variant.quill)
+            .ok();
 
     let mut lengths = Vec::new();
     let mut ends = Vec::new();
@@ -285,8 +283,7 @@ fn main() -> Result<()> {
     let source_text_units = u64::try_from(source_text.len() / 2).context("TEXT units overflow")?;
     let variant_text_units =
         u64::try_from(variant_text.len() / 2).context("TEXT units overflow")?;
-    let closes_source =
-        ordinary.is_some() && ends.last().copied() == Some(source_text_units);
+    let closes_source = ordinary.is_some() && ends.last().copied() == Some(source_text_units);
     let endpoint_ordinals = if all_in_source_fdpp {
         ends.iter()
             .map(|end| {
