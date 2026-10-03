@@ -12,6 +12,7 @@ on:
       - "research/publisher_borderart_catalog_usage_census.py"
       - "research/publisher_borderart_static_projection.py"
       - "research/publisher_borderart_fbid_index_join.py"
+      - "research/publisher_borderart_payload_layout.py"
   workflow_dispatch:
 
 concurrency:
@@ -76,6 +77,13 @@ jobs:
             --objects out/publisher-html-harvest/objects.json \
             --out out/publisher-html-harvest/borderart-fbid-index-join.json
 
+      - name: Prove BorderArt eight-slot catalog payload layout
+        run: |
+          python research/publisher_borderart_payload_layout.py \
+            --properties out/publisher-html-harvest/properties.json \
+            --objects out/publisher-html-harvest/objects.json \
+            --out out/publisher-html-harvest/borderart-payload-layout.json
+
       - name: Publish summary
         if: always()
         run: |
@@ -116,6 +124,23 @@ jobs:
               for row in d["rows"]:
                   mark = "present" if row["present"] else "missing"
                   f.write(f"- `{row['property_name']} {row['priv']}`: **{mark}**, sources={row['source_count']}\n")
+          PY
+          fi
+          if [ -f out/publisher-html-harvest/borderart-payload-layout.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher-html-harvest/borderart-payload-layout.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## BorderArt eight-slot payload layout\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              for row in d["rows"]:
+                  f.write(
+                      f"- `{row['source_id']}` / `{row['catalog_name']}`: "
+                      f"offsets={row['metadata_offsets']} / cb={row['payload_blob_sizes']}\n"
+                  )
+              f.write("- invariant: 8 offsets, 8 payload blobs, base=108, exact prefix-sum offsets\n")
+              f.write("- bounded clue: alternating 4+4 payload-size classes; corner/edge semantics remain unproven\n")
           PY
           fi
           if [ -f out/publisher-html-harvest/borderart-fbid-index-join.json ]; then
@@ -195,5 +220,6 @@ jobs:
             out/publisher-html-harvest/borderart-catalog-usage-census.json
             out/publisher-html-harvest/borderart-static-projection.json
             out/publisher-html-harvest/borderart-fbid-index-join.json
+            out/publisher-html-harvest/borderart-payload-layout.json
           if-no-files-found: error
           retention-days: 30
