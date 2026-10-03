@@ -1046,6 +1046,40 @@ pub struct ViewerEmbeddedImage {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ViewerImageSceneAdmissionStatsV1 {
+    dropped_node_uses: usize,
+    dropped_placements: usize,
+    dropped_resources: usize,
+}
+
+fn retain_viewer_image_uses_for_scene_nodes_v1(
+    images: &mut Vec<ViewerEmbeddedImage>,
+    admitted_node_ids: &BTreeSet<NodeId>,
+) -> ViewerImageSceneAdmissionStatsV1 {
+    let mut stats = ViewerImageSceneAdmissionStatsV1::default();
+
+    for image in images.iter_mut() {
+        let node_use_count = image.node_ids.len();
+        image
+            .node_ids
+            .retain(|node_id| admitted_node_ids.contains(node_id));
+        stats.dropped_node_uses += node_use_count.saturating_sub(image.node_ids.len());
+
+        let retained_uses = image.node_ids.iter().copied().collect::<BTreeSet<_>>();
+        let placement_count = image.placements.len();
+        image
+            .placements
+            .retain(|placement| retained_uses.contains(&placement.node_id));
+        stats.dropped_placements += placement_count.saturating_sub(image.placements.len());
+    }
+
+    let resource_count = images.len();
+    images.retain(|image| !image.node_ids.is_empty());
+    stats.dropped_resources = resource_count.saturating_sub(images.len());
+    stats
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerSource {
     pub format: String,
@@ -2514,6 +2548,29 @@ fn open_mature_0x2c_bundle(
         &scene,
         &mut document.diagnostics,
     ));
+
+    let admitted_scene_nodes = scene
+        .nodes
+        .iter()
+        .map(|node| node.origin)
+        .collect::<BTreeSet<_>>();
+    let image_admission =
+        retain_viewer_image_uses_for_scene_nodes_v1(&mut images, &admitted_scene_nodes);
+    if image_admission.dropped_node_uses > 0
+        || image_admission.dropped_placements > 0
+        || image_admission.dropped_resources > 0
+    {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.image.page_admission_composed".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "Image projection omitted {} source use(s), {} placement metadata binding(s), and {} resource(s) whose target nodes are outside the admitted Viewer Scene.",
+                image_admission.dropped_node_uses,
+                image_admission.dropped_placements,
+                image_admission.dropped_resources,
+            ),
+        });
+    }
 
     #[cfg(feature = "cmo-slot-compose")]
     let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
@@ -4074,6 +4131,70 @@ mod tests {
 
     fn id(byte: u8) -> CanonicalId {
         CanonicalId::from_bytes([byte; 16])
+    }
+
+    #[test]
+    fn image_uses_compose_with_scene_node_admission() {
+        let admitted = NodeId::from_canonical(id(61));
+        let excluded = NodeId::from_canonical(id(62));
+        let excluded_only = NodeId::from_canonical(id(63));
+        let first_resource = ResourceId::from_canonical(id(71));
+        let second_resource = ResourceId::from_canonical(id(72));
+        let mut images = vec![
+            ViewerEmbeddedImage {
+                resource_id: first_resource,
+                mime: "image/png".to_owned(),
+                node_ids: vec![admitted, excluded],
+                placements: vec![
+                    ViewerImagePlacementV1 {
+                        node_id: admitted,
+                        source_window: None,
+                        content_rotation_degrees: Some(90),
+                        recolor: None,
+                    },
+                    ViewerImagePlacementV1 {
+                        node_id: excluded,
+                        source_window: None,
+                        content_rotation_degrees: None,
+                        recolor: Some(ViewerImageRecolorV1 {
+                            target_rgb: [1, 2, 3],
+                            preserve_grays: false,
+                        }),
+                    },
+                ],
+                bytes: vec![1, 2, 3],
+            },
+            ViewerEmbeddedImage {
+                resource_id: second_resource,
+                mime: "image/jpeg".to_owned(),
+                node_ids: vec![excluded_only],
+                placements: vec![ViewerImagePlacementV1 {
+                    node_id: excluded_only,
+                    source_window: None,
+                    content_rotation_degrees: None,
+                    recolor: None,
+                }],
+                bytes: vec![4, 5, 6],
+            },
+        ];
+        let admitted_nodes = BTreeSet::from([admitted]);
+
+        let stats = retain_viewer_image_uses_for_scene_nodes_v1(&mut images, &admitted_nodes);
+
+        assert_eq!(
+            stats,
+            ViewerImageSceneAdmissionStatsV1 {
+                dropped_node_uses: 2,
+                dropped_placements: 2,
+                dropped_resources: 1,
+            }
+        );
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].resource_id, first_resource);
+        assert_eq!(images[0].node_ids, vec![admitted]);
+        assert_eq!(images[0].placements.len(), 1);
+        assert_eq!(images[0].placements[0].node_id, admitted);
+        assert_eq!(images[0].bytes, vec![1, 2, 3]);
     }
 
     #[test]
