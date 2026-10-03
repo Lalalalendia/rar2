@@ -94,6 +94,7 @@ def main() -> int:
         errors = []
         seen_capture = set()
 
+        query_specs = []
         for crawl in crawls:
             crawl_id = str(crawl["id"])
             endpoint = str(crawl["cdx-api"])
@@ -104,11 +105,23 @@ def main() -> int:
                     "filter": "status:200",
                     "collapse": "digest",
                 }
-                query = endpoint + "?" + urllib.parse.urlencode(params)
-                try:
-                    rows = request_json_lines(query, timeout=18)
-                except Exception as exc:
-                    errors.append({"crawl": crawl_id, "error_class": type(exc).__name__})
+                query_specs.append(
+                    (crawl_id, candidate_url, endpoint + "?" + urllib.parse.urlencode(params))
+                )
+
+        def run_query(spec):
+            crawl_id, candidate_url, query = spec
+            try:
+                return crawl_id, candidate_url, request_json_lines(query, timeout=14), None
+            except Exception as exc:
+                return crawl_id, candidate_url, [], type(exc).__name__
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            for crawl_id, candidate_url, rows, error_class in pool.map(
+                run_query, query_specs
+            ):
+                if error_class:
+                    errors.append({"crawl": crawl_id, "error_class": error_class})
                     continue
                 for row in rows:
                     key = (
@@ -176,7 +189,7 @@ def main() -> int:
         report_targets.append(
             {
                 "source_sha256": source_sha,
-                "collections_queried": len(crawls),
+                "collections_queried": len(crawls),\n                "index_query_count": len(query_specs),
                 "index_capture_count": len(discovered),
                 "downloaded_cfb_count": sum(
                     row.get("download_status") == "cfb" for row in captures
