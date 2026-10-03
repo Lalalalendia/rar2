@@ -1799,6 +1799,16 @@ fn mixed_family_layout_fingerprint_v1(runs: &[ResolvedFamilyTypographyRunV1<'_>]
     fingerprint
 }
 
+fn mixed_family_line_base_height_v1(
+    cursor: u32,
+    runs: &[ResolvedFamilyTypographyRunV1<'_>],
+) -> Result<i64, RenderTextLayoutFallbackReasonV1> {
+    runs.iter()
+        .find(|run| run.scalar_start <= cursor && cursor < run.scalar_end)
+        .map(|run| run.font.default_line_height_emu)
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)
+}
+
 fn shape_mixed_family_line_candidate_v1(
     scalars: &[char],
     cursor: u32,
@@ -1822,10 +1832,7 @@ fn shape_mixed_family_line_candidate_v1(
         .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
     let mut spans = Vec::new();
     let mut measured_width_emu = 0_i64;
-    let mut line_height_emu = runs
-        .first()
-        .map(|run| run.font.default_line_height_emu)
-        .unwrap_or(0);
+    let mut line_height_emu = mixed_family_line_base_height_v1(cursor, runs)?;
 
     for run in runs {
         let span_start = run.scalar_start.max(cursor);
@@ -2517,6 +2524,47 @@ mod tests {
         );
 
         assert_eq!(effective_source_font_family_v1(&visual, &fragment), None);
+    }
+
+    #[test]
+    fn mixed_family_line_height_uses_family_at_line_cursor() {
+        let first_bytes: &[u8] = b"source-free-first-font";
+        let second_bytes: &[u8] = b"source-free-second-font";
+        let first_sha = font_fingerprint_sha256(first_bytes);
+        let second_sha = font_fingerprint_sha256(second_bytes);
+        let runs = vec![
+            ResolvedFamilyTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 2,
+                font_size_emu: 152_400,
+                font: ExplicitRenderTextFontResourceV1 {
+                    resource_id: "font-first",
+                    expected_sha256: &first_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 300_000,
+                    bytes: first_bytes,
+                },
+                font_fingerprint_sha256: first_sha,
+            },
+            ResolvedFamilyTypographyRunV1 {
+                scalar_start: 2,
+                scalar_end: 4,
+                font_size_emu: 152_400,
+                font: ExplicitRenderTextFontResourceV1 {
+                    resource_id: "font-second",
+                    expected_sha256: &second_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 100_000,
+                    bytes: second_bytes,
+                },
+                font_fingerprint_sha256: second_sha,
+            },
+        ];
+
+        assert_eq!(mixed_family_line_base_height_v1(0, &runs), Ok(300_000));
+        assert_eq!(mixed_family_line_base_height_v1(2, &runs), Ok(100_000));
     }
 
     #[test]
