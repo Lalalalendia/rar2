@@ -49,7 +49,8 @@ jobs:
               "property_observations", "property_observations_explicit",
               "property_observations_inferred", "property_observations_unresolved",
               "ambiguous_inference_key_count",
-              "registry_entries", "unique_opl_classes", "unique_property_names"
+              "registry_entries", "unique_opl_classes", "unique_property_names",
+              "publisher_versions"
           ]
           with open(Path.home() / "summary.md", "w", encoding="utf-8") as f:
               f.write("## Publisher HTML harvest\n\n")
@@ -73,5 +74,6 @@ jobs:
             out/publisher-html-harvest/properties.json
             out/publisher-html-harvest/properties.tsv
             out/publisher-html-harvest/registry.tsv
+            out/publisher-html-harvest/version-diff.json
           if-no-files-found: error
           retention-days: 30
