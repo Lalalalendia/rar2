@@ -263,6 +263,10 @@ jobs:
               print("DELTA")
               print(json.dumps({
                   "baseline_repository_commit_sha": delta["baseline_repository_commit_sha"],
+                  "stable_identity_page_count": delta["stable_identity_page_count"],
+                  "remapped_page_count": delta["remapped_page_count"],
+                  "identity_unknown_page_count": delta["identity_unknown_page_count"],
+                  "page_identity_remaps": delta["page_identity_remaps"][:10],
                   "improved_page_count": delta["improved_page_count"],
                   "regressed_page_count": delta["regressed_page_count"],
                   "unchanged_page_count": delta["unchanged_page_count"],
