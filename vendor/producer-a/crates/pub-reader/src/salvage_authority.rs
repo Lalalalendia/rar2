@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 const READER_EVIDENCE_REGISTRY_SCHEMA_V1: &str =
-    "chaptera.reader1050-evidence-registry.v1";
+    "chaptera.reader-evidence-registry.v1";
 const READER_EVIDENCE_REGISTRY_JSON: &str =
     include_str!("../data/reader-evidence-registry.json");
 
@@ -23,8 +23,13 @@ struct EvidenceEntry {
 
 #[derive(Debug, Deserialize)]
 struct EvidenceAuthorityReceipt {
+    kind: String,
     #[serde(default)]
     task_id: Option<String>,
+    #[serde(default)]
+    run_id: Option<u64>,
+    #[serde(default)]
+    artifact_id: Option<u64>,
     #[serde(default)]
     evidence_digest: Option<String>,
     #[serde(default)]
@@ -35,8 +40,9 @@ struct EvidenceAuthorityReceipt {
 pub struct ReaderSalvageAuthority {
     pub source_sha256: String,
     pub owner: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
+    pub task_id: String,
+    pub run_id: u64,
+    pub artifact_id: u64,
     pub evidence_digest: String,
     pub classification: String,
 }
@@ -57,19 +63,30 @@ pub fn typed_corruption_authority(source_sha256: &str) -> Option<ReaderSalvageAu
         return None;
     }
 
-    let evidence_digest = entry.authority_receipt.evidence_digest.as_ref()?;
-    if !is_sha256_digest(evidence_digest) {
+    if entry.authority_receipt.kind != "closed_discriminator" {
         return None;
     }
+    let task_id = entry.authority_receipt.task_id.as_ref()?;
+    let run_id = entry.authority_receipt.run_id?;
+    let artifact_id = entry.authority_receipt.artifact_id?;
+    let evidence_digest = entry.authority_receipt.evidence_digest.as_ref()?;
     let classification = entry.authority_receipt.classification.as_ref()?;
-    if classification.trim().is_empty() || entry.owner.trim().is_empty() {
+    if task_id.trim().is_empty()
+        || run_id == 0
+        || artifact_id == 0
+        || !is_sha256_digest(evidence_digest)
+        || classification.trim().is_empty()
+        || entry.owner.trim().is_empty()
+    {
         return None;
     }
 
     Some(ReaderSalvageAuthority {
         source_sha256: entry.source_sha256.clone(),
         owner: entry.owner.clone(),
-        task_id: entry.authority_receipt.task_id.clone(),
+        task_id: task_id.clone(),
+        run_id,
+        artifact_id,
         evidence_digest: evidence_digest.clone(),
         classification: classification.clone(),
     })
@@ -119,7 +136,9 @@ mod tests {
             authority.classification,
             "malformed-or-stale-publisher97-media-variant"
         );
-        assert_eq!(authority.task_id.as_deref(), Some("PUB-T-650"));
+        assert_eq!(authority.task_id, "PUB-T-650");
+        assert_eq!(authority.run_id, 36072949588);
+        assert_eq!(authority.artifact_id, 10838639727);
     }
 
     #[test]
