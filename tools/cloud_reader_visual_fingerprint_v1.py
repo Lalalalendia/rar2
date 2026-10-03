@@ -147,6 +147,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             page_count_mismatch += 1
 
         pair_metrics = []
+        candidate_page_identity_order_sha256 = None
         if not rendered:
             unsupported.append({
                 "fixture": pair["basename"],
@@ -159,6 +160,18 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             geometry = fixture.get("page_geometry", [])
             if len(shots) != candidate_pages or len(geometry) != candidate_pages:
                 raise ValueError(f"incomplete browser receipt for {pair['basename']}")
+            page_identity_hashes = [entry.get("page_identity_sha256") for entry in geometry]
+            if any(
+                not isinstance(identity, str)
+                or len(identity) != 64
+                or any(ch not in "0123456789abcdef" for ch in identity)
+                for identity in page_identity_hashes
+            ):
+                raise ValueError(f"missing canonical source PAGE identity fingerprint for {pair['basename']}")
+            canonical_identities = "".join(identity + "\n" for identity in page_identity_hashes).encode("ascii")
+            candidate_page_identity_order_sha256 = (
+                "sha256:" + hashlib.sha256(canonical_identities).hexdigest()
+            )
 
             for index in range(min(candidate_pages, expected_pages)):
                 shot = shots[index]
@@ -189,6 +202,8 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
 
         pair_rows.append({
             "fixture": pair["basename"],
+            "source_sha256": pair["pub_sha256"],
+            "candidate_page_identity_order_sha256": candidate_page_identity_order_sha256,
             "reference_state": pair["reference_state"],
             "rendered": rendered,
             "candidate_pages": candidate_pages,
