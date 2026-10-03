@@ -3815,36 +3815,91 @@ impl EditorSession {
 
     pub fn undo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.undo.pop().ok_or(EditorError::NothingToUndo)?;
-        if matches!(operation, EditOperation::ReplaceImage { .. }) {
-            apply_image_inverse(&mut self.image_replacements, &operation)?;
-        } else if matches!(operation, EditOperation::CreateShape { .. }) {
-            apply_authored_shape_inverse(&mut self.authored_shapes, &operation)?;
-        } else if matches!(operation, EditOperation::DeleteNode { .. }) {
-            apply_authored_shape_delete_inverse(&mut self.authored_shapes, &operation)?;
-        } else {
-            apply_inverse(&mut self.graph, &operation)?;
+        let result = (|| {
+            if authored_stack_operation_page_id_v1(&operation).is_some() {
+                let before_stacks = derive_authored_stacks_from_operations_v1(&self.undo)?;
+                let mut expected_after_stacks = before_stacks.clone();
+                apply_authored_stack_history_forward_v1(&mut expected_after_stacks, &operation)?;
+                if expected_after_stacks != self.authored_stacks {
+                    return Err(EditorError::StaleAuthoredStack {
+                        page_id: authored_stack_operation_page_id_v1(&operation)
+                            .expect("lane operation has page"),
+                    });
+                }
+
+                let mut candidate_shapes = self.authored_shapes.clone();
+                match &operation {
+                    EditOperation::CreateShape { .. } => {
+                        apply_authored_shape_inverse(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::DeleteNode { .. } => {
+                        apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::ReorderAuthoredStack { .. } => {}
+                    _ => unreachable!("authored-stack page helper only admits lane operations"),
+                }
+                self.authored_shapes = candidate_shapes;
+                self.authored_stacks = before_stacks;
+            } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
+                apply_image_inverse(&mut self.image_replacements, &operation)?;
+            } else {
+                apply_inverse(&mut self.graph, &operation)?;
+            }
+            self.validate_source_identity()
+        })();
+
+        if let Err(error) = result {
+            self.undo.push(operation);
+            return Err(error);
         }
         self.redo.push(operation);
-        self.validate_source_identity()?;
         Ok(self.redo.last().expect("just pushed undo operation"))
     }
 
     pub fn redo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.redo.pop().ok_or(EditorError::NothingToRedo)?;
-        if matches!(operation, EditOperation::ReplaceImage { .. }) {
-            apply_image_forward(&mut self.image_replacements, &operation)?;
-        } else if matches!(operation, EditOperation::CreateShape { .. }) {
-            let shape = authored_shape_from_operation(&operation)
-                .expect("CreateShape operation reconstructs authored shape");
-            self.validate_create_shape_candidate(&shape)?;
-            self.authored_shapes.insert(shape.node_id, shape);
-        } else if matches!(operation, EditOperation::DeleteNode { .. }) {
-            apply_authored_shape_delete_forward(&mut self.authored_shapes, &operation)?;
-        } else {
-            apply_forward(&mut self.graph, &operation)?;
+        let result = (|| {
+            if authored_stack_operation_page_id_v1(&operation).is_some() {
+                let expected_before_stacks = derive_authored_stacks_from_operations_v1(&self.undo)?;
+                if expected_before_stacks != self.authored_stacks {
+                    return Err(EditorError::StaleAuthoredStack {
+                        page_id: authored_stack_operation_page_id_v1(&operation)
+                            .expect("lane operation has page"),
+                    });
+                }
+                let mut after_stacks = expected_before_stacks.clone();
+                apply_authored_stack_history_forward_v1(&mut after_stacks, &operation)?;
+
+                let mut candidate_shapes = self.authored_shapes.clone();
+                match &operation {
+                    EditOperation::CreateShape { .. } => {
+                        let shape = authored_shape_from_operation(&operation)
+                            .expect("CreateShape operation reconstructs authored shape");
+                        self.validate_create_shape_candidate(&shape)?;
+                        candidate_shapes.insert(shape.node_id, shape);
+                    }
+                    EditOperation::DeleteNode { .. } => {
+                        apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::ReorderAuthoredStack { .. } => {}
+                    _ => unreachable!("authored-stack page helper only admits lane operations"),
+                }
+
+                self.authored_shapes = candidate_shapes;
+                self.authored_stacks = after_stacks;
+            } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
+                apply_image_forward(&mut self.image_replacements, &operation)?;
+            } else {
+                apply_forward(&mut self.graph, &operation)?;
+            }
+            self.validate_source_identity()
+        })();
+
+        if let Err(error) = result {
+            self.redo.push(operation);
+            return Err(error);
         }
         self.undo.push(operation);
-        self.validate_source_identity()?;
         Ok(self.undo.last().expect("just pushed redo operation"))
     }
 
@@ -5269,6 +5324,84 @@ fn apply_inverse(
         }
     }
     Ok(())
+}
+
+fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<PageId> {
+    match operation {
+        EditOperation::CreateShape { page_id, .. } | EditOperation::DeleteNode { page_id, .. } => {
+            Some(*page_id)
+        }
+        EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
+        _ => None,
+    }
+}
+
+fn install_authored_stack_in_map_v1(
+    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
+    stack: AuthoredStackV1,
+) {
+    if stack.members.is_empty() {
+        stacks.remove(&stack.page_id);
+    } else {
+        stacks.insert(stack.page_id, stack);
+    }
+}
+
+fn apply_authored_stack_history_forward_v1(
+    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    match operation {
+        EditOperation::CreateShape { page_id, .. } => {
+            let shape = authored_shape_from_operation(operation)
+                .expect("CreateShape reconstructs authored shape");
+            let before = stacks
+                .get(page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
+            let transition = plan_create_shape_append_v1(&before, &shape)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::DeleteNode {
+            page_id, before, ..
+        } => {
+            let stack = stacks
+                .get(page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
+            let transition = plan_delete_shape_remove_v1(&stack, before)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            let after = apply_authored_stack_transition_forward_v1(&stack, &transition)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::ReorderAuthoredStack { transition } => {
+            let current = stacks
+                .get(&transition.page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(transition.page_id));
+            let after = apply_authored_stack_reorder_forward_v1(&current, transition)
+                .map_err(|_| EditorError::StaleAuthoredStack {
+                    page_id: transition.page_id,
+                })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn derive_authored_stacks_from_operations_v1(
+    operations: &[EditOperation],
+) -> Result<BTreeMap<PageId, AuthoredStackV1>, EditorError> {
+    let mut stacks = BTreeMap::new();
+    for operation in operations {
+        apply_authored_stack_history_forward_v1(&mut stacks, operation)?;
+    }
+    Ok(stacks)
 }
 
 fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredShapeRuntimeV1> {
