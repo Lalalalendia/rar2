@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
+use pub_reader::analyze_mature_0x2c_page_roles;
 use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::{BTreeMap, BTreeSet}, env, fs};
+use std::{collections::{BTreeMap, BTreeSet}, env, fs, io::Cursor};
 
 const SCHEMA: &str = "chaptera.mature-033-page-object-ownership.v1";
 
@@ -45,6 +46,13 @@ fn main() -> Result<()> {
     let bundle = open_pub_bundle(&bytes, viewer_geometry_environment_v0_1())
         .context("open exact PUB through current Viewer bundle")?;
     let graph = &bundle.resolved_graph;
+    let page_roles = analyze_mature_0x2c_page_roles(Cursor::new(bytes.as_slice()))
+        .context("analyze exact source PAGE roles")?;
+    let page_role_by_ordinal = page_roles
+        .pages
+        .into_iter()
+        .map(|page| (page.document_ordinal, page))
+        .collect::<BTreeMap<_, _>>();
 
     let document_pages = graph.document.pages.clone();
     let page_ids = document_pages
@@ -71,6 +79,39 @@ fn main() -> Result<()> {
         .iter()
         .map(|paint| id_string(&paint.node_id))
         .collect::<BTreeSet<_>>();
+    let viewer_story_frame_nodes = bundle
+        .geometry
+        .story_frames
+        .iter()
+        .map(|frame| id_string(&frame.frame_id))
+        .collect::<BTreeSet<_>>();
+    let viewer_text_fragment_nodes = bundle
+        .geometry
+        .text_fragments
+        .iter()
+        .map(|fragment| id_string(&fragment.frame_id))
+        .collect::<BTreeSet<_>>();
+    let viewer_table_nodes = bundle
+        .geometry
+        .tables
+        .iter()
+        .map(|table| id_string(&table.node_id))
+        .collect::<BTreeSet<_>>();
+    let mut viewer_image_nodes = BTreeSet::<String>::new();
+    for image in &bundle.geometry.images {
+        viewer_image_nodes.extend(image.node_ids.iter().map(id_string));
+        viewer_image_nodes.extend(image.placements.iter().map(|placement| id_string(&placement.node_id)));
+    }
+    let source_paint_order_by_page = bundle
+        .source_page_paint_orders
+        .iter()
+        .map(|order| {
+            (
+                id_string(&order.page_id),
+                order.node_ids.iter().map(id_string).collect::<Vec<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
 
     let mut node_parent = BTreeMap::<String, String>::new();
     for node in graph.nodes.values() {
@@ -106,8 +147,12 @@ fn main() -> Result<()> {
         let mut paint_node_count = 0_u64;
         let mut story_frame_count = 0_u64;
         let mut resolved_story_frame_count = 0_u64;
+        let mut viewer_story_frame_count = 0_u64;
+        let mut viewer_text_fragment_count = 0_u64;
         let mut table_node_count = 0_u64;
+        let mut viewer_table_count = 0_u64;
         let mut image_bound_node_count = 0_u64;
+        let mut viewer_image_node_count = 0_u64;
         let mut effective_paint_node_count = 0_u64;
         let mut source_ref_count = 0_u64;
         let mut projection_ref_count = 0_u64;
@@ -141,8 +186,12 @@ fn main() -> Result<()> {
                     resolved_story_frame_count += 1;
                 }
             }
+            viewer_story_frame_count += u64::from(viewer_story_frame_nodes.contains(&node_id));
+            viewer_text_fragment_count += u64::from(viewer_text_fragment_nodes.contains(&node_id));
             table_node_count += u64::from(node.payload.table.is_some());
+            viewer_table_count += u64::from(viewer_table_nodes.contains(&node_id));
             image_bound_node_count += u64::from(node.payload.image_slot.is_some());
+            viewer_image_node_count += u64::from(viewer_image_nodes.contains(&node_id));
             effective_paint_node_count += u64::from(node.payload.effective_paint.is_some());
             source_ref_count += u64::try_from(node.header.source_refs.len()).unwrap_or(u64::MAX);
             projection_ref_count += node
@@ -160,6 +209,29 @@ fn main() -> Result<()> {
             *kind_histogram.entry(node_kind(&node.kind)).or_default() += 1;
         }
 
+        let source_paint_order = source_paint_order_by_page
+            .get(&page_key)
+            .cloned()
+            .unwrap_or_default();
+        let source_paint_order_node_count = source_paint_order.len();
+        let source_paint_order_scene_covered_count = source_paint_order
+            .iter()
+            .filter(|node_id| scene_nodes.contains(*node_id))
+            .count();
+        let source_paint_order_paint_covered_count = source_paint_order
+            .iter()
+            .filter(|node_id| paint_nodes.contains(*node_id))
+            .count();
+        let page_role = page_role_by_ordinal.get(&document_ordinal);
+        let child_raw_type_counts = page_role
+            .map(|page| {
+                page.child_raw_type_counts
+                    .iter()
+                    .map(|(raw_type, count)| (format!("0x{raw_type:02X}"), *count))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+
         rows.push(json!({
             "document_ordinal": document_ordinal,
             "page_identity_fingerprint_sha256": page_fingerprint(page_id),
@@ -172,9 +244,20 @@ fn main() -> Result<()> {
             "paint_node_count": paint_node_count,
             "story_frame_count": story_frame_count,
             "resolved_story_frame_count": resolved_story_frame_count,
+            "viewer_story_frame_count": viewer_story_frame_count,
+            "viewer_text_fragment_count": viewer_text_fragment_count,
             "table_node_count": table_node_count,
+            "viewer_table_count": viewer_table_count,
             "image_bound_node_count": image_bound_node_count,
+            "viewer_image_node_count": viewer_image_node_count,
             "effective_paint_node_count": effective_paint_node_count,
+            "source_paint_order_present": source_paint_order_node_count > 0,
+            "source_paint_order_node_count": source_paint_order_node_count,
+            "source_paint_order_scene_covered_count": source_paint_order_scene_covered_count,
+            "source_paint_order_paint_covered_count": source_paint_order_paint_covered_count,
+            "direct_child_shape_count": page_role.map_or(0, |page| page.shape_child_count),
+            "direct_child_group_count": page_role.map_or(0, |page| page.group_child_count),
+            "direct_child_raw_type_histogram": child_raw_type_counts,
             "source_ref_count": source_ref_count,
             "projection_ref_count": projection_ref_count,
             "node_kind_histogram": kind_histogram,
