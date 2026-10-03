@@ -145,11 +145,15 @@ jobs:
                   raw = json.loads((root/"raw"/f"{fixture}.json").read_text())
                   proj = json.loads((root/"projection"/f"{fixture}.json").read_text())
                   rr, root_ordinals = roles(raw)
-                  per = {int(p["document_ordinal_zero_based"]):p for p in proj.get("per_page", [])}
+                  per = {p["page_identity_fingerprint_sha256"]:p for p in proj.get("per_page", []) if isinstance(p.get("page_identity_fingerprint_sha256"), str)}
+                  raw_by_ordinal = {int(p["document_ordinal"]):p for p in raw.get("pages", [])}
                   joined = []
                   for r in rr:
-                      scene = per.get(r["document_ordinal"], {})
+                      raw_page = raw_by_ordinal.get(r["document_ordinal"], {})
+                      fingerprint = raw_page.get("page_identity_fingerprint_sha256")
+                      scene = per.get(fingerprint, {}) if isinstance(fingerprint, str) else {}
                       item = dict(r)
+                      item["selected_by_current_viewer"] = bool(scene)
                       for key in payload_keys:
                           item[key] = int(scene.get(key, 0))
                       item["scene_payload_score"] = sum(item[key] for key in payload_keys)
@@ -187,7 +191,7 @@ jobs:
                   "source_seq_nums_emitted":False,
                   "source_oid_values_emitted":False,
                   "story_text_emitted":False,
-                  "direct_scene_payload_counted_before_candidate_pruning":True
+                  "direct_scene_payload_counted_for_exact_source_page_identity":True
               }
           }
           (root/"summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True)+"\n")
