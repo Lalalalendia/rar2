@@ -8,6 +8,7 @@ license.workspace=true
 [features]
 default=[]
 cmo-authority-bridge=["dep:pub-plccmob-projection"]
+master-authority-bridge=["dep:pub-master-projection"]
 
 [dependencies]
 anyhow.workspace=true
@@ -20,6 +21,7 @@ pub-escher={path="../pub-escher"}
 pub-model={path="../pub-model"}
 pub-format-registry={path="../pub-format-registry"}
 pub-plccmob-projection={path="../../../../crates/pub-plccmob-projection",optional=true}
+pub-master-projection={path="../../../../crates/pub-master-projection",optional=true}
 serde.workspace=true
 serde_json.workspace=true
 sha2.workspace=true
