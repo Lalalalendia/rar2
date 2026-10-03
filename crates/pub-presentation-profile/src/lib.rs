@@ -616,7 +616,7 @@ pub fn select_mature_primary_secondary_customer_page_seq_nums_v1(
         return None;
     }
 
-    let primary_customers = applied
+    let primary_applied = applied
         .iter()
         .copied()
         .filter(|page| page.applied_master_seq_num == Some(primary))
@@ -626,10 +626,14 @@ pub fn select_mature_primary_secondary_customer_page_seq_nums_v1(
         .copied()
         .filter(|page| page.applied_master_seq_num == Some(secondary))
         .collect::<Vec<_>>();
-    if primary_customers.is_empty()
-        || secondary_applied.is_empty()
+    if primary_applied.is_empty()
+        || secondary_applied.len() < 2
         || applied.last()?.applied_master_seq_num != Some(secondary)
     {
+        return None;
+    }
+    let (terminal_secondary, secondary_customers) = secondary_applied.split_last()?;
+    if secondary_customers.is_empty() || terminal_secondary.document_ordinal != applied.last()?.document_ordinal {
         return None;
     }
 
@@ -662,20 +666,21 @@ pub fn select_mature_primary_secondary_customer_page_seq_nums_v1(
         return None;
     }
 
-    let mut service_page_seq_nums = secondary_applied
+    let mut service_page_seq_nums = primary_applied
         .iter()
         .map(|page| page.contents_seq_num)
         .collect::<Vec<_>>();
+    service_page_seq_nums.push(terminal_secondary.contents_seq_num);
     service_page_seq_nums.extend(tail.iter().map(|page| page.contents_seq_num));
 
     Some(StandardPrintServiceTailSelectionV1 {
-        profile_id: MATURE_PRIMARY_SECONDARY_PROFILE_ID_V1.to_owned(),
+        profile_id: "publisher-mature-0x2c/secondary-applied-ab/v1".to_owned(),
         raw_page_count: base.pages.len(),
-        customer_page_seq_nums: primary_customers
+        customer_page_seq_nums: secondary_customers
             .iter()
             .map(|page| page.contents_seq_num)
             .collect(),
-        master_page_seq_num: primary,
+        master_page_seq_num: secondary,
         service_page_seq_nums,
     })
 }
@@ -1818,10 +1823,13 @@ mod tests {
             mature_primary_secondary_input(),
         )
         .unwrap();
-        assert_eq!(selection.profile_id, MATURE_PRIMARY_SECONDARY_PROFILE_ID_V1);
-        assert_eq!(selection.customer_page_seq_nums, vec![200, 202]);
-        assert_eq!(selection.master_page_seq_num, 100);
-        assert_eq!(selection.service_page_seq_nums, vec![201, 203, 300, 301]);
+        assert_eq!(
+            selection.profile_id,
+            "publisher-mature-0x2c/secondary-applied-ab/v1"
+        );
+        assert_eq!(selection.customer_page_seq_nums, vec![201]);
+        assert_eq!(selection.master_page_seq_num, 101);
+        assert_eq!(selection.service_page_seq_nums, vec![200, 202, 203, 300, 301]);
     }
 
     #[test]
