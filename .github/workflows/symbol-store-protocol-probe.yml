@@ -1,0 +1,32 @@
+name: Symbol Store Protocol Probe
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Probe one-tier two-tier and pointer variants
+        run: |
+          mkdir -p out
+          python research/symbol_store_protocol_probe.py
+      - name: Publish result
+        if: always()
+        run: cat out/symbol-store-protocol.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbol-store-protocol-${{ github.run_id }}
+          path: out/symbol-store-protocol.json
+          if-no-files-found: error
+          retention-days: 30

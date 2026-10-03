@@ -1,0 +1,181 @@
+name: Word 2016 KB5002323 Symbol Probe
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download official Word 2016 x86 security update
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\package | Out-Null
+          $url = "https://download.microsoft.com/download/5/2/e/52e01048-4450-473f-a681-8f2549c468f6/word2016-kb5002323-fullfile-x86-glb.exe"
+          curl.exe -L --fail --retry 3 -o out\package\word2016-kb5002323-x86.exe $url
+          [ordered]@{
+            source = $url
+            size = (Get-Item out\package\word2016-kb5002323-x86.exe).Length
+            sha256 = (Get-FileHash out\package\word2016-kb5002323-x86.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 out\package-receipt.json
+
+      - name: Extract Microsoft self-extractor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\stage1 | Out-Null
+          $exe = (Resolve-Path out\package\word2016-kb5002323-x86.exe).Path
+          $dest = (Resolve-Path out\stage1).Path
+          $p = Start-Process -FilePath $exe -ArgumentList "/quiet","/extract:$dest" -Wait -PassThru
+          $files = @(Get-ChildItem out\stage1 -Recurse -File)
+          [ordered]@{
+            exit_code = $p.ExitCode
+            extracted = @($files | ForEach-Object {
+              [ordered]@{
+                path = $_.FullName.Substring($pwd.Path.Length + 1)
+                size = $_.Length
+                sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+            })
+          } | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 out\stage1-receipt.json
+          if ($p.ExitCode -ne 0) { throw "Office update extraction failed: $($p.ExitCode)" }
+          if (-not ($files | Where-Object { $_.Extension -ieq ".msp" })) { throw "MSP missing after self-extraction" }
+
+      - name: Extract MSP OLE streams with Windows Installer API
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msp = Get-ChildItem out\stage1 -Recurse -File -Filter *.msp | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path out\streams | Out-Null
+          python research\extract_msp_streams.py $msp.FullName out\streams out\msp-streams.json
+          Get-Content out\msp-streams.json | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Expand embedded CAB streams
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\cab-expanded | Out-Null
+          $rows = @()
+          $i = 0
+          foreach ($cab in @(Get-ChildItem out\streams -File -Filter *.cab)) {
+            $i++
+            $dest = Join-Path $pwd ("out\cab-expanded\cab{0:d2}" -f $i)
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            $output = & expand.exe "-F:*" $cab.FullName $dest 2>&1
+            $rows += [pscustomobject]@{
+              cab = $cab.Name
+              destination = $dest.Substring($pwd.Path.Length + 1)
+              exit_code = $LASTEXITCODE
+              file_count = @(Get-ChildItem $dest -Recurse -File -ErrorAction SilentlyContinue).Count
+              output = @($output)
+            }
+          }
+          $rows | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 out\cab-expansion.json
+          Get-Content out\cab-expansion.json | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Inventory CAB payload and locate PE files
+        id: locate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out\modules | Out-Null
+          $rows = @()
+          $wwlib = $null
+          $winword = $null
+          foreach ($f in @(Get-ChildItem out\cab-expanded -Recurse -File -ErrorAction SilentlyContinue)) {
+            $head = New-Object byte[] ([Math]::Min(16, [int]$f.Length))
+            if ($head.Length -gt 0) {
+              $s = [System.IO.File]::OpenRead($f.FullName)
+              try { [void]$s.Read($head,0,$head.Length) } finally { $s.Dispose() }
+            }
+            $isPe = $head.Length -ge 2 -and $head[0] -eq 0x4d -and $head[1] -eq 0x5a
+            $row = [ordered]@{
+              path = $f.FullName.Substring($pwd.Path.Length + 1)
+              size = $f.Length
+              magic_hex = (($head | ForEach-Object { $_.ToString("x2") }) -join "")
+              sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              is_pe = $isPe
+            }
+            if ($isPe) {
+              try {
+                $vi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($f.FullName)
+                $row.original_filename = $vi.OriginalFilename
+                $row.internal_name = $vi.InternalName
+                $row.file_version = $vi.FileVersion
+                $row.product_version = $vi.ProductVersion
+                if (-not $wwlib -and ($vi.OriginalFilename -ieq "WWLIB.DLL" -or $vi.InternalName -ieq "WWLIB")) { $wwlib = $f }
+                if (-not $winword -and ($vi.OriginalFilename -ieq "WINWORD.EXE" -or $vi.InternalName -ieq "WINWORD")) { $winword = $f }
+              } catch {}
+            }
+            $rows += [pscustomobject]$row
+          }
+          $rows | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 out\cab-payload-inventory.json
+          if ($wwlib) { Copy-Item $wwlib.FullName out\modules\WWLIB.DLL -Force }
+          if ($winword) { Copy-Item $winword.FullName out\modules\WINWORD.EXE -Force }
+          [ordered]@{
+            wwlib_found = [bool]$wwlib
+            winword_found = [bool]$winword
+            wwlib_path = if ($wwlib) { $wwlib.FullName.Substring($pwd.Path.Length + 1) } else { $null }
+            winword_path = if ($winword) { $winword.FullName.Substring($pwd.Path.Length + 1) } else { $null }
+            payload_file_count = $rows.Count
+            pe_count = @($rows | Where-Object { $_.is_pe }).Count
+          } | ConvertTo-Json | Set-Content -Encoding UTF8 out\target-location.json
+          Get-Content out\target-location.json | Add-Content $env:GITHUB_STEP_SUMMARY
+          "wwlib_found=$([bool]$wwlib)" | Add-Content $env:GITHUB_OUTPUT
+
+      - name: Probe exact patched WWLIB CodeView identity
+        if: steps.locate.outputs.wwlib_found == 'True'
+        shell: pwsh
+        run: |
+          $args = @("research\generic_symbol_probe.py","out\symbol-probe.json","word2016_kb5002323=out\modules\WWLIB.DLL")
+          if (Test-Path out\modules\WINWORD.EXE) { $args += "word2016_kb5002323=out\modules\WINWORD.EXE" }
+          python @args
+
+      - name: Publish receipts
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($f in @("package-receipt.json","stage1-receipt.json","msp-streams.json","cab-expansion.json","cab-payload-inventory.json","target-location.json","symbol-probe.json")) {
+            $p = Join-Path out $f
+            if (Test-Path $p) {
+              "## $f" | Add-Content $env:GITHUB_STEP_SUMMARY
+              Get-Content $p | Add-Content $env:GITHUB_STEP_SUMMARY
+            }
+          }
+
+      - name: Guard evidence boundary
+        if: always()
+        shell: pwsh
+        run: |
+          $bad = Get-ChildItem out -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\package\\|\\stage1\\|\\streams\\|\\cab-expanded\\|\\modules\\' -and
+              $_.Extension -match '^\.(exe|dll|pdb|pd_|cab|msi|msp)$'
+            }
+          if ($bad) { throw "Binary escaped private working paths" }
+
+      - name: Upload derived metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: word2016-kb5002323-symbol-probe-${{ github.run_id }}
+          path: |
+            out/package-receipt.json
+            out/stage1-receipt.json
+            out/msp-streams.json
+            out/cab-expansion.json
+            out/cab-payload-inventory.json
+            out/target-location.json
+            out/symbol-probe.json
+          if-no-files-found: warn
+          retention-days: 30
