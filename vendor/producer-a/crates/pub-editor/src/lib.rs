@@ -3178,10 +3178,11 @@ impl EditorSession {
         self.validate_create_shape_candidate(&shape)?;
 
         let before_stack = self.current_authored_stack_v1(shape.page_id);
-        let transition = plan_create_shape_append_v1(&before_stack, &shape)
-            .map_err(|_| EditorError::StaleAuthoredStack {
+        let transition = plan_create_shape_append_v1(&before_stack, &shape).map_err(|_| {
+            EditorError::StaleAuthoredStack {
                 page_id: shape.page_id,
-            })?;
+            },
+        )?;
         let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
             .map_err(|_| EditorError::StaleAuthoredStack {
                 page_id: shape.page_id,
@@ -3349,8 +3350,8 @@ impl EditorSession {
         }
 
         let before = self.current_authored_stack_v1(page_id);
-        let transition = plan_reorder_authored_stack_v1(&before, node_id, mode).map_err(|error| {
-            match error {
+        let transition = plan_reorder_authored_stack_v1(&before, node_id, mode).map_err(
+            |error| match error {
                 AuthoredStackReorderErrorV1::NoChange { .. } => {
                     EditorError::AuthoredStackReorderNoChange { node_id }
                 }
@@ -3379,21 +3380,22 @@ impl EditorSession {
         let EditOperation::ReorderAuthoredStack { transition } = &operation else {
             unreachable!("consume_canonical_reorder_authored_stack receives ReorderAuthoredStack")
         };
-        let shape = self
-            .authored_shapes
-            .get(&transition.node_id)
-            .ok_or(EditorError::AuthoredStackReorderUnsupported {
+        let shape = self.authored_shapes.get(&transition.node_id).ok_or(
+            EditorError::AuthoredStackReorderUnsupported {
                 node_id: transition.node_id,
-            })?;
+            },
+        )?;
         if shape.page_id != transition.page_id || shape.parent_id != transition.page_id {
             return Err(EditorError::AuthoredStackReorderUnsupported {
                 node_id: transition.node_id,
             });
         }
         let current = self.current_authored_stack_v1(transition.page_id);
-        let after = apply_authored_stack_reorder_forward_v1(&current, transition)
-            .map_err(|_| EditorError::StaleAuthoredStack {
-                page_id: transition.page_id,
+        let after =
+            apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
+                EditorError::StaleAuthoredStack {
+                    page_id: transition.page_id,
+                }
             })?;
         self.install_authored_stack_v1(after);
         self.undo.push(operation.clone());
@@ -5390,9 +5392,11 @@ fn apply_authored_stack_history_forward_v1(
                 .get(&transition.page_id)
                 .cloned()
                 .unwrap_or_else(|| AuthoredStackV1::empty(transition.page_id));
-            let after = apply_authored_stack_reorder_forward_v1(&current, transition)
-                .map_err(|_| EditorError::StaleAuthoredStack {
-                    page_id: transition.page_id,
+            let after =
+                apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
+                    EditorError::StaleAuthoredStack {
+                        page_id: transition.page_id,
+                    }
                 })?;
             install_authored_stack_in_map_v1(stacks, after);
         }
