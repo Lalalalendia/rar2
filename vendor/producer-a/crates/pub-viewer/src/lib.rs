@@ -43,9 +43,8 @@ use pub_presentation_profile::{
     LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1, Legacy22PageListDialectV1,
     Legacy22PageListEntryEvidenceV1, Legacy22PageListProfileInputV1,
     MaturePrimarySecondaryDocumentEntryEvidenceV1, MaturePrimarySecondaryProfileInputV1,
-    STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1,
-    StandardPrintServiceTailPageEvidenceV1, StandardPrintServiceTailProfileInputV1,
-    carlton_admitted_carrier_page_seq_nums_v1,
+    STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
+    StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
     reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
     select_legacy22_customer_page_indices_v1,
     select_mature_detached_post_special_tail_customer_page_seq_nums_v1,
@@ -3050,14 +3049,12 @@ fn select_viewer_pages(
             };
         }
 
-        if let Some(selection) =
-            select_mature_primary_secondary_customer_page_seq_nums_v1(
-                MaturePrimarySecondaryProfileInputV1 {
-                    base: input.clone(),
-                    document_entries: primary_secondary_document_entries,
-                },
-            )
-        {
+        if let Some(selection) = select_mature_primary_secondary_customer_page_seq_nums_v1(
+            MaturePrimarySecondaryProfileInputV1 {
+                base: input.clone(),
+                document_entries: primary_secondary_document_entries,
+            },
+        ) {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
                 let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
