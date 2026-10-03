@@ -7,6 +7,7 @@ on:
     paths:
       - "vendor/producer-a/crates/pub-reader/src/bin/escher_fopt_census.rs"
       - "research/publisher11_borderart_fopt_probe.py"
+      - "research/publisher11_borderart_projection_join.py"
       - ".github/workflows/publisher11-borderart-fopt-probe.yml"
   workflow_dispatch:
 
@@ -40,6 +41,26 @@ jobs:
           printf '{"source_sha256":"%s","source_size":%s}\n' \
             "$actual" "$(stat -c %s /tmp/help.pub)" > out/source-receipt.json
 
+      - name: Acquire exact paired Publisher 11 help.htm
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            -o /tmp/help.htm \
+            "https://raw.githubusercontent.com/Planet-Source-Code/hartoto-flexible-phoone-book__1-69597/1400f033db5f4a57cca6d5392f551943271b7f72/help.htm"
+          actual="$(sha256sum /tmp/help.htm | awk '{print $1}')"
+          expected="6c2edf51c7a8d7ff76f1466d6bff69e37c7110ece27bcfac093cd0ce40aa7c5b"
+          test "$actual" = "$expected"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("out/source-receipt.json")
+          d = json.loads(p.read_text())
+          d["html_sha256"] = "6c2edf51c7a8d7ff76f1466d6bff69e37c7110ece27bcfac093cd0ce40aa7c5b"
+          d["html_size"] = Path("/tmp/help.htm").stat().st_size
+          p.write_text(json.dumps(d, indent=2))
+          PY
+
       - name: Build and run exact FOPT census
         shell: bash
         run: |
@@ -54,6 +75,14 @@ jobs:
           python research/publisher11_borderart_fopt_probe.py \
             --census out/escher-fopt-census.json \
             --out out/publisher11-borderart-fopt-probe.json
+
+      - name: Join LastFmt line state to OfficeArt and VML
+        run: |
+          python research/publisher11_borderart_projection_join.py \
+            --pub-receipt out/source-receipt.json \
+            --html /tmp/help.htm \
+            --census out/escher-fopt-census.json \
+            --out out/publisher11-borderart-projection-join.json
 
       - name: Publish summary
         if: always()
@@ -82,6 +111,25 @@ jobs:
               f.write(f"- target BLIP-id IDs: `{c['target_blip_id_property_ids']}`\n")
           PY
           fi
+          if [ -f out/publisher11-borderart-projection-join.json ]; then
+            python - <<'PY'
+          import json, os
+          from pathlib import Path
+          d = json.loads(Path("out/publisher11-borderart-projection-join.json").read_text())
+          o = d["officeart"]
+          v = d["vml"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n## Publisher 11 BorderArt projection join\n\n")
+              f.write(f"- verdict: `{d['verdict']}`\n")
+              f.write(f"- FBID: `{d['target']['fbid']}`\n")
+              f.write(f"- lineColor: `{o['line_color']['op_hex']}` ↔ VML `{v['strokecolor']}`\n")
+              f.write(f"- lineBackColor: `{o['line_back_color']['op_hex']}` ↔ VML `{v['stroke_color2']}`\n")
+              f.write(f"- lineWidth: `{o['line_width']['op']}` EMU = `{o['line_width']['points']}pt` ↔ VML `{v['strokeweight']}`\n")
+              f.write(f"- insetPen: `{o['line_booleans']['fInsetPen']}` ↔ VML `{v['insetpen']}`\n")
+              f.write(f"- target direct FOPT pointer flags: `{d['direct_pointer_flags']}`\n")
+              f.write(f"- same-file BLIP control shape 356: `{d['same_file_blip_control_shape_356']}`\n")
+          PY
+          fi
 
       - name: Guard source-free evidence boundary
         if: always()
@@ -102,5 +150,6 @@ jobs:
             out/source-receipt.json
             out/escher-fopt-census.json
             out/publisher11-borderart-fopt-probe.json
+            out/publisher11-borderart-projection-join.json
           if-no-files-found: error
           retention-days: 30
