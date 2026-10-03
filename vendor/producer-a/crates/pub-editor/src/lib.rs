@@ -2412,7 +2412,7 @@ impl EditorSession {
         })
     }
 
-    fn full_story_typography_v1(&self) -> Vec<FullStoryTypographyV1> {
+    pub fn full_story_typography_v1(&self) -> Vec<FullStoryTypographyV1> {
         let ordinary_story_ids = self
             .graph
             .nodes

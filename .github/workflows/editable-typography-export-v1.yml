@@ -1,0 +1,258 @@
+name: Editable Typography Export V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "tools/verify_editable_typography_export.py"
+      - "tools/ci/scribus_idml_consumer.py"
+      - ".github/workflows/editable-typography-export-v1.yml"
+  push:
+    branches: [main]
+    paths:
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+      - "tools/verify_editable_typography_export.py"
+      - "tools/ci/scribus_idml_consumer.py"
+      - ".github/workflows/editable-typography-export-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: editable-typography-export-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bounded-consumer-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/editable-typography
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/editable-typography-evidence
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+      PINNED_CORPUS_COUNT: "1050"
+      PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check changed Rust formatting
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -p pub-export -p pub-idml -p pub-odg -- --check
+
+      - name: Run bounded writer unit tests
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-idml typography
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-odg typography
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [p.stem.casefold() for p in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate corpus SHA"
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          print(f"verified {len(paths)} exact PUB files; sha-list digest={digest}")
+          PY
+
+      - name: Build typography and editable-route probes
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --release --bin editable_typography_probe --bin editable_route_probe
+
+      - name: Select first exact bounded typography witness
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          evidence = Path(os.environ["EVIDENCE_ROOT"])
+          probe = Path(os.environ["CARGO_TARGET_DIR"]) / "release" / "editable_typography_probe"
+
+          selected = None
+          for path in sorted(root.glob("*.pub")):
+              run = subprocess.run(
+                  [str(probe), str(path)],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+                  timeout=30,
+              )
+              data = json.loads(run.stdout)
+              if data["open_state"] == "admitted" and data["eligible_count"] > 0:
+                  selected = (path, data)
+                  break
+
+          assert selected is not None, "exact corpus contains no bounded full-Story typography witness"
+          path, data = selected
+          (evidence / "expected.json").write_text(
+              json.dumps(data, indent=2, sort_keys=True) + "\n"
+          )
+          (evidence / "witness.txt").write_text(str(path) + "\n")
+          print(json.dumps({
+              "source_sha256": data["source_sha256"],
+              "eligible_count": data["eligible_count"],
+              "font_size_pt": sorted({item["font_size_pt"] for item in data["items"]}),
+              "font_family_count": len({item["font_family"] for item in data["items"]}),
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Materialize exact IDML and ODG
+        run: |
+          set -euo pipefail
+          pub="$(cat "$EVIDENCE_ROOT/witness.txt")"
+          sha="$(basename "$pub" .pub)"
+          "$CARGO_TARGET_DIR/release/editable_route_probe"             "$pub"             --label "$sha.pub"             --materialize-dir "$EVIDENCE_ROOT/materialized"             > "$EVIDENCE_ROOT/route.json"
+          test -s "$EVIDENCE_ROOT/materialized/output.idml"
+          test -s "$EVIDENCE_ROOT/materialized/output.odg"
+
+      - name: Verify target wire before consumer import
+        run: |
+          set -euo pipefail
+          python tools/verify_editable_typography_export.py             wire             --expected "$EVIDENCE_ROOT/expected.json"             --root "$EVIDENCE_ROOT/materialized"             --receipt "$EVIDENCE_ROOT/wire.json"
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends scribus libreoffice-draw xvfb
+
+      - name: Scribus import save reopen save
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/scribus"
+          CHAPTERA_SCRIBUS_SLA_OUT="$EVIDENCE_ROOT/scribus/round1.sla"             xvfb-run -a scribus -g -ns               -py tools/ci/scribus_idml_consumer.py --               "$EVIDENCE_ROOT/materialized/output.idml"
+          test -s "$EVIDENCE_ROOT/scribus/round1.sla"
+          CHAPTERA_SCRIBUS_SLA_OUT="$EVIDENCE_ROOT/scribus/round2.sla"             xvfb-run -a scribus -g -ns               -py tools/ci/scribus_idml_consumer.py --               "$EVIDENCE_ROOT/scribus/round1.sla"
+          test -s "$EVIDENCE_ROOT/scribus/round2.sla"
+          python tools/verify_editable_typography_export.py             scribus             --expected "$EVIDENCE_ROOT/expected.json"             --input "$EVIDENCE_ROOT/scribus/round2.sla"             --receipt "$EVIDENCE_ROOT/scribus.json"
+
+      - name: LibreOffice import save reopen save
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/lo1" "$EVIDENCE_ROOT/lo2" "$EVIDENCE_ROOT/lo3"
+          libreoffice --headless             --convert-to fodg             --outdir "$EVIDENCE_ROOT/lo1"             "$EVIDENCE_ROOT/materialized/output.odg"
+          test -s "$EVIDENCE_ROOT/lo1/output.fodg"
+          libreoffice --headless             --convert-to odg             --outdir "$EVIDENCE_ROOT/lo2"             "$EVIDENCE_ROOT/lo1/output.fodg"
+          test -s "$EVIDENCE_ROOT/lo2/output.odg"
+          libreoffice --headless             --convert-to fodg             --outdir "$EVIDENCE_ROOT/lo3"             "$EVIDENCE_ROOT/lo2/output.odg"
+          test -s "$EVIDENCE_ROOT/lo3/output.fodg"
+          python tools/verify_editable_typography_export.py             libreoffice             --expected "$EVIDENCE_ROOT/expected.json"             --input "$EVIDENCE_ROOT/lo3/output.fodg"             --receipt "$EVIDENCE_ROOT/libreoffice.json"
+
+      - name: Build source-safe acceptance receipt
+        env:
+          REPO_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          expected = json.loads((root / "expected.json").read_text())
+
+          def digest(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          receipt = {
+              "schema": "chaptera.editable-typography-export-receipt.v1",
+              "repository_commit_sha": os.environ["REPO_SHA"],
+              "source_sha256": expected["source_sha256"],
+              "eligible_story_count": expected["eligible_count"],
+              "typography": [
+                  {
+                      "story_id": item["story_id"],
+                      "font_family": item["font_family"],
+                      "font_size_emu": item["font_size_emu"],
+                      "font_size_pt": item["font_size_pt"],
+                  }
+                  for item in expected["items"]
+              ],
+              "checks": {
+                  "target_wire": json.loads((root / "wire.json").read_text()),
+                  "scribus_save_reopen": json.loads((root / "scribus.json").read_text()),
+                  "libreoffice_save_reopen": json.loads((root / "libreoffice.json").read_text()),
+              },
+              "output_sha256": {
+                  "idml": digest(root / "materialized" / "output.idml"),
+                  "odg": digest(root / "materialized" / "output.odg"),
+              },
+              "claims": {
+                  "bounded_full_story_font_family_and_size_wire_survived": True,
+                  "consumer_save_reopen_proven": True,
+                  "loss_report_manifest_upgraded_by_this_change": False,
+                  "partial_or_mixed_runs_proven": False,
+                  "color_or_alignment_proven": False,
+              },
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({
+              "source_sha256": receipt["source_sha256"],
+              "eligible_story_count": receipt["eligible_story_count"],
+              "output_sha256": receipt["output_sha256"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe typography receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editable-typography-export-v1-${{ github.run_id }}
+          path: |
+            target/editable-typography-evidence/expected.json
+            target/editable-typography-evidence/route.json
+            target/editable-typography-evidence/wire.json
+            target/editable-typography-evidence/scribus.json
+            target/editable-typography-evidence/libreoffice.json
+            target/editable-typography-evidence/receipt.json
+          if-no-files-found: warn
+          retention-days: 90
