@@ -12,6 +12,7 @@ on:
       - "tools/windows/pub-runtime/**"
       - "tools/windows/recover_pub_native_runner.ps1"
       - "tools/windows/run_t891_direct.ps1"
+      - "tools/windows/run_vba_call_bearing_native_estate_direct.ps1"
   workflow_dispatch:
 
 concurrency:
@@ -56,6 +57,7 @@ jobs:
           $files += (Resolve-Path "tools/windows/pub-runtime/PubRuntime.psm1").Path
           $files += (Resolve-Path "tools/windows/recover_pub_native_runner.ps1").Path
           $files += (Resolve-Path "tools/windows/run_t891_direct.ps1").Path
+          $files += (Resolve-Path "tools/windows/run_vba_call_bearing_native_estate_direct.ps1").Path
           foreach ($file in $files) {
             $tokens = $null
             $errors = $null
