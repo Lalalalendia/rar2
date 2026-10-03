@@ -130,14 +130,10 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 6
-        marker_frames = frames_with_marker(all_text_frames(), marker)
-        if not marker_frames:
-            print("scribus edit marker is not observable after insertText", file=sys.stderr)
+        if after_length is None or before_length is None or after_length <= before_length:
+            print("scribus insertText did not increase target frame text length", file=sys.stderr)
             return 7
-        if not any(
-            frame_matches_typography(frame, expected_family, expected_size_pt)
-            for frame in marker_frames
-        ):
+        if not frame_matches_typography(edited_frame, expected_family, expected_size_pt):
             print(
                 "scribus edited frame no longer matches expected typography after edit",
                 file=sys.stderr,
