@@ -1,0 +1,64 @@
+name: Native SymSrv GUID Probe
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Probe exact PDB identities through DbgHelp and SymSrv
+        shell: pwsh
+        run: |
+          python research\native_symsrv_probe.py
+          Get-Content out\native-symsrv.json | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Probe full symbol-store protocol variants
+        shell: pwsh
+        run: |
+          python research\symbol_store_protocol_probe.py
+          Get-Content out\symbol-store-protocol.json | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Query Wayback for exact WWLIB identity
+        shell: pwsh
+        run: |
+          python research\wayback_exact_symbol_probe.py out\wayback.json
+          Get-Content out\wayback.json | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Query Common Crawl symbol history
+        shell: pwsh
+        run: |
+          python research\commoncrawl_symbol_history.py
+          Get-Content out\commoncrawl-symbol-history.json | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Guard binary boundary
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item out\native-symcache -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Upload metadata only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-symsrv-probe-${{ github.run_id }}
+          path: |
+            out/native-symsrv.json
+            out/symbol-store-protocol.json
+            out/wayback.json
+            out/commoncrawl-symbol-history.json
+          if-no-files-found: error
+          retention-days: 30
