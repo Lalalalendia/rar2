@@ -99,7 +99,14 @@ def idml_expected(path: Path) -> dict[str, tuple[str, Decimal]]:
             if not (name.startswith("Stories/") and name.endswith(".xml")):
                 continue
             root = ET.fromstring(archive.read(name))
-            story = next((el for el in root.iter() if local_name(el.tag) == "Story"), None)
+            story = next(
+                (
+                    el
+                    for el in root.iter()
+                    if local_name(el.tag) == "Story" and "Self" in el.attrib
+                ),
+                None,
+            )
             if story is None:
                 continue
             origin = idml_origin(story.attrib["Self"])
