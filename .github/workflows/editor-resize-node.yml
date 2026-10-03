@@ -11,7 +11,6 @@ on:
       - "services/editor-api/revision_store.py"
       - "services/editor-api/test_revision_store.py"
       - "docs/chaptera-editor-resize-node-v1.md"
-      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - "vendor/producer-a/crates/pub-editor/src/writer_assessment.rs"
       - "vendor/producer-a/crates/pub-editor/tests/resize_node_v1.rs"
       - "apps/chaptera-desktop/src/agent.rs"
