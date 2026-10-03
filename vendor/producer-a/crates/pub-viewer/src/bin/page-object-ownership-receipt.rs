@@ -270,6 +270,8 @@ fn main() -> Result<()> {
         "source_byte_len": bytes.len(),
         "document_page_count": document_pages.len(),
         "viewer_page_count": bundle.geometry.document.pages.len(),
+        "source_page_role_observation_count": page_role_by_ordinal.len(),
+        "source_paint_order_page_count": source_paint_order_by_page.len(),
         "scene_node_count": bundle.geometry.scene.nodes.len(),
         "paint_node_count": bundle.geometry.paints.len(),
         "pages": rows,
