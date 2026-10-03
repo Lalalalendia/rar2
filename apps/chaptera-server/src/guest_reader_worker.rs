@@ -603,9 +603,7 @@ fn classify_projection_failure(error: &str) -> &'static str {
         "text_binding"
     } else if error.contains("page") {
         "page_binding"
-    } else if error.contains("Viewer node")
-        || error.contains("parent")
-        || error.contains("node id")
+    } else if error.contains("Viewer node") || error.contains("parent") || error.contains("node id")
     {
         "node_geometry"
     } else if error.contains("paint") {
