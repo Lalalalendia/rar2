@@ -51,6 +51,19 @@ def main() -> int:
             },
             {
                 "sha256": "b" * 64,
+                "byte_len": 45678,
+                "vba_state": "source_extracted",
+                "vba_project_count": 1,
+                "call_families": {
+                    "mail_merge": 6,
+                    "output": 3,
+                    "tables": 4,
+                    "shapes": 2,
+                    "picture": 1,
+                },
+            },
+            {
+                "sha256": "c" * 64,
                 "byte_len": 999,
                 "vba_state": "non_project_vba_storage",
                 "vba_project_count": 0,
@@ -63,9 +76,9 @@ def main() -> int:
     assert plan["mapping_version"] == "v1"
     assert plan["claims"]["vba_executed"] is False
     assert plan["claims"]["migration_plan_executes_code"] is False
-    assert plan["summary"]["file_count"] == 2
-    assert plan["summary"]["vba_project_files"] == 1
-    assert plan["summary"]["call_bearing_files"] == 1
+    assert plan["summary"]["file_count"] == 3
+    assert plan["summary"]["vba_project_files"] == 2
+    assert plan["summary"]["call_bearing_files"] == 2
 
     first = plan["files"][0]
     assert "path" not in first
@@ -79,6 +92,23 @@ def main() -> int:
     recipes = {x["id"] for x in first["recipe_candidates"]}
     assert "computed_page_reference_refresh" in recipes
     assert "batch_file_output" in recipes
+
+    second = plan["files"][1]
+    second_recipes = {x["id"] for x in second["recipe_candidates"]}
+    assert {
+        "data_recipe_batch_output",
+        "data_bound_table",
+        "bulk_picture_replace",
+    } <= second_recipes
+    assert {x["family"] for x in second["plan"]["automatic"]} == {
+        "mail_merge",
+        "output",
+        "tables",
+        "shapes",
+        "picture",
+    }
+    assert second["plan"]["user_choice"] == []
+    assert second["plan"]["unsupported"] == []
 
     empty = module.build_plan(receipt([]))
     assert empty["summary"] == {
