@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn non_control_mode_is_not_consumed() {
         let mut input = args(&["--product-smoke-v1", "receipt.json"]);
-        assert_eq!(try_run_from_args(&mut input, true).unwrap(), false);
+        assert!(!try_run_from_args(&mut input, true).unwrap());
         assert_eq!(input.next(), Some(OsString::from("--product-smoke-v1")));
         assert_eq!(input.next(), Some(OsString::from("receipt.json")));
     }
