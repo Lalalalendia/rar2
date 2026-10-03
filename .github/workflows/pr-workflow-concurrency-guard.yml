@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/**"
       - "AGENTS.md"
+      - "tools/ci/check_changed_pr_workflow_scope.py"
   workflow_dispatch:
 
 concurrency:
@@ -36,6 +37,11 @@ jobs:
           mapfile -t changed < <(
             git diff --name-only "$base"...HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
           )
+
+          python tools/ci/check_changed_pr_workflow_scope.py --self-test
+          if (( ${#changed[@]} > 0 )); then
+            python tools/ci/check_changed_pr_workflow_scope.py "${changed[@]}"
+          fi
 
           failed=0
           for path in "${changed[@]}"; do

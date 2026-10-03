@@ -3,8 +3,6 @@ name: Authoring TextFrame Break Link V1
 on:
   pull_request:
     paths:
-      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
-      - "vendor/producer-a/crates/pub-editor/tests/break_text_frame_forward_link_v1.rs"
       - "vendor/producer-a/producer/tests/break_link_layout_v1.rs"
       - ".github/workflows/authoring-textframe-break-link-v1.yml"
 concurrency:

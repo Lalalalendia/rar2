@@ -1,0 +1,284 @@
+name: Publisher visual golden Batch 01
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publisher-visual-golden-batch01.yml"
+      - "tools/cloud_reader_visual_fingerprint_v1.py"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
+      - "apps/cloud-reader/**"
+      - "apps/chaptera-server/src/reader_scene_v1.rs"
+      - "apps/chaptera-server/src/guest_reader_worker.rs"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "vendor/producer-a/crates/pub-viewer/**"
+      - "vendor/producer-a/crates/pub-reader/src/lib.rs"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publisher-visual-golden-batch01-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/publisher-visual-batch01
+
+jobs:
+  visual-fingerprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact rar2 candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download pinned exact 1050 materialization
+        id: pinned-1050
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify pinned exact 1050 materialization
+        if: steps.pinned-1050.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          paths = sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == 1050, len(shas)
+          assert digest == "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43", digest
+          print("pinned 1050 verified:", digest)
+          PY
+
+      - name: Checkout pinned natural corpus donor
+        if: steps.pinned-1050.outcome != 'success'
+        uses: actions/checkout@v4
+        with:
+          repository: Lalalalendia/lalamu
+          ref: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+          path: corpus-donor
+          sparse-checkout: |
+            pub-corpus/corpus
+          sparse-checkout-cone-mode: true
+
+      - name: Restore exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success'
+        id: historical-425-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: out/container
+          key: reader-historical-425-b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef-v1
+
+      - name: Install historical reconstruction tools on cache miss
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y p7zip-full
+          python -m pip install --disable-pip-version-check olefile==0.47
+
+      - name: Rehydrate exact historical 425-SHA tranche on cache miss
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p out/container/pub
+          python tools/corpus/pub_container_extract.py \
+            --seed tools/corpus/materialization_container_first_wave.csv \
+            --out out/container/manifest.json \
+            --materialize-dir out/container/pub \
+            --max-containers 3 \
+            --max-container-bytes 200000000 \
+            --max-member-bytes 104857600 \
+            --max-total-expanded 1073741824 \
+            --max-members 600 \
+            --max-depth 2 \
+            --timeout 45 \
+            --command-timeout 90
+
+      - name: Verify exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          expected_count = 425
+          expected_digest = "b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef"
+          paths = sorted(Path("out/container/pub").glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256("".join(sha + "\n" for sha in shas).encode("ascii")).hexdigest()
+          assert len(shas) == expected_count, len(shas)
+          assert digest == expected_digest, (digest, expected_digest)
+          print(f"historical-425 verified: {digest}")
+          PY
+
+      - name: Save exact historical 425-SHA tranche
+        if: steps.pinned-1050.outcome != 'success' && steps.historical-425-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/container
+          key: reader-historical-425-b844102681a9f4458aa9e723843d645e5aae6e6b8bd0b70d631e7ae0be9bc8ef-v1
+
+      - name: Install visual fingerprint dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
+          python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p = Path("tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json")
+          digest = hashlib.sha256(p.read_bytes()).hexdigest()
+          assert digest == "c522ebdc72d0b62ef68be3747494c2f5178ff69a70b83f14b3fd6a9bf8128404", digest
+          print("reference fingerprint:", digest)
+          PY
+
+      - name: Prepare exact 55 source PUB fixtures
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/publisher-visual-batch01"
+          mkdir -p "$RUNNER_TEMP/publisher-visual-batch01"
+          if [ "${{ steps.pinned-1050.outcome }}" = "success" ]; then
+            natural_root="out/pinned1050/materialized/native"
+            historical_root="$RUNNER_TEMP/no-second-source-root"
+          else
+            natural_root="corpus-donor/pub-corpus/corpus"
+            historical_root="out/container/pub"
+          fi
+          python tools/cloud_reader_visual_fingerprint_v1.py prepare \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv \
+            "$natural_root" \
+            "$historical_root" \
+            "$RUNNER_TEMP/publisher-visual-batch01/fixtures" \
+            "$RUNNER_TEMP/publisher-visual-batch01/manifest.json"
+
+      - name: Build canonical Cloud Reader worker
+        run: cargo build -p chaptera-server --bin chaptera --jobs 2
+
+      - name: Restore pinned Playwright Chromium cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ~/.cache/ms-playwright
+          key: publisher-visual-batch01-${{ runner.os }}-playwright-1.55.0-chromium
+
+      - name: Install pinned browser acceptance runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Render exact Batch 01 PUB set through current Cloud Reader
+        env:
+          REPOSITORY_COMMIT_SHA: ${{ github.sha }}
+          READER_WORKER_BINARY: ${{ github.workspace }}/target/publisher-visual-batch01/debug/chaptera
+          READER_REAL_MANIFEST: ${{ runner.temp }}/publisher-visual-batch01/manifest.json
+          READER_REAL_OUTPUT: ${{ runner.temp }}/publisher-visual-batch01/browser
+          READER_REFERENCE_RASTER_DPI: "144"
+          READER_CONTINUE_WORKER_FAILURES: "1"
+          READER_WORKER_TIMEOUT_SECONDS: "120"
+          READER_WORKER_CPU_SECONDS: "90"
+          READER_WORKER_ADDRESS_SPACE_MB: "768"
+        run: node apps/cloud-reader/real-browser.test.mjs
+
+      - name: Compare 55 pairs against source-free Publisher fingerprints
+        run: |
+          set -euo pipefail
+          mkdir -p target/publisher-visual-batch01
+          python tools/cloud_reader_visual_fingerprint_v1.py compare \
+            "$RUNNER_TEMP/publisher-visual-batch01/browser/receipt.json" \
+            tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
+            target/publisher-visual-batch01/summary.json
+
+      - name: Compare with previous successful main baseline
+        id: baseline-delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/publisher-visual-baseline"
+          baseline_run="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/publisher-visual-golden-batch01.yml/runs?branch=main&status=success&per_page=20" \
+              --jq '.workflow_runs | map(select(.id != ('"${GITHUB_RUN_ID}"' | tonumber))) | .[0].id // empty'
+          )"
+          if [ -z "$baseline_run" ]; then
+            echo "No previous successful main Batch 01 run; current receipt becomes the first baseline."
+            echo "baseline_found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Downloading baseline run $baseline_run"
+          gh run download "$baseline_run" \
+            -n publisher-visual-golden-batch01-receipt \
+            -D "$RUNNER_TEMP/publisher-visual-baseline"
+          test -f "$RUNNER_TEMP/publisher-visual-baseline/summary.json"
+          python tools/cloud_reader_visual_fingerprint_v1.py delta \
+            target/publisher-visual-batch01/summary.json \
+            "$RUNNER_TEMP/publisher-visual-baseline/summary.json" \
+            target/publisher-visual-batch01/delta.json
+          echo "baseline_found=true" >> "$GITHUB_OUTPUT"
+          echo "baseline_run_id=$baseline_run" >> "$GITHUB_OUTPUT"
+
+      - name: Print top residuals
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("target/publisher-visual-batch01/summary.json").read_text())
+          print(json.dumps({
+              "pair_count": data["pair_count"],
+              "reference_page_count": data["reference_page_count"],
+              "compared_page_count": data["compared_page_count"],
+              "unsupported_pair_count": data["unsupported_pair_count"],
+              "page_count_mismatch_pair_count": data["page_count_mismatch_pair_count"],
+              "corpus_mean_changed_cell_fraction": data["corpus_mean_changed_cell_fraction"],
+              "worst_pages": data["worst_pages"][:10],
+          }, indent=2, sort_keys=True))
+          delta_path = Path("target/publisher-visual-batch01/delta.json")
+          if delta_path.is_file():
+              delta = json.loads(delta_path.read_text())
+              print("DELTA")
+              print(json.dumps({
+                  "baseline_repository_commit_sha": delta["baseline_repository_commit_sha"],
+                  "improved_page_count": delta["improved_page_count"],
+                  "regressed_page_count": delta["regressed_page_count"],
+                  "unchanged_page_count": delta["unchanged_page_count"],
+                  "mean_delta": delta["corpus_mean_changed_cell_fraction"]["delta"],
+                  "largest_regressions": delta["largest_regressions"][:10],
+                  "largest_improvements": delta["largest_improvements"][:10],
+              }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-free Batch 01 visual receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publisher-visual-golden-batch01-receipt
+          path: |
+            target/publisher-visual-batch01/summary.json
+            target/publisher-visual-batch01/delta.json
+          if-no-files-found: warn
+          retention-days: 90

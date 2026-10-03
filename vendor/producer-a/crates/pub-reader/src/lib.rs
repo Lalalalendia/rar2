@@ -22,6 +22,7 @@ mod mature_wmf;
 mod ole_presentation;
 mod resolve;
 mod salvage;
+mod salvage_authority;
 mod structural_base;
 mod table_bridge;
 mod wmf;
@@ -95,9 +96,9 @@ use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
     OFFICE_ART_PROPERTY_CROP_FROM_BOTTOM, OFFICE_ART_PROPERTY_CROP_FROM_LEFT,
     OFFICE_ART_PROPERTY_CROP_FROM_RIGHT, OFFICE_ART_PROPERTY_CROP_FROM_TOP,
-    OFFICE_ART_PROPERTY_PIB, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
-    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField, PublisherFieldRecord,
-    SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
+    OFFICE_ART_PROPERTY_PIB, OFFICE_ART_TERTIARY_FOPT, PUBLISHER_FIELD_SHAPE_ID,
+    PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS, PublisherField,
+    PublisherFieldRecord, SpContainerInventory, inspect_dgg_default_options, inspect_sp_containers,
 };
 use pub_model::{
     Affine2D, AuthorityClass, ByteRange, CanonicalId, Decimal, Document, DocumentId, LengthEmu,
@@ -124,6 +125,7 @@ pub use salvage::{
     build_reader_partial_source_graph, probe_reader_salvage_candidate,
     probe_reader_salvage_candidate_with_trigger,
 };
+pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -277,6 +279,35 @@ fn affine_rotation_about_bounds(rotation_op: u32, bounds: RectEmu) -> Option<Aff
         tx: LengthEmu::new(i64::try_from(tx).ok()?),
         ty: LengthEmu::new(i64::try_from(ty).ok()?),
     })
+}
+
+fn bounded_direct_image_cardinal_content_rotation_degrees(
+    rotation_properties: &[(u32, bool, bool)],
+    fsp_flags: u32,
+) -> Option<i16> {
+    if fsp_flags & (FSP_FLIP_H | FSP_FLIP_V) != 0
+        || rotation_properties.len() != 1
+        || rotation_properties
+            .iter()
+            .any(|(_, f_bid, f_complex)| *f_bid || *f_complex)
+    {
+        return None;
+    }
+
+    const FULL_TURN_UNITS: i64 = 360 * 65_536;
+    const QUARTER_TURN_UNITS: i64 = 90 * 65_536;
+    let (rotation_op, _, _) = rotation_properties[0];
+    let mut angle = i64::from(rotation_op as i32) % FULL_TURN_UNITS;
+    if angle < 0 {
+        angle += FULL_TURN_UNITS;
+    }
+
+    match angle {
+        QUARTER_TURN_UNITS => Some(90),
+        angle if angle == 2 * QUARTER_TURN_UNITS => Some(180),
+        angle if angle == 3 * QUARTER_TURN_UNITS => Some(270),
+        _ => None,
+    }
 }
 
 fn bounded_direct_image_transform(
@@ -545,6 +576,10 @@ pub struct PubTypographyRun {
     pub text_size_emu: u32,
     pub font_inherited: bool,
     pub size_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    pub color_inherited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -603,6 +638,16 @@ pub struct PubNodePayload {
     /// reinterpreted as Publisher points or normalized crop geometry here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit_image_crop: Option<PubExplicitImageCropSource>,
+    /// Exact cardinal OfficeArt picture-content rotation admitted separately
+    /// from the outer NodeHeader transform. This keeps already-resolved frame
+    /// geometry fixed while preserving bounded image-fill orientation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explicit_image_cardinal_rotation_degrees: Option<i16>,
+    /// Bounded source-backed picture recolor state. This is placement/node state,
+    /// not image-resource state: the same embedded image can be reused with
+    /// different recolor targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explicit_image_recolor: Option<PubExplicitImageRecolorSource>,
     /// Explicit shape-local OfficeArt paint state only.
     pub explicit_paint: PubExplicitShapePaintSource,
     /// Bounded effective solid-paint resolution for admitted 2-D shapes.
@@ -628,6 +673,12 @@ pub struct PubExplicitImageCropSource {
     /// unambiguous non-complex scalar value. Presence remains explicit so
     /// callers must fail closed rather than misclassify the image as crop-free.
     pub ambiguous: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubExplicitImageRecolorSource {
+    pub target_rgb: [u8; 3],
+    pub preserve_grays: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2793,6 +2844,8 @@ pub fn build_mature_0x2c_from_streams(
                     font_inherited: run.font_source == QuillTypographyValueSource::InheritedStsh1,
                     size_inherited: run.text_size_source
                         == QuillTypographyValueSource::InheritedStsh1,
+                    color_rgb: run.color_rgb,
+                    color_inherited: run.color_inherited,
                 });
             }
         } else {
@@ -2834,6 +2887,8 @@ pub fn build_mature_0x2c_from_streams(
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: false,
+                    color_rgb: run.color_rgb,
+                    color_inherited: run.color_inherited,
                 });
             }
         }
@@ -3008,6 +3063,15 @@ pub fn build_mature_0x2c_from_streams(
             .is_some()
             .then(|| bounded_officeart_image_crop(shape))
             .flatten();
+        let explicit_image_recolor = image_slot
+            .is_some()
+            .then(|| {
+                bounded_officeart_image_recolor(
+                    shape,
+                    color_scheme.as_ref().map(|scheme| &scheme.scheme),
+                )
+            })
+            .flatten();
         let mut story_frame = if raw_type == Some(RAW_TYPE_SHAPE) {
             build_story_frame(
                 source_hash,
@@ -3125,23 +3189,40 @@ pub fn build_mature_0x2c_from_streams(
             (None, None)
         };
 
-        let direct_image_transform = if raw_type == Some(RAW_TYPE_SHAPE)
+        let direct_image_candidate = raw_type == Some(RAW_TYPE_SHAPE)
             && exact_story_identity.is_none()
             && image_slot.is_some()
-            && grouped_sources.is_empty()
-        {
-            let rotation_properties = shape
+            && grouped_sources.is_empty();
+        let direct_image_rotation_properties = if direct_image_candidate {
+            shape
                 .fopts
                 .iter()
                 .flat_map(|record| record.properties.iter())
                 .filter(|property| property.property_id() == OFFICE_ART_PROPERTY_ROTATION)
                 .map(|property| (property.op, property.f_bid(), property.f_complex()))
-                .collect::<Vec<_>>();
-            let fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
-            bounded_direct_image_transform(&rotation_properties, fsp_flags, bounds)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let direct_image_fsp_flags = shape.fsp.as_ref().map(|fsp| fsp.flags).unwrap_or(0);
+        let direct_image_transform = if direct_image_candidate {
+            bounded_direct_image_transform(
+                &direct_image_rotation_properties,
+                direct_image_fsp_flags,
+                bounds,
+            )
         } else {
             BoundedDirectImageTransform::Identity
         };
+        let direct_image_cardinal_rotation_degrees =
+            if direct_image_candidate && explicit_image_crop.is_none() {
+                bounded_direct_image_cardinal_content_rotation_degrees(
+                    &direct_image_rotation_properties,
+                    direct_image_fsp_flags,
+                )
+            } else {
+                None
+            };
         let (node_transform, direct_image_rotation_applied) = match direct_image_transform {
             BoundedDirectImageTransform::Identity | BoundedDirectImageTransform::Unsupported => {
                 (Affine2D::identity(), false)
@@ -3183,7 +3264,7 @@ pub fn build_mature_0x2c_from_streams(
                 ReadConfidence::Exact,
             ));
         }
-        if direct_image_rotation_applied {
+        if direct_image_rotation_applied || direct_image_cardinal_rotation_degrees.is_some() {
             source_refs.push(source_ref(
                 &graph.source,
                 &shape.source,
@@ -3286,6 +3367,9 @@ pub fn build_mature_0x2c_from_streams(
                     image_slot,
                     legacy_ole: None,
                     explicit_image_crop,
+                    explicit_image_cardinal_rotation_degrees:
+                        direct_image_cardinal_rotation_degrees,
+                    explicit_image_recolor,
                     explicit_paint,
                     effective_paint,
                     story_frame,
@@ -3982,6 +4066,12 @@ fn source_page_paint_orders_v1(
         .collect()
 }
 
+const OFFICE_ART_PICTURE_RECOLOR: u16 = 0x011A;
+const OFFICE_ART_PICTURE_RECOLOR_EXTRA_START: u16 = 0x011B;
+const OFFICE_ART_PICTURE_RECOLOR_EXTRA_END: u16 = 0x011D;
+const OFFICE_ART_BLIP_BOOLEANS: u16 = 0x013F;
+const BLIP_USE_PICTURE_PRESERVE_GRAYS_BIT: u32 = 1 << 22;
+const BLIP_PICTURE_PRESERVE_GRAYS_BIT: u32 = 1 << 6;
 const OFFICE_ART_ADJUST_VALUE: u16 = 0x0147;
 const OFFICE_ART_FILL_TYPE: u16 = 0x0180;
 const OFFICE_ART_FILL_COLOR: u16 = 0x0181;
@@ -4531,6 +4621,76 @@ fn bounded_officeart_image_crop(
     })
 }
 
+fn bounded_officeart_image_recolor(
+    shape: &pub_escher::SpContainerObservation,
+    color_scheme: Option<&MatureColorScheme>,
+) -> Option<PubExplicitImageRecolorSource> {
+    if shape
+        .fopts
+        .iter()
+        .flat_map(|record| record.properties.iter())
+        .any(|property| {
+            (OFFICE_ART_PICTURE_RECOLOR_EXTRA_START..=OFFICE_ART_PICTURE_RECOLOR_EXTRA_END)
+                .contains(&property.property_id())
+        })
+    {
+        return None;
+    }
+
+    let recolor = shape
+        .fopts
+        .iter()
+        .flat_map(|record| {
+            record
+                .properties
+                .iter()
+                .filter(move |property| property.property_id() == OFFICE_ART_PICTURE_RECOLOR)
+                .map(move |property| (record.rec_type, property))
+        })
+        .collect::<Vec<_>>();
+    let [(recolor_record_type, recolor_property)] = recolor.as_slice() else {
+        return None;
+    };
+    if *recolor_record_type != OFFICE_ART_TERTIARY_FOPT
+        || recolor_property.f_bid()
+        || recolor_property.f_complex()
+    {
+        return None;
+    }
+    let target_rgb = bounded_officeart_rgb(recolor_property.op, color_scheme)?;
+
+    let booleans = shape
+        .fopts
+        .iter()
+        .flat_map(|record| {
+            record
+                .properties
+                .iter()
+                .filter(move |property| property.property_id() == OFFICE_ART_BLIP_BOOLEANS)
+                .map(move |property| (record.rec_type, property))
+        })
+        .collect::<Vec<_>>();
+    let [(boolean_record_type, boolean_property)] = booleans.as_slice() else {
+        return None;
+    };
+    if *boolean_record_type != OFFICE_ART_TERTIARY_FOPT
+        || boolean_property.f_bid()
+        || boolean_property.f_complex()
+        || boolean_property.op & BLIP_USE_PICTURE_PRESERVE_GRAYS_BIT == 0
+    {
+        return None;
+    }
+    let preserve_grays = boolean_property.op & BLIP_PICTURE_PRESERVE_GRAYS_BIT != 0;
+    if preserve_grays {
+        return None;
+    }
+
+    Some(PubExplicitImageRecolorSource {
+        target_rgb,
+        preserve_grays,
+    })
+}
+
 fn direct_officeart_rgb(value: u32) -> Option<[u8; 3]> {
     // OfficeArtCOLORREF uses upper-byte flags for non-direct color forms.
     // This bounded path accepts only the unflagged direct RGB form.
@@ -5003,6 +5163,45 @@ mod tests {
         assert_eq!(
             bounded_direct_image_transform(&[((360u32) << 16, false, false)], 0, test_bounds()),
             BoundedDirectImageTransform::Identity
+        );
+    }
+
+    #[test]
+    fn direct_image_cardinal_rotation_is_preserved_for_picture_content_only() {
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((90u32) << 16, false, false)],
+                0,
+            ),
+            Some(90)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((180u32) << 16, false, false)],
+                0,
+            ),
+            Some(180)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((270u32) << 16, false, false)],
+                0,
+            ),
+            Some(270)
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((12u32) << 16, false, false)],
+                0,
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_direct_image_cardinal_content_rotation_degrees(
+                &[((90u32) << 16, false, false)],
+                FSP_FLIP_H,
+            ),
+            None
         );
     }
 

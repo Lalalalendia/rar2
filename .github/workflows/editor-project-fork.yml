@@ -3,8 +3,6 @@ name: Editor Project Fork
 on:
   pull_request:
     paths:
-      - "vendor/producer-a/Cargo.toml"
-      - "vendor/producer-a/crates/pub-editor/**"
       - ".github/workflows/editor-project-fork.yml"
   workflow_dispatch:
 

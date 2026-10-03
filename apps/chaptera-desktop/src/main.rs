@@ -5,6 +5,7 @@
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
 mod acceptance;
+mod acceptance_v2;
 mod agent;
 mod diagnostic_sweep;
 mod fallback_font;
@@ -15,6 +16,7 @@ mod product_smoke;
 mod reader_product_ui;
 mod reader_salvage;
 mod render_backend;
+mod selection_keyboard;
 mod source_font;
 #[allow(dead_code)]
 mod supporter;
@@ -361,6 +363,11 @@ impl SceneSelectionState {
         self.selected.clear();
         self.selected.insert(instance_id.clone());
         self.primary = Some(instance_id);
+    }
+
+    fn replace_all(&mut self, instance_ids: impl IntoIterator<Item = String>) {
+        self.selected = instance_ids.into_iter().collect();
+        self.primary = self.selected.iter().next().cloned();
     }
 
     fn toggle(&mut self, instance_id: String) {
@@ -962,6 +969,52 @@ fn main() -> eframe::Result<()> {
                     "{}",
                     serde_json::to_string(&observation)
                         .expect("desktop acceptance observation is JSON-serializable")
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--desktop-acceptance-v2")) {
+        let Some(fixture) = args.next().map(PathBuf::from) else {
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
+            std::process::exit(2);
+        };
+        let Some(replacement) = args.next().map(PathBuf::from) else {
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
+            std::process::exit(2);
+        };
+        let Some(project) = args.next().map(PathBuf::from) else {
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
+            std::process::exit(2);
+        };
+        let Some(export) = args.next().map(PathBuf::from) else {
+            eprintln!(
+                "usage: chaptera --desktop-acceptance-v2 FIXTURE REPLACEMENT_IMAGE PROJECT EXPORT"
+            );
+            std::process::exit(2);
+        };
+        if args.next().is_some() {
+            eprintln!("desktop continuity V2 mode accepts exactly four path arguments");
+            std::process::exit(2);
+        }
+
+        match acceptance_v2::run(&fixture, &replacement, &project, &export) {
+            Ok(observation) => {
+                println!(
+                    "{}",
+                    serde_json::to_string(&observation)
+                        .expect("desktop continuity V2 observation is JSON-serializable")
                 );
                 return Ok(());
             }
@@ -4322,14 +4375,222 @@ impl ViewerApp {
         }
     }
 
-    fn process_canvas_text_input(&mut self, ctx: &egui::Context) {
-        if self.text_mode.is_none() {
+    fn selected_direct_move_target(
+        &self,
+    ) -> Result<(pub_editor::NodeId, pub_editor::RectEmu), String> {
+        if self.canvas_selection.len() != 1 {
+            return Err("Object nudge requires exactly one selected object.".to_owned());
+        }
+        let selected_instance = self
+            .canvas_selection
+            .primary()
+            .ok_or_else(|| "Select one object first.".to_owned())?;
+        let visual = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document scene is unavailable.".to_owned())?;
+        let page = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let page_origin = page.id.into_canonical();
+        let page_id_text = page.id.as_canonical().to_string();
+
+        for scene_node in visual
+            .scene
+            .nodes
+            .iter()
+            .filter(|node| node.parent_origin == page_origin)
+        {
+            let Some(instance) = direct_scene_instance(editor, &page_id_text, scene_node.origin)
+            else {
+                continue;
+            };
+            if instance.instance_id != selected_instance {
+                continue;
+            }
+            let admission = admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
+            let origin_node_id = scene_node.origin.as_canonical().to_string();
+            if !admission.admitted
+                || admission.origin_node_id.as_deref() != Some(origin_node_id.as_str())
+            {
+                return Err("Selected visual instance is projected/read-only.".to_owned());
+            }
+            let authored = editor
+                .graph()
+                .nodes
+                .get(&scene_node.origin)
+                .ok_or_else(|| "Selected object has no authored node.".to_owned())?;
+            let bounds = authored.header.bounds;
+            editor
+                .can_move_node_to(scene_node.origin, bounds.x, bounds.y)
+                .map_err(|error| {
+                    format!("Selected object cannot move: {} ({})", error, error.code())
+                })?;
+            return Ok((scene_node.origin, bounds));
+        }
+
+        Err("Selected visual instance is not a direct page-local object.".to_owned())
+    }
+
+    fn active_story_owns_selected_object(&self) -> bool {
+        let Some(mode) = self.text_mode.as_ref() else {
+            return false;
+        };
+        self.selected_direct_move_target()
+            .is_ok_and(|(node_id, _)| node_id == mode.frame_id)
+    }
+
+    fn nudge_selected_object(&mut self, dx_emu: i64, dy_emu: i64, rebind_text: bool) {
+        let outcome = self
+            .selected_direct_move_target()
+            .and_then(|(node_id, before)| {
+                let x = before
+                    .x
+                    .checked_add(pub_editor::LengthEmu::new(dx_emu))
+                    .ok_or_else(|| "Object nudge overflowed X geometry.".to_owned())?;
+                let y = before
+                    .y
+                    .checked_add(pub_editor::LengthEmu::new(dy_emu))
+                    .ok_or_else(|| "Object nudge overflowed Y geometry.".to_owned())?;
+                let editor = self
+                    .editor
+                    .as_mut()
+                    .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+                let before_operations = editor.operations().len();
+                editor
+                    .can_move_node_to(node_id, x, y)
+                    .map_err(|error| format!("Nudge unavailable: {} ({})", error, error.code()))?;
+                editor
+                    .move_node_to(node_id, x, y)
+                    .map_err(|error| format!("Nudge rejected: {} ({})", error, error.code()))?;
+                if editor.operations().len() != before_operations + 1 {
+                    return Err(
+                        "Object nudge must append exactly one MoveNode operation.".to_owned()
+                    );
+                }
+                Ok(())
+            });
+
+        match outcome {
+            Ok(()) => {
+                self.finish_authoring_change(
+                    "Nudged canvas object in the authoring session. One MoveNode operation was committed.",
+                );
+                if rebind_text
+                    && let (Some(editor), Some(mode)) = (&self.editor, &mut self.text_mode)
+                    && let Err(error) =
+                        text_session::rebind_after_non_text_document_change(editor, mode)
+                {
+                    self.edit_status = Some(format!(
+                        "Object nudge committed, but active Story authority could not rebind: {error}"
+                    ));
+                }
+            }
+            Err(error) => {
+                self.edit_status = Some(error);
+                self.sync_visual_geometry_from_editor();
+            }
+        }
+    }
+
+    fn select_all_current_page_objects(&mut self) {
+        let Some(visual) = self.visual.as_ref() else {
             return;
+        };
+        let Some(editor) = self.editor.as_ref() else {
+            return;
+        };
+        let Some(page) = visual.document.pages.get(self.selected_page) else {
+            return;
+        };
+        let page_origin = page.id.into_canonical();
+        let page_id_text = page.id.as_canonical().to_string();
+        let selected = visual
+            .scene
+            .nodes
+            .iter()
+            .filter(|node| node.parent_origin == page_origin)
+            .filter_map(|node| direct_scene_instance(editor, &page_id_text, node.origin))
+            .map(|instance| instance.instance_id)
+            .collect::<Vec<_>>();
+        self.canvas_selection.replace_all(selected);
+        self.canvas_drag = None;
+        self.canvas_resize = None;
+    }
+
+    fn process_canvas_object_keyboard(&mut self, ctx: &egui::Context) {
+        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let events = ctx.input(|input| input.events.clone());
+        for event in events {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                continue;
+            };
+
+            if key == egui::Key::Escape {
+                if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
+                    self.edit_status = Some("Cancelled the active canvas gesture.".to_owned());
+                } else if self.canvas_selection.len() > 0 {
+                    self.canvas_selection.clear();
+                    self.edit_status = Some("Cleared canvas selection.".to_owned());
+                }
+                continue;
+            }
+
+            if (modifiers.ctrl || modifiers.command)
+                && !modifiers.alt
+                && !modifiers.shift
+                && key == egui::Key::A
+            {
+                self.select_all_current_page_objects();
+                continue;
+            }
+
+            let Some(direction) = keyboard_arrow_direction(key) else {
+                continue;
+            };
+            let movable = self.selected_direct_move_target().is_ok();
+            let decision = selection_keyboard::route_arrow_v1(
+                selection_keyboard::FocusOwnerV1::Canvas,
+                direction,
+                selection_keyboard::KeyModifiersV1 {
+                    shift: modifiers.shift,
+                    control_or_command: modifiers.ctrl || modifiers.command,
+                    alt: modifiers.alt,
+                },
+                self.canvas_selection.len(),
+                movable,
+                false,
+            );
+            if decision.route == selection_keyboard::ArrowRouteV1::MoveObject {
+                self.nudge_selected_object(decision.dx_emu, decision.dy_emu, false);
+            }
+        }
+    }
+
+    fn process_canvas_text_input(&mut self, ctx: &egui::Context) -> bool {
+        if self.text_mode.is_none() {
+            return false;
         }
         if ctx.wants_keyboard_input() {
             self.exit_canvas_text_mode("focus_transfer");
-            return;
+            return true;
         }
+
         let events = ctx.input(|input| input.events.clone());
         for event in events {
             if self.text_mode.is_none() {
@@ -4347,6 +4608,39 @@ impl ViewerApp {
                         self.exit_canvas_text_mode("escape");
                         continue;
                     }
+
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::A
+                    {
+                        if let Some(mode) = self.text_mode.as_mut() {
+                            text_session::select_all(mode);
+                        }
+                        continue;
+                    }
+
+                    if modifiers.alt && !modifiers.shift && !modifiers.ctrl && !modifiers.command {
+                        if let Some(direction) = keyboard_arrow_direction(key) {
+                            let movable = self.selected_direct_move_target().is_ok();
+                            let decision = selection_keyboard::route_arrow_v1(
+                                selection_keyboard::FocusOwnerV1::StoryText,
+                                direction,
+                                selection_keyboard::KeyModifiersV1 {
+                                    alt: true,
+                                    ..Default::default()
+                                },
+                                self.canvas_selection.len(),
+                                movable,
+                                self.active_story_owns_selected_object(),
+                            );
+                            if decision.route == selection_keyboard::ArrowRouteV1::MoveObject {
+                                self.nudge_selected_object(decision.dx_emu, decision.dy_emu, true);
+                            }
+                        }
+                        continue;
+                    }
+
                     if modifiers.ctrl || modifiers.command || modifiers.alt {
                         continue;
                     }
@@ -4367,6 +4661,7 @@ impl ViewerApp {
                 _ => {}
             }
         }
+        true
     }
 
     fn ensure_image_textures(&mut self, ctx: &egui::Context) {
@@ -5371,7 +5666,10 @@ impl eframe::App for ViewerApp {
         self.accept_dropped_file(ctx);
         self.poll_committed_source_freshness();
         self.poll_diagnostic_sweep();
-        self.process_canvas_text_input(ctx);
+        let text_keyboard_owned = self.process_canvas_text_input(ctx);
+        if !text_keyboard_owned {
+            self.process_canvas_object_keyboard(ctx);
+        }
 
         debug_assert_eq!(
             self.supporter_value.is_eligible(),
@@ -5445,6 +5743,16 @@ impl eframe::App for ViewerApp {
         if self.text_mode.is_some() && ctx.wants_keyboard_input() {
             self.exit_canvas_text_mode("explicit_exit");
         }
+    }
+}
+
+fn keyboard_arrow_direction(key: egui::Key) -> Option<selection_keyboard::ArrowDirectionV1> {
+    match key {
+        egui::Key::ArrowLeft => Some(selection_keyboard::ArrowDirectionV1::Left),
+        egui::Key::ArrowRight => Some(selection_keyboard::ArrowDirectionV1::Right),
+        egui::Key::ArrowUp => Some(selection_keyboard::ArrowDirectionV1::Up),
+        egui::Key::ArrowDown => Some(selection_keyboard::ArrowDirectionV1::Down),
+        _ => None,
     }
 }
 
@@ -8991,6 +9299,590 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_canvas_keyboard_nudge_select_all_escape_and_delete_fail_closed_on_real_pub() {
+        use egui_kittest::Harness;
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(24)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture), cc.storage)
+            });
+        harness.step();
+        harness.step();
+
+        let (page_index, instance_id, node_id, before) = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let editor = app.editor.as_ref().expect("editor loaded");
+            visual
+                .document
+                .pages
+                .iter()
+                .enumerate()
+                .find_map(|(page_index, page)| {
+                    let page_origin = page.id.into_canonical();
+                    let page_id_text = page.id.as_canonical().to_string();
+                    visual
+                        .scene
+                        .nodes
+                        .iter()
+                        .filter(|node| node.parent_origin == page_origin)
+                        .find_map(|node| {
+                            let instance =
+                                direct_scene_instance(editor, &page_id_text, node.origin)?;
+                            let admission =
+                                admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
+                            if !admission.admitted
+                                || admission.origin_node_id.as_deref()
+                                    != Some(node.origin.as_canonical().to_string().as_str())
+                            {
+                                return None;
+                            }
+                            let bounds = editor.graph().nodes.get(&node.origin)?.header.bounds;
+                            editor
+                                .can_move_node_to(node.origin, bounds.x, bounds.y)
+                                .ok()?;
+                            Some((page_index, instance.instance_id, node.origin, bounds))
+                        })
+                })
+                .expect("real fixture exposes one direct movable object")
+        };
+
+        {
+            let app = harness.state_mut();
+            app.selected_page = page_index;
+            app.canvas_selection.select_only(instance_id);
+        }
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        harness.step();
+
+        let after = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .graph()
+            .nodes[&node_id]
+            .header
+            .bounds;
+        assert_eq!(
+            after.x.get() - before.x.get(),
+            selection_keyboard::BASE_NUDGE_EMU
+        );
+        assert_eq!(after.y, before.y);
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before + 1,
+            "one Arrow key must emit exactly one MoveNode"
+        );
+        assert!(matches!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .last(),
+            Some(pub_editor::EditOperation::MoveNode { node_id: moved, .. }) if *moved == node_id
+        ));
+
+        let expected_select_all = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual");
+            let editor = app.editor.as_ref().expect("editor");
+            let page = &visual.document.pages[page_index];
+            let page_origin = page.id.into_canonical();
+            let page_id_text = page.id.as_canonical().to_string();
+            visual
+                .scene
+                .nodes
+                .iter()
+                .filter(|node| node.parent_origin == page_origin)
+                .filter_map(|node| direct_scene_instance(editor, &page_id_text, node.origin))
+                .map(|instance| instance.instance_id)
+                .collect::<BTreeSet<_>>()
+        };
+        let operations_after_nudge = operations_before + 1;
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        });
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .canvas_selection
+                .iter()
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>(),
+            expected_select_all
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_after_nudge,
+            "canvas Ctrl+A must remain transient"
+        );
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_after_nudge,
+            "object Delete remains deliberately unavailable in this slice"
+        );
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        assert_eq!(harness.state().canvas_selection.len(), 0);
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_after_nudge,
+            "Escape selection clear must not create a document revision"
+        );
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_escape_cancels_active_object_gesture_before_clearing_selection_on_real_pub() {
+        use egui_kittest::Harness;
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(16)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture), cc.storage)
+            });
+        harness.step();
+        harness.step();
+
+        let (page_index, instance_id, node_id, before) = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let editor = app.editor.as_ref().expect("editor loaded");
+            visual
+                .document
+                .pages
+                .iter()
+                .enumerate()
+                .find_map(|(page_index, page)| {
+                    let page_origin = page.id.into_canonical();
+                    let page_id_text = page.id.as_canonical().to_string();
+                    visual
+                        .scene
+                        .nodes
+                        .iter()
+                        .filter(|node| node.parent_origin == page_origin)
+                        .find_map(|node| {
+                            let instance =
+                                direct_scene_instance(editor, &page_id_text, node.origin)?;
+                            let admission =
+                                admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
+                            if !admission.admitted {
+                                return None;
+                            }
+                            let bounds = editor.graph().nodes.get(&node.origin)?.header.bounds;
+                            editor
+                                .can_move_node_to(node.origin, bounds.x, bounds.y)
+                                .ok()?;
+                            Some((page_index, instance.instance_id, node.origin, bounds))
+                        })
+                })
+                .expect("real fixture exposes one direct movable object")
+        };
+
+        let pointer_start = pub_interaction::DocumentPoint::new(
+            pub_editor::LengthEmu::ZERO,
+            pub_editor::LengthEmu::ZERO,
+        );
+        {
+            let app = harness.state_mut();
+            app.selected_page = page_index;
+            app.canvas_selection.select_only(instance_id);
+            app.canvas_drag = Some(
+                MoveTransaction::begin(node_id, before, pointer_start)
+                    .expect("valid transient move gesture"),
+            );
+        }
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+
+        assert!(
+            harness.state().canvas_drag.is_none(),
+            "first Escape must cancel the active object gesture"
+        );
+        assert_eq!(
+            harness.state().canvas_selection.len(),
+            1,
+            "gesture-owning Escape must not also clear selection"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before,
+            "gesture cancellation is transient"
+        );
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+
+        assert_eq!(
+            harness.state().canvas_selection.len(),
+            0,
+            "second Escape reaches the final selection-clearing fallback"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before,
+            "selection clearing is transient"
+        );
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub() {
+        use egui_kittest::Harness;
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(24)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture), cc.storage)
+            });
+        harness.step();
+        harness.step();
+
+        let (page_index, instance_id, story_id, frame_id, before) = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let editor = app.editor.as_ref().expect("editor loaded");
+            visual
+                .text_fragments
+                .iter()
+                .find_map(|fragment| {
+                    text_session::enter_explicit_text_mode(
+                        editor,
+                        fragment.story_id,
+                        fragment.frame_id,
+                    )
+                    .ok()?;
+                    let node = visual
+                        .scene
+                        .nodes
+                        .iter()
+                        .find(|node| node.origin == fragment.frame_id)?;
+                    let (page_index, page) = visual
+                        .document
+                        .pages
+                        .iter()
+                        .enumerate()
+                        .find(|(_, page)| node.parent_origin == page.id.into_canonical())?;
+                    let page_id_text = page.id.as_canonical().to_string();
+                    let instance = direct_scene_instance(editor, &page_id_text, fragment.frame_id)?;
+                    let admission =
+                        admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
+                    if !admission.admitted
+                        || admission.origin_node_id.as_deref()
+                            != Some(fragment.frame_id.as_canonical().to_string().as_str())
+                    {
+                        return None;
+                    }
+                    let bounds = editor.graph().nodes.get(&fragment.frame_id)?.header.bounds;
+                    editor
+                        .can_move_node_to(fragment.frame_id, bounds.x, bounds.y)
+                        .ok()?;
+                    Some((
+                        page_index,
+                        instance.instance_id,
+                        fragment.story_id,
+                        fragment.frame_id,
+                        bounds,
+                    ))
+                })
+                .expect("real fixture exposes one editable movable direct TextFrame")
+        };
+
+        {
+            let app = harness.state_mut();
+            app.selected_page = page_index;
+            app.canvas_selection.select_only(instance_id);
+            app.enter_canvas_text_mode(story_id, frame_id);
+        }
+        assert!(harness.state().text_mode.is_some());
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::ArrowLeft,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before,
+            "ordinary Story Arrow must stay transient text navigation"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&frame_id]
+                .header
+                .bounds,
+            before,
+            "ordinary Story Arrow must not move the owning object"
+        );
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+        });
+        harness.step();
+        harness.step();
+
+        let after = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .graph()
+            .nodes[&frame_id]
+            .header
+            .bounds;
+        assert_eq!(
+            after.x.get() - before.x.get(),
+            selection_keyboard::BASE_NUDGE_EMU
+        );
+        assert_eq!(after.y, before.y);
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before + 1,
+            "Alt+Arrow must emit exactly one MoveNode for the owning TextFrame"
+        );
+        {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("editor");
+            let mode = app.text_mode.as_ref().expect("Story mode remains active");
+            assert_eq!(
+                mode.session.revision_id,
+                editor.project().state_id_v1(),
+                "active Story selection must rebind to the post-MoveNode revision"
+            );
+        }
+
+        let operations_after_nudge = operations_before + 1;
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        });
+        harness.step();
+        {
+            let app = harness.state();
+            let mode = app.text_mode.as_ref().expect("Story mode");
+            assert_eq!(mode.session.selection.anchor_scalar, 0);
+            assert_eq!(
+                mode.session.selection.focus_scalar,
+                mode.domain.raw_scalar_len
+            );
+            assert_eq!(
+                app.editor.as_ref().expect("editor").operations().len(),
+                operations_after_nudge,
+                "Story Ctrl+A must remain transient"
+            );
+        }
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        assert!(harness.state().text_mode.is_none());
+        assert_eq!(
+            harness.state().canvas_selection.len(),
+            1,
+            "the same Escape that exits Story mode must not also clear object selection"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_after_nudge
+        );
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        assert_eq!(harness.state().canvas_selection.len(), 0);
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_after_nudge
+        );
     }
 
     struct GoldenPageOnlyApp {

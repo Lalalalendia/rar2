@@ -185,6 +185,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "source_bytes": bytes.len(),
             "open_state": "admitted",
             "reason_code": Value::Null,
+            "source_image_count": session.source_image_count(),
             "targets": {
                 "idml": idml,
                 "odg": odg

@@ -116,6 +116,39 @@ mod tests {
         android=False,
     )
     assert_scope(
+        ["apps/cloud-reader/render-v1.mjs"],
+        tier_a=False,
+        cloud_reference=True,
+        virginia_page_role=False,
+        visual_batch01=True,
+    )
+    assert_scope(
+        ["tools/validate_virginia_page_roles.py"],
+        tier_a=False,
+        cloud_reference=False,
+        virginia_page_role=True,
+        visual_batch01=False,
+    )
+    assert_scope(
+        ["tools/cloud_reader_visual_fingerprint_v1.py"],
+        tier_a=False,
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=True,
+    )
+    assert_scope(
+        ["vendor/producer-a/crates/pub-reader/src/lib.rs"],
+        cloud_reference=True,
+        virginia_page_role=True,
+        visual_batch01=True,
+    )
+    assert_scope(
+        ["vendor/producer-a/crates/pub-reader/src/bin/source_image_export_probe.rs"],
+        cloud_reference=False,
+        virginia_page_role=False,
+        visual_batch01=False,
+    )
+    assert_scope(
         ["apps/chaptera-mobile-android/app/src/main/AndroidManifest.xml"],
         tier_a=False,
         android_core=False,

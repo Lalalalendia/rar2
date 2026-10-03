@@ -647,6 +647,8 @@ fn materialize_legacy_noquill_child(
                 image_slot: None,
                 legacy_ole,
                 explicit_image_crop: None,
+                explicit_image_cardinal_rotation_degrees: None,
+                explicit_image_recolor: None,
                 explicit_paint: PubExplicitShapePaintSource::default(),
                 effective_paint: None,
                 story_frame: story_id.map(|story_id| PubStoryFrameSource {

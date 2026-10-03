@@ -115,6 +115,38 @@ function imageDataUrl(resource) {
   return value;
 }
 
+export function imageContentRotationGeometry(bounds, degrees = null) {
+  const x = finiteNumber(bounds.x, "image.rotation.bounds.x");
+  const y = finiteNumber(bounds.y, "image.rotation.bounds.y");
+  const width = finiteNumber(bounds.width, "image.rotation.bounds.width");
+  const height = finiteNumber(bounds.height, "image.rotation.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  if (degrees === null || degrees === undefined || degrees === 0) {
+    return Object.freeze({ x, y, width, height, transform: null });
+  }
+  if (![90, 180, 270].includes(degrees)) return null;
+
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+  if (degrees === 180) {
+    return Object.freeze({
+      x,
+      y,
+      width,
+      height,
+      transform: "rotate(180 " + centerX + " " + centerY + ")"
+    });
+  }
+
+  return Object.freeze({
+    x: centerX - height / 2,
+    y: centerY - width / 2,
+    width: height,
+    height: width,
+    transform: "rotate(" + degrees + " " + centerX + " " + centerY + ")"
+  });
+}
+
 export function imagePaintGeometry(bounds, sourceWindow = null) {
   const x = safeInteger(bounds.x, "bounds.x");
   const y = safeInteger(bounds.y, "bounds.y");
@@ -171,6 +203,7 @@ export function resolvedTextLinePaintPlan(node) {
   const height = safeInteger(bounds.height, "text.bounds.height");
   const fontSize = safeInteger(layout.font_size_emu, "text.font_size_emu");
   const lineHeight = safeInteger(layout.line_height_emu, "text.line_height_emu");
+  const color = rgb(layout.color_rgb) ?? "rgb(0 0 0)";
   if (width <= 0 || height <= 0 || fontSize <= 0 || lineHeight <= 0) return null;
 
   const verticalOffset = safeInteger(layout.vertical_offset_emu ?? 0, "text.vertical_offset_emu");
@@ -221,6 +254,7 @@ export function resolvedTextLinePaintPlan(node) {
     font_resource_id: layout.font_resource_id,
     font_size_emu: fontSize,
     line_height_emu: lineHeight,
+    color,
     lines: Object.freeze(lines)
   });
 }
@@ -272,6 +306,7 @@ function appendText(group, defs, node, fonts, index) {
       y: (line.y - plan.bounds.y) / EMU_PER_CSS_PX,
       "font-family": installed.family,
       "font-size": plan.font_size_emu / EMU_PER_CSS_PX,
+      fill: plan.color,
       "text-rendering": "geometricPrecision",
       "dominant-baseline": "text-before-edge",
       "data-text-authority": "server-shared-resolved",
@@ -381,44 +416,118 @@ function appendTableText(group, node) {
   }
 }
 
+export function imageRecolorPaintPlan(node) {
+  const effect = node?.image_recolor;
+  if (!effect || effect.preserve_grays !== false) return null;
+  const target = effect.target_rgb;
+  if (!Array.isArray(target) || target.length !== 3) return null;
+  const channels = target.map((value) => {
+    const channel = Number(value);
+    if (!Number.isInteger(channel) || channel < 0 || channel > 255) {
+      throw new RangeError("image_recolor.target_rgb must contain byte values");
+    }
+    return channel / 255;
+  });
+
+  // Bounded #802 A/B candidate: grayscale luminance drives a tint from the
+  // persisted recolor target at black to white at full luminance. This is
+  // renderer math only; source semantics stay the resolved target RGB +
+  // preserve_grays disposition.
+  const luminance = [0.2125, 0.7154, 0.0721];
+  const rows = channels.map((targetChannel) => [
+    luminance[0] * (1 - targetChannel),
+    luminance[1] * (1 - targetChannel),
+    luminance[2] * (1 - targetChannel),
+    0,
+    targetChannel
+  ]);
+  rows.push([0, 0, 0, 1, 0]);
+
+  return Object.freeze({
+    target_rgb: Object.freeze([...target]),
+    values: rows.flat().join(" ")
+  });
+}
+
 export function imageResourcePaintPlan(node, resource) {
   const href = imageDataUrl(resource);
   if (!href) return null;
-  const geometry = imagePaintGeometry(node?.bounds, node?.image_source_window ?? null);
+  const frame = node?.bounds;
+  const sourceWindow = node?.image_source_window ?? null;
+  const geometry = imagePaintGeometry(frame, sourceWindow);
   if (!geometry) return null;
+
+  const rotation = node?.image_content_rotation_degrees ?? null;
+  if (rotation !== null && sourceWindow !== null) return null;
+  const localGeometry = {
+    x: geometry.x - frame.x,
+    y: geometry.y - frame.y,
+    width: geometry.width,
+    height: geometry.height
+  };
+  const contentGeometry = imageContentRotationGeometry(localGeometry, rotation);
+  if (!contentGeometry) return null;
+
   return Object.freeze({
     href,
     resource_id: resource.resource_id,
     availability: resource.availability,
-    geometry
+    geometry: Object.freeze({
+      x: contentGeometry.x,
+      y: contentGeometry.y,
+      width: contentGeometry.width,
+      height: contentGeometry.height
+    }),
+    content_transform: contentGeometry.transform
   });
 }
 
-function appendImage(group, defs, node, resource, clipId) {
+function appendImage(group, defs, node, resource, imageId) {
   const plan = imageResourcePaintPlan(node, resource);
   if (!plan) return false;
 
-  const clipPath = svgNode("clipPath", { id: clipId });
-  clipPath.appendChild(svgNode("rect", {
+  const recolor = imageRecolorPaintPlan(node);
+  let filterId = null;
+  if (recolor) {
+    filterId = imageId + "-recolor";
+    const filter = svgNode("filter", {
+      id: filterId,
+      "color-interpolation-filters": "sRGB"
+    });
+    filter.appendChild(svgNode("feColorMatrix", {
+      type: "matrix",
+      values: recolor.values
+    }));
+    defs.appendChild(filter);
+  }
+
+  // Picture-content placement is resolved in frame-local coordinates. A nested
+  // SVG viewport supplies the fixed frame clip without carrying large page-EMU
+  // clipPath coordinates or rotating the clip together with the image.
+  const viewport = svgNode("svg", {
     x: node.bounds.x,
     y: node.bounds.y,
     width: node.bounds.width,
-    height: node.bounds.height
-  }));
-  defs.appendChild(clipPath);
-
+    height: node.bounds.height,
+    viewBox: "0 0 " + node.bounds.width + " " + node.bounds.height,
+    overflow: "hidden",
+    "data-picture-viewport": "fixed-frame"
+  });
   const image = svgNode("image", {
     x: plan.geometry.x,
     y: plan.geometry.y,
     width: plan.geometry.width,
     height: plan.geometry.height,
     preserveAspectRatio: "none",
-    "clip-path": "url(#" + clipId + ")",
+    filter: filterId ? "url(#" + filterId + ")" : null,
     "data-resource-id": plan.resource_id,
-    "data-resource-availability": plan.availability
+    "data-resource-availability": plan.availability,
+    "data-image-recolor-authority": recolor ? "source-picture-recolor" : null,
+    transform: plan.content_transform
   });
   image.setAttribute("href", plan.href);
-  group.appendChild(image);
+  viewport.appendChild(image);
+  group.appendChild(viewport);
   return true;
 }
 
@@ -472,7 +581,7 @@ function renderNode(svg, defs, node, resources, fonts, index) {
       defs,
       node,
       resource,
-      "chaptera-reader-clip-" + index
+      "chaptera-reader-image-" + index
     );
     if (!paintedResource) {
       const placeholder = svgNode("rect", {

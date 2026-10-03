@@ -1,7 +1,8 @@
 name: Brochure effective paint census
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "vendor/producer-a/crates/pub-reader/src/lib.rs"
@@ -12,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:

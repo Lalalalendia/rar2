@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   assertReaderSceneSourceNeutral,
+  imageContentRotationGeometry,
   imagePaintGeometry,
+  imageRecolorPaintPlan,
   imageResourcePaintPlan,
   presetShapePaintGeometry,
   resolvedTextLinePaintPlan,
@@ -33,11 +35,129 @@ test("Viewer-materialized OLE preview PNG uses the generic image resource paint 
     href: resource.inline_data_url,
     resource_id: resource.resource_id,
     availability: "inline_data_url",
-    geometry: { x: 100, y: 200, width: 300, height: 400 }
+    geometry: { x: 0, y: 0, width: 300, height: 400 },
+    content_transform: null
   });
   assert.equal(
     imageResourcePaintPlan(node, { ...resource, inline_data_url: "data:image/svg+xml;base64,PHN2Zy8+" }),
     null
+  );
+});
+
+test("cardinal picture content rotation keeps the destination frame fixed", () => {
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 100, y: 200, width: 300, height: 900 }, 270),
+    {
+      x: -200,
+      y: 500,
+      width: 900,
+      height: 300,
+      transform: "rotate(270 250 650)"
+    }
+  );
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 100, y: 200, width: 900, height: 300 }, 180),
+    {
+      x: 100,
+      y: 200,
+      width: 900,
+      height: 300,
+      transform: "rotate(180 550 350)"
+    }
+  );
+  assert.equal(
+    imageContentRotationGeometry({ x: 0, y: 0, width: 100, height: 200 }, 45),
+    null
+  );
+});
+
+test("unrotated cropped image keeps fractional paint geometry", () => {
+  assert.deepEqual(
+    imageContentRotationGeometry({ x: 10.5, y: 20.25, width: 300.75, height: 400.125 }, null),
+    {
+      x: 10.5,
+      y: 20.25,
+      width: 300.75,
+      height: 400.125,
+      transform: null
+    }
+  );
+});
+
+test("cardinal picture content rotation is a placement transform, not a frame transform", () => {
+  const resource = {
+    resource_id: "resource:cardinal",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+  const node = {
+    node_id: "node:cardinal",
+    kind: "picture_frame",
+    bounds: { x: 100, y: 200, width: 300, height: 900 },
+    resource_id: resource.resource_id,
+    image_content_rotation_degrees: 270
+  };
+  const plan = imageResourcePaintPlan(node, resource);
+  assert.deepEqual(plan.geometry, { x: -300, y: 300, width: 900, height: 300 });
+  assert.equal(plan.content_transform, "rotate(270 150 450)");
+  assert.deepEqual(node.bounds, { x: 100, y: 200, width: 300, height: 900 });
+});
+
+test("high-offset picture frame keeps content placement frame-local", () => {
+  const resource = {
+    resource_id: "resource:bottom-border",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+  const node = {
+    node_id: "node:bottom-border",
+    kind: "picture_frame",
+    bounds: { x: 571_500, y: 9_144_000, width: 6_858_000, height: 703_977 },
+    resource_id: resource.resource_id,
+    image_content_rotation_degrees: 180
+  };
+  const plan = imageResourcePaintPlan(node, resource);
+  assert.deepEqual(plan.geometry, { x: 0, y: 0, width: 6_858_000, height: 703_977 });
+  assert.equal(plan.content_transform, "rotate(180 3429000 351988.5)");
+});
+
+test("bounded picture recolor matrix maps black to target and white to white", () => {
+  const plan = imageRecolorPaintPlan({
+    image_recolor: {
+      target_rgb: [51, 102, 153],
+      preserve_grays: false
+    }
+  });
+  assert.ok(plan);
+
+  const values = plan.values.split(/\s+/).map(Number);
+  assert.equal(values.length, 20);
+  const apply = ([r, g, b, a]) => [
+    values[0] * r + values[1] * g + values[2] * b + values[3] * a + values[4],
+    values[5] * r + values[6] * g + values[7] * b + values[8] * a + values[9],
+    values[10] * r + values[11] * g + values[12] * b + values[13] * a + values[14],
+    values[15] * r + values[16] * g + values[17] * b + values[18] * a + values[19]
+  ];
+
+  const black = apply([0, 0, 0, 1]);
+  assert.deepEqual(black.map((value) => Math.round(value * 255)), [51, 102, 153, 255]);
+
+  const white = apply([1, 1, 1, 1]);
+  assert.deepEqual(white.map((value) => Math.round(value * 255)), [255, 255, 255, 255]);
+});
+
+test("picture recolor fails closed for preserve-grays or invalid target state", () => {
+  assert.equal(imageRecolorPaintPlan({
+    image_recolor: { target_rgb: [1, 2, 3], preserve_grays: true }
+  }), null);
+  assert.equal(imageRecolorPaintPlan({}), null);
+  assert.throws(
+    () => imageRecolorPaintPlan({
+      image_recolor: { target_rgb: [1, 2, 999], preserve_grays: false }
+    }),
+    /byte values/
   );
 });
 
@@ -220,6 +340,27 @@ test("shared resolved text paint plan preserves server line breaks", () => {
   );
 });
 
+test("shared resolved text paint plan carries server text color", () => {
+  const plan = resolvedTextLinePaintPlan({
+    bounds: { x: 100, y: 200, width: 1000, height: 600 },
+    text_layout: {
+      disposition: "shared_resolved",
+      font_resource_id: "font-1",
+      font_size_emu: 120,
+      line_height_emu: 150,
+      color_rgb: [255, 255, 0],
+      lines: [{
+        line_index: 0,
+        text: "yellow",
+        measured_width_emu: 300,
+        line_height_emu: 150
+      }]
+    }
+  });
+
+  assert.equal(plan.color, "rgb(255 255 0)");
+});
+
 test("shared resolved text paint plan applies server vertical block offset", () => {
   const plan = resolvedTextLinePaintPlan({
     bounds: { x: 100, y: 200, width: 1000, height: 600 },
@@ -283,7 +424,12 @@ test("source-backed text bounds affect text only, not outer resource geometry", 
 
   assert.doesNotThrow(() => assertReaderSceneSourceNeutral({ nodes: [node], resources: [resource] }));
   assert.deepEqual(resolvedTextLinePaintPlan(node).bounds, node.text_bounds);
-  assert.deepEqual(imageResourcePaintPlan(node, resource).geometry, node.bounds);
+  assert.deepEqual(imageResourcePaintPlan(node, resource).geometry, {
+    x: 0,
+    y: 0,
+    width: node.bounds.width,
+    height: node.bounds.height
+  });
 });
 
 test("mixed shared text plan preserves server span sizes and cumulative line heights", () => {

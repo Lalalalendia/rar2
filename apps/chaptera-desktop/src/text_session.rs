@@ -166,6 +166,101 @@ fn rebind_after_commit(
     Ok(())
 }
 
+fn scalar_selection_for_current_authority(
+    mode: &DesktopTextMode,
+    revision: &str,
+    domain: &StoryEditDomainV1,
+    layout: &DesktopStoryLayoutV1,
+    anchor_scalar: u32,
+    focus_scalar: u32,
+) -> TextSelectionStateV1 {
+    let interaction_domain = to_interaction_domain_v1(domain);
+    let anchor = resolve_story_position_v1(
+        &layout.caret_map,
+        anchor_scalar,
+        None,
+        Some(&layout.layout_revision_id),
+    )
+    .ok();
+    let focus = resolve_story_position_v1(
+        &layout.caret_map,
+        focus_scalar,
+        None,
+        Some(&layout.layout_revision_id),
+    )
+    .ok();
+    let projected = anchor.is_some() && focus.is_some();
+
+    TextSelectionStateV1 {
+        protocol_version: SELECTION_VERSION_V1.to_owned(),
+        story_id: interaction_domain.story_id,
+        anchor_scalar,
+        focus_scalar,
+        revision_id: revision.to_owned(),
+        edit_domain_id: interaction_domain.domain_id,
+        projection_state: if projected {
+            "projected".to_owned()
+        } else {
+            "layout_pending".to_owned()
+        },
+        layout_revision_id: projected.then(|| layout.layout_revision_id.clone()),
+        anchor_visual_stop_id: anchor.map(|stop| stop.stop_id),
+        focus_visual_stop_id: focus.map(|stop| stop.stop_id),
+        preferred_inline_x_emu: None,
+    }
+}
+
+/// Keep the active Story session authoritative after a non-text document
+/// mutation such as Alt+Arrow moving the owning TextFrame.
+pub fn rebind_after_non_text_document_change(
+    editor: &EditorSession,
+    mode: &mut DesktopTextMode,
+) -> Result<(), String> {
+    let anchor_scalar = mode.session.selection.anchor_scalar;
+    let focus_scalar = mode.session.selection.focus_scalar;
+    let revision = revision_id(editor);
+    let domain = derive_domain(editor, mode.story_id)?;
+    let interaction_domain = to_interaction_domain_v1(&domain);
+    let layout = build_layout(editor, mode.story_id, &revision)?;
+    let selection = scalar_selection_for_current_authority(
+        mode,
+        &revision,
+        &domain,
+        &layout,
+        anchor_scalar,
+        focus_scalar,
+    );
+    let rebound = rebind_text_edit_session_authority_v1(
+        &mode.session,
+        &revision,
+        &interaction_domain,
+        &layout.caret_map,
+        &layout.layout_revision_id,
+        selection,
+    )
+    .map_err(|error| error.to_string())?;
+
+    mode.domain = domain;
+    mode.layout = layout;
+    mode.session = rebound.session;
+    Ok(())
+}
+
+/// Select the complete active Story through the existing selection authority.
+pub fn select_all(mode: &mut DesktopTextMode) {
+    let revision = mode.session.revision_id.clone();
+    let domain = mode.domain.clone();
+    let layout = mode.layout.clone();
+    mode.session.selection = scalar_selection_for_current_authority(
+        mode,
+        &revision,
+        &domain,
+        &layout,
+        0,
+        domain.raw_scalar_len,
+    );
+}
+
 pub fn enter_explicit_text_mode(
     editor: &EditorSession,
     story_id: StoryId,

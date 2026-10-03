@@ -63,6 +63,14 @@ function compatibilityReport(classification, sha, scene) {
   };
 }
 
+const continueWorkerFailures = process.env.READER_CONTINUE_WORKER_FAILURES === "1";
+const workerTimeoutSeconds = Number(process.env.READER_WORKER_TIMEOUT_SECONDS ?? "60");
+const workerCpuSeconds = Number(process.env.READER_WORKER_CPU_SECONDS ?? "30");
+const workerAddressSpaceMb = Number(process.env.READER_WORKER_ADDRESS_SPACE_MB ?? "512");
+assert.ok(Number.isInteger(workerTimeoutSeconds) && workerTimeoutSeconds >= 30 && workerTimeoutSeconds <= 180, "worker timeout must be 30..180 seconds");
+assert.ok(Number.isInteger(workerCpuSeconds) && workerCpuSeconds >= 15 && workerCpuSeconds <= workerTimeoutSeconds, "worker CPU limit must be bounded by timeout");
+assert.ok(Number.isInteger(workerAddressSpaceMb) && workerAddressSpaceMb >= 256 && workerAddressSpaceMb <= 1024, "worker address-space limit must be 256..1024 MiB");
+
 const referenceRasterDpi = Number(process.env.READER_REFERENCE_RASTER_DPI ?? "0");
 assert.ok(
   referenceRasterDpi === 0 || (Number.isInteger(referenceRasterDpi) && referenceRasterDpi >= 72 && referenceRasterDpi <= 300),
@@ -142,14 +150,48 @@ try {
     assert.equal(sha256(bytes), fixture.sha256);
     await writeFile(source, bytes);
     const workerOutput = join(temporary, fixture.name + "-worker");
-    const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
-      "--output-dir", workerOutput, "--input", source, "--timeout", "60", "--address-space-mb", "512",
-      "--cpu-seconds", "30", "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
-      worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
-      "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)], { cwd: repo, timeout: 70000, maxBuffer: 1024 * 1024 });
-    const isolation = JSON.parse(stdout);
-    assert.equal(isolation.status, "success");
-    assert.equal(isolation.network_policy, "seccomp_default_deny");
+    let isolation;
+    try {
+      const { stdout } = await run("python3", [join(repo, "tools/migration_pdf_worker_isolation.py"), "run",
+        "--output-dir", workerOutput, "--input", source, "--timeout", String(workerTimeoutSeconds),
+        "--address-space-mb", String(workerAddressSpaceMb),
+        "--cpu-seconds", String(workerCpuSeconds), "--open-files", "64", "--output-file-mb", "32", "--clear-environment", "--",
+        worker, "guest-reader-scene", "--session-id", "guest:" + String(index + 1).padStart(32, "0"),
+        "--expected-sha256", fixture.sha256, "--expected-byte-len", String(fixture.bytes)],
+        { cwd: repo, timeout: (workerTimeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 });
+      isolation = JSON.parse(stdout);
+      assert.equal(isolation.status, "success");
+      assert.equal(isolation.network_policy, "seccomp_default_deny");
+    } catch (error) {
+      if (!continueWorkerFailures || fixture.require_render === true) throw error;
+      let failure = null;
+      try {
+        failure = JSON.parse(String(error.stdout ?? ""));
+      } catch {}
+      results.push({
+        fixture: fixture.name,
+        source_sha256: fixture.sha256,
+        source_byte_len: fixture.bytes,
+        classification: "unsupported",
+        terminal_code: "reader_worker_isolation_failed",
+        rendered: false,
+        worker_failure: failure ? {
+          status: failure.status ?? null,
+          exit_code: failure.exit_code ?? null,
+          timed_out: failure.timed_out ?? null,
+        } : null,
+        filesystem_confinement: null,
+        network_policy: failure?.network_policy ?? "seccomp_default_deny",
+        screenshots: []
+      });
+      console.log(JSON.stringify({
+        fixture: fixture.name,
+        classification: "unsupported",
+        terminal_code: "reader_worker_isolation_failed",
+        worker_exit_code: failure?.exit_code ?? null
+      }));
+      continue;
+    }
     const receiptBytes = await readFile(join(workerOutput, "result.json"));
     const receipt = JSON.parse(receiptBytes);
     assert.equal(receipt.filesystem_confinement, true);

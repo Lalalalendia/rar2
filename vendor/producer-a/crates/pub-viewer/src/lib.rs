@@ -983,6 +983,10 @@ pub struct ViewerTypographyRun {
     pub text_size_emu: u32,
     pub font_inherited: bool,
     pub size_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<[u8; 3]>,
+    #[serde(default)]
+    pub color_inherited: bool,
     pub source_story_text_sha256: Sha256Digest,
 }
 
@@ -1015,10 +1019,20 @@ pub struct ViewerImageSourceWindowV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerImageRecolorV1 {
+    pub target_rgb: [u8; 3],
+    pub preserve_grays: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerImagePlacementV1 {
     pub node_id: NodeId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_window: Option<ViewerImageSourceWindowV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_rotation_degrees: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recolor: Option<ViewerImageRecolorV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1593,7 +1607,8 @@ fn viewer_mature_officeart_wmf_preview_images(
 
         let mut placements = Vec::new();
         for node_id in &node_ids {
-            let source_window = match resolved.nodes.get(node_id).map(|node| {
+            let resolved_node = resolved.nodes.get(node_id);
+            let source_window = match resolved_node.map(|node| {
                 viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
             }) {
                 Some(Ok(source_window)) => source_window,
@@ -1610,10 +1625,17 @@ fn viewer_mature_officeart_wmf_preview_images(
                 }
                 None => None,
             };
-            if let Some(source_window) = source_window {
+            let content_rotation_degrees = resolved_node
+                .and_then(|node| node.payload.explicit_image_cardinal_rotation_degrees);
+            let recolor = source.graph.nodes.get(node_id).and_then(|node| {
+                viewer_image_recolor_v1(node.payload.explicit_image_recolor.as_ref())
+            });
+            if source_window.is_some() || content_rotation_degrees.is_some() || recolor.is_some() {
                 placements.push(ViewerImagePlacementV1 {
                     node_id: *node_id,
-                    source_window: Some(source_window),
+                    source_window,
+                    content_rotation_degrees,
+                    recolor,
                 });
             }
         }
@@ -1784,6 +1806,15 @@ fn viewer_image_source_window_v1(
     }))
 }
 
+fn viewer_image_recolor_v1(
+    recolor: Option<&pub_reader::PubExplicitImageRecolorSource>,
+) -> Option<ViewerImageRecolorV1> {
+    recolor.map(|recolor| ViewerImageRecolorV1 {
+        target_rgb: recolor.target_rgb,
+        preserve_grays: recolor.preserve_grays,
+    })
+}
+
 pub fn open_mature_0x2c(bytes: &[u8]) -> Result<ViewerDocument> {
     let pipeline = build_mature_0x2c_pipeline(bytes)?;
     viewer_document_from_pipeline(bytes.len(), &pipeline)
@@ -1808,12 +1839,14 @@ pub enum ViewerProductOpenOutcome {
 }
 
 /// Opens a Publisher source normally first, then attempts the conservative
-/// intake-only damaged-file salvage path.
+/// damaged-file salvage path.
 ///
 /// Valid known-PUB files that fail normal parsing are not automatically called
-/// damaged: those require a typed ProvenStructuralCorruption trigger from a
-/// stronger discriminator. This keeps unsupported grammar research separate
-/// from recovery.
+/// damaged. Intake-only probes remain fail-closed unless either a narrow
+/// structural detector or the compiled exact-SHA evidence registry supplies a
+/// typed ProvenStructuralCorruption authority. This keeps unsupported grammar
+/// research separate from recovery while allowing proven prior evidence to be
+/// reused by the product path.
 pub fn open_pub_or_salvage(
     bytes: &[u8],
     environment: BoundedLayoutEnvironment,
@@ -2212,6 +2245,8 @@ fn open_mature_0x2c_bundle(
                 text_size_emu: run.text_size_emu,
                 font_inherited: run.font_inherited,
                 size_inherited: run.size_inherited,
+                color_rgb: run.color_rgb,
+                color_inherited: run.color_inherited,
                 source_story_text_sha256: viewer_story_text_sha256(&story.text),
             })
         })
@@ -2231,6 +2266,8 @@ fn open_mature_0x2c_bundle(
                     text_size_emu: run.text_size_emu,
                     font_inherited: false,
                     size_inherited: run.size_inherited,
+                    color_rgb: None,
+                    color_inherited: false,
                     source_story_text_sha256: viewer_story_text_sha256(&story.text),
                 })
             }),
@@ -2387,11 +2424,10 @@ fn open_mature_0x2c_bundle(
 
                 let mut placements = Vec::with_capacity(entry.uses.len());
                 for usage in &entry.uses {
-                    let source_window = match pipeline.resolved.graph.nodes.get(&usage.node_id).map(
-                        |node| {
-                            viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
-                        },
-                    ) {
+                    let resolved_node = pipeline.resolved.graph.nodes.get(&usage.node_id);
+                    let source_window = match resolved_node.map(|node| {
+                        viewer_image_source_window_v1(node.payload.explicit_image_crop.as_ref())
+                    }) {
                         Some(Ok(source_window)) => source_window,
                         Some(Err(reason)) => {
                             document.diagnostics.push(ViewerDiagnostic {
@@ -2406,10 +2442,28 @@ fn open_mature_0x2c_bundle(
                         }
                         None => None,
                     };
-                    if let Some(source_window) = source_window {
+                    let content_rotation_degrees = resolved_node
+                        .and_then(|node| node.payload.explicit_image_cardinal_rotation_degrees);
+                    let recolor =
+                        pipeline
+                            .source
+                            .graph
+                            .nodes
+                            .get(&usage.node_id)
+                            .and_then(|node| {
+                                viewer_image_recolor_v1(
+                                    node.payload.explicit_image_recolor.as_ref(),
+                                )
+                            });
+                    if source_window.is_some()
+                        || content_rotation_degrees.is_some()
+                        || recolor.is_some()
+                    {
                         placements.push(ViewerImagePlacementV1 {
                             node_id: usage.node_id,
-                            source_window: Some(source_window),
+                            source_window,
+                            content_rotation_degrees,
+                            recolor,
                         });
                     }
                 }
@@ -4111,6 +4165,7 @@ mod tests {
                         image_slot: None,
                         legacy_ole: None,
                         explicit_image_crop: None,
+                        explicit_image_cardinal_rotation_degrees: None,
                         explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                         effective_paint: None,
                         story_frame: Some(PubResolvedStoryFrame {
@@ -4681,6 +4736,7 @@ mod tests {
                 image_slot: None,
                 legacy_ole: None,
                 explicit_image_crop: None,
+                explicit_image_cardinal_rotation_degrees: None,
                 explicit_paint: pub_reader::PubExplicitShapePaintSource::default(),
                 effective_paint: None,
                 story_frame: Some(PubResolvedStoryFrame {

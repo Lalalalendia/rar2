@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use pub_viewer::{
-    classify_pub_family, open_pub_or_salvage, probe_reader_salvage_candidate,
-    viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderSalvageCorruptionEvidence,
-    ReaderSalvageEligibility, ViewerProductOpenOutcome,
+    build_reader_partial_source_graph, classify_pub_family, open_pub_or_salvage,
+    probe_reader_salvage_candidate, probe_reader_salvage_candidate_with_trigger,
+    viewer_geometry_environment_v0_1, ReaderPartialSourceFact, ReaderPartialSourceGraphError,
+    ReaderSalvageCorruptionEvidence, ReaderSalvageEligibility, ReaderSalvageProbe,
+    ReaderSalvageSubsystemProbe, ReaderSalvageTrigger, ViewerProductOpenOutcome,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -35,6 +37,18 @@ struct AcceptanceRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     corruption_evidence: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    authority_owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_run_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_artifact_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_evidence_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_classification: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     has_surviving_evidence: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cfb_inventory_available: Option<bool>,
@@ -46,7 +60,30 @@ struct AcceptanceRow {
     salvage_gap_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     open_error_signature_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forced_trigger_probe: Option<ForcedTriggerProbeReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forced_partial_graph: Option<ForcedPartialGraphReceipt>,
     source_modified: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ForcedTriggerProbeReceipt {
+    eligibility: &'static str,
+    cfb_inventory_available: bool,
+    contents_family: Option<String>,
+    has_surviving_evidence: bool,
+    subsystems: ReaderSalvageSubsystemProbe,
+    source_modified: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct ForcedPartialGraphReceipt {
+    status: &'static str,
+    fact_counts: BTreeMap<&'static str, usize>,
+    gap_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'static str>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -81,6 +118,9 @@ fn corruption_name(value: ReaderSalvageCorruptionEvidence) -> &'static str {
         ReaderSalvageCorruptionEvidence::QuillStrsServiceSpanOutOfBounds => {
             "quill_strs_service_span_out_of_bounds"
         }
+        ReaderSalvageCorruptionEvidence::ExactShaTypedCorruptionAuthority => {
+            "exact_sha_typed_corruption_authority"
+        }
     }
 }
 
@@ -95,6 +135,57 @@ fn failed_outcome(eligibility: ReaderSalvageEligibility) -> AcceptanceOutcome {
         | ReaderSalvageEligibility::AwaitingTypedCorruptionEvidence
         | ReaderSalvageEligibility::IneligibleUnproven => AcceptanceOutcome::Unsupported,
     }
+}
+
+fn partial_graph_error_name(value: ReaderPartialSourceGraphError) -> &'static str {
+    match value {
+        ReaderPartialSourceGraphError::SourceIdentityMismatch => "source_identity_mismatch",
+        ReaderPartialSourceGraphError::SourceModified => "source_modified",
+        ReaderPartialSourceGraphError::ProbeMismatch => "probe_mismatch",
+        ReaderPartialSourceGraphError::Ineligible => "ineligible",
+    }
+}
+
+fn forced_trigger_diagnostic(
+    bytes: &[u8],
+    intake_probe: &ReaderSalvageProbe,
+) -> (
+    Option<ForcedTriggerProbeReceipt>,
+    Option<ForcedPartialGraphReceipt>,
+) {
+    if intake_probe.eligibility != ReaderSalvageEligibility::AwaitingTypedCorruptionEvidence {
+        return (None, None);
+    }
+
+    let forced = probe_reader_salvage_candidate_with_trigger(
+        bytes,
+        ReaderSalvageTrigger::ProvenStructuralCorruption,
+    );
+    let probe_receipt = ForcedTriggerProbeReceipt {
+        eligibility: eligibility_name(forced.eligibility),
+        cfb_inventory_available: forced.cfb_inventory_available,
+        contents_family: forced.contents_family.clone(),
+        has_surviving_evidence: forced.has_surviving_evidence(),
+        subsystems: forced.subsystems,
+        source_modified: forced.source_modified,
+    };
+
+    let graph_receipt = match build_reader_partial_source_graph(bytes, &forced) {
+        Ok(graph) => ForcedPartialGraphReceipt {
+            status: "constructed",
+            fact_counts: fact_counts(&graph.facts),
+            gap_count: graph.gaps.len(),
+            error: None,
+        },
+        Err(error) => ForcedPartialGraphReceipt {
+            status: "error",
+            fact_counts: BTreeMap::new(),
+            gap_count: 0,
+            error: Some(partial_graph_error_name(error)),
+        },
+    };
+
+    (Some(probe_receipt), Some(graph_receipt))
 }
 
 fn fact_counts(facts: &[ReaderPartialSourceFact]) -> BTreeMap<&'static str, usize> {
@@ -123,12 +214,20 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
             pub_profile: family.profile.as_str().to_owned(),
             salvage_eligibility: None,
             corruption_evidence: None,
+            authority_owner: None,
+            authority_task_id: None,
+            authority_run_id: None,
+            authority_artifact_id: None,
+            authority_evidence_digest: None,
+            authority_classification: None,
             has_surviving_evidence: None,
             cfb_inventory_available: None,
             contents_family: None,
             salvage_fact_counts: None,
             salvage_gap_count: None,
             open_error_signature_sha256: None,
+            forced_trigger_probe: None,
+            forced_partial_graph: None,
             source_modified: false,
         },
         Ok(ViewerProductOpenOutcome::Salvage(graph)) => {
@@ -143,17 +242,39 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 pub_profile: family.profile.as_str().to_owned(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
+                authority_owner: probe.authority.as_ref().map(|authority| authority.owner.clone()),
+                authority_task_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.task_id.clone()),
+                authority_run_id: probe.authority.as_ref().map(|authority| authority.run_id),
+                authority_artifact_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.artifact_id),
+                authority_evidence_digest: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.evidence_digest.clone()),
+                authority_classification: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.classification.clone()),
                 has_surviving_evidence: Some(probe.has_surviving_evidence()),
                 cfb_inventory_available: Some(probe.cfb_inventory_available),
                 contents_family: graph.contents_family.clone(),
                 salvage_fact_counts: Some(fact_counts(&graph.facts)),
                 salvage_gap_count: Some(graph.gaps.len()),
                 open_error_signature_sha256: None,
+                forced_trigger_probe: None,
+                forced_partial_graph: None,
                 source_modified: probe.source_modified,
             }
         }
         Err(error) => {
             let probe = probe_reader_salvage_candidate(bytes);
+            let (forced_trigger_probe, forced_partial_graph) =
+                forced_trigger_diagnostic(bytes, &probe);
             AcceptanceRow {
                 source_sha256,
                 byte_len: bytes.len(),
@@ -162,12 +283,32 @@ fn classify(bytes: &[u8]) -> AcceptanceRow {
                 pub_profile: family.profile.as_str().to_owned(),
                 salvage_eligibility: Some(eligibility_name(probe.eligibility)),
                 corruption_evidence: probe.corruption_evidence.map(corruption_name),
+                authority_owner: probe.authority.as_ref().map(|authority| authority.owner.clone()),
+                authority_task_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.task_id.clone()),
+                authority_run_id: probe.authority.as_ref().map(|authority| authority.run_id),
+                authority_artifact_id: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.artifact_id),
+                authority_evidence_digest: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.evidence_digest.clone()),
+                authority_classification: probe
+                    .authority
+                    .as_ref()
+                    .map(|authority| authority.classification.clone()),
                 has_surviving_evidence: Some(probe.has_surviving_evidence()),
                 cfb_inventory_available: Some(probe.cfb_inventory_available),
                 contents_family: probe.contents_family.clone(),
                 salvage_fact_counts: None,
                 salvage_gap_count: None,
                 open_error_signature_sha256: Some(sha256_hex(format!("{error:#}").as_bytes())),
+                forced_trigger_probe,
+                forced_partial_graph,
                 source_modified: probe.source_modified,
             }
         }
@@ -225,12 +366,49 @@ fn main() -> Result<()> {
         rows.push(row);
     }
 
+    let forced_trigger_attempted_count = rows
+        .iter()
+        .filter(|row| row.forced_trigger_probe.is_some())
+        .count();
+    let forced_cfb_inventory_available_count = rows
+        .iter()
+        .filter_map(|row| row.forced_trigger_probe.as_ref())
+        .filter(|probe| probe.cfb_inventory_available)
+        .count();
+    let forced_surviving_evidence_count = rows
+        .iter()
+        .filter_map(|row| row.forced_trigger_probe.as_ref())
+        .filter(|probe| probe.has_surviving_evidence)
+        .count();
+    let forced_partial_graph_constructed_count = rows
+        .iter()
+        .filter_map(|row| row.forced_partial_graph.as_ref())
+        .filter(|graph| graph.status == "constructed")
+        .count();
+    let mut forced_contents_family_counts = BTreeMap::<String, usize>::new();
+    for family in rows
+        .iter()
+        .filter_map(|row| row.forced_trigger_probe.as_ref())
+        .filter_map(|probe| probe.contents_family.as_deref())
+    {
+        *forced_contents_family_counts
+            .entry(family.to_owned())
+            .or_default() += 1;
+    }
+
     let report = serde_json::json!({
         "schema": SCHEMA,
         "corpus_file_count": rows.len(),
         "outcome_counts": outcome_counts,
         "salvage_eligibility_counts": eligibility_counts,
         "corruption_evidence_counts": corruption_evidence_counts,
+        "forced_trigger_summary": {
+            "attempted_count": forced_trigger_attempted_count,
+            "cfb_inventory_available_count": forced_cfb_inventory_available_count,
+            "surviving_evidence_count": forced_surviving_evidence_count,
+            "partial_graph_constructed_count": forced_partial_graph_constructed_count,
+            "contents_family_counts": forced_contents_family_counts,
+        },
         "rows": rows,
         "evidence_boundary": "source-safe acceptance only; no filenames, paths, document text, raw streams, source bytes, repaired PUB materialization, or guessed geometry are retained",
     });
@@ -251,6 +429,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exact_sha_authority_evidence_name_is_stable() {
+        assert_eq!(
+            corruption_name(ReaderSalvageCorruptionEvidence::ExactShaTypedCorruptionAuthority),
+            "exact_sha_typed_corruption_authority"
+        );
+    }
+
+    #[test]
     fn unsafe_is_reserved_for_policy_or_resource_fail_closed_classes() {
         for eligibility in [
             ReaderSalvageEligibility::IneligibleArchive,
@@ -260,6 +446,18 @@ mod tests {
         ] {
             assert_eq!(failed_outcome(eligibility), AcceptanceOutcome::Unsafe);
         }
+    }
+
+    #[test]
+    fn forced_trigger_diagnostic_error_names_are_stable() {
+        assert_eq!(
+            partial_graph_error_name(ReaderPartialSourceGraphError::Ineligible),
+            "ineligible"
+        );
+        assert_eq!(
+            partial_graph_error_name(ReaderPartialSourceGraphError::ProbeMismatch),
+            "probe_mismatch"
+        );
     }
 
     #[test]
