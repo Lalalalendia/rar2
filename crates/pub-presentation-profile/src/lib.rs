@@ -273,6 +273,142 @@ pub fn select_standard_print_service_tail_customer_page_seq_nums_v1(
     })
 }
 
+pub const MATURE_TERMINAL_SERVICE_TAIL_PROFILE_ID_V1: &str =
+    "publisher-mature-0x2c/terminal-nonzero-service-tail/v1";
+
+/// Admits the mature 0x2C terminal-service topology proven by the all-55
+/// Publisher-paired census in #963.
+///
+/// This selector is intentionally source-semantic and payload-blind. It uses
+/// only DOCUMENT/PAGE order, Page.Oid zero/nonzero class, and the applied-master
+/// relation. External page counts, source hashes, filenames, text/payload state,
+/// and PAGE seqNum constants are not inputs. Structural drift returns `None`.
+pub fn select_mature_terminal_service_tail_customer_page_seq_nums_v1(
+    mut input: StandardPrintServiceTailProfileInputV1,
+) -> Option<StandardPrintServiceTailSelectionV1> {
+    if input.schema_version != STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1
+        || input.confirmed_page_count != input.pages.len()
+        || input.document_page_list_entry_count
+            != input
+                .confirmed_page_count
+                .checked_add(input.special_entry_count)?
+        || input.special_entry_count > 1
+    {
+        return None;
+    }
+
+    input.pages.sort_by_key(|page| page.document_ordinal);
+    let mut ordinals = BTreeSet::new();
+    let mut seq_nums = BTreeSet::new();
+    for page in &input.pages {
+        if page.document_ordinal >= input.document_page_list_entry_count
+            || !ordinals.insert(page.document_ordinal)
+            || !seq_nums.insert(page.contents_seq_num)
+        {
+            return None;
+        }
+    }
+
+    let oid_is_zero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        page.oid_dword0 == Some(0) && page.oid_dword1 == Some(0)
+    };
+    let oid_is_nonzero = |page: &StandardPrintServiceTailPageEvidenceV1| {
+        matches!(
+            (page.oid_dword0, page.oid_dword1),
+            (Some(d0), Some(d1)) if d0 != 0 || d1 != 0
+        )
+    };
+
+    let leader = input.pages.first()?;
+    if leader.document_ordinal != 0
+        || !oid_is_nonzero(leader)
+        || leader.applied_master_seq_num.is_some()
+    {
+        return None;
+    }
+    let leader_seq = leader.contents_seq_num;
+
+    let mut nonzero_end = 1usize;
+    while let Some(page) = input.pages.get(nonzero_end) {
+        if !oid_is_nonzero(page) {
+            break;
+        }
+        if page.applied_master_seq_num != Some(leader_seq) {
+            return None;
+        }
+        nonzero_end = nonzero_end.checked_add(1)?;
+    }
+
+    // At least one customer PAGE plus one terminal nonzero service PAGE.
+    if nonzero_end < 3 {
+        return None;
+    }
+    let customer_pages = input.pages.get(1..nonzero_end.checked_sub(1)?)?;
+    let terminal_service = input.pages.get(nonzero_end.checked_sub(1)?)?;
+    let zero_tail = input.pages.get(nonzero_end..)?;
+    if customer_pages.is_empty()
+        || zero_tail.is_empty()
+        || !zero_tail
+            .iter()
+            .all(|page| oid_is_zero(page) && page.applied_master_seq_num == Some(leader_seq))
+    {
+        return None;
+    }
+
+    // The all-55 falsifier admitted only the exact four-entry DOCUMENT suffix:
+    //   PAGE service / PAGE / PAGE / PAGE
+    // or
+    //   PAGE service / raw0x59 / PAGE / PAGE.
+    // The page-role receipt exposes the one special entry as the sole ordinal
+    // absent from the PAGE sequence, so the suffix can be fenced without
+    // importing payload semantics.
+    let last_customer_ordinal = customer_pages.last()?.document_ordinal;
+    if input
+        .document_page_list_entry_count
+        .checked_sub(last_customer_ordinal.checked_add(1)?)?
+        != 4
+        || terminal_service.document_ordinal != last_customer_ordinal.checked_add(1)?
+    {
+        return None;
+    }
+
+    let expected_zero_ordinals = if input.special_entry_count == 0 {
+        vec![
+            last_customer_ordinal.checked_add(2)?,
+            last_customer_ordinal.checked_add(3)?,
+            last_customer_ordinal.checked_add(4)?,
+        ]
+    } else {
+        vec![
+            last_customer_ordinal.checked_add(3)?,
+            last_customer_ordinal.checked_add(4)?,
+        ]
+    };
+    if zero_tail
+        .iter()
+        .map(|page| page.document_ordinal)
+        .collect::<Vec<_>>()
+        != expected_zero_ordinals
+    {
+        return None;
+    }
+
+    let mut service_page_seq_nums = Vec::with_capacity(1 + zero_tail.len());
+    service_page_seq_nums.push(terminal_service.contents_seq_num);
+    service_page_seq_nums.extend(zero_tail.iter().map(|page| page.contents_seq_num));
+
+    Some(StandardPrintServiceTailSelectionV1 {
+        profile_id: MATURE_TERMINAL_SERVICE_TAIL_PROFILE_ID_V1.to_owned(),
+        raw_page_count: input.pages.len(),
+        customer_page_seq_nums: customer_pages
+            .iter()
+            .map(|page| page.contents_seq_num)
+            .collect(),
+        master_page_seq_num: leader_seq,
+        service_page_seq_nums,
+    })
+}
+
 pub const LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1: &str =
     "chaptera.legacy22-page-list-profile-input.v1";
 pub const LEGACY22_NOQUILL_PAGE_PROFILE_ID_V1: &str = "publisher-legacy22/noquill-middle-pages/v1";
