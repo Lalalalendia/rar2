@@ -2,6 +2,16 @@ name: Editable Typography Consumer Edit V1
 # Exact real-consumer edit proof for #999.
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-typography-consumer-edit-v1.yml"
+      - "tools/ci/scribus_typography_edit_consumer.py"
+      - "tools/ci/libreoffice_draw_typography_edit.py"
+      - "tools/verify_editable_typography_export.py"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
   push:
     branches:
       - conversion/editable-typography-consumer-edit-01b
