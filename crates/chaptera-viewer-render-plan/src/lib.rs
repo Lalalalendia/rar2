@@ -2545,7 +2545,7 @@ mod tests {
                     default_line_height_emu: 300_000,
                     bytes: first_bytes,
                 },
-                font_fingerprint_sha256: first_sha,
+                font_fingerprint_sha256: first_sha.clone(),
             },
             ResolvedFamilyTypographyRunV1 {
                 scalar_start: 2,
@@ -2559,7 +2559,7 @@ mod tests {
                     default_line_height_emu: 100_000,
                     bytes: second_bytes,
                 },
-                font_fingerprint_sha256: second_sha,
+                font_fingerprint_sha256: second_sha.clone(),
             },
         ];
 
