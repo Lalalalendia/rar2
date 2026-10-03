@@ -1942,6 +1942,8 @@ fn open_legacy_0x22_noquill_bundle(
         .iter()
         .map(|page| page.id)
         .collect::<Vec<_>>();
+    let structural_point_groups =
+        legacy_noquill_structural_point_group_ids(&resolved.graph, &effective_page_ids);
     let authoring = bounded_legacy_noquill_authoring_slice_from_resolved_pages(
         &resolved.graph,
         &effective_page_ids,
@@ -1960,6 +1962,7 @@ fn open_legacy_0x22_noquill_bundle(
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
+        .filter(|paint| !structural_point_groups.contains(&paint.node_id))
         .collect::<Vec<_>>();
 
     let story_frames = projection
@@ -1994,6 +1997,16 @@ fn open_legacy_0x22_noquill_bundle(
             .filter(|diagnostic| diagnostic.code != "story_text_layout_not_implemented")
             .map(map_scene_diagnostic),
     );
+    if !structural_point_groups.is_empty() {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.legacy_group.structural_point_container".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "{} source-backed legacy point Group container(s) were preserved as structural ancestry without projecting zero-size paint geometry.",
+                structural_point_groups.len()
+            ),
+        });
+    }
 
     let preview_source_hash = document.source.source_hash;
     let mut images = viewer_legacy_ole_cached_preview_images(
@@ -3012,6 +3025,24 @@ pub fn bounded_authoring_slice_from_resolved(
     bounded_authoring_slice_from_resolved_pages(graph, &graph.document.pages)
 }
 
+fn legacy_noquill_structural_point_group_ids(
+    graph: &PubResolvedGraph,
+    page_ids: &[PageId],
+) -> BTreeSet<NodeId> {
+    let selected_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
+    graph
+        .nodes
+        .values()
+        .filter(|node| node.kind == NodeKind::Group)
+        .filter(|node| {
+            selected_pages.contains(&PageId::from_canonical(node.header.parent_id))
+        })
+        .filter(|node| node.header.bounds.width.get() == 0 && node.header.bounds.height.get() == 0)
+        .filter(|node| node.header.transform == Affine2D::identity())
+        .map(|node| node.header.id)
+        .collect()
+}
+
 fn legacy_noquill_image_page(
     graph: &PubResolvedGraph,
     node: &Node<PubResolvedNodePayload>,
@@ -3046,6 +3077,11 @@ fn bounded_legacy_noquill_authoring_slice_from_resolved_pages(
     page_ids: &[PageId],
 ) -> Result<BoundedAuthoringSlice> {
     let mut authoring = bounded_authoring_slice_from_resolved_pages(graph, page_ids)?;
+    let structural_point_groups = legacy_noquill_structural_point_group_ids(graph, page_ids);
+    authoring
+        .node_geometry
+        .retain(|node| !structural_point_groups.contains(&node.node_id));
+
     let selected_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
     let mut projected_ids = authoring
         .node_geometry
@@ -4074,6 +4110,37 @@ mod tests {
 
     fn id(byte: u8) -> CanonicalId {
         CanonicalId::from_bytes([byte; 16])
+    }
+
+    #[test]
+    fn legacy_noquill_point_group_is_structural_not_scene_geometry() {
+        let mut graph = resolved_graph_fixture();
+        let page_id = graph.document.pages[0];
+        let node_id = *graph.nodes.keys().next().expect("fixture node");
+        let node = graph.nodes.get_mut(&node_id).expect("fixture node");
+        node.kind = NodeKind::Group;
+        node.header.parent_id = page_id.into_canonical();
+        node.header.bounds = RectEmu::new(
+            LengthEmu::new(100),
+            LengthEmu::new(200),
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+        );
+        node.header.transform = Affine2D::identity();
+
+        let structural =
+            legacy_noquill_structural_point_group_ids(&graph, &[page_id]);
+        assert_eq!(structural, BTreeSet::from([node_id]));
+
+        node.header.bounds = RectEmu::new(
+            LengthEmu::new(100),
+            LengthEmu::new(200),
+            LengthEmu::new(1),
+            LengthEmu::new(1),
+        );
+        assert!(
+            legacy_noquill_structural_point_group_ids(&graph, &[page_id]).is_empty()
+        );
     }
 
     #[test]
