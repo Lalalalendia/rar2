@@ -149,7 +149,9 @@ fn parse_descriptor_directory(bytes: &[u8]) -> Result<Directory> {
 
 fn mark_range(regions: &mut [u8], start: usize, len: usize, kind: u8) -> Result<()> {
     let end = start.checked_add(len).context("region range overflow")?;
-    let range = regions.get_mut(start..end).context("region outside Quill")?;
+    let range = regions
+        .get_mut(start..end)
+        .context("region outside Quill")?;
     for byte in range {
         if *byte != REGION_INTERSTITIAL && *byte != kind {
             bail!("overlapping Quill structural regions");
@@ -186,13 +188,15 @@ fn mask_payloads(bytes: &[u8], regions: &[u8]) -> Vec<u8> {
     bytes
         .iter()
         .zip(regions)
-        .map(|(byte, region)| {
-            if *region == REGION_PAYLOAD {
-                0
-            } else {
-                *byte
-            }
-        })
+        .map(
+            |(byte, region)| {
+                if *region == REGION_PAYLOAD {
+                    0
+                } else {
+                    *byte
+                }
+            },
+        )
         .collect()
 }
 
@@ -252,10 +256,8 @@ fn main() -> Result<()> {
     let mut differing_descriptor_metadata_byte_count = 0usize;
     let mut differing_interstitial_byte_count = 0usize;
     if source_quill.len() == variant_quill.len() && region_layout_equal {
-        for ((source_byte, variant_byte), region) in source_quill
-            .iter()
-            .zip(&variant_quill)
-            .zip(&source_regions)
+        for ((source_byte, variant_byte), region) in
+            source_quill.iter().zip(&variant_quill).zip(&source_regions)
         {
             if source_byte == variant_byte || *region == REGION_PAYLOAD {
                 continue;
