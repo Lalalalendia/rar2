@@ -3,22 +3,52 @@ name: Editor Insert Shape UI V1
 on:
   pull_request:
     paths:
-      - "services/editor-api/insert_shape_ui_v1.py"
-      - "services/editor-api/test_insert_shape_ui_v1.py"
+      - "Cargo.toml"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/rectangle_creation.rs"
       - ".github/workflows/editor-insert-shape-ui-v1.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  validate:
+  contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: "3.12"
-      - name: Run Rectangle tool orchestration tests
-        working-directory: services/editor-api
-        run: python -m unittest -v test_insert_shape_ui_v1
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check Desktop Rectangle slice formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+      - name: Check Desktop Rectangle integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Lint Desktop Rectangle integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+      - name: Prove Rectangle interaction adapter
+        run: cargo test -p chaptera-desktop rectangle_creation::tests -- --nocapture
+
+      - name: Re-prove canonical CreateShape Undo Redo replay
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml
+          -p pub-editor --test create_shape_runtime_v1
