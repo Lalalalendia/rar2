@@ -48,7 +48,6 @@ pub struct ViewerDecorativeBorderV1 {
     pub corner_extent_emu: u32,
     pub horizontal_extent_emu: u32,
     pub vertical_extent_emu: u32,
-    pub resources: Vec<ViewerDecorativeBorderResourceV1>,
     pub slots: Vec<ViewerDecorativeBorderSlotRefV1>,
 }
 
@@ -118,7 +117,11 @@ pub(crate) fn viewer_decorative_borders_v1(
     pub_bytes: &[u8],
     source_hash: &Sha256Digest,
     graph: &PubResolvedGraph,
-) -> (Vec<ViewerDecorativeBorderV1>, Vec<ViewerDiagnostic>) {
+) -> (
+    Vec<ViewerDecorativeBorderV1>,
+    Vec<ViewerDecorativeBorderResourceV1>,
+    Vec<ViewerDiagnostic>,
+) {
     let mut diagnostics = Vec::new();
     let read = match read_mature_0x2c_borderart_assets_from_pub_bytes_v1(pub_bytes) {
         Ok(read) => read,
@@ -130,7 +133,7 @@ pub(crate) fn viewer_decorative_borders_v1(
                     "Persisted decorative-border metadata could not be projected safely: {error}"
                 ),
             });
-            return (Vec::new(), diagnostics);
+            return (Vec::new(), Vec::new(), diagnostics);
         }
     };
 
@@ -143,7 +146,7 @@ pub(crate) fn viewer_decorative_borders_v1(
     }
 
     if read.shape_uses.is_empty() {
-        return (Vec::new(), diagnostics);
+        return (Vec::new(), Vec::new(), diagnostics);
     }
 
     let node_by_seq = seq_to_node_map(graph, &mut diagnostics);
@@ -154,6 +157,8 @@ pub(crate) fn viewer_decorative_borders_v1(
         .collect::<BTreeMap<_, _>>();
 
     let mut seen_nodes = BTreeSet::new();
+    let mut resource_registry =
+        BTreeMap::<(u32, u8), ViewerDecorativeBorderResourceV1>::new();
     let mut out = Vec::new();
 
     for shape_use in &read.shape_uses {
@@ -192,9 +197,14 @@ pub(crate) fn viewer_decorative_borders_v1(
         }
 
         let mut resource_ids = BTreeMap::new();
-        let mut resources = Vec::new();
         let mut resource_failed = false;
         for resource in &entry.resources {
+            let key = (entry.ordinal, resource.pool_index);
+            if let Some(existing) = resource_registry.get(&key) {
+                resource_ids.insert(resource.pool_index, existing.resource_id);
+                continue;
+            }
+
             match borderart_resource_id(
                 source_hash,
                 entry.ordinal,
@@ -235,12 +245,15 @@ pub(crate) fn viewer_decorative_borders_v1(
                         }
                     };
                     resource_ids.insert(resource.pool_index, resource_id);
-                    resources.push(ViewerDecorativeBorderResourceV1 {
-                        resource_id,
-                        mime: "image/png".to_owned(),
-                        source_wmf_sha256: resource.sha256.clone(),
-                        bytes: png,
-                    });
+                    resource_registry.insert(
+                        key,
+                        ViewerDecorativeBorderResourceV1 {
+                            resource_id,
+                            mime: "image/png".to_owned(),
+                            source_wmf_sha256: resource.sha256.clone(),
+                            bytes: png,
+                        },
+                    );
                 }
                 Err(error) => {
                     diagnostics.push(ViewerDiagnostic {
@@ -287,7 +300,6 @@ pub(crate) fn viewer_decorative_borders_v1(
             corner_extent_emu: entry.corner_extent_emu,
             horizontal_extent_emu: entry.horizontal_extent_emu,
             vertical_extent_emu: entry.vertical_extent_emu,
-            resources,
             slots,
         });
     }
@@ -303,7 +315,8 @@ pub(crate) fn viewer_decorative_borders_v1(
         });
     }
 
-    (out, diagnostics)
+    let resources = resource_registry.into_values().collect::<Vec<_>>();
+    (out, resources, diagnostics)
 }
 
 #[cfg(test)]
