@@ -9513,6 +9513,140 @@ mod tests {
     #[cfg(not(feature = "reader-only"))]
     #[test]
     #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_escape_cancels_active_object_gesture_before_clearing_selection_on_real_pub() {
+        use egui_kittest::Harness;
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(16)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture), cc.storage)
+            });
+        harness.step();
+        harness.step();
+
+        let (page_index, instance_id, node_id, before) = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let editor = app.editor.as_ref().expect("editor loaded");
+            visual
+                .document
+                .pages
+                .iter()
+                .enumerate()
+                .find_map(|(page_index, page)| {
+                    let page_origin = page.id.into_canonical();
+                    let page_id_text = page.id.as_canonical().to_string();
+                    visual
+                        .scene
+                        .nodes
+                        .iter()
+                        .filter(|node| node.parent_origin == page_origin)
+                        .find_map(|node| {
+                            let instance =
+                                direct_scene_instance(editor, &page_id_text, node.origin)?;
+                            let admission =
+                                admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
+                            if !admission.admitted {
+                                return None;
+                            }
+                            let bounds = editor.graph().nodes.get(&node.origin)?.header.bounds;
+                            editor
+                                .can_move_node_to(node.origin, bounds.x, bounds.y)
+                                .ok()?;
+                            Some((page_index, instance.instance_id, node.origin, bounds))
+                        })
+                })
+                .expect("real fixture exposes one direct movable object")
+        };
+
+        let pointer_start = pub_interaction::DocumentPoint::new(
+            pub_editor::LengthEmu::ZERO,
+            pub_editor::LengthEmu::ZERO,
+        );
+        {
+            let app = harness.state_mut();
+            app.selected_page = page_index;
+            app.canvas_selection.select_only(instance_id);
+            app.canvas_drag = Some(
+                MoveTransaction::begin(node_id, before, pointer_start)
+                    .expect("valid transient move gesture"),
+            );
+        }
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+
+        assert!(
+            harness.state().canvas_drag.is_none(),
+            "first Escape must cancel the active object gesture"
+        );
+        assert_eq!(
+            harness.state().canvas_selection.len(),
+            1,
+            "gesture-owning Escape must not also clear selection"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before,
+            "gesture cancellation is transient"
+        );
+
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+
+        assert_eq!(
+            harness.state().canvas_selection.len(),
+            0,
+            "second Escape reaches the final selection-clearing fallback"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before,
+            "selection clearing is transient"
+        );
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
     fn gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub() {
         use egui_kittest::Harness;
 
