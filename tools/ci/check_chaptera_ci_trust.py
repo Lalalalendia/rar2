@@ -17,6 +17,13 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/chaptera-win-dll-search-harden.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/windows_dll_search.rs",
+            "apps/chaptera-desktop/src/bin/chaptera-dll-search-probe.rs",
+        ),
+    },
     ".github/workflows/chaptera-desktop-fallback-font-resource-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
