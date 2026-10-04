@@ -9,6 +9,10 @@ on:
       - ".github/workflows/native-main-obsolete-run-canceller.yml"
       - ".github/workflows/mature-029-native-page-spread-once.yml"
       - "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
+      - "tools/windows/run_mature_029_native_page_spread_direct.ps1"
+      - ".github/workflows/master-projection-stack-auth-once.yml"
+      - "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
+      - "tools/windows/run_master_projection_stack_auth_direct.ps1"
       - ".github/workflows/quill-story-readonly-oracle-v2.yml"
       - "tools/research-runner/experiments/quill-story-readonly-oracle-02.packet.json"
       - "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"
@@ -34,6 +38,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TARGET_WORKFLOW_PATHS: |
             .github/workflows/mature-029-native-page-spread-once.yml
+            .github/workflows/master-projection-stack-auth-once.yml
             .github/workflows/quill-story-readonly-oracle-v2.yml
         run: |
           set -euo pipefail
@@ -52,6 +57,7 @@ jobs:
               | jq -r --arg path "$workflow_path" '
                   .workflow_runs[]
                   | select(.path == $path)
+                  | select(.head_branch == "main")
                   | select(
                       .status == "queued"
                       or .status == "pending"
