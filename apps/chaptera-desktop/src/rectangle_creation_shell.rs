@@ -61,6 +61,10 @@ impl ViewerApp {
         }
     }
 
+    pub(super) fn rectangle_tool_inactive(&self) -> bool {
+        !self.rectangle_creation.active()
+    }
+
     pub(super) fn deactivate_rectangle_for_other_tool(&mut self) {
         if self.rectangle_creation.active() {
             let _ = self.rectangle_creation.deactivate_to_select();
