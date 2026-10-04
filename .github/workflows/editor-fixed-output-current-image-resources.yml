@@ -1,0 +1,23 @@
+name: Editor fixed-output current image resources
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - ".github/workflows/editor-fixed-output-current-image-resources.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check pub-editor
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+      - name: Test current fixed-output image resources
+        run: |
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor             asset_reachability_tests::current_image_resources -- --nocapture
