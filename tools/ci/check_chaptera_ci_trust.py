@@ -17,6 +17,17 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/chaptera-desktop-fallback-font-resource-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "crates/chaptera-desktop-fallback-font-resource/**",
+            "apps/chaptera-desktop/src/fallback_font.rs",
+            "apps/chaptera-desktop/src/source_font.rs",
+            "apps/chaptera-desktop/src/render_backend.rs",
+            "crates/chaptera-viewer-render-plan/**",
+            "packages/product/editor-live-trial/**",
+        ),
+    },
     ".github/workflows/editor-duplicate-rectangle-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
