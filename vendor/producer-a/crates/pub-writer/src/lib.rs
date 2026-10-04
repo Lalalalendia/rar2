@@ -9,6 +9,15 @@
 //! Здесь реализуются только первые два. Третье остаётся отдельным native-validation gate.
 
 mod seeded;
+mod structural_replay;
+
+pub use structural_replay::{
+    OrdinaryShapeReplayGeometry, OrdinaryShapeReplayPlan, OrdinaryShapeReplayRequest,
+    STRUCT_WRITER_REPLAY_SCHEMA_V0_1, StructuralReplayObservedBase,
+    StructuralReplayPlanBlocked, inspect_t370_ordinary_shape_replay_base,
+    plan_bounded_t406_ordinary_shape_replay,
+    plan_bounded_t406_ordinary_shape_replay_from_pub,
+};
 
 pub use seeded::{
     PUB_SEEDED_BOOTSTRAP_REPORT_SCHEMA_V0_1, PUB_SEEDED_NEW_DOCUMENT_STRUCTURAL_GATE,
