@@ -69,6 +69,18 @@ def classify_node(node: dict[str, Any]) -> tuple[list[str], dict[str, int]]:
             if kind == "backend_fallback":
                 reason = disposition.get("reason")
                 reasons.append(f"text_backend_fallback:{reason}")
+                if reason == "shared_layout_incomplete":
+                    sizes = {
+                        int(run["text_size_emu"])
+                        for run in (text.get("typography") or [])
+                        if int(run.get("text_size_emu", 0)) > 0
+                    }
+                    if not sizes:
+                        reasons.append("shared_layout_incomplete:size_profile_unknown")
+                    elif len(sizes) == 1:
+                        reasons.append("shared_layout_incomplete:uniform_size")
+                    else:
+                        reasons.append("shared_layout_incomplete:mixed_size")
             elif kind == "shared_resolved":
                 admitted_lines = 0
                 typography = text.get("typography") or []
