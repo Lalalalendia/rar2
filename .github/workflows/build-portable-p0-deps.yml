@@ -25,6 +25,10 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: build-portable-p0-deps-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
