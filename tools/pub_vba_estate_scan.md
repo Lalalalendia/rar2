@@ -38,9 +38,12 @@ These are scanner evidence states, not claims that Publisher would execute a pro
 
 ## Current call-family taxonomy
 
-The V0 histogram covers the evidence-backed families from the Publisher VBA research:
+The receipt exposes `call_classifier_version`. Classifier `v2.1` is calibrated against the pinned public Publisher VBA tutorial source estate measured in PUB-T-900. It separates document access from page access and avoids treating unrelated `.Rows` / `.Columns` members such as `LayoutGuides.Rows` as table evidence.
+
+Current families:
 
 - `application_lifecycle`
+- `documents`
 - `pages`
 - `page_lifecycle`
 - `shapes`
@@ -48,13 +51,24 @@ The V0 histogram covers the evidence-backed families from the Publisher VBA rese
 - `picture`
 - `tables`
 - `mail_merge`
+- `layout`
 - `output`
 - `hyperlinks`
 - `linked_text`
 - `metadata_selectors`
 - `ole_links`
 
-The scanner masks comments and ordinary string literals before classification. The one deliberate exception is `CreateObject("Publisher.Application")`, because the application identity is necessarily carried in a string literal.
+Notable v2/v2.1 corrections/additions:
+
+- `ActiveDocument` / `ThisDocument` belong to `documents`, not `pages`;
+- `Documents.Add` and `Documents.Open` are document-family evidence without also incrementing the generic `Documents` symbol;
+- table `Rows` / `Columns` / `Cells` are counted only through a declared/assigned `Table` variable or an explicit `.Table.<member>` path, so `LayoutGuides.Rows` / `LayoutGuides.Columns` do not contaminate `tables`;
+- both `CreateObject("Publisher.Application")` and `GetObject(, "Publisher.Application")` are recognized as application lifecycle calls;
+- `LayoutGuides`, `RulerGuides`, `Align` and `Distribute` populate `layout`;
+- `SaveAs`, `ExportEmailHTML` and `WebPagePreview` extend `output`;
+- `UpdateOLEObjects` extends `ole_links`.
+
+The scanner masks comments and ordinary string literals before classification. The deliberate exceptions are the Publisher application identity strings inside `CreateObject` and `GetObject`, because those API identities necessarily live in string literals.
 
 ## Bounds
 
@@ -72,7 +86,7 @@ python tools/test_pub_vba_estate_scan.py
 python -m py_compile tools/pub_vba_cfb.py tools/pub_vba_estate_scan.py tools/test_pub_vba_estate_scan.py
 ```
 
-The source-free synthetic fixtures cover nested Publisher-style macro-project detection, a missing-`PROJECT` negative, storage-name collisions, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, and CopyToken decoding including the power-of-two `difference=16` boundary.
+The source-free synthetic fixtures cover nested Publisher-style macro-project detection, a missing-`PROJECT` negative, storage-name collisions, macro absence, malformed CFB, source extraction, comment/string masking, literal/raw MS-OVBA chunks, CopyToken decoding including the power-of-two `difference=16` boundary, and classifier-v2.1 regressions for document-vs-page separation, non-overlapping document collection calls, context-aware table members, late-bound Publisher acquisition, layout, output and OLE update calls.
 
 ## Corpus integration
 

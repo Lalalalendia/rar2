@@ -38,16 +38,24 @@ def strip_vba_comments(source: str) -> str:
     return "\n".join(lines)
 
 
+CALL_CLASSIFIER_VERSION = "v2.1"
+
 CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "application_lifecycle": [
         ("CreateObject(Publisher.Application)", re.compile(r"(?i)createobject\s*\(\s*\"publisher\.application\"")),
+        ("GetObject(Publisher.Application)", re.compile(r"(?i)getobject\s*\([^\)]*\"publisher\.application\"")),
         ("Publisher.Application", re.compile(r"(?i)\bpublisher\.application\b")),
-        ("Documents.Open", re.compile(r"(?i)\bdocuments\s*\.\s*open\b")),
         ("Application.Quit", re.compile(r"(?i)\bapplication\s*\.\s*quit\b|\.quit\b")),
+    ],
+    "documents": [
+        ("ActiveDocument", re.compile(r"(?i)\bactivedocument\b")),
+        ("ThisDocument", re.compile(r"(?i)\bthisdocument\b")),
+        ("Documents", re.compile(r"(?i)(?:\.|\b)documents\b(?!\s*\.\s*(?:add|open)\b)")),
+        ("Documents.Add", re.compile(r"(?i)\bdocuments\s*\.\s*add\b")),
+        ("Documents.Open", re.compile(r"(?i)\bdocuments\s*\.\s*open\b")),
     ],
     "pages": [
         ("Pages", re.compile(r"(?i)(?:\.|\b)pages\b")),
-        ("ActiveDocument", re.compile(r"(?i)\bactivedocument\b")),
     ],
     "page_lifecycle": [
         ("Pages.Add", re.compile(r"(?i)\bpages\s*\.\s*add\b")),
@@ -72,10 +80,6 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("AddPicture", re.compile(r"(?i)\baddpicture\b")),
     ],
     "tables": [
-        ("Table", re.compile(r"(?i)(?:\.|\b)table\b")),
-        ("Rows", re.compile(r"(?i)(?:\.|\b)rows\b")),
-        ("Columns", re.compile(r"(?i)(?:\.|\b)columns\b")),
-        ("Cells", re.compile(r"(?i)(?:\.|\b)cells\b")),
         ("AddTable", re.compile(r"(?i)\baddtable\b")),
     ],
     "mail_merge": [
@@ -86,11 +90,20 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("FirstRecord", re.compile(r"(?i)\bfirstrecord\b")),
         ("LastRecord", re.compile(r"(?i)\blastrecord\b")),
     ],
+    "layout": [
+        ("LayoutGuides", re.compile(r"(?i)\blayoutguides\b")),
+        ("RulerGuides", re.compile(r"(?i)\brulerguides\b")),
+        ("Align", re.compile(r"(?i)(?:\.|\b)align\b")),
+        ("Distribute", re.compile(r"(?i)(?:\.|\b)distribute\b")),
+    ],
     "output": [
         ("ExportAsFixedFormat", re.compile(r"(?i)\bexportasfixedformat\b")),
         ("PrintOutEx", re.compile(r"(?i)\bprintoutex\b")),
         ("PrintOut", re.compile(r"(?i)\bprintout\b")),
         ("SaveAsPicture", re.compile(r"(?i)\bsaveaspicture\b")),
+        ("SaveAs", re.compile(r"(?i)(?:\.|\b)saveas\b")),
+        ("ExportEmailHTML", re.compile(r"(?i)\bexportemailhtml\b")),
+        ("WebPagePreview", re.compile(r"(?i)\bwebpagepreview\b")),
     ],
     "hyperlinks": [("Hyperlinks", re.compile(r"(?i)\bhyperlinks?\b"))],
     "linked_text": [
@@ -105,7 +118,13 @@ CALL_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "ole_links": [
         ("LinkFormat", re.compile(r"(?i)\blinkformat\b")),
         ("OLEFormat", re.compile(r"(?i)\boleformat\b")),
+        ("UpdateOLEObjects", re.compile(r"(?i)\bupdateoleobjects\b")),
     ],
+}
+
+STRING_BEARING_SYMBOLS = {
+    "CreateObject(Publisher.Application)",
+    "GetObject(Publisher.Application)",
 }
 
 
@@ -135,6 +154,43 @@ def mask_vba_strings(source: str) -> str:
     return "".join(out)
 
 
+def _classify_contextual_table_calls(source: str) -> tuple[int, dict[str, int]]:
+    symbols: Counter[str] = Counter()
+    table_vars = {
+        match.group(1).casefold()
+        for match in re.finditer(
+            r"(?i)\b(?:dim|private|public|static)\s+([a-z_][a-z0-9_]*)\s+as\s+(?:publisher\s*\.\s*)?table\b",
+            source,
+        )
+    }
+    table_vars.update(
+        match.group(1).casefold()
+        for match in re.finditer(
+            r"(?i)\bset\s+([a-z_][a-z0-9_]*)\s*=\s*[^\r\n]*?\.\s*table\b",
+            source,
+        )
+    )
+
+    inline_table = re.compile(r"(?i)\.\s*table\b")
+    inline_count = len(inline_table.findall(source))
+    if inline_count:
+        symbols["Table"] += inline_count
+
+    for symbol in ("Rows", "Columns", "Cells"):
+        explicit = re.compile(rf"(?i)\.\s*table\s*\.\s*{symbol}\b")
+        explicit_count = len(explicit.findall(source))
+        if explicit_count:
+            symbols[symbol] += explicit_count
+
+        for var in table_vars:
+            pattern = re.compile(rf"(?i)\b{re.escape(var)}\s*\.\s*{symbol}\b")
+            count = len(pattern.findall(source))
+            if count:
+                symbols[symbol] += count
+
+    return sum(symbols.values()), dict(symbols)
+
+
 def classify_calls(source: str) -> tuple[dict[str, int], dict[str, int]]:
     cleaned = strip_vba_comments(source)
     stringless = mask_vba_strings(cleaned)
@@ -143,13 +199,20 @@ def classify_calls(source: str) -> tuple[dict[str, int], dict[str, int]]:
     for family, patterns in CALL_PATTERNS.items():
         family_total = 0
         for symbol, pattern in patterns:
-            haystack = cleaned if symbol == "CreateObject(Publisher.Application)" else stringless
+            haystack = cleaned if symbol in STRING_BEARING_SYMBOLS else stringless
             count = len(pattern.findall(haystack))
             if count:
                 family_total += count
                 symbol_hits[symbol] = symbol_hits.get(symbol, 0) + count
         if family_total:
             family_hits[family] = family_total
+
+    contextual_table_total, contextual_table_symbols = _classify_contextual_table_calls(stringless)
+    if contextual_table_total:
+        family_hits["tables"] = family_hits.get("tables", 0) + contextual_table_total
+        for symbol, count in contextual_table_symbols.items():
+            symbol_hits[symbol] = symbol_hits.get(symbol, 0) + count
+
     return family_hits, symbol_hits
 
 
@@ -352,6 +415,7 @@ def build_receipt(files: list[pathlib.Path], *, include_paths: bool = False) -> 
     rows.sort(key=lambda row: (row["sha256"] or "~", row.get("path", "")))
     return {
         "schema": "chaptera.pub-vba-estate-scan.v1",
+        "call_classifier_version": CALL_CLASSIFIER_VERSION,
         "claims": {
             "vba_executed": False,
             "ole_com_activated": False,

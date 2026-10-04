@@ -15,6 +15,7 @@ mod locale;
 mod product_smoke;
 mod reader_product_ui;
 mod reader_salvage;
+mod rectangle_creation;
 mod render_backend;
 mod selection_keyboard;
 mod source_font;
@@ -31,9 +32,10 @@ use chaptera_scene_instance::{
     direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderPlanErrorV1,
-    build_page_render_plan_with_text_layout_resolver_v1,
-    build_page_render_plan_with_text_layout_v1,
+    AuthoredPageRenderLaneV1, AuthoredPageRenderNodeV1, ExplicitRenderTextFontResourceV1,
+    NodeRenderPlanV1, PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1,
+    apply_authored_page_render_lane_v1, build_page_render_plan_with_text_layout_resolver_v1,
+    build_page_render_plan_with_text_layout_v1, layout_decorative_border_v1,
 };
 use eframe::egui;
 use pub_interaction::{
@@ -125,6 +127,106 @@ fn build_desktop_page_render_plan_with_source_fonts(
     build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
         source_fonts.resource_for_fragment(fragment)
     })
+}
+
+fn paint_document_node_decorative_border(
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    node: &NodeRenderPlanV1,
+    image_textures: &BTreeMap<String, CachedImageTexture>,
+) {
+    let (Some(border), Some(line)) = (node.decorative_border.as_ref(), node.solid_line.as_ref())
+    else {
+        return;
+    };
+    let Some(stretch_pictures) = border.stretch_pictures else {
+        return;
+    };
+    let Some(placements) =
+        layout_decorative_border_v1(border, node.bounds, line.width_emu, stretch_pictures)
+    else {
+        return;
+    };
+
+    for placement in placements {
+        let key = format!("{:?}", placement.resource_id);
+        let Some(texture) = image_textures.get(&key) else {
+            continue;
+        };
+        let Some(rect) = render_backend::physical_rect_to_egui(
+            page_rect,
+            scene_scale,
+            placement.bounds.x.get(),
+            placement.bounds.y.get(),
+            placement.bounds.width.get(),
+            placement.bounds.height.get(),
+        ) else {
+            continue;
+        };
+        painter.image(
+            texture.texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
+}
+
+fn editor_authored_page_render_lane(
+    editor: &pub_editor::EditorSession,
+    page_id: pub_editor::PageId,
+) -> Result<AuthoredPageRenderLaneV1, String> {
+    let stack = editor
+        .authored_stack(page_id)
+        .ok_or_else(|| "authored lane page is absent from the editor graph".to_owned())?;
+    let mut nodes = Vec::with_capacity(stack.members.len());
+
+    for node_id in stack.members {
+        let shape = editor
+            .authored_shape(node_id)
+            .ok_or_else(|| format!("authored lane member {node_id:?} has no authored shape"))?;
+        if shape.page_id != page_id || shape.parent_id != page_id {
+            return Err(format!(
+                "authored lane member {node_id:?} does not belong directly to page {page_id:?}"
+            ));
+        }
+        if shape.provenance != pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
+            || shape.paint.provenance != pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
+        {
+            return Err(format!(
+                "authored lane member {node_id:?} is not canonically AuthorCreated"
+            ));
+        }
+
+        nodes.push(AuthoredPageRenderNodeV1 {
+            node_id,
+            bounds: shape.bounds,
+            solid_fill_rgb: shape.paint.fill.visible.then_some([
+                shape.paint.fill.color.r,
+                shape.paint.fill.color.g,
+                shape.paint.fill.color.b,
+            ]),
+            solid_line: shape.paint.stroke.visible.then_some(RenderSolidLineV1 {
+                rgb: [
+                    shape.paint.stroke.color.r,
+                    shape.paint.stroke.color.g,
+                    shape.paint.stroke.color.b,
+                ],
+                width_emu: shape.paint.stroke.width_emu,
+            }),
+        });
+    }
+
+    Ok(AuthoredPageRenderLaneV1 { page_id, nodes })
+}
+
+fn apply_editor_authored_page_lane(
+    plan: &mut PageRenderPlanV1,
+    editor: &pub_editor::EditorSession,
+) -> Result<(), String> {
+    let lane = editor_authored_page_render_lane(editor, plan.page_id)?;
+    apply_authored_page_render_lane_v1(plan, &lane).map_err(|error| error.to_string())
 }
 
 fn text_layout_disposition_counts(plan: &PageRenderPlanV1) -> (usize, usize) {
@@ -749,8 +851,17 @@ fn direct_scene_instance(
     target_page_id: &str,
     node_id: pub_editor::NodeId,
 ) -> Option<SceneInstanceV1> {
-    let authored = editor.graph().nodes.get(&node_id)?;
-    if authored.header.parent_id.to_string() != target_page_id {
+    let direct_page_owned = editor
+        .graph()
+        .nodes
+        .get(&node_id)
+        .is_some_and(|node| node.header.parent_id.to_string() == target_page_id)
+        || editor.authored_shape(node_id).is_some_and(|shape| {
+            shape.page_id.as_canonical().to_string() == target_page_id
+                && shape.parent_id == shape.page_id
+                && shape.provenance == pub_editor::AuthoredEntityProvenanceV1::AuthorCreated
+        });
+    if !direct_page_owned {
         return None;
     }
     direct_page_local_instance_v1(&node_id.as_canonical().to_string(), target_page_id).ok()
@@ -1320,6 +1431,7 @@ struct ViewerApp {
     canvas_selection: SceneSelectionState,
     canvas_drag: Option<MoveTransaction>,
     canvas_resize: Option<ResizeTransaction>,
+    rectangle_creation: rectangle_creation::RectangleCreateSessionV1,
     created_text_box_scene_nodes: BTreeSet<pub_editor::NodeId>,
     text_mode: Option<text_session::DesktopTextMode>,
     zoom: f32,
@@ -1384,6 +1496,7 @@ impl ViewerApp {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -1928,6 +2041,7 @@ impl ViewerApp {
     }
 
     fn load_path(&mut self, path: PathBuf) {
+        self.rectangle_creation = rectangle_creation::RectangleCreateSessionV1::default();
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
         let generation = self.open_state.begin_attempt();
@@ -2229,6 +2343,58 @@ impl ViewerApp {
                 self.open_pub_folder_diagnostics();
             }
 
+            let rectangle_active = self.rectangle_creation.active();
+            let rectangle_response = ui.add_enabled(
+                editor_available && self.visual.is_some(),
+                egui::SelectableLabel::new(rectangle_active, "Rectangle"),
+            );
+            if rectangle_response.clicked() {
+                self.canvas_drag = None;
+                self.canvas_resize = None;
+                if rectangle_active {
+                    match self.rectangle_creation.deactivate_to_select() {
+                        Ok(()) => {
+                            self.edit_status = Some("Rectangle tool deactivated.".to_owned());
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Rectangle tool could not deactivate: {error}"));
+                        }
+                    }
+                } else {
+                    if self.text_mode.is_some() {
+                        self.exit_canvas_text_mode("rectangle_tool_activation");
+                    }
+                    match self.rectangle_creation.activate() {
+                        Ok(()) => {
+                            self.edit_status = Some(
+                                "Rectangle tool active. Drag on the page to create one rectangle."
+                                    .to_owned(),
+                            );
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Rectangle tool could not activate: {error}"));
+                        }
+                    }
+                }
+            }
+
+            let duplicate_enabled =
+                !self.rectangle_creation.active() && self.selected_authored_rectangle_target().is_ok();
+            let duplicate_response =
+                ui.add_enabled(duplicate_enabled, egui::Button::new("Duplicate"));
+            if duplicate_response.clicked()
+                && let Err(error) = self.duplicate_selected_authored_rectangle()
+            {
+                self.edit_status = Some(error);
+            }
+            if !duplicate_enabled {
+                duplicate_response.on_disabled_hover_text(
+                    "Select exactly one authored Rectangle to duplicate it.",
+                );
+            }
+
             if let Some(label) = document_label {
                 ui.label(label);
             } else {
@@ -2317,21 +2483,7 @@ impl ViewerApp {
                     }
                 }
                 if save_clicked {
-                    match self.save_editor_project_sidecar() {
-                        Ok(path) => {
-                            self.project_status = Some(format!(
-                                "Saved editor project with {operation_count} operations."
-                            ));
-                            self.edit_status = Some(format!(
-                                "Project saved to {}. Source PUB was not overwritten.",
-                                path.display()
-                            ));
-                        }
-                        Err(error) => {
-                            self.edit_status =
-                                Some(format!("Could not save editor project: {error}"));
-                        }
-                    }
+                    self.save_project_with_status(operation_count);
                 }
                 if redo_clicked {
                     self.apply_redo();
@@ -4035,6 +4187,99 @@ impl ViewerApp {
         }
     }
 
+    fn selected_authored_rectangle_target(
+        &self,
+    ) -> Result<(pub_editor::NodeId, pub_editor::PageId), String> {
+        if self.canvas_selection.len() != 1 {
+            return Err("Duplicate requires exactly one selected authored Rectangle.".to_owned());
+        }
+        let selected_instance = self
+            .canvas_selection
+            .primary()
+            .ok_or_else(|| "Select one authored Rectangle first.".to_owned())?;
+        let visual = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document scene is unavailable.".to_owned())?;
+        let page = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let stack = editor
+            .authored_stack(page.id)
+            .ok_or_else(|| "Selected page is unavailable in the authoring session.".to_owned())?;
+        let page_id_text = page.id.as_canonical().to_string();
+
+        for node_id in stack.members {
+            let Some(shape) = editor.authored_shape(node_id) else {
+                continue;
+            };
+            if shape.page_id != page.id || shape.parent_id != page.id {
+                continue;
+            }
+            let instance =
+                direct_page_local_instance_v1(&node_id.as_canonical().to_string(), &page_id_text)
+                    .map_err(|error| format!("Duplicate selection identity is invalid: {error}"))?;
+            if instance.instance_id != selected_instance {
+                continue;
+            }
+            editor
+                .can_duplicate_authored_rectangle(node_id)
+                .map_err(|error| format!("Duplicate is unavailable: {error}"))?;
+            return Ok((node_id, page.id));
+        }
+
+        Err("Selected visual instance is not an admitted authored Rectangle.".to_owned())
+    }
+
+    fn duplicate_selected_authored_rectangle(&mut self) -> Result<pub_editor::NodeId, String> {
+        let (source_node_id, page_id) = self.selected_authored_rectangle_target()?;
+        let destination_node_id =
+            pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let editor = self
+            .editor
+            .as_mut()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let before_operations = editor.operations().len();
+        let operation = editor
+            .duplicate_authored_rectangle(
+                source_node_id,
+                destination_node_id,
+                pub_editor::DUPLICATE_PLACEMENT_POLICY_V1,
+            )
+            .map_err(|error| format!("Duplicate rejected: {error}"))?;
+        if editor.operations().len() != before_operations + 1 {
+            return Err("Duplicate must append exactly one CreateShape operation.".to_owned());
+        }
+        if !matches!(
+            operation,
+            pub_editor::EditOperation::CreateShape { node_id, .. }
+                if node_id == destination_node_id
+        ) {
+            return Err(
+                "Duplicate must persist as one canonical CreateShape operation.".to_owned(),
+            );
+        }
+
+        self.finish_authoring_change(
+            "Duplicated authored Rectangle. One CreateShape operation was committed.",
+        );
+        let instance = direct_page_local_instance_v1(
+            &destination_node_id.as_canonical().to_string(),
+            &page_id.as_canonical().to_string(),
+        )
+        .map_err(|error| {
+            format!("Duplicate committed, but durable selection could not bind: {error}")
+        })?;
+        self.canvas_selection.select_only(instance.instance_id);
+        Ok(destination_node_id)
+    }
+
     fn selected_direct_replace_image_target(&self) -> Result<pub_editor::NodeId, String> {
         let selected_instance = self
             .canvas_selection
@@ -4524,6 +4769,85 @@ impl ViewerApp {
         self.canvas_resize = None;
     }
 
+    fn save_project_with_status(&mut self, operation_count: usize) {
+        if operation_count == 0 {
+            self.project_status = Some("Editor project has no edit operations to save.".to_owned());
+            self.edit_status =
+                Some("Nothing new to save. Source PUB was not overwritten.".to_owned());
+            return;
+        }
+
+        if self.saved_project_operation_count().ok().flatten() == Some(operation_count) {
+            self.project_status = Some(format!(
+                "Editor project is already saved with {operation_count} operations."
+            ));
+            self.edit_status = Some(
+                "Chaptera Project is already saved. Source PUB was not overwritten.".to_owned(),
+            );
+            return;
+        }
+
+        match self.save_editor_project_sidecar() {
+            Ok(path) => {
+                self.project_status = Some(format!(
+                    "Saved editor project with {operation_count} operations."
+                ));
+                self.edit_status = Some(format!(
+                    "Project saved to {}. Source PUB was not overwritten.",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Could not save editor project: {error}"));
+            }
+        }
+    }
+
+    fn process_global_save_shortcut(&mut self, ctx: &egui::Context) {
+        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let save_pressed = ctx.input(|input| {
+            let command = input.modifiers.ctrl || input.modifiers.command;
+            command
+                && !input.modifiers.alt
+                && !input.modifiers.shift
+                && input.key_pressed(egui::Key::S)
+        });
+        if !save_pressed {
+            return;
+        }
+
+        let operation_count = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
+        self.save_project_with_status(operation_count);
+    }
+
+    fn process_global_history_shortcuts(&mut self, ctx: &egui::Context) {
+        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let (undo_pressed, redo_pressed) = ctx.input(|input| {
+            let command = input.modifiers.ctrl || input.modifiers.command;
+            let unmodified_command = command && !input.modifiers.alt && !input.modifiers.shift;
+            (
+                unmodified_command && input.key_pressed(egui::Key::Z),
+                unmodified_command && input.key_pressed(egui::Key::Y),
+            )
+        });
+
+        if undo_pressed {
+            self.apply_undo();
+        } else if redo_pressed {
+            self.apply_redo();
+        }
+    }
+
     fn process_canvas_object_keyboard(&mut self, ctx: &egui::Context) {
         if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
             return;
@@ -4542,7 +4866,30 @@ impl ViewerApp {
             };
 
             if key == egui::Key::Escape {
-                if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
+                if self.rectangle_creation.active() {
+                    if self.rectangle_creation.gesture_token.is_some() {
+                        match self.rectangle_creation.cancel() {
+                            Ok(()) => {
+                                self.edit_status =
+                                    Some("Cancelled the Rectangle draw gesture.".to_owned());
+                            }
+                            Err(error) => {
+                                self.edit_status =
+                                    Some(format!("Rectangle gesture cancel failed: {error}"));
+                            }
+                        }
+                    } else {
+                        match self.rectangle_creation.deactivate_to_select() {
+                            Ok(()) => {
+                                self.edit_status = Some("Rectangle tool deactivated.".to_owned());
+                            }
+                            Err(error) => {
+                                self.edit_status =
+                                    Some(format!("Rectangle tool could not deactivate: {error}"));
+                            }
+                        }
+                    }
+                } else if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
                     self.edit_status = Some("Cancelled the active canvas gesture.".to_owned());
                 } else if self.canvas_selection.len() > 0 {
                     self.canvas_selection.clear();
@@ -4706,6 +5053,43 @@ impl ViewerApp {
             }
         }
 
+        for resource in &visual.decorative_border_resources {
+            let key = format!("{:?}", resource.resource_id);
+            if self.image_textures.contains_key(&key)
+                || self.image_decode_diagnostics.contains_key(&key)
+            {
+                continue;
+            }
+
+            let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+            match image_decode_adapter::decode_texture_image_v1(
+                &resource.bytes,
+                &resource.mime,
+                &expected_sha256,
+            ) {
+                Ok(admitted) => {
+                    let texture = ctx.load_texture(
+                        format!("pub-borderart-{key}"),
+                        admitted.color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.image_textures.insert(
+                        key,
+                        CachedImageTexture {
+                            texture,
+                            _cache_identity_sha256: admitted.cache_identity_sha256,
+                        },
+                    );
+                }
+                Err(error) => {
+                    self.image_decode_diagnostics.insert(
+                        key.clone(),
+                        image_decode_adapter::diagnostic_for(key, resource.mime.clone(), &error),
+                    );
+                }
+            }
+        }
+
         if let Some(editor) = &self.editor {
             for asset in editor.replacement_assets() {
                 let key = format!("replacement:{:?}", asset.sha256);
@@ -4755,12 +5139,15 @@ impl ViewerApp {
             .pages
             .get(page_index)
             .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
-        let render_plan = if self.source_fonts_active {
+        let mut render_plan = if self.source_fonts_active {
             build_desktop_page_render_plan_with_source_fonts(visual, page_index, &self.source_fonts)
         } else {
             build_desktop_page_render_plan(visual, page_index)
         }
         .map_err(|error| error.to_string())?;
+        if let Some(editor) = self.editor.as_ref() {
+            apply_editor_authored_page_lane(&mut render_plan, editor)?;
+        }
         let page_id_text = page.id.as_canonical().to_string();
 
         let mut hit_entries = Vec::new();
@@ -5019,14 +5406,7 @@ impl ViewerApp {
         let movable_nodes = &frame_work.movable_nodes;
         let resizable_nodes = &frame_work.resizable_nodes;
 
-        let page_origin = page.id.into_canonical();
         let page_id_text = page.id.as_canonical().to_string();
-        let page_nodes = visual
-            .scene
-            .nodes
-            .iter()
-            .filter(|node| node.parent_origin == page_origin)
-            .collect::<Vec<_>>();
         let selected_bounds = self
             .canvas_selection
             .primary()
@@ -5081,6 +5461,8 @@ impl ViewerApp {
         let mut drag_error = None;
         let mut resize_commit = None;
         let mut resize_error = None;
+        let mut rectangle_release = None;
+        let mut rectangle_error = None;
         let mut edit_text_request: Option<(pub_editor::StoryId, pub_editor::NodeId)> = None;
         let mut text_pointer_request: Option<(String, pub_interaction::DocumentPoint)> = None;
         let mut text_exit_request = false;
@@ -5145,6 +5527,62 @@ impl ViewerApp {
                 let press_screen = ui.ctx().input(|input| input.pointer.press_origin());
                 let press_document = press_screen
                     .and_then(|pointer| canvas_document_point(page_rect, scene_scale, pointer));
+                let primary_pressed = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
+                let primary_down = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_down(egui::PointerButton::Primary));
+                let primary_released = ui
+                    .ctx()
+                    .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
+
+                if !reader_only_mode()
+                    && self.text_mode.is_none()
+                    && self.rectangle_creation.active()
+                {
+                    if self.rectangle_creation.gesture_token.is_none()
+                        && primary_pressed
+                        && let (Some(pointer_start_screen), Some(pointer_start)) =
+                            (press_screen, press_document)
+                        && page_rect.contains(pointer_start_screen)
+                        && let Err(error) = self.rectangle_creation.pointer_down(
+                            page.id,
+                            pointer_start,
+                            "rectangle-draw-v1".to_owned(),
+                        )
+                    {
+                        rectangle_error = Some(format!("Rectangle draw could not start: {error}"));
+                    }
+
+                    if self.rectangle_creation.gesture_token.is_some()
+                        && primary_down
+                        && let Some(point) = pointer_document
+                        && let Err(error) = self.rectangle_creation.pointer_move(point)
+                    {
+                        let _ = self.rectangle_creation.cancel();
+                        rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
+                    }
+
+                    if self.rectangle_creation.gesture_token.is_some() && primary_released {
+                        if let Some(point) = pointer_document {
+                            match self.rectangle_creation.pointer_up(point) {
+                                Ok(release) => rectangle_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.rectangle_creation.cancel();
+                                    rectangle_error =
+                                        Some(format!("Rectangle draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error = Some(
+                                "Rectangle draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
@@ -5152,69 +5590,101 @@ impl ViewerApp {
                     && let (Some(pointer_start), Some(pointer_current)) =
                         (press_document, pointer_document)
                 {
-                    let mut resize_started = false;
-                    if let (Some(selected_instance), Some(pointer_start_screen)) =
-                        (selected_canvas_instance.as_deref(), press_screen)
-                        && let Some((node_id, before)) =
-                            resizable_nodes.get(selected_instance).copied()
-                    {
-                        let selected_screen_bounds = ScreenRect::new(
-                            f64::from(page_rect.left() + before.x.get() as f32 * scene_scale),
-                            f64::from(page_rect.top() + before.y.get() as f32 * scene_scale),
-                            f64::from(before.width.get() as f32 * scene_scale),
-                            f64::from(before.height.get() as f32 * scene_scale),
-                        );
-                        if let Ok(selected_screen_bounds) = selected_screen_bounds
-                            && let Ok(ResizePointerDown::Handle(handle)) =
-                                classify_resize_pointer_down(
-                                    selected_screen_bounds,
-                                    ScreenPoint::new(
-                                        f64::from(pointer_start_screen.x),
-                                        f64::from(pointer_start_screen.y),
-                                    ),
-                                    6.0,
+                    if self.rectangle_creation.active() {
+                        next_canvas_drag = None;
+                        next_canvas_resize = None;
+                        let result = if self.rectangle_creation.gesture_token.is_none() {
+                            self.rectangle_creation
+                                .pointer_down(
+                                    page.id,
+                                    pointer_start,
+                                    "rectangle-draw-v1".to_owned(),
                                 )
+                                .and_then(|()| {
+                                    self.rectangle_creation
+                                        .pointer_move(pointer_current)
+                                        .map(|_| ())
+                                })
+                        } else {
+                            self.rectangle_creation
+                                .pointer_move(pointer_current)
+                                .map(|_| ())
+                        };
+                        if let Err(error) = result {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error =
+                                Some(format!("Rectangle draw could not start: {error}"));
+                        }
+                    } else {
+                        let mut resize_started = false;
+                        if let (Some(selected_instance), Some(pointer_start_screen)) =
+                            (selected_canvas_instance.as_deref(), press_screen)
+                            && let Some((node_id, before)) =
+                                resizable_nodes.get(selected_instance).copied()
                         {
-                            resize_started = true;
-                            canvas_hit = Some(selected_instance.to_owned());
-                            next_canvas_drag = None;
-                            match ResizeTransaction::begin(node_id, before, handle, pointer_start) {
-                                Ok(mut resize) => match resize.update(pointer_current) {
-                                    Ok(ResizeUpdate::Preview(_))
-                                    | Ok(ResizeUpdate::Invalid { .. }) => {
-                                        next_canvas_resize = Some(resize);
-                                    }
+                            let selected_screen_bounds = ScreenRect::new(
+                                f64::from(page_rect.left() + before.x.get() as f32 * scene_scale),
+                                f64::from(page_rect.top() + before.y.get() as f32 * scene_scale),
+                                f64::from(before.width.get() as f32 * scene_scale),
+                                f64::from(before.height.get() as f32 * scene_scale),
+                            );
+                            if let Ok(selected_screen_bounds) = selected_screen_bounds
+                                && let Ok(ResizePointerDown::Handle(handle)) =
+                                    classify_resize_pointer_down(
+                                        selected_screen_bounds,
+                                        ScreenPoint::new(
+                                            f64::from(pointer_start_screen.x),
+                                            f64::from(pointer_start_screen.y),
+                                        ),
+                                        6.0,
+                                    )
+                            {
+                                resize_started = true;
+                                canvas_hit = Some(selected_instance.to_owned());
+                                next_canvas_drag = None;
+                                match ResizeTransaction::begin(
+                                    node_id,
+                                    before,
+                                    handle,
+                                    pointer_start,
+                                ) {
+                                    Ok(mut resize) => match resize.update(pointer_current) {
+                                        Ok(ResizeUpdate::Preview(_))
+                                        | Ok(ResizeUpdate::Invalid { .. }) => {
+                                            next_canvas_resize = Some(resize);
+                                        }
+                                        Err(error) => {
+                                            next_canvas_resize = None;
+                                            resize_error =
+                                                Some(format!("Object resize cancelled: {error}"));
+                                        }
+                                    },
                                     Err(error) => {
                                         next_canvas_resize = None;
                                         resize_error =
                                             Some(format!("Object resize cancelled: {error}"));
                                     }
-                                },
-                                Err(error) => {
-                                    next_canvas_resize = None;
-                                    resize_error =
-                                        Some(format!("Object resize cancelled: {error}"));
                                 }
                             }
                         }
-                    }
 
-                    if !resize_started && let Some(hit) = hit_index.topmost_at(pointer_start) {
-                        canvas_hit = Some(hit.instance_id.clone());
-                        next_canvas_resize = None;
-                        if let Some((node_id, before)) =
-                            movable_nodes.get(&hit.instance_id).copied()
-                        {
-                            match MoveTransaction::begin(node_id, before, pointer_start).and_then(
-                                |mut drag| {
-                                    drag.update(pointer_current)?;
-                                    Ok(drag)
-                                },
-                            ) {
-                                Ok(drag) => next_canvas_drag = Some(drag),
-                                Err(error) => {
-                                    next_canvas_drag = None;
-                                    drag_error = Some(format!("Object move cancelled: {error}"));
+                        if !resize_started && let Some(hit) = hit_index.topmost_at(pointer_start) {
+                            canvas_hit = Some(hit.instance_id.clone());
+                            next_canvas_resize = None;
+                            if let Some((node_id, before)) =
+                                movable_nodes.get(&hit.instance_id).copied()
+                            {
+                                match MoveTransaction::begin(node_id, before, pointer_start)
+                                    .and_then(|mut drag| {
+                                        drag.update(pointer_current)?;
+                                        Ok(drag)
+                                    }) {
+                                    Ok(drag) => next_canvas_drag = Some(drag),
+                                    Err(error) => {
+                                        next_canvas_drag = None;
+                                        drag_error =
+                                            Some(format!("Object move cancelled: {error}"));
+                                    }
                                 }
                             }
                         }
@@ -5223,7 +5693,26 @@ impl ViewerApp {
                     && self.text_mode.is_none()
                     && response.drag_stopped_by(egui::PointerButton::Primary)
                 {
-                    if let (Some(mut resize), Some(point)) =
+                    if self.rectangle_creation.active()
+                        && self.rectangle_creation.gesture_token.is_some()
+                    {
+                        if let Some(point) = pointer_document {
+                            match self.rectangle_creation.pointer_up(point) {
+                                Ok(release) => rectangle_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.rectangle_creation.cancel();
+                                    rectangle_error =
+                                        Some(format!("Rectangle draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error = Some(
+                                "Rectangle draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
+                    } else if let (Some(mut resize), Some(point)) =
                         (next_canvas_resize.take(), pointer_document)
                     {
                         match resize.update(point) {
@@ -5259,7 +5748,16 @@ impl ViewerApp {
                     && response.dragged_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
-                    if let Some(mut resize) = next_canvas_resize {
+                    if self.rectangle_creation.active()
+                        && self.rectangle_creation.gesture_token.is_some()
+                    {
+                        if let Some(point) = pointer_document
+                            && let Err(error) = self.rectangle_creation.pointer_move(point)
+                        {
+                            let _ = self.rectangle_creation.cancel();
+                            rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
+                        }
+                    } else if let Some(mut resize) = next_canvas_resize {
                         match resize.update(point) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
                                 next_canvas_resize = Some(resize);
@@ -5281,6 +5779,7 @@ impl ViewerApp {
                 }
 
                 if !reader_only_mode()
+                    && !self.rectangle_creation.active()
                     && response.clicked_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
@@ -5397,6 +5896,13 @@ impl ViewerApp {
                             .or(source_texture)
                             .map(|cached| cached.texture.id()),
                     );
+                    paint_document_node_decorative_border(
+                        &painter,
+                        page_rect,
+                        scene_scale,
+                        render_node,
+                        &self.image_textures,
+                    );
 
                     painter.rect_stroke(
                         node_rect,
@@ -5447,6 +5953,31 @@ impl ViewerApp {
                     }
                 }
 
+                if self.rectangle_creation.page_id == Some(page.id)
+                    && let Ok(rectangle_creation::RectangleCreatePreviewV1::Bounds(bounds)) =
+                        self.rectangle_creation.preview()
+                    && let Some(preview_rect) = render_backend::physical_rect_to_egui(
+                        page_rect,
+                        scene_scale,
+                        bounds.x.get(),
+                        bounds.y.get(),
+                        bounds.width.get(),
+                        bounds.height.get(),
+                    )
+                {
+                    painter.rect_filled(
+                        preview_rect,
+                        0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 48),
+                    );
+                    painter.rect_stroke(
+                        preview_rect,
+                        0,
+                        egui::Stroke::new(1.5_f32, egui::Color32::BLACK),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
                 if let Some(mode) = self.text_mode.as_ref()
                     && let Some(stop) = text_session::focus_caret(mode)
                     && stop.page_id == page_id_text
@@ -5480,24 +6011,20 @@ impl ViewerApp {
                 }
 
                 if let Some(selected_instance_id) = selected_canvas_instance.as_deref()
-                    && let Some(selected_node_id) =
-                        hit_index.node_for_instance(selected_instance_id)
-                    && let Some(node) = page_nodes
-                        .iter()
-                        .copied()
-                        .find(|node| node.origin == selected_node_id)
-                    && node.bounds.width.get() > 0
-                    && node.bounds.height.get() > 0
+                    && let Some(selected_hit) = hit_index.entry_for_instance(selected_instance_id)
+                    && selected_hit.bounds.width.get() > 0
+                    && selected_hit.bounds.height.get() > 0
                 {
+                    let selected_node_id = selected_hit.node_id;
                     let selected_bounds = next_canvas_resize
-                        .filter(|resize| resize.node_id() == node.origin)
+                        .filter(|resize| resize.node_id() == selected_node_id)
                         .and_then(|resize| resize.preview_bounds())
                         .or_else(|| {
                             next_canvas_drag
-                                .filter(|drag| drag.node_id() == node.origin)
+                                .filter(|drag| drag.node_id() == selected_node_id)
                                 .map(|drag| drag.preview_bounds())
                         })
-                        .unwrap_or(node.bounds);
+                        .unwrap_or(selected_hit.bounds);
                     let min = egui::pos2(
                         page_rect.left() + selected_bounds.x.get() as f32 * scene_scale,
                         page_rect.top() + selected_bounds.y.get() as f32 * scene_scale,
@@ -5515,7 +6042,7 @@ impl ViewerApp {
                         && let Some(fragment) = visual
                             .text_fragments
                             .iter()
-                            .find(|fragment| fragment.frame_id == node.origin)
+                            .find(|fragment| fragment.frame_id == selected_node_id)
                         && self.editor.as_ref().is_some_and(|editor| {
                             editor.can_replace_story_text(fragment.story_id).is_ok()
                         })
@@ -5535,7 +6062,7 @@ impl ViewerApp {
                             .put(button_rect, egui::Button::new("Edit Text"))
                             .clicked()
                         {
-                            edit_text_request = Some((fragment.story_id, node.origin));
+                            edit_text_request = Some((fragment.story_id, selected_node_id));
                         }
                     }
                     if resize_enabled {
@@ -5579,6 +6106,46 @@ impl ViewerApp {
                     }
                 }
             });
+
+        if let Some(error) = rectangle_error {
+            self.edit_status = Some(error);
+        }
+        if let Some(release) = rectangle_release {
+            let created_page_id = match release {
+                rectangle_creation::RectangleCreateReleaseV1::Commit { page_id, .. } => {
+                    Some(page_id)
+                }
+                rectangle_creation::RectangleCreateReleaseV1::NoChange => None,
+            };
+            let outcome = match self.editor.as_mut() {
+                Some(editor) => self.rectangle_creation.commit_release(editor, release),
+                None => Err("Editor session is unavailable.".to_owned()),
+            };
+            match outcome {
+                Ok(Some(node_id)) => {
+                    self.finish_authoring_change(
+                        "Created Rectangle in the authoring session. One CreateShape operation was committed.",
+                    );
+                    if let Some(page_id) = created_page_id {
+                        match direct_page_local_instance_v1(
+                            &node_id.as_canonical().to_string(),
+                            &page_id.as_canonical().to_string(),
+                        ) {
+                            Ok(instance) => self.canvas_selection.select_only(instance.instance_id),
+                            Err(error) => {
+                                self.edit_status = Some(format!(
+                                    "Rectangle was created, but durable selection could not bind: {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.edit_status = Some(error);
+                }
+            }
+        }
 
         if text_exit_request {
             self.exit_canvas_text_mode("canvas_non_text_click");
@@ -5669,6 +6236,8 @@ impl eframe::App for ViewerApp {
         let text_keyboard_owned = self.process_canvas_text_input(ctx);
         if !text_keyboard_owned {
             self.process_canvas_object_keyboard(ctx);
+            self.process_global_history_shortcuts(ctx);
+            self.process_global_save_shortcut(ctx);
         }
 
         debug_assert_eq!(
@@ -6024,9 +6593,14 @@ fn paint_page_thumbnail(
     let Some(page) = visual.document.pages.get(page_index) else {
         return;
     };
-    let Ok(render_plan) = build_desktop_page_render_plan(visual, page_index) else {
+    let Ok(mut render_plan) = build_desktop_page_render_plan(visual, page_index) else {
         return;
     };
+    if let Some(editor) = editor
+        && apply_editor_authored_page_lane(&mut render_plan, editor).is_err()
+    {
+        return;
+    }
     if render_plan.page_size.width.get() <= 0 || render_plan.page_size.height.get() <= 0 {
         return;
     }
@@ -6437,9 +7011,10 @@ mod tests {
     #[test]
     fn source_pub_is_not_a_write_target_by_construction() {
         let source = include_str!("main.rs");
-        let production_source = source
-            .split_once("#[cfg(test)]")
-            .map_or(source, |(production, _)| production);
+        let normalized_source = source.replace("\r\n", "\n");
+        let production_source = normalized_source
+            .split_once("\n#[cfg(test)]\nmod tests {")
+            .map_or(normalized_source.as_str(), |(production, _)| production);
 
         assert!(production_source.contains("fs::read(&path)"));
         assert!(production_source.contains("fs::write(&sidecar"));
@@ -6764,6 +7339,7 @@ mod tests {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -6832,6 +7408,7 @@ mod tests {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -7115,6 +7692,7 @@ mod tests {
             canvas_selection: SceneSelectionState::default(),
             canvas_drag: None,
             canvas_resize: None,
+            rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -7798,11 +8376,119 @@ mod tests {
             "GUI Redo must restore exact moved geometry"
         );
 
-        harness.get_by_label("Save Project").click();
+        let history_operation_count = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::Z);
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&moved_node_id]
+                .header
+                .bounds,
+            before_move,
+            "Ctrl+Z must route to the same canonical Undo state"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            history_operation_count
+                .checked_sub(1)
+                .expect("walkthrough has one operation to undo"),
+            "Ctrl+Z must move exactly one applied operation onto the redo stack"
+        );
+
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::Y);
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .graph()
+                .nodes[&moved_node_id]
+                .header
+                .bounds,
+            after_move,
+            "Ctrl+Y must route to the same canonical Redo state"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            history_operation_count,
+            "Ctrl+Y must not append a new authoring operation"
+        );
+
+        let save_operation_count = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
         harness.step();
         harness.step();
         let sidecar = editor_project_sidecar_path(&fixture).expect("sidecar path");
-        assert!(sidecar.is_file(), "GUI Save Project must write the sidecar");
+        assert!(
+            sidecar.is_file(),
+            "Ctrl+S must write the EditorProject sidecar"
+        );
+        let shortcut_sidecar = fs::read(&sidecar).expect("read Ctrl+S sidecar");
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            save_operation_count,
+            "Ctrl+S must not append an Editor operation"
+        );
+
+        harness.get_by_label("Save Project").click();
+        harness.step();
+        harness.step();
+        let button_sidecar = fs::read(&sidecar).expect("read Save Project sidecar");
+        assert_eq!(
+            shortcut_sidecar, button_sidecar,
+            "Ctrl+S and Save Project must materialize identical sidecar bytes"
+        );
+
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
+        harness.step();
+        assert_eq!(
+            harness.state().project_status.as_deref(),
+            Some("Editor project is already saved with 2 operations."),
+            "Ctrl+S on an already-saved project must be an honest no-op confirmation"
+        );
+        assert_eq!(
+            fs::read(&sidecar).expect("read unchanged sidecar"),
+            button_sidecar,
+            "saved-state Ctrl+S must not change sidecar bytes"
+        );
+
         // Save happens after command enablement is computed for this frame.
         // Advance once more so the accessibility tree reflects the saved sidecar.
         harness.step();
@@ -7887,6 +8573,168 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_duplicate_button_commits_one_create_shape_and_selects_duplicate_on_real_pub() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let original = fs::read(&fixture).expect("read pinned SampleNewsletter fixture");
+        let fixture_for_app = fixture.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(32)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
+            });
+        harness.step();
+        harness.step();
+
+        let (page_index, page_id, source_bounds) = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let page = visual
+                .document
+                .pages
+                .first()
+                .expect("real fixture exposes a first page");
+            let surface = visual
+                .scene
+                .surfaces
+                .iter()
+                .find(|surface| surface.origin == page.id)
+                .expect("first page has a scene surface");
+            let width = (surface.size.width.get() / 5).max(127_000);
+            let height = (surface.size.height.get() / 8).max(127_000);
+            (
+                0,
+                page.id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(surface.size.width.get() / 4),
+                    pub_editor::LengthEmu::new(surface.size.height.get() / 4),
+                    pub_editor::LengthEmu::new(width),
+                    pub_editor::LengthEmu::new(height),
+                ),
+            )
+        };
+
+        let source_node_id =
+            pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        {
+            let app = harness.state_mut();
+            app.selected_page = page_index;
+            app.editor
+                .as_mut()
+                .expect("editor")
+                .create_shape(
+                    source_node_id,
+                    page_id,
+                    source_bounds,
+                    rectangle_creation::chaptera_rectangle_paint_v1(),
+                )
+                .expect("seed authored Rectangle through canonical CreateShape");
+            app.finish_authoring_change("Seeded Duplicate GUI witness.");
+            let instance = direct_page_local_instance_v1(
+                &source_node_id.as_canonical().to_string(),
+                &page_id.as_canonical().to_string(),
+            )
+            .expect("canonical source instance");
+            app.canvas_selection.select_only(instance.instance_id);
+        }
+        harness.step();
+
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.get_by_label("Duplicate").click();
+        harness.step();
+        harness.step();
+
+        let duplicate_node_id = {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("editor");
+            assert_eq!(
+                editor.operations().len(),
+                operations_before + 1,
+                "one Duplicate click must append exactly one document operation"
+            );
+            let Some(pub_editor::EditOperation::CreateShape { node_id, .. }) =
+                editor.operations().last()
+            else {
+                panic!("Duplicate must persist as CreateShape")
+            };
+            assert_ne!(*node_id, source_node_id);
+            let source = editor
+                .authored_shape(source_node_id)
+                .expect("source authored shape");
+            let duplicate = editor
+                .authored_shape(*node_id)
+                .expect("duplicate authored shape");
+            assert_eq!(duplicate.paint, source.paint);
+            assert_eq!(duplicate.bounds.width, source.bounds.width);
+            assert_eq!(duplicate.bounds.height, source.bounds.height);
+            assert_eq!(
+                duplicate.bounds.x.get(),
+                source.bounds.x.get() + pub_editor::DUPLICATE_OFFSET_EMU_V1
+            );
+            assert_eq!(
+                duplicate.bounds.y.get(),
+                source.bounds.y.get() + pub_editor::DUPLICATE_OFFSET_EMU_V1
+            );
+            let expected_instance = direct_page_local_instance_v1(
+                &node_id.as_canonical().to_string(),
+                &page_id.as_canonical().to_string(),
+            )
+            .expect("canonical duplicate instance");
+            assert_eq!(
+                app.canvas_selection.primary(),
+                Some(expected_instance.instance_id.as_str()),
+                "accepted Duplicate must select the durable duplicate"
+            );
+            *node_id
+        };
+
+        harness.get_by_label("Undo").click();
+        harness.step();
+        assert!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .authored_shape(duplicate_node_id)
+                .is_none(),
+            "Undo must remove the duplicate"
+        );
+
+        harness.get_by_label("Redo").click();
+        harness.step();
+        let app = harness.state();
+        assert!(
+            app.editor
+                .as_ref()
+                .expect("editor")
+                .authored_shape(duplicate_node_id)
+                .is_some(),
+            "Redo must restore the same duplicate identity"
+        );
+        assert_eq!(
+            fs::read(&fixture).expect("re-read source PUB"),
+            original,
+            "Duplicate must never mutate source PUB bytes"
+        );
     }
 
     #[cfg(not(feature = "reader-only"))]
@@ -8779,7 +9627,7 @@ mod tests {
         let project = app.editor.as_ref().expect("editor").project();
         assert_eq!(
             project.schema_version,
-            pub_editor::EDITOR_PROJECT_VERSION_V0_11
+            pub_editor::EDITOR_PROJECT_VERSION_V0_12
         );
         assert_eq!(project.assets.len(), 1);
         let asset_bytes = app
@@ -9960,6 +10808,42 @@ mod tests {
                     },
                 );
             }
+
+            for resource in &self.visual.decorative_border_resources {
+                let key = format!("{:?}", resource.resource_id);
+                if self.image_textures.contains_key(&key) {
+                    continue;
+                }
+                let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+                let admitted = image_decode_adapter::decode_texture_image_v1(
+                    &resource.bytes,
+                    &resource.mime,
+                    &expected_sha256,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "clean golden BorderArt decode failed for {} / {}: {error}",
+                        key, resource.mime
+                    )
+                });
+                let [width, height] = admitted.color_image.size;
+                assert!(
+                    width <= max_texture_side && height <= max_texture_side,
+                    "BorderArt golden image {width}x{height} exceeds active egui texture limit {max_texture_side}"
+                );
+                let texture = ctx.load_texture(
+                    format!("borderart-golden-{key}"),
+                    admitted.color_image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.image_textures.insert(
+                    key,
+                    CachedImageTexture {
+                        texture,
+                        _cache_identity_sha256: admitted.cache_identity_sha256,
+                    },
+                );
+            }
         }
     }
 
@@ -10004,6 +10888,13 @@ mod tests {
                             node,
                             node_rect,
                             texture.map(|cached| cached.texture.id()),
+                        );
+                        paint_document_node_decorative_border(
+                            &painter,
+                            page_rect,
+                            scene_scale,
+                            node,
+                            &self.image_textures,
                         );
                         let outcome = render_backend::paint_document_node_foreground(
                             &painter,

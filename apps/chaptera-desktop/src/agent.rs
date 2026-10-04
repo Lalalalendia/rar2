@@ -2195,6 +2195,27 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "paint":paint,
             "provenance":provenance
         }),
+        EditOperation::DeleteNode {
+            node_id,
+            page_id,
+            before_state_id,
+            ..
+        } => json!({
+            "kind":"delete_node",
+            "node_id":node_id.as_canonical().to_string(),
+            "page_id":page_id.as_canonical().to_string(),
+            "before_state_id":before_state_id
+        }),
+        EditOperation::ReorderAuthoredStack { transition } => json!({
+            "kind":"reorder_authored_stack",
+            "node_id":transition.node_id.as_canonical().to_string(),
+            "page_id":transition.page_id.as_canonical().to_string(),
+            "mode":transition.mode,
+            "before_index":transition.before_index,
+            "after_index":transition.after_index,
+            "before_state_id":transition.before_state_id,
+            "after_state_id":transition.after_state_id
+        }),
     }
 }
 

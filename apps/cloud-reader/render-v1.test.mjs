@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   assertReaderSceneSourceNeutral,
+  decorativeBorderPlacementPaintPlan,
   imageContentRotationGeometry,
   imagePaintGeometry,
   imageRecolorPaintPlan,
@@ -13,6 +14,44 @@ import {
   tableCellFillPaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
+
+test("decorative BorderArt placement uses exact server geometry and bounded image resources", () => {
+  const resource = {
+    resource_id: "resource:border-top",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+  const placement = {
+    slot: "top",
+    resource_id: resource.resource_id,
+    bounds: { x: 100, y: 200, width: 300, height: 40 }
+  };
+
+  assert.deepEqual(
+    decorativeBorderPlacementPaintPlan(placement, resource),
+    {
+      slot: "top",
+      resource_id: resource.resource_id,
+      href: resource.inline_data_url,
+      geometry: { x: 100, y: 200, width: 300, height: 40 }
+    }
+  );
+  assert.equal(
+    decorativeBorderPlacementPaintPlan(
+      { ...placement, slot: "publisher_private_slot" },
+      resource
+    ),
+    null
+  );
+  assert.equal(
+    decorativeBorderPlacementPaintPlan(
+      placement,
+      { ...resource, availability: "descriptor_only", inline_data_url: undefined }
+    ),
+    null
+  );
+});
 
 test("Viewer-materialized OLE preview PNG uses the generic image resource paint path", () => {
   const resource = {
@@ -469,7 +508,9 @@ test("mixed shared text plan preserves server span sizes and cumulative line hei
               text: "A ",
               x_offset_emu: 0,
               measured_width_emu: 180,
-              font_size_emu: 100
+              font_size_emu: 100,
+              font_resource_id: "font-elephant",
+              font_fingerprint_sha256: "sha-elephant"
             },
             {
               scalar_start: 2,
@@ -477,7 +518,9 @@ test("mixed shared text plan preserves server span sizes and cumulative line hei
               text: "B",
               x_offset_emu: 180,
               measured_width_emu: 240,
-              font_size_emu: 180
+              font_size_emu: 180,
+              font_resource_id: "font-times",
+              font_fingerprint_sha256: "sha-times"
             }
           ]
         }
@@ -495,9 +538,44 @@ test("mixed shared text plan preserves server span sizes and cumulative line hei
       span.scalar_end,
       span.x_offset_emu,
       span.font_size_emu,
+      span.font_resource_id,
+      span.font_fingerprint_sha256,
       span.text
     ]),
-    [[0, 2, 0, 100, "A "], [2, 3, 180, 180, "B"]]
+    [
+      [0, 2, 0, 100, "font-elephant", "sha-elephant", "A "],
+      [2, 3, 180, 180, "font-times", "sha-times", "B"]
+    ]
+  );
+});
+
+test("shared text span font identity is all-or-nothing", () => {
+  assert.equal(
+    resolvedTextLinePaintPlan({
+      bounds: { x: 0, y: 0, width: 1000, height: 600 },
+      text_layout: {
+        disposition: "shared_resolved",
+        font_resource_id: "font-1",
+        font_size_emu: 100,
+        line_height_emu: 120,
+        lines: [{
+          line_index: 0,
+          text: "mixed",
+          measured_width_emu: 300,
+          line_height_emu: 120,
+          spans: [{
+            scalar_start: 0,
+            scalar_end: 5,
+            text: "mixed",
+            x_offset_emu: 0,
+            measured_width_emu: 300,
+            font_size_emu: 100,
+            font_resource_id: "font-elephant"
+          }]
+        }]
+      }
+    }),
+    null
   );
 });
 

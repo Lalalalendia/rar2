@@ -53,5 +53,15 @@
     "id": "supersociedades-27894",
     "url": "https://www.supersociedades.gov.co/documents/107391/2999435/27894.pdf/c7a8559f-8044-149f-e101-ef1fac811322?download=true&t=1743211781911",
     "note": "Publisher hidden XML with OplMocd/OplPlbot/OplOt/OplLastFmt"
+  },
+  {
+    "id": "publisher11-northpark-white-dashes",
+    "url": "https://raw.githubusercontent.com/Northparkbv/huh/7f0eca9abd3275c1b90fa1f06c70e88e876bde04/index.mht",
+    "note": "Pinned Publisher-generated MHTML with OplPlbFb catalog item Basic...White Dashes and no observed OplOdpo.FBID usage"
+  },
+  {
+    "id": "publisher11-pfoltz-corner-triangles",
+    "url": "https://raw.githubusercontent.com/pfoltz/vstreff_com/3cb4f038eba149744e72f82efff1de593d0b1191/Web%20site%20files/_Sheila/Sketches3a.htm",
+    "note": "Pinned Publisher-generated HTML with OplPlbFb catalog item Corner Triangles and no observed OplOdpo.FBID usage"
   }
 ]

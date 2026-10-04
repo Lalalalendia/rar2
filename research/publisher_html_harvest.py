@@ -211,6 +211,7 @@ def parse_publisher_xml(text, source_id):
             "owner_oh": owner["attrs"].get("oh") if owner else None,
             "name": tag,
             "value": value,
+            "cb": attrs.get("cb"),
             "priv_origin": priv_origin,
             **decoded,
         })

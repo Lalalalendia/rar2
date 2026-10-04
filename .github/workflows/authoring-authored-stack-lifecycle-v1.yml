@@ -1,0 +1,50 @@
+name: Authoring AuthoredStack Lifecycle V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-editor/src/authored_stack_lifecycle_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/authored_stack_lifecycle_v1.rs"
+      - ".github/workflows/authoring-authored-stack-lifecycle-v1.yml"
+  push:
+    branches:
+      - authoring-authored-stack-lifecycle-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check pub-editor formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -- --check
+
+      - name: Check pub-editor
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets
+
+      - name: Lint pub-editor
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --all-targets -- -D warnings
+
+      - name: Prove AuthoredStack lifecycle contract
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test authored_stack_lifecycle_v1
+
+      - name: Re-run CreateShape and DeleteNode runtimes
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor
+          --test create_shape_runtime_v1
+          --test delete_node_runtime_v1

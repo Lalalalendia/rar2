@@ -8,8 +8,11 @@ on:
     paths:
       - ".github/workflows/publisher-visual-golden-batch01.yml"
       - "tools/cloud_reader_visual_fingerprint_v1.py"
+      - "tools/cloud_reader_page_membership_gate_v1.py"
+      - "tools/corpus/receipts/publisher-visual-page-membership-authority-v1.json"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json"
       - "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
+      - "tools/corpus/receipts/publisher-visual-golden-batch-01-borderart-v1.json"
       - "apps/cloud-reader/**"
       - "apps/chaptera-server/src/reader_scene_v1.rs"
       - "apps/chaptera-server/src/guest_reader_worker.rs"
@@ -150,6 +153,8 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir "Pillow==12.3.0"
           python -m py_compile tools/cloud_reader_visual_fingerprint_v1.py
+          python -m py_compile tools/cloud_reader_page_membership_gate_v1.py
+          python tools/cloud_reader_page_membership_gate_v1.py --self-test
           python - <<'PY'
           import hashlib
           from pathlib import Path
@@ -214,6 +219,90 @@ jobs:
             tools/corpus/receipts/publisher-visual-golden-batch-01-fingerprint-v1.json \
             target/publisher-visual-batch01/summary.json
 
+      - name: Build real-PUB BorderArt visual subset receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          overlap_path = Path("tools/corpus/receipts/publisher-visual-golden-batch-01-borderart-v1.json")
+          summary_path = Path("target/publisher-visual-batch01/summary.json")
+          overlap = json.loads(overlap_path.read_text())
+          summary = json.loads(summary_path.read_text())
+
+          assert overlap["schema"] == "chaptera.publisher-visual-golden-borderart-overlap.v1"
+          assert overlap["borderart_pair_count"] == 6
+          assert len(overlap["pairs"]) == 6
+          assert sum(row["nonstretch_marker_count"] > 0 for row in overlap["pairs"]) == 2
+          assert sum(row["default_stretch_use_count"] > 0 for row in overlap["pairs"]) == 5
+
+          current_by_fixture = {row["fixture"]: row for row in summary["pairs"]}
+          rows = []
+          historically_rendered = 0
+          still_rendered = 0
+          for authority in overlap["pairs"]:
+              fixture = authority["fixture"]
+              assert fixture in current_by_fixture, fixture
+              current = current_by_fixture[fixture]
+              if authority["baseline"]["rendered"]:
+                  historically_rendered += 1
+                  assert current["rendered"], f"previously renderable BorderArt pair regressed to unsupported: {fixture}"
+                  still_rendered += 1
+              rows.append({
+                  "oracle_id": authority["oracle_id"],
+                  "fixture": fixture,
+                  "pub_sha256": authority["pub_sha256"],
+                  "stretch_modes_present": authority["stretch_modes_present"],
+                  "fbid_use_count": authority["fbid_use_count"],
+                  "nonstretch_marker_count": authority["nonstretch_marker_count"],
+                  "baseline": authority["baseline"],
+                  "current": current,
+                  "mean_changed_cell_fraction_delta": (
+                      None
+                      if authority["baseline"]["mean_changed_cell_fraction"] is None
+                      or current["mean_changed_cell_fraction"] is None
+                      else current["mean_changed_cell_fraction"]
+                          - authority["baseline"]["mean_changed_cell_fraction"]
+                  ),
+              })
+
+          assert historically_rendered == 4
+          assert still_rendered == 4
+          receipt = {
+              "schema": "chaptera.publisher-visual-golden-borderart-subset.v1",
+              "repository_commit_sha": summary["repository_commit_sha"],
+              "publisher_reference_pair_count": len(rows),
+              "historically_rendered_pair_count": historically_rendered,
+              "current_rendered_pair_count": sum(row["current"]["rendered"] for row in rows),
+              "repeat_nonstretch_reference_pair_count": sum(
+                  "repeat_nonstretch" in row["stretch_modes_present"] for row in rows
+              ),
+              "stretch_default_reference_pair_count": sum(
+                  "stretch_default" in row["stretch_modes_present"] for row in rows
+              ),
+              "pairs": rows,
+          }
+          out = Path("target/publisher-visual-batch01/borderart-subset.json")
+          out.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print(json.dumps({
+              "publisher_reference_pair_count": receipt["publisher_reference_pair_count"],
+              "current_rendered_pair_count": receipt["current_rendered_pair_count"],
+              "repeat_nonstretch_reference_pair_count": receipt["repeat_nonstretch_reference_pair_count"],
+              "stretch_default_reference_pair_count": receipt["stretch_default_reference_pair_count"],
+              "pairs": [
+                  {
+                      "fixture": row["fixture"],
+                      "stretch_modes_present": row["stretch_modes_present"],
+                      "rendered": row["current"]["rendered"],
+                      "mean_changed_cell_fraction": row["current"]["mean_changed_cell_fraction"],
+                      "delta": row["mean_changed_cell_fraction_delta"],
+                  }
+                  for row in rows
+              ],
+          }, indent=2, sort_keys=True))
+          PY
+
       - name: Compare with previous successful main baseline
         id: baseline-delta
         env:
@@ -242,6 +331,16 @@ jobs:
           echo "baseline_found=true" >> "$GITHUB_OUTPUT"
           echo "baseline_run_id=$baseline_run" >> "$GITHUB_OUTPUT"
 
+      - name: Enforce stage-aware exact PAGE membership authority
+        if: steps.baseline-delta.outputs.baseline_found == 'true'
+        run: |
+          set -euo pipefail
+          python tools/cloud_reader_page_membership_gate_v1.py \
+            --current target/publisher-visual-batch01/summary.json \
+            --baseline "$RUNNER_TEMP/publisher-visual-baseline/summary.json" \
+            --authority tools/corpus/receipts/publisher-visual-page-membership-authority-v1.json \
+            --out target/publisher-visual-batch01/membership-gate.json
+
       - name: Print top residuals
         run: |
           python - <<'PY'
@@ -254,6 +353,7 @@ jobs:
               "compared_page_count": data["compared_page_count"],
               "unsupported_pair_count": data["unsupported_pair_count"],
               "page_count_mismatch_pair_count": data["page_count_mismatch_pair_count"],
+              "reference_surface_stage_counts": data["reference_surface_stage_counts"],
               "corpus_mean_changed_cell_fraction": data["corpus_mean_changed_cell_fraction"],
               "worst_pages": data["worst_pages"][:10],
           }, indent=2, sort_keys=True))
@@ -263,6 +363,11 @@ jobs:
               print("DELTA")
               print(json.dumps({
                   "baseline_repository_commit_sha": delta["baseline_repository_commit_sha"],
+                  "stable_identity_page_count": delta["stable_identity_page_count"],
+                  "remapped_page_count": delta["remapped_page_count"],
+                  "identity_unknown_page_count": delta["identity_unknown_page_count"],
+                  "page_identity_remaps": delta["page_identity_remaps"][:10],
+                  "reference_surface_stage_counts": delta["reference_surface_stage_counts"],
                   "improved_page_count": delta["improved_page_count"],
                   "regressed_page_count": delta["regressed_page_count"],
                   "unchanged_page_count": delta["unchanged_page_count"],
@@ -280,5 +385,7 @@ jobs:
           path: |
             target/publisher-visual-batch01/summary.json
             target/publisher-visual-batch01/delta.json
+            target/publisher-visual-batch01/membership-gate.json
+            target/publisher-visual-batch01/borderart-subset.json
           if-no-files-found: warn
           retention-days: 90

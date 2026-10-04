@@ -17,6 +17,28 @@ GRID_W = 64
 GRID_H = 64
 CELL_DELTA = 12
 EMU_PER_POINT = 12700.0
+REFERENCE_SURFACE_STAGES = (
+    "logical_page",
+    "production_sheet",
+    "viewport_spread",
+    "unknown",
+)
+
+
+def reference_surface_stage(value: object) -> str:
+    if value is None:
+        return "unknown"
+    if not isinstance(value, str) or value not in REFERENCE_SURFACE_STAGES:
+        raise ValueError(f"unsupported reference_surface_stage: {value!r}")
+    return value
+
+
+def reference_surface_stage_counts(rows: list[dict]) -> dict[str, int]:
+    counts = {stage: 0 for stage in REFERENCE_SURFACE_STAGES}
+    for row in rows:
+        counts[reference_surface_stage(row.get("reference_surface_stage"))] += 1
+    return counts
+
 
 
 def sha256(path: Path) -> str:
@@ -136,6 +158,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
     page_count_mismatch = 0
 
     for pair in reference["pairs"]:
+        surface_stage = reference_surface_stage(pair.get("reference_surface_stage"))
         fixture = find_fixture(browser, pair["basename"])
         if fixture.get("source_sha256") != pair["pub_sha256"]:
             raise ValueError(f"source identity drift for {pair['basename']}")
@@ -147,18 +170,36 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             page_count_mismatch += 1
 
         pair_metrics = []
+        candidate_page_identity_order_sha256 = None
         if not rendered:
             unsupported.append({
                 "fixture": pair["basename"],
                 "classification": fixture.get("classification"),
                 "terminal_code": fixture.get("terminal_code"),
                 "reference_state": pair["reference_state"],
+                "reference_surface_stage": surface_stage,
             })
         else:
             shots = fixture.get("screenshots", [])
             geometry = fixture.get("page_geometry", [])
             if len(shots) != candidate_pages or len(geometry) != candidate_pages:
                 raise ValueError(f"incomplete browser receipt for {pair['basename']}")
+            page_identity_hashes = [entry.get("page_identity_sha256") for entry in geometry]
+            if any(
+                not isinstance(identity, str)
+                or len(identity) != 64
+                or any(ch not in "0123456789abcdef" for ch in identity)
+                for identity in page_identity_hashes
+            ):
+                raise ValueError(
+                    f"missing canonical source PAGE identity fingerprint for {pair['basename']}"
+                )
+            canonical_identities = "".join(
+                identity + "\n" for identity in page_identity_hashes
+            ).encode("ascii")
+            candidate_page_identity_order_sha256 = (
+                "sha256:" + hashlib.sha256(canonical_identities).hexdigest()
+            )
 
             for index in range(min(candidate_pages, expected_pages)):
                 shot = shots[index]
@@ -180,6 +221,8 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
                     "fixture": pair["basename"],
                     "page": index + 1,
                     "reference_state": pair["reference_state"],
+                    "reference_surface_stage": surface_stage,
+                    "candidate_page_identity_sha256": page_geometry.get("page_identity_sha256"),
                     **metrics,
                     "reference_media_extent_delta": media_delta,
                 }
@@ -188,7 +231,10 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
 
         pair_rows.append({
             "fixture": pair["basename"],
+            "source_sha256": pair["pub_sha256"],
+            "candidate_page_identity_order_sha256": candidate_page_identity_order_sha256,
             "reference_state": pair["reference_state"],
+            "reference_surface_stage": surface_stage,
             "rendered": rendered,
             "candidate_pages": candidate_pages,
             "reference_pages": expected_pages,
@@ -210,6 +256,7 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
         "compared_page_count": len(page_rows),
         "unsupported_pair_count": len(unsupported),
         "page_count_mismatch_pair_count": page_count_mismatch,
+        "reference_surface_stage_counts": reference_surface_stage_counts(pair_rows),
         "corpus_mean_changed_cell_fraction": sum(fractions) / len(fractions) if fractions else None,
         "worst_pages": page_rows[:25],
         "pages": page_rows,
@@ -227,6 +274,8 @@ def compare(browser_receipt: Path, reference_path: Path, out_path: Path) -> dict
             "pixel_exact_visual_parity": False,
             "pdf_used_as_visual_authority_only": True,
             "fingerprint_used_as_semantic_authority": False,
+            "missing_reference_surface_stage_defaults_to_unknown": True,
+            "reference_surface_stage_inference_from_raster": False,
             "raw_pub_bytes_emitted": False,
             "raw_pdf_bytes_emitted": False,
             "raw_story_text_emitted": False,
@@ -259,13 +308,38 @@ def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) ->
     improved = []
     regressed = []
     unchanged = []
+    remapped = []
+    identity_unknown = []
+    stable_identity_keys = []
     for key in keys:
+        current_identity = current_pages[key].get("candidate_page_identity_sha256")
+        baseline_identity = baseline_pages[key].get("candidate_page_identity_sha256")
+        if current_identity is None or baseline_identity is None:
+            identity_unknown.append({
+                "fixture": key[0],
+                "page": key[1],
+                "baseline_page_identity_sha256": baseline_identity,
+                "current_page_identity_sha256": current_identity,
+            })
+            continue
+        if current_identity != baseline_identity:
+            remapped.append({
+                "fixture": key[0],
+                "page": key[1],
+                "baseline_page_identity_sha256": baseline_identity,
+                "current_page_identity_sha256": current_identity,
+            })
+            continue
+        stable_identity_keys.append(key)
+
+    for key in stable_identity_keys:
         now = current_pages[key]["changed_cell_fraction"]
         before = baseline_pages[key]["changed_cell_fraction"]
         delta = now - before
         row = {
             "fixture": key[0],
             "page": key[1],
+            "page_identity_sha256": current_pages[key].get("candidate_page_identity_sha256"),
             "baseline_changed_cell_fraction": before,
             "current_changed_cell_fraction": now,
             "delta": delta,
@@ -287,6 +361,9 @@ def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) ->
         "baseline_repository_commit_sha": baseline.get("repository_commit_sha"),
         "current_repository_commit_sha": current.get("repository_commit_sha"),
         "matched_page_count": len(keys),
+        "stable_identity_page_count": len(stable_identity_keys),
+        "remapped_page_count": len(remapped),
+        "identity_unknown_page_count": len(identity_unknown),
         "improved_page_count": len(improved),
         "regressed_page_count": len(regressed),
         "unchanged_page_count": len(unchanged),
@@ -307,11 +384,19 @@ def compare_baseline(current_path: Path, baseline_path: Path, out_path: Path) ->
             "baseline": baseline.get("page_count_mismatch_pair_count"),
             "current": current.get("page_count_mismatch_pair_count"),
         },
+        "reference_surface_stage_counts": {
+            "baseline": reference_surface_stage_counts(baseline.get("pairs", [])),
+            "current": reference_surface_stage_counts(current.get("pairs", [])),
+        },
         "largest_improvements": improved[:25],
         "largest_regressions": regressed[:25],
+        "page_identity_remaps": remapped[:100],
+        "page_identity_unknown": identity_unknown[:100],
         "claims": {
             "measurement_only": True,
             "hard_regression_threshold_applied": False,
+            "visual_delta_only_compares_stable_page_identity": True,
+            "page_identity_remap_is_not_visual_regression_evidence": True,
         },
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +442,9 @@ def main() -> None:
         delta = compare_baseline(args.current, args.baseline, args.out)
         print(json.dumps({
             "matched_pages": delta["matched_page_count"],
+            "stable_identity_pages": delta["stable_identity_page_count"],
+            "remapped_pages": delta["remapped_page_count"],
+            "identity_unknown_pages": delta["identity_unknown_page_count"],
             "improved_pages": delta["improved_page_count"],
             "regressed_pages": delta["regressed_page_count"],
             "unchanged_pages": delta["unchanged_page_count"],

@@ -115,6 +115,59 @@ function imageDataUrl(resource) {
   return value;
 }
 
+const DECORATIVE_BORDER_SLOTS = new Set([
+  "top_left", "top", "top_right", "right",
+  "bottom_right", "bottom", "bottom_left", "left"
+]);
+
+export function decorativeBorderPlacementPaintPlan(placement, resource) {
+  const slot = placement?.slot;
+  if (typeof slot !== "string" || !DECORATIVE_BORDER_SLOTS.has(slot)) return null;
+  if (typeof placement?.resource_id !== "string"
+      || placement.resource_id !== resource?.resource_id) return null;
+  const href = imageDataUrl(resource);
+  if (!href) return null;
+  const bounds = placement?.bounds;
+  if (!bounds) return null;
+  const x = safeInteger(bounds.x, "decorative_border.bounds.x");
+  const y = safeInteger(bounds.y, "decorative_border.bounds.y");
+  const width = safeInteger(bounds.width, "decorative_border.bounds.width");
+  const height = safeInteger(bounds.height, "decorative_border.bounds.height");
+  if (width <= 0 || height <= 0) return null;
+  return Object.freeze({
+    slot,
+    resource_id: placement.resource_id,
+    href,
+    geometry: Object.freeze({ x, y, width, height })
+  });
+}
+
+function appendDecorativeBorder(group, node, resources) {
+  const border = node?.decorative_border;
+  if (!border) return 0;
+  let painted = 0;
+  for (const placement of border.placements ?? []) {
+    const resource = resources.get(placement.resource_id) ?? null;
+    const plan = decorativeBorderPlacementPaintPlan(placement, resource);
+    if (!plan) continue;
+    const image = svgNode("image", {
+      x: plan.geometry.x,
+      y: plan.geometry.y,
+      width: plan.geometry.width,
+      height: plan.geometry.height,
+      preserveAspectRatio: "none",
+      "data-resource-id": plan.resource_id,
+      "data-resource-availability": resource.availability,
+      "data-decorative-border-slot": plan.slot,
+      "data-decorative-border-authority": "source-borderart"
+    });
+    image.setAttribute("href", plan.href);
+    group.appendChild(image);
+    painted += 1;
+  }
+  return painted;
+}
+
 export function imageContentRotationGeometry(bounds, degrees = null) {
   const x = finiteNumber(bounds.x, "image.rotation.bounds.x");
   const y = finiteNumber(bounds.y, "image.rotation.bounds.y");
@@ -226,13 +279,23 @@ export function resolvedTextLinePaintPlan(node) {
       const spanWidth = safeInteger(span.measured_width_emu, "text.span.measured_width_emu");
       const spanFontSize = safeInteger(span.font_size_emu, "text.span.font_size_emu");
       if (scalarEnd <= scalarStart || xOffset < 0 || spanWidth < 0 || spanFontSize <= 0) return null;
+      const spanFontResourceId = typeof span.font_resource_id === "string" && span.font_resource_id.length
+        ? span.font_resource_id
+        : null;
+      const spanFontFingerprint = typeof span.font_fingerprint_sha256 === "string"
+        && span.font_fingerprint_sha256.length
+        ? span.font_fingerprint_sha256
+        : null;
+      if ((spanFontResourceId === null) !== (spanFontFingerprint === null)) return null;
       spans.push(Object.freeze({
         scalar_start: scalarStart,
         scalar_end: scalarEnd,
         text: String(span.text ?? ""),
         x_offset_emu: xOffset,
         measured_width_emu: spanWidth,
-        font_size_emu: spanFontSize
+        font_size_emu: spanFontSize,
+        font_resource_id: spanFontResourceId,
+        font_fingerprint_sha256: spanFontFingerprint
       }));
     }
 
@@ -281,6 +344,20 @@ function appendText(group, defs, node, fonts, index) {
     return;
   }
 
+  const spanFonts = new Map();
+  for (const line of plan.lines) {
+    for (const span of line.spans) {
+      if (!span.font_resource_id) continue;
+      const spanInstalled = fonts.get(span.font_resource_id) ?? null;
+      if (!spanInstalled
+          || spanInstalled.resource.expected_sha256 !== span.font_fingerprint_sha256) {
+        appendPreviewText(group, node, plan);
+        return;
+      }
+      spanFonts.set(span.font_resource_id, spanInstalled);
+    }
+  }
+
   const clipId = "chaptera-reader-text-clip-" + index;
   const clipPath = svgNode("clipPath", { id: clipId });
   clipPath.appendChild(svgNode("rect", {
@@ -316,12 +393,17 @@ function appendText(group, defs, node, fonts, index) {
     text.setAttribute("xml:space", "preserve");
     if (line.spans.length) {
       for (const span of line.spans) {
+        const spanInstalled = span.font_resource_id
+          ? spanFonts.get(span.font_resource_id) ?? null
+          : null;
         const tspan = svgNode("tspan", {
           x: (line.x + span.x_offset_emu - plan.bounds.x) / EMU_PER_CSS_PX,
+          "font-family": spanInstalled?.family ?? installed.family,
           "font-size": span.font_size_emu / EMU_PER_CSS_PX,
           "data-text-span-start": span.scalar_start,
           "data-text-span-end": span.scalar_end,
-          "data-measured-width-emu": span.measured_width_emu
+          "data-measured-width-emu": span.measured_width_emu,
+          "data-font-resource-id": span.font_resource_id
         });
         tspan.setAttribute("xml:space", "preserve");
         tspan.textContent = span.text;
@@ -598,9 +680,13 @@ function renderNode(svg, defs, node, resources, fonts, index) {
     }
   }
 
+  const hasDecorativeBorder = node.decorative_border !== null
+    && node.decorative_border !== undefined;
+  if (hasDecorativeBorder) appendDecorativeBorder(group, node, resources);
+
   const line = node.paint?.line;
   const stroke = rgb(line?.rgb);
-  if (stroke && Number(line.width_emu) > 0 && shapeGeometry) {
+  if (!hasDecorativeBorder && stroke && Number(line.width_emu) > 0 && shapeGeometry) {
     group.appendChild(svgNode(shapeGeometry.tag, {
       ...shapeGeometry.attrs,
       fill: "none",

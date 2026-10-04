@@ -3,6 +3,7 @@ name: Cancel obsolete PR head runs
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
 
 permissions:
   actions: write
@@ -57,6 +58,7 @@ jobs:
           done
 
           cancelled=0
+          forced=0
           preserved=0
           while IFS=$'\t' read -r id head_branch head_sha name; do
             [[ -n "$id" ]] || continue
@@ -74,12 +76,19 @@ jobs:
             fi
 
             echo "CANCEL    $id  $head_branch  ${head_sha:0:12}  $name"
-            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/cancel" >/dev/null; then
+            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
               cancelled=$((cancelled + 1))
+              continue
+            fi
+
+            echo "FORCE     $id  $head_branch  ${head_sha:0:12}  $name"
+            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/force-cancel" >/dev/null 2>&1; then
+              forced=$((forced + 1))
             else
-              echo "::warning::Could not cancel run $id; it may have completed concurrently."
+              echo "::warning::Could not cancel or force-cancel run $id; it may have completed concurrently."
             fi
           done <"$runs_file"
 
           echo "Cancelled obsolete PR-head runs: $cancelled"
+          echo "Force-cancelled obsolete PR-head runs: $forced"
           echo "Preserved current-head/self runs: $preserved"

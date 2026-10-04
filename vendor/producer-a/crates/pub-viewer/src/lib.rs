@@ -7,6 +7,13 @@
 //! CFB, Contents, Quill, Escher, byte offsets, and writer mutation state are not
 //! part of the Viewer contract.
 
+mod borderart;
+
+pub use borderart::{
+    ViewerDecorativeBorderResourceV1, ViewerDecorativeBorderSlotRefV1,
+    ViewerDecorativeBorderSlotV1, ViewerDecorativeBorderV1,
+};
+
 use anyhow::{Context, Result, anyhow};
 #[cfg(feature = "cmo-slot-compose")]
 use chaptera_layout_projection::{
@@ -40,9 +47,15 @@ use pub_paint_bridge::{
 use pub_presentation_profile::STANDARD_PRINT_SERVICE_TAIL_PROFILE_ID_V1;
 use pub_presentation_profile::{
     CARLTON_PRESENTATION_INPUT_SCHEMA_V1, CarltonPageEvidenceV1, CarltonPresentationProfileInputV1,
+    LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1, Legacy22PageListDialectV1,
+    Legacy22PageListEntryEvidenceV1, Legacy22PageListProfileInputV1,
     STANDARD_PRINT_SERVICE_TAIL_INPUT_SCHEMA_V1, StandardPrintServiceTailPageEvidenceV1,
     StandardPrintServiceTailProfileInputV1, carlton_admitted_carrier_page_seq_nums_v1,
     reference_fixture_profile_known_v1, select_carlton_customer_page_seq_nums_v1,
+    select_legacy22_customer_page_indices_v1,
+    select_mature_detached_post_special_tail_customer_page_seq_nums_v1,
+    select_mature_terminal_service_tail_customer_page_seq_nums_v1,
+    select_mature_zero_leader_detached_tail_customer_page_seq_nums_v1,
     select_reference_fixture_customer_page_seq_nums_v1,
     select_standard_print_service_tail_customer_page_seq_nums_v1,
 };
@@ -70,11 +83,12 @@ use pub_reader::{
     PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
-    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
-    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
-    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
-    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
-    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
+    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
+    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
+    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
+    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
+    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
@@ -246,6 +260,10 @@ pub struct ViewerGeometryDocument {
     pub projected_instances: Vec<ViewerProjectedSceneInstanceV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ViewerEmbeddedImage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decorative_border_resources: Vec<ViewerDecorativeBorderResourceV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decorative_borders: Vec<ViewerDecorativeBorderV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1046,6 +1064,62 @@ pub struct ViewerEmbeddedImage {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ViewerImagePageAdmissionStatsV1 {
+    dropped_node_uses: usize,
+    dropped_placements: usize,
+    dropped_resources: usize,
+}
+
+fn retain_viewer_image_uses_for_selected_pages_v1<F>(
+    images: &mut Vec<ViewerEmbeddedImage>,
+    selected_pages: &BTreeSet<PageId>,
+    mut page_for_node: F,
+) -> ViewerImagePageAdmissionStatsV1
+where
+    F: FnMut(NodeId) -> Option<PageId>,
+{
+    let mut stats = ViewerImagePageAdmissionStatsV1::default();
+
+    for image in images.iter_mut() {
+        let node_use_count = image.node_ids.len();
+        image.node_ids.retain(|node_id| {
+            page_for_node(*node_id).is_none_or(|page_id| selected_pages.contains(&page_id))
+        });
+        stats.dropped_node_uses += node_use_count.saturating_sub(image.node_ids.len());
+
+        let placement_count = image.placements.len();
+        image.placements.retain(|placement| {
+            page_for_node(placement.node_id).is_none_or(|page_id| selected_pages.contains(&page_id))
+        });
+        stats.dropped_placements += placement_count.saturating_sub(image.placements.len());
+    }
+
+    let resource_count = images.len();
+    images.retain(|image| !image.node_ids.is_empty() || !image.placements.is_empty());
+    stats.dropped_resources = resource_count.saturating_sub(images.len());
+    stats
+}
+
+fn resolved_page_for_node_v1(graph: &PubResolvedGraph, node_id: NodeId) -> Option<PageId> {
+    let mut current = graph.nodes.get(&node_id)?.header.parent_id;
+    let mut seen = BTreeSet::new();
+    loop {
+        if !seen.insert(current) {
+            return None;
+        }
+        let page_id = PageId::from_canonical(current);
+        if graph.pages.contains_key(&page_id) {
+            return Some(page_id);
+        }
+        current = graph
+            .nodes
+            .get(&NodeId::from_canonical(current))?
+            .header
+            .parent_id;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerSource {
     pub format: String,
@@ -1758,6 +1832,63 @@ enum ViewerPageSelectionDisposition {
     },
 }
 
+fn select_legacy22_viewer_pages(
+    bytes: &[u8],
+    source: &PubSourceGraphBuild,
+    dialect: Legacy22PageListDialectV1,
+) -> ViewerPageSelection {
+    let generic = || ViewerPageSelection {
+        page_ids: source.effective_pages.page_ids.clone(),
+        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
+    };
+
+    let observation = match analyze_legacy_0x22_page_roles(Cursor::new(bytes)) {
+        Ok(observation) => observation,
+        Err(_) => return generic(),
+    };
+    let selection = match select_legacy22_customer_page_indices_v1(Legacy22PageListProfileInputV1 {
+        schema_version: LEGACY22_PAGE_LIST_PROFILE_INPUT_SCHEMA_V1.to_owned(),
+        dialect,
+        document_page_list_entry_count: observation.document_page_list_entry_count,
+        physical_page_count: observation.physical_page_count,
+        entries: observation
+            .page_list_entries
+            .into_iter()
+            .map(|entry| Legacy22PageListEntryEvidenceV1 {
+                document_ordinal: entry.document_ordinal,
+                raw_type: entry.raw_type,
+            })
+            .collect(),
+    }) {
+        Some(selection) => selection,
+        None => return generic(),
+    };
+    if selection.materialized_page_count != source.effective_pages.page_ids.len() {
+        return generic();
+    }
+
+    let customer_page_count = selection.customer_page_indices.len();
+    let mut page_ids = Vec::with_capacity(customer_page_count);
+    for index in &selection.customer_page_indices {
+        let Some(page_id) = source.effective_pages.page_ids.get(*index).copied() else {
+            return generic();
+        };
+        page_ids.push(page_id);
+    }
+    if page_ids.is_empty() {
+        return generic();
+    }
+
+    ViewerPageSelection {
+        page_ids,
+        disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+            profile_id: selection.profile_id,
+            raw_page_count: selection.materialized_page_count,
+            customer_page_count,
+        },
+    }
+}
+
 /// Opens one mature 0x2C Publisher file into the read-only Viewer manifest.
 ///
 /// This function never writes to the supplied bytes and does not construct a
@@ -1926,10 +2057,8 @@ fn open_legacy_0x22_noquill_bundle(
         .context("build legacy-0x22 no-Quill PUB source graph for Viewer")?;
     let resolved = resolve_pub_source_graph(&source.graph)
         .context("resolve legacy no-Quill PUB source graph for Viewer")?;
-    let page_selection = ViewerPageSelection {
-        page_ids: source.effective_pages.page_ids.clone(),
-        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
-    };
+    let page_selection =
+        select_legacy22_viewer_pages(bytes, &source, Legacy22PageListDialectV1::NoQuill);
     let mut document = viewer_document_from_graph(
         bytes.len(),
         source_hash,
@@ -1942,6 +2071,8 @@ fn open_legacy_0x22_noquill_bundle(
         .iter()
         .map(|page| page.id)
         .collect::<Vec<_>>();
+    let structural_point_groups =
+        legacy_noquill_structural_point_group_ids(&resolved.graph, &effective_page_ids);
     let authoring = bounded_legacy_noquill_authoring_slice_from_resolved_pages(
         &resolved.graph,
         &effective_page_ids,
@@ -1960,6 +2091,7 @@ fn open_legacy_0x22_noquill_bundle(
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
+        .filter(|paint| !structural_point_groups.contains(&paint.node_id))
         .collect::<Vec<_>>();
 
     let story_frames = projection
@@ -1994,6 +2126,16 @@ fn open_legacy_0x22_noquill_bundle(
             .filter(|diagnostic| diagnostic.code != "story_text_layout_not_implemented")
             .map(map_scene_diagnostic),
     );
+    if !structural_point_groups.is_empty() {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.legacy_group.structural_point_container".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "{} source-backed legacy point Group container(s) were preserved as structural ancestry without projecting zero-size paint geometry.",
+                structural_point_groups.len()
+            ),
+        });
+    }
 
     let preview_source_hash = document.source.source_hash;
     let mut images = viewer_legacy_ole_cached_preview_images(
@@ -2035,6 +2177,8 @@ fn open_legacy_0x22_noquill_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_border_resources: Vec::new(),
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2064,10 +2208,8 @@ fn open_legacy_0x22_quill_bundle(
         .context("build legacy-0x22+Quill PUB source graph for Viewer")?;
     let resolved = resolve_pub_source_graph(&source.graph)
         .context("resolve legacy PUB source graph for Viewer")?;
-    let page_selection = ViewerPageSelection {
-        page_ids: source.effective_pages.page_ids.clone(),
-        disposition: ViewerPageSelectionDisposition::GenericNoLoss,
-    };
+    let page_selection =
+        select_legacy22_viewer_pages(bytes, &source, Legacy22PageListDialectV1::Quill);
     let mut document = viewer_document_from_graph(
         bytes.len(),
         source_hash,
@@ -2164,6 +2306,8 @@ fn open_legacy_0x22_quill_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances: Vec::new(),
         images,
+        decorative_border_resources: Vec::new(),
+        decorative_borders: Vec::new(),
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2515,6 +2659,27 @@ fn open_mature_0x2c_bundle(
         &mut document.diagnostics,
     ));
 
+    let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
+    let image_admission =
+        retain_viewer_image_uses_for_selected_pages_v1(&mut images, &selected_pages, |node_id| {
+            resolved_page_for_node_v1(&pipeline.resolved.graph, node_id)
+        });
+    if image_admission.dropped_node_uses > 0
+        || image_admission.dropped_placements > 0
+        || image_admission.dropped_resources > 0
+    {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.image.page_admission_composed".to_owned(),
+            severity: ViewerDiagnosticSeverity::Info,
+            message: format!(
+                "Image projection omitted {} source use(s), {} placement metadata binding(s), and {} resource(s) whose target ancestry resolves to canonical pages already excluded by bounded page selection.",
+                image_admission.dropped_node_uses,
+                image_admission.dropped_placements,
+                image_admission.dropped_resources,
+            ),
+        });
+    }
+
     #[cfg(feature = "cmo-slot-compose")]
     let projected_instances = match project_carlton_march_cmo_instances(bytes, &pipeline, &scene) {
         Ok(instances) => {
@@ -2542,7 +2707,6 @@ fn open_mature_0x2c_bundle(
         }
     };
 
-    let selected_pages = effective_page_ids.iter().copied().collect::<BTreeSet<_>>();
     let source_page_paint_orders = pipeline
         .source
         .source_page_paint_orders
@@ -2565,6 +2729,14 @@ fn open_mature_0x2c_bundle(
             ),
         });
     }
+
+    let (decorative_borders, decorative_border_resources, borderart_diagnostics) =
+        borderart::viewer_decorative_borders_v1(
+            bytes,
+            &pipeline.source_hash,
+            &pipeline.resolved.graph,
+        );
+    document.diagnostics.extend(borderart_diagnostics);
 
     if !scene.nodes.is_empty() {
         document.diagnostics.push(ViewerDiagnostic {
@@ -2590,6 +2762,8 @@ fn open_mature_0x2c_bundle(
         #[cfg(feature = "cmo-slot-compose")]
         projected_instances,
         images,
+        decorative_border_resources,
+        decorative_borders,
     };
     Ok(ViewerOpenBundle {
         geometry,
@@ -2797,7 +2971,77 @@ fn select_viewer_pages(
                 })
                 .collect(),
         };
-        if let Some(selection) = select_standard_print_service_tail_customer_page_seq_nums_v1(input)
+        if let Some(selection) =
+            select_standard_print_service_tail_customer_page_seq_nums_v1(input.clone())
+        {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+
+        if let Some(selection) =
+            select_mature_terminal_service_tail_customer_page_seq_nums_v1(input.clone())
+        {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+
+        if let Some(selection) =
+            select_mature_detached_post_special_tail_customer_page_seq_nums_v1(input.clone())
+        {
+            let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
+            for seq_num in &selection.customer_page_seq_nums {
+                let Ok(page_id) = derive_pub_page_id(&source_hash, *seq_num) else {
+                    return generic();
+                };
+                if !resolved.graph.pages.contains_key(&page_id) {
+                    return generic();
+                }
+                page_ids.push(page_id);
+            }
+            return ViewerPageSelection {
+                page_ids,
+                disposition: ViewerPageSelectionDisposition::FamilyProfileApplied {
+                    profile_id: selection.profile_id,
+                    raw_page_count: selection.raw_page_count,
+                    customer_page_count: selection.customer_page_seq_nums.len(),
+                },
+            };
+        }
+
+        if let Some(selection) =
+            select_mature_zero_leader_detached_tail_customer_page_seq_nums_v1(input)
         {
             let mut page_ids = Vec::with_capacity(selection.customer_page_seq_nums.len());
             for seq_num in &selection.customer_page_seq_nums {
@@ -3012,6 +3256,22 @@ pub fn bounded_authoring_slice_from_resolved(
     bounded_authoring_slice_from_resolved_pages(graph, &graph.document.pages)
 }
 
+fn legacy_noquill_structural_point_group_ids(
+    graph: &PubResolvedGraph,
+    page_ids: &[PageId],
+) -> BTreeSet<NodeId> {
+    let selected_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
+    graph
+        .nodes
+        .values()
+        .filter(|node| node.kind == NodeKind::Group)
+        .filter(|node| selected_pages.contains(&PageId::from_canonical(node.header.parent_id)))
+        .filter(|node| node.header.bounds.width.get() == 0 && node.header.bounds.height.get() == 0)
+        .filter(|node| node.header.transform == Affine2D::identity())
+        .map(|node| node.header.id)
+        .collect()
+}
+
 fn legacy_noquill_image_page(
     graph: &PubResolvedGraph,
     node: &Node<PubResolvedNodePayload>,
@@ -3046,6 +3306,11 @@ fn bounded_legacy_noquill_authoring_slice_from_resolved_pages(
     page_ids: &[PageId],
 ) -> Result<BoundedAuthoringSlice> {
     let mut authoring = bounded_authoring_slice_from_resolved_pages(graph, page_ids)?;
+    let structural_point_groups = legacy_noquill_structural_point_group_ids(graph, page_ids);
+    authoring
+        .node_geometry
+        .retain(|node| !structural_point_groups.contains(&node.node_id));
+
     let selected_pages = page_ids.iter().copied().collect::<BTreeSet<_>>();
     let mut projected_ids = authoring
         .node_geometry
@@ -4077,6 +4342,128 @@ mod tests {
     }
 
     #[test]
+    fn image_uses_compose_only_with_known_page_exclusion() {
+        let admitted = NodeId::from_canonical(id(61));
+        let excluded = NodeId::from_canonical(id(62));
+        let excluded_only = NodeId::from_canonical(id(63));
+        let unresolved = NodeId::from_canonical(id(64));
+        let selected_page = PageId::from_canonical(id(81));
+        let excluded_page = PageId::from_canonical(id(82));
+        let first_resource = ResourceId::from_canonical(id(71));
+        let second_resource = ResourceId::from_canonical(id(72));
+        let third_resource = ResourceId::from_canonical(id(73));
+        let mut images = vec![
+            ViewerEmbeddedImage {
+                resource_id: first_resource,
+                mime: "image/png".to_owned(),
+                node_ids: vec![admitted, excluded],
+                placements: vec![
+                    ViewerImagePlacementV1 {
+                        node_id: admitted,
+                        source_window: None,
+                        content_rotation_degrees: Some(90),
+                        recolor: None,
+                    },
+                    ViewerImagePlacementV1 {
+                        node_id: excluded,
+                        source_window: None,
+                        content_rotation_degrees: None,
+                        recolor: Some(ViewerImageRecolorV1 {
+                            target_rgb: [1, 2, 3],
+                            preserve_grays: false,
+                        }),
+                    },
+                ],
+                bytes: vec![1, 2, 3],
+            },
+            ViewerEmbeddedImage {
+                resource_id: second_resource,
+                mime: "image/jpeg".to_owned(),
+                node_ids: vec![excluded_only],
+                placements: vec![ViewerImagePlacementV1 {
+                    node_id: excluded_only,
+                    source_window: None,
+                    content_rotation_degrees: None,
+                    recolor: None,
+                }],
+                bytes: vec![4, 5, 6],
+            },
+            ViewerEmbeddedImage {
+                resource_id: third_resource,
+                mime: "image/png".to_owned(),
+                node_ids: vec![unresolved],
+                placements: vec![ViewerImagePlacementV1 {
+                    node_id: unresolved,
+                    source_window: None,
+                    content_rotation_degrees: None,
+                    recolor: None,
+                }],
+                bytes: vec![7, 8, 9],
+            },
+        ];
+        let selected_pages = BTreeSet::from([selected_page]);
+        let page_by_node = BTreeMap::from([
+            (admitted, selected_page),
+            (excluded, excluded_page),
+            (excluded_only, excluded_page),
+        ]);
+
+        let stats = retain_viewer_image_uses_for_selected_pages_v1(
+            &mut images,
+            &selected_pages,
+            |node_id| page_by_node.get(&node_id).copied(),
+        );
+
+        assert_eq!(
+            stats,
+            ViewerImagePageAdmissionStatsV1 {
+                dropped_node_uses: 2,
+                dropped_placements: 2,
+                dropped_resources: 1,
+            }
+        );
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].resource_id, first_resource);
+        assert_eq!(images[0].node_ids, vec![admitted]);
+        assert_eq!(images[0].placements.len(), 1);
+        assert_eq!(images[0].placements[0].node_id, admitted);
+        assert_eq!(images[0].bytes, vec![1, 2, 3]);
+        assert_eq!(images[1].resource_id, third_resource);
+        assert_eq!(images[1].node_ids, vec![unresolved]);
+        assert_eq!(images[1].placements.len(), 1);
+        assert_eq!(images[1].placements[0].node_id, unresolved);
+    }
+
+    #[test]
+    fn legacy_noquill_point_group_is_structural_not_scene_geometry() {
+        let mut graph = resolved_graph_fixture();
+        let page_id = graph.document.pages[0];
+        let node_id = *graph.nodes.keys().next().expect("fixture node");
+        let node = graph.nodes.get_mut(&node_id).expect("fixture node");
+        node.kind = NodeKind::Group;
+        node.header.parent_id = page_id.into_canonical();
+        node.header.bounds = RectEmu::new(
+            LengthEmu::new(100),
+            LengthEmu::new(200),
+            LengthEmu::ZERO,
+            LengthEmu::ZERO,
+        );
+        node.header.transform = Affine2D::identity();
+
+        let structural = legacy_noquill_structural_point_group_ids(&graph, &[page_id]);
+        assert_eq!(structural, BTreeSet::from([node_id]));
+
+        let node = graph.nodes.get_mut(&node_id).expect("fixture node");
+        node.header.bounds = RectEmu::new(
+            LengthEmu::new(100),
+            LengthEmu::new(200),
+            LengthEmu::new(1),
+            LengthEmu::new(1),
+        );
+        assert!(legacy_noquill_structural_point_group_ids(&graph, &[page_id]).is_empty());
+    }
+
+    #[test]
     fn semantic_table_fences_generic_owner_fill_but_preserves_line() {
         let line = ViewerSolidLine {
             rgb: [1, 2, 3],
@@ -4699,6 +5086,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         let page_id = graph.document.pages[0];
@@ -4856,6 +5245,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.scene.nodes.clone();
 
@@ -5310,6 +5701,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5419,6 +5812,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
 
         graph
@@ -5487,6 +5882,8 @@ mod tests {
             #[cfg(feature = "cmo-slot-compose")]
             projected_instances: Vec::new(),
             images: Vec::new(),
+            decorative_border_resources: Vec::new(),
+            decorative_borders: Vec::new(),
         };
         let before = visual.clone();
         visual.document.source.source_hash = Sha256Digest::from_bytes([0xCD; 32]);

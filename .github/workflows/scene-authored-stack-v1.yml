@@ -1,0 +1,53 @@
+name: Scene AuthoredStack V1
+
+on:
+  pull_request:
+    paths:
+      - "crates/chaptera-viewer-render-plan/src/lib.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - ".github/workflows/scene-authored-stack-v1.yml"
+  push:
+    branches:
+      - scene-authored-stack-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  projection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check render-plan formatting
+        run: cargo fmt --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml -- --check
+
+      - name: Test source-neutral authored lane composition
+        run: cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml
+
+      - name: Check Desktop formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+      - name: Check Desktop integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Lint Desktop integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments

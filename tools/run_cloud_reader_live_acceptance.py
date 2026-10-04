@@ -923,8 +923,9 @@ def main() -> int:
         )
         if index_status != 200:
             raise AssertionError(f"embedded Cloud Reader root returned HTTP {index_status}")
-        if b"Chaptera <span>Cloud Reader</span>" not in index_raw:
-            raise AssertionError("HTTPS root did not serve the embedded Cloud Reader UI")
+        expected_index = (ROOT / "apps" / "cloud-reader" / "index.html").read_bytes()
+        if index_raw != expected_index:
+            raise AssertionError("HTTPS root differed from the canonical embedded Cloud Reader index")
 
         response_path = work / "response.json"
         header_path = work / "headers.txt"

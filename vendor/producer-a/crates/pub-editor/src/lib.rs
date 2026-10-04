@@ -6,13 +6,33 @@
 //! resolved authoring graph. Native PUB materialization remains a separate
 //! writer gate.
 
+mod authored_stack_lifecycle_v1;
+mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
+mod duplicate_authored_rectangle_v1;
 mod writer_assessment;
 
+pub use authored_stack_lifecycle_v1::{
+    AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
+    AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
+    apply_authored_stack_transition_forward_v1, apply_authored_stack_transition_inverse_v1,
+    authored_stack_state_id_v1, plan_create_shape_append_v1, plan_delete_shape_remove_v1,
+    validate_authored_stack_v1,
+};
+pub use authored_stack_runtime_v1::{
+    AuthoredStackReorderErrorV1, AuthoredStackReorderModeV1, AuthoredStackReorderTransitionV1,
+    apply_authored_stack_reorder_forward_v1, apply_authored_stack_reorder_inverse_v1,
+    plan_reorder_authored_stack_v1,
+};
 pub use create_shape_runtime_v1::{
     AuthoredEntityProvenanceV1, AuthoredShapeKindV1, AuthoredShapePaintV1, AuthoredShapeRuntimeV1,
     AuthoredShapeTransformV1, AuthoredSolidFillV1, AuthoredSolidStrokeV1,
     CreateShapeRuntimeValidationError, Srgb8V1, validate_authored_shape_runtime_v1,
+};
+pub use duplicate_authored_rectangle_v1::{
+    DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
+    DuplicateAuthoredRectanglePlanV1, plan_duplicate_authored_rectangle_v1,
+    validate_duplicate_authored_rectangle_source_v1,
 };
 pub use writer_assessment::{
     EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
@@ -22,16 +42,20 @@ pub use writer_assessment::{
 
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, LossItem, LossKind, LossSeverity, PersistenceCompatibilityAssessment,
-    PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
-    PersistenceTargetProfile, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
-    WriterCapabilityManifest, assess_persistence_compatibility, build_export_report, plan_export,
+    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
+    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
+    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
+    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
+    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
+    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
+    assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
     render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
-    IdmlWireProfile, add_embedded_images_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
+    IdmlWireProfile, add_embedded_images_to_idml, add_full_story_typography_to_idml,
+    project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
@@ -41,10 +65,12 @@ use pub_model::{
 pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
-    add_embedded_images_to_odg, project_resolved_graph_to_odg, write_odg,
+    OdgFullStoryTypographyPlacement, add_embedded_images_to_odg, add_full_story_typography_to_odg,
+    project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
-    PubAssetExportBundle, PubResolvedGraph, PubResolvedNodePayload, PubResolvedStoryFrame,
+    PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
+    PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
@@ -66,7 +92,9 @@ pub const EDITOR_PROJECT_VERSION_V0_8: &str = "pub-editor-v0.8";
 pub const EDITOR_PROJECT_VERSION_V0_9: &str = "pub-editor-v0.9";
 pub const EDITOR_PROJECT_VERSION_V0_10: &str = "pub-editor-v0.10";
 pub const EDITOR_PROJECT_VERSION_V0_11: &str = "pub-editor-v0.11";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_11;
+pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
+pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_13;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -81,6 +109,23 @@ pub fn story_state_id_v1(story_id: StoryId, text: &str) -> String {
     });
     let bytes =
         serde_json::to_vec(&payload).expect("canonical Story state JSON serialization cannot fail");
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing lowercase hex into String cannot fail");
+    }
+    format!("sha256:{encoded}")
+}
+
+/// Canonical authored-shape state identity used by persisted DeleteNode V1.
+pub fn authored_shape_state_id_v1(shape: &AuthoredShapeRuntimeV1) -> String {
+    let payload = serde_json::json!({
+        "protocol_version": "chaptera.authored-shape-state.v1",
+        "shape": shape,
+    });
+    let bytes = serde_json::to_vec(&payload)
+        .expect("canonical authored-shape state JSON serialization cannot fail");
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(64);
     for byte in digest {
@@ -253,6 +298,15 @@ pub enum EditOperation {
         paint: AuthoredShapePaintV1,
         provenance: AuthoredEntityProvenanceV1,
     },
+    DeleteNode {
+        node_id: NodeId,
+        page_id: PageId,
+        before: AuthoredShapeRuntimeV1,
+        before_state_id: String,
+    },
+    ReorderAuthoredStack {
+        transition: AuthoredStackReorderTransitionV1,
+    },
 }
 
 impl EditOperation {
@@ -286,7 +340,9 @@ impl EditOperation {
             | Self::ResizeNode { .. }
             | Self::ResizeNodes { .. }
             | Self::CreateTextBox { .. }
-            | Self::CreateShape { .. } => Vec::new(),
+            | Self::CreateShape { .. }
+            | Self::DeleteNode { .. }
+            | Self::ReorderAuthoredStack { .. } => Vec::new(),
         }
     }
 }
@@ -410,6 +466,16 @@ impl PersistenceRequirements for EditOperation {
                     property_path: Some("node.paint".into()),
                 },
             ],
+            Self::DeleteNode { node_id, .. } => vec![PersistenceRequirement {
+                feature: "node.deleted_identity".into(),
+                origin: Some(node_id.into_canonical()),
+                property_path: Some("node".into()),
+            }],
+            Self::ReorderAuthoredStack { transition } => vec![PersistenceRequirement {
+                feature: "node.authored_stack_order".into(),
+                origin: Some(transition.node_id.into_canonical()),
+                property_path: Some("page.authored_stack".into()),
+            }],
         }
     }
 }
@@ -560,7 +626,7 @@ impl EditorProject {
         });
 
         Ok(Self {
-            schema_version: EDITOR_PROJECT_VERSION_V0_11.into(),
+            schema_version: self.schema_version.clone(),
             source_hash: self.source_hash,
             identity: Some(identity),
             assets: self.assets.clone(),
@@ -795,6 +861,25 @@ pub enum EditorError {
     CreateShapeMalformed {
         node_id: NodeId,
     },
+    NodeDeleteUnsupported {
+        node_id: NodeId,
+    },
+    NodeDeletePageMismatch {
+        node_id: NodeId,
+        page_id: PageId,
+    },
+    StaleNodeDelete {
+        node_id: NodeId,
+    },
+    AuthoredStackReorderUnsupported {
+        node_id: NodeId,
+    },
+    AuthoredStackReorderNoChange {
+        node_id: NodeId,
+    },
+    StaleAuthoredStack {
+        page_id: PageId,
+    },
     NodeMoveUnsupported {
         node_id: NodeId,
     },
@@ -1028,6 +1113,37 @@ impl fmt::Display for EditorError {
                 "CreateShape node {} violates the bounded rectangle/identity/page contract",
                 node_id.as_canonical()
             ),
+            Self::NodeDeleteUnsupported { node_id } => write!(
+                formatter,
+                "node {} is not an admitted author-created direct page-owned Rectangle",
+                node_id.as_canonical()
+            ),
+            Self::NodeDeletePageMismatch { node_id, page_id } => write!(
+                formatter,
+                "DeleteNode node {} does not belong to persisted page {}",
+                node_id.as_canonical(),
+                page_id.as_canonical()
+            ),
+            Self::StaleNodeDelete { node_id } => write!(
+                formatter,
+                "node {} no longer matches the DeleteNode authored-state precondition",
+                node_id.as_canonical()
+            ),
+            Self::AuthoredStackReorderUnsupported { node_id } => write!(
+                formatter,
+                "node {} is not an admitted author-created member of the authored stack",
+                node_id.as_canonical()
+            ),
+            Self::AuthoredStackReorderNoChange { node_id } => write!(
+                formatter,
+                "node {} is already at the requested authored-stack position",
+                node_id.as_canonical()
+            ),
+            Self::StaleAuthoredStack { page_id } => write!(
+                formatter,
+                "authored stack for page {} no longer matches the persisted transition precondition",
+                page_id.as_canonical()
+            ),
             Self::NodeMoveUnsupported { node_id } => write!(
                 formatter,
                 "node {} is outside the bounded directly-page-owned move slice",
@@ -1172,6 +1288,12 @@ impl EditorError {
             Self::CreateShapeInvalidPaint { .. } => "create_shape_invalid_paint",
             Self::CreateShapeInvalidProvenance { .. } => "create_shape_invalid_provenance",
             Self::CreateShapeMalformed { .. } => "create_shape_malformed",
+            Self::NodeDeleteUnsupported { .. } => "node_delete_unsupported",
+            Self::NodeDeletePageMismatch { .. } => "node_delete_page_mismatch",
+            Self::StaleNodeDelete { .. } => "stale_node_delete",
+            Self::AuthoredStackReorderUnsupported { .. } => "authored_stack_reorder_unsupported",
+            Self::AuthoredStackReorderNoChange { .. } => "authored_stack_reorder_no_change",
+            Self::StaleAuthoredStack { .. } => "stale_authored_stack",
             Self::NodeMoveUnsupported { .. } => "node_move_unsupported",
             Self::NodeMoveNoChange { .. } => "node_move_no_change",
             Self::NodeMoveOverflow { .. } => "node_move_overflow",
@@ -1262,6 +1384,12 @@ pub enum EditorProjectError {
     LegacyProjectCarriesCreateTextBoxOperation {
         index: usize,
     },
+    LegacyProjectCarriesDeleteNodeOperation {
+        index: usize,
+    },
+    LegacyProjectCarriesReorderAuthoredStackOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTableGrids,
     LegacyProjectCarriesIdentity,
     MissingProjectIdentity,
@@ -1310,7 +1438,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, or {EDITOR_PROJECT_VERSION_V0_11:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, or {EDITOR_PROJECT_VERSION_V0_13:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -1353,6 +1481,14 @@ impl fmt::Display for EditorProjectError {
             Self::LegacyProjectCarriesCreateTextBoxOperation { index } => write!(
                 formatter,
                 "editor project operation {index} uses CreateTextBox but the project schema predates pub-editor-v0.11"
+            ),
+            Self::LegacyProjectCarriesDeleteNodeOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses DeleteNode but the project schema predates pub-editor-v0.12"
+            ),
+            Self::LegacyProjectCarriesReorderAuthoredStackOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses ReorderAuthoredStack but the project schema predates pub-editor-v0.13"
             ),
             Self::LegacyProjectCarriesTableGrids => formatter.write_str(
                 "editor projects before pub-editor-v0.6 cannot carry EffectiveTableGridV1 state",
@@ -1438,6 +1574,9 @@ pub fn open_mature_0x2c_editor(
     let resolved = resolve_pub_source_graph(&source.graph)
         .map_err(|error| EditorOpenError::Resolve(error.to_string()))?;
     let mut session = EditorSession::new(resolved.graph).map_err(EditorOpenError::Session)?;
+    session.source_typography_runs = source.typography_runs;
+    session.source_typography_size_runs = source.typography_size_runs;
+    session.source_paragraph_alignments = source.paragraph_alignments;
     if let Some(bundle) = source_images {
         let (assets, nodes) = source_image_context_from_bundle(bundle);
         session.source_image_assets = assets;
@@ -1566,9 +1705,14 @@ pub struct EditorSession {
     project_identity: Option<EditorProjectIdentity>,
     source_image_assets: BTreeMap<ResourceId, EditorSourceImageAsset>,
     source_image_nodes: BTreeMap<NodeId, ResourceId>,
+    source_story_state_ids: BTreeMap<StoryId, String>,
+    source_typography_runs: Vec<PubTypographyRun>,
+    source_typography_size_runs: Vec<PubTypographySizeRun>,
+    source_paragraph_alignments: Vec<PubParagraphAlignmentRun>,
     replacement_assets: BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    authored_stacks: BTreeMap<PageId, AuthoredStackV1>,
     undo: Vec<EditOperation>,
     redo: Vec<EditOperation>,
 }
@@ -1580,15 +1724,26 @@ impl EditorSession {
             return Err(EditorError::SourceIdentityChanged);
         }
 
+        let source_story_state_ids = graph
+            .stories
+            .iter()
+            .map(|(story_id, story)| (*story_id, story_state_id_v1(*story_id, &story.text)))
+            .collect();
+
         Ok(Self {
             source_hash,
             graph,
             project_identity: Some(new_project_identity()),
             source_image_assets: BTreeMap::new(),
             source_image_nodes: BTreeMap::new(),
+            source_story_state_ids,
+            source_typography_runs: Vec::new(),
+            source_typography_size_runs: Vec::new(),
+            source_paragraph_alignments: Vec::new(),
             replacement_assets: BTreeMap::new(),
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
+            authored_stacks: BTreeMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -1750,6 +1905,57 @@ impl EditorSession {
         self.authored_shapes.get(&node_id)
     }
 
+    pub fn authored_stack(&self, page_id: PageId) -> Option<AuthoredStackV1> {
+        self.graph.pages.contains_key(&page_id).then(|| {
+            self.authored_stacks
+                .get(&page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
+        })
+    }
+
+    pub fn can_duplicate_authored_rectangle(
+        &self,
+        source_node_id: NodeId,
+    ) -> Result<(), DuplicateAuthoredRectangleErrorV1> {
+        self.validate_source_identity()
+            .map_err(DuplicateAuthoredRectangleErrorV1::Commit)?;
+        let source = self.authored_shapes.get(&source_node_id).ok_or(
+            DuplicateAuthoredRectangleErrorV1::SourceUnsupported {
+                node_id: source_node_id,
+            },
+        )?;
+        if !self.graph.pages.contains_key(&source.page_id) {
+            return Err(DuplicateAuthoredRectangleErrorV1::SourceUnsupported {
+                node_id: source_node_id,
+            });
+        }
+        validate_duplicate_authored_rectangle_source_v1(source)
+    }
+
+    pub fn duplicate_authored_rectangle(
+        &mut self,
+        source_node_id: NodeId,
+        destination_node_id: NodeId,
+        placement_policy: &str,
+    ) -> Result<EditOperation, DuplicateAuthoredRectangleErrorV1> {
+        self.can_duplicate_authored_rectangle(source_node_id)?;
+        let source = self
+            .authored_shapes
+            .get(&source_node_id)
+            .expect("Duplicate capability verified current authored source")
+            .clone();
+        let plan =
+            plan_duplicate_authored_rectangle_v1(&source, destination_node_id, placement_policy)?;
+        self.create_shape(
+            plan.destination_node_id,
+            plan.page_id,
+            plan.bounds,
+            plan.paint,
+        )
+        .map_err(DuplicateAuthoredRectangleErrorV1::Commit)
+    }
+
     pub fn source_image_count(&self) -> usize {
         self.source_image_nodes
             .keys()
@@ -1807,8 +2013,22 @@ impl EditorSession {
 
     pub fn try_project(&self) -> Result<EditorProject, EditorProjectError> {
         let table_grids = effective_table_grids(&self.graph);
+        let carries_reorder = self
+            .undo
+            .iter()
+            .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }));
+        if carries_reorder && self.project_identity.is_none() {
+            return Err(EditorProjectError::MissingProjectIdentity);
+        }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
-            (EDITOR_PROJECT_VERSION_V0_11, Some(identity.clone()))
+            (
+                if carries_reorder {
+                    EDITOR_PROJECT_VERSION_V0_13
+                } else {
+                    EDITOR_PROJECT_VERSION_V0_12
+                },
+                Some(identity.clone()),
+            )
         } else {
             let legacy_schema = if self
                 .undo
@@ -1925,6 +2145,8 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -1952,6 +2174,8 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -1968,6 +2192,8 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -1983,6 +2209,8 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -1992,6 +2220,8 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -2003,6 +2233,8 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2015,6 +2247,8 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_9
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2026,6 +2260,8 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_10
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
         {
             if let Some(index) = project
                 .operations
@@ -2035,7 +2271,10 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+        {
             if let Some(index) = project
                 .operations
                 .iter()
@@ -2046,10 +2285,38 @@ impl EditorSession {
                 );
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11 && project.identity.is_some() {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+        {
+            if let Some(index) = project
+                .operations
+                .iter()
+                .position(|operation| matches!(operation, EditOperation::DeleteNode { .. }))
+            {
+                return Err(EditorProjectError::LegacyProjectCarriesDeleteNodeOperation { index });
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_13 {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(operation, EditOperation::ReorderAuthoredStack { .. })
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesReorderAuthoredStackOperation { index },
+                );
+            }
+        }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.identity.is_some()
+        {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
         }
-        if project.schema_version == EDITOR_PROJECT_VERSION_V0_11 && project.identity.is_none() {
+        if (project.schema_version == EDITOR_PROJECT_VERSION_V0_11
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13)
+            && project.identity.is_none()
+        {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
         if project.source_hash != self.source_hash {
@@ -2063,11 +2330,15 @@ impl EditorSession {
             || !self.replacement_assets.is_empty()
             || !self.image_replacements.is_empty()
             || !self.authored_shapes.is_empty()
+            || !self.authored_stacks.is_empty()
         {
             return Err(EditorProjectError::SessionNotEmpty);
         }
 
-        if project.schema_version == EDITOR_PROJECT_VERSION_V0_11 {
+        if project.schema_version == EDITOR_PROJECT_VERSION_V0_11
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
+        {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
                 .collect::<Vec<_>>();
@@ -2130,6 +2401,8 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_9
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_10
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_11
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
         {
             let actual_grids = effective_table_grids(&candidate.graph);
             if actual_grids != project.table_grids {
@@ -2171,6 +2444,13 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
+                    let typography = self.full_story_typography_v1();
+                    add_full_story_typography_to_idml(&plan, &mut package, &typography).map_err(
+                        |error| EditorExportError::Projection {
+                            target,
+                            message: error.to_string(),
+                        },
+                    )?;
                 }
                 EditorEditableTarget::Odg => {
                     let mut package =
@@ -2186,6 +2466,14 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
+                    let typography = self.full_story_typography_v1();
+                    let typography_placements =
+                        self.odg_full_story_typography_placements_v1(&typography);
+                    add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
+                        .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 }
             }
         }
@@ -2232,6 +2520,13 @@ impl EditorSession {
                         message: error.to_string(),
                     }
                 })?;
+                let typography = self.full_story_typography_v1();
+                add_full_story_typography_to_idml(&plan, &mut package, &typography).map_err(
+                    |error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    },
+                )?;
                 write_idml_ucf(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -2252,6 +2547,14 @@ impl EditorSession {
                         message: error.to_string(),
                     }
                 })?;
+                let typography = self.full_story_typography_v1();
+                let typography_placements =
+                    self.odg_full_story_typography_placements_v1(&typography);
+                add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 write_odg(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -2267,6 +2570,193 @@ impl EditorSession {
         })
     }
 
+    pub fn full_story_typography_v1(&self) -> Vec<FullStoryTypographyV1> {
+        let table_story_ids = self
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| {
+                [
+                    node.payload
+                        .table_story
+                        .as_ref()
+                        .and_then(|owner| owner.story_id),
+                    node.payload.table.as_ref().and_then(|table| table.story_id),
+                ]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let ordinary_story_ids = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
+            .map(|frame| frame.story_id)
+            .filter(|story_id| !table_story_ids.contains(story_id))
+            .collect::<BTreeSet<_>>();
+
+        let mut runs_by_story = BTreeMap::<StoryId, Vec<&PubTypographyRun>>::new();
+        for run in &self.source_typography_runs {
+            if ordinary_story_ids.contains(&run.story_id)
+                && self.graph.stories.contains_key(&run.story_id)
+            {
+                runs_by_story.entry(run.story_id).or_default().push(run);
+            }
+        }
+
+        let mut size_only_by_story = BTreeMap::<StoryId, Vec<&PubTypographySizeRun>>::new();
+        for run in &self.source_typography_size_runs {
+            if ordinary_story_ids.contains(&run.story_id)
+                && self.graph.stories.contains_key(&run.story_id)
+            {
+                size_only_by_story
+                    .entry(run.story_id)
+                    .or_default()
+                    .push(run);
+            }
+        }
+
+        let mut result = Vec::new();
+        for (story_id, mut runs) in runs_by_story {
+            let Some(story) = self.graph.stories.get(&story_id) else {
+                continue;
+            };
+            let current_story_state_id = story_state_id_v1(story_id, &story.text);
+            if self.source_story_state_ids.get(&story_id) != Some(&current_story_state_id) {
+                continue;
+            }
+            let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+                continue;
+            };
+            let Ok(story_utf16_len) = u32::try_from(story.text.encode_utf16().count()) else {
+                continue;
+            };
+            if story_scalar_len == 0 || story_utf16_len == 0 {
+                continue;
+            }
+
+            runs.sort_by_key(|run| {
+                (
+                    run.story_scalar_start,
+                    run.story_scalar_end,
+                    run.story_utf16_start,
+                    run.story_utf16_end,
+                )
+            });
+
+            let mut scalar_cursor = 0_u32;
+            let mut utf16_cursor = 0_u32;
+            let mut font_family: Option<&str> = None;
+            let mut font_size_emu: Option<u32> = None;
+            let mut valid = true;
+
+            for run in runs {
+                if run.story_scalar_start != scalar_cursor
+                    || run.story_utf16_start != utf16_cursor
+                    || run.story_scalar_end <= run.story_scalar_start
+                    || run.story_utf16_end <= run.story_utf16_start
+                    || run.story_scalar_end > story_scalar_len
+                    || run.story_utf16_end > story_utf16_len
+                    || run.font_inherited
+                    || run.size_inherited
+                    || run.source_font_name.trim().is_empty()
+                    || run.text_size_emu == 0
+                {
+                    valid = false;
+                    break;
+                }
+
+                match font_family {
+                    None => font_family = Some(run.source_font_name.as_str()),
+                    Some(existing) if existing == run.source_font_name.as_str() => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+                match font_size_emu {
+                    None => font_size_emu = Some(run.text_size_emu),
+                    Some(existing) if existing == run.text_size_emu => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                scalar_cursor = run.story_scalar_end;
+                utf16_cursor = run.story_utf16_end;
+            }
+
+            if !valid || scalar_cursor != story_scalar_len || utf16_cursor != story_utf16_len {
+                continue;
+            }
+
+            let Some(font_family) = font_family else {
+                continue;
+            };
+            let Some(font_size_emu) = font_size_emu else {
+                continue;
+            };
+
+            if size_only_by_story.get(&story_id).is_some_and(|runs| {
+                runs.iter().any(|run| {
+                    run.size_inherited
+                        || run.text_size_emu == 0
+                        || run.text_size_emu != font_size_emu
+                        || run.story_scalar_end > story_scalar_len
+                        || run.story_utf16_end > story_utf16_len
+                })
+            }) {
+                continue;
+            }
+
+            result.push(FullStoryTypographyV1 {
+                story_id,
+                font_family: font_family.to_owned(),
+                font_size_emu: LengthEmu::new(i64::from(font_size_emu)),
+            });
+        }
+
+        result.sort_by_key(|item| item.story_id);
+        result
+    }
+
+    fn odg_full_story_typography_placements_v1(
+        &self,
+        typography: &[FullStoryTypographyV1],
+    ) -> Vec<OdgFullStoryTypographyPlacement> {
+        let eligible = typography
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
+
+        for (node_id, node) in &self.graph.nodes {
+            let Some(frame) = frame_from_payload(*node_id, &node.payload) else {
+                continue;
+            };
+            if frame.previous.is_none() && eligible.contains(&frame.story_id) {
+                roots
+                    .entry(frame.story_id)
+                    .or_default()
+                    .push(frame.frame_id);
+            }
+        }
+
+        typography
+            .iter()
+            .filter_map(|item| {
+                let mut frame_ids = roots.get(&item.story_id)?.clone();
+                frame_ids.sort_unstable();
+                frame_ids.dedup();
+                (!frame_ids.is_empty()).then(|| OdgFullStoryTypographyPlacement {
+                    typography: item.clone(),
+                    frame_ids,
+                })
+            })
+            .collect()
+    }
+
     fn build_editable_export_plan(
         &self,
         target: EditorEditableTarget,
@@ -2274,12 +2764,20 @@ impl EditorSession {
     ) -> Result<(ExportReport, String, ExportPlan), EditorExportError> {
         self.validate_source_identity()
             .map_err(EditorExportError::Session)?;
+        let typography = self.full_story_typography_v1();
         let plan = editable_export_plan(
             target,
             &self.graph,
             &self.image_replacements,
             &self.source_image_nodes,
-        );
+            EditableExportTypographyInputs {
+                source_typography_runs: &self.source_typography_runs,
+                source_typography_size_runs: &self.source_typography_size_runs,
+                source_paragraph_alignments: &self.source_paragraph_alignments,
+                full_story_typography: &typography,
+            },
+        )
+        .map_err(|error| EditorExportError::Report(error.to_string()))?;
         let report = build_export_report(
             &plan,
             ExportReportSource {
@@ -2920,6 +3418,21 @@ impl EditorSession {
         Ok(operation)
     }
 
+    fn current_authored_stack_v1(&self, page_id: PageId) -> AuthoredStackV1 {
+        self.authored_stacks
+            .get(&page_id)
+            .cloned()
+            .unwrap_or_else(|| AuthoredStackV1::empty(page_id))
+    }
+
+    fn install_authored_stack_v1(&mut self, stack: AuthoredStackV1) {
+        if stack.members.is_empty() {
+            self.authored_stacks.remove(&stack.page_id);
+        } else {
+            self.authored_stacks.insert(stack.page_id, stack);
+        }
+    }
+
     pub fn create_shape(
         &mut self,
         node_id: NodeId,
@@ -2948,7 +3461,20 @@ impl EditorSession {
         let shape = authored_shape_from_operation(&operation)
             .expect("consume_canonical_create_shape receives CreateShape");
         self.validate_create_shape_candidate(&shape)?;
+
+        let before_stack = self.current_authored_stack_v1(shape.page_id);
+        let transition = plan_create_shape_append_v1(&before_stack, &shape).map_err(|_| {
+            EditorError::StaleAuthoredStack {
+                page_id: shape.page_id,
+            }
+        })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack {
+                page_id: shape.page_id,
+            })?;
+
         self.authored_shapes.insert(shape.node_id, shape);
+        self.install_authored_stack_v1(after_stack);
         self.undo.push(operation.clone());
         self.redo.clear();
         self.validate_source_identity()?;
@@ -3002,6 +3528,165 @@ impl EditorSession {
                 node_id: shape.node_id,
             }),
         }
+    }
+
+    /// Bounded DeleteNode V1 capability: only a current author-created,
+    /// direct page-owned ordinary Rectangle in the authored overlay is admitted.
+    pub fn can_delete_node(&self, node_id: NodeId) -> Result<(), EditorError> {
+        self.validate_source_identity()?;
+        if self.graph.nodes.contains_key(&node_id) {
+            return Err(EditorError::NodeDeleteUnsupported { node_id });
+        }
+        let shape = self
+            .authored_shapes
+            .get(&node_id)
+            .ok_or(EditorError::NodeDeleteUnsupported { node_id })?;
+        if !self.graph.pages.contains_key(&shape.page_id)
+            || shape.parent_id != shape.page_id
+            || shape.shape_kind != AuthoredShapeKindV1::Rectangle
+            || shape.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || shape.paint.provenance != AuthoredEntityProvenanceV1::AuthorCreated
+            || validate_authored_shape_runtime_v1(shape).is_err()
+        {
+            return Err(EditorError::NodeDeleteUnsupported { node_id });
+        }
+        Ok(())
+    }
+
+    pub fn delete_node(&mut self, node_id: NodeId) -> Result<EditOperation, EditorError> {
+        self.can_delete_node(node_id)?;
+        let before = self
+            .authored_shapes
+            .get(&node_id)
+            .expect("DeleteNode capability verified authored shape")
+            .clone();
+        let operation = EditOperation::DeleteNode {
+            node_id,
+            page_id: before.page_id,
+            before_state_id: authored_shape_state_id_v1(&before),
+            before,
+        };
+        self.consume_canonical_delete_node(operation)
+    }
+
+    fn consume_canonical_delete_node(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let EditOperation::DeleteNode {
+            node_id,
+            page_id,
+            before,
+            before_state_id,
+        } = &operation
+        else {
+            unreachable!("consume_canonical_delete_node receives DeleteNode")
+        };
+
+        if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id
+        {
+            return Err(EditorError::NodeDeletePageMismatch {
+                node_id: *node_id,
+                page_id: *page_id,
+            });
+        }
+        if authored_shape_state_id_v1(before) != *before_state_id {
+            return Err(EditorError::StaleNodeDelete { node_id: *node_id });
+        }
+        self.can_delete_node(*node_id)?;
+
+        let before_stack = self.current_authored_stack_v1(*page_id);
+        let transition = plan_delete_shape_remove_v1(&before_stack, before)
+            .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+        let after_stack = apply_authored_stack_transition_forward_v1(&before_stack, &transition)
+            .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+
+        let mut candidate_shapes = self.authored_shapes.clone();
+        apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
+
+        self.authored_shapes = candidate_shapes;
+        self.install_authored_stack_v1(after_stack);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn reorder_authored_stack(
+        &mut self,
+        page_id: PageId,
+        node_id: NodeId,
+        mode: AuthoredStackReorderModeV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        if self.project_identity.is_none() {
+            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
+        }
+        let shape = self
+            .authored_shapes
+            .get(&node_id)
+            .ok_or(EditorError::AuthoredStackReorderUnsupported { node_id })?;
+        if shape.page_id != page_id
+            || shape.parent_id != page_id
+            || validate_authored_shape_runtime_v1(shape).is_err()
+        {
+            return Err(EditorError::AuthoredStackReorderUnsupported { node_id });
+        }
+
+        let before = self.current_authored_stack_v1(page_id);
+        let transition = plan_reorder_authored_stack_v1(&before, node_id, mode).map_err(
+            |error| match error {
+                AuthoredStackReorderErrorV1::NoChange { .. } => {
+                    EditorError::AuthoredStackReorderNoChange { node_id }
+                }
+                AuthoredStackReorderErrorV1::MissingMember { .. }
+                | AuthoredStackReorderErrorV1::PageMismatch
+                | AuthoredStackReorderErrorV1::InvalidStack => {
+                    EditorError::AuthoredStackReorderUnsupported { node_id }
+                }
+                AuthoredStackReorderErrorV1::BeforeStateMismatch
+                | AuthoredStackReorderErrorV1::AfterStateMismatch
+                | AuthoredStackReorderErrorV1::TransitionMismatch => {
+                    EditorError::StaleAuthoredStack { page_id }
+                }
+            },
+        )?;
+        self.consume_canonical_reorder_authored_stack(EditOperation::ReorderAuthoredStack {
+            transition,
+        })
+    }
+
+    fn consume_canonical_reorder_authored_stack(
+        &mut self,
+        operation: EditOperation,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let EditOperation::ReorderAuthoredStack { transition } = &operation else {
+            unreachable!("consume_canonical_reorder_authored_stack receives ReorderAuthoredStack")
+        };
+        let shape = self.authored_shapes.get(&transition.node_id).ok_or(
+            EditorError::AuthoredStackReorderUnsupported {
+                node_id: transition.node_id,
+            },
+        )?;
+        if shape.page_id != transition.page_id || shape.parent_id != transition.page_id {
+            return Err(EditorError::AuthoredStackReorderUnsupported {
+                node_id: transition.node_id,
+            });
+        }
+        let current = self.current_authored_stack_v1(transition.page_id);
+        let after =
+            apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
+                EditorError::StaleAuthoredStack {
+                    page_id: transition.page_id,
+                }
+            })?;
+        self.install_authored_stack_v1(after);
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
     }
 
     pub fn can_move_node_to(
@@ -3424,32 +4109,91 @@ impl EditorSession {
 
     pub fn undo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.undo.pop().ok_or(EditorError::NothingToUndo)?;
-        if matches!(operation, EditOperation::ReplaceImage { .. }) {
-            apply_image_inverse(&mut self.image_replacements, &operation)?;
-        } else if matches!(operation, EditOperation::CreateShape { .. }) {
-            apply_authored_shape_inverse(&mut self.authored_shapes, &operation)?;
-        } else {
-            apply_inverse(&mut self.graph, &operation)?;
+        let result = (|| {
+            if authored_stack_operation_page_id_v1(&operation).is_some() {
+                let before_stacks = derive_authored_stacks_from_operations_v1(&self.undo)?;
+                let mut expected_after_stacks = before_stacks.clone();
+                apply_authored_stack_history_forward_v1(&mut expected_after_stacks, &operation)?;
+                if expected_after_stacks != self.authored_stacks {
+                    return Err(EditorError::StaleAuthoredStack {
+                        page_id: authored_stack_operation_page_id_v1(&operation)
+                            .expect("lane operation has page"),
+                    });
+                }
+
+                let mut candidate_shapes = self.authored_shapes.clone();
+                match &operation {
+                    EditOperation::CreateShape { .. } => {
+                        apply_authored_shape_inverse(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::DeleteNode { .. } => {
+                        apply_authored_shape_delete_inverse(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::ReorderAuthoredStack { .. } => {}
+                    _ => unreachable!("authored-stack page helper only admits lane operations"),
+                }
+                self.authored_shapes = candidate_shapes;
+                self.authored_stacks = before_stacks;
+            } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
+                apply_image_inverse(&mut self.image_replacements, &operation)?;
+            } else {
+                apply_inverse(&mut self.graph, &operation)?;
+            }
+            self.validate_source_identity()
+        })();
+
+        if let Err(error) = result {
+            self.undo.push(operation);
+            return Err(error);
         }
         self.redo.push(operation);
-        self.validate_source_identity()?;
         Ok(self.redo.last().expect("just pushed undo operation"))
     }
 
     pub fn redo(&mut self) -> Result<&EditOperation, EditorError> {
         let operation = self.redo.pop().ok_or(EditorError::NothingToRedo)?;
-        if matches!(operation, EditOperation::ReplaceImage { .. }) {
-            apply_image_forward(&mut self.image_replacements, &operation)?;
-        } else if matches!(operation, EditOperation::CreateShape { .. }) {
-            let shape = authored_shape_from_operation(&operation)
-                .expect("CreateShape operation reconstructs authored shape");
-            self.validate_create_shape_candidate(&shape)?;
-            self.authored_shapes.insert(shape.node_id, shape);
-        } else {
-            apply_forward(&mut self.graph, &operation)?;
+        let result = (|| {
+            if authored_stack_operation_page_id_v1(&operation).is_some() {
+                let expected_before_stacks = derive_authored_stacks_from_operations_v1(&self.undo)?;
+                if expected_before_stacks != self.authored_stacks {
+                    return Err(EditorError::StaleAuthoredStack {
+                        page_id: authored_stack_operation_page_id_v1(&operation)
+                            .expect("lane operation has page"),
+                    });
+                }
+                let mut after_stacks = expected_before_stacks.clone();
+                apply_authored_stack_history_forward_v1(&mut after_stacks, &operation)?;
+
+                let mut candidate_shapes = self.authored_shapes.clone();
+                match &operation {
+                    EditOperation::CreateShape { .. } => {
+                        let shape = authored_shape_from_operation(&operation)
+                            .expect("CreateShape operation reconstructs authored shape");
+                        self.validate_create_shape_candidate(&shape)?;
+                        candidate_shapes.insert(shape.node_id, shape);
+                    }
+                    EditOperation::DeleteNode { .. } => {
+                        apply_authored_shape_delete_forward(&mut candidate_shapes, &operation)?;
+                    }
+                    EditOperation::ReorderAuthoredStack { .. } => {}
+                    _ => unreachable!("authored-stack page helper only admits lane operations"),
+                }
+
+                self.authored_shapes = candidate_shapes;
+                self.authored_stacks = after_stacks;
+            } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
+                apply_image_forward(&mut self.image_replacements, &operation)?;
+            } else {
+                apply_forward(&mut self.graph, &operation)?;
+            }
+            self.validate_source_identity()
+        })();
+
+        if let Err(error) = result {
+            self.redo.push(operation);
+            return Err(error);
         }
         self.undo.push(operation);
-        self.validate_source_identity()?;
         Ok(self.undo.last().expect("just pushed redo operation"))
     }
 
@@ -3628,6 +4372,12 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::CreateShape { .. } => session
             .consume_canonical_create_shape(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::DeleteNode { .. } => session
+            .consume_canonical_delete_node(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ReorderAuthoredStack { .. } => session
+            .consume_canonical_reorder_authored_stack(expected.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
     }
 }
@@ -4003,12 +4753,20 @@ fn frame_from_payload(
     })
 }
 
+struct EditableExportTypographyInputs<'a> {
+    source_typography_runs: &'a [PubTypographyRun],
+    source_typography_size_runs: &'a [PubTypographySizeRun],
+    source_paragraph_alignments: &'a [PubParagraphAlignmentRun],
+    full_story_typography: &'a [FullStoryTypographyV1],
+}
+
 fn editable_export_plan(
     target: EditorEditableTarget,
     graph: &PubResolvedGraph,
     image_replacements: &BTreeMap<NodeId, Sha256Digest>,
     source_image_nodes: &BTreeMap<NodeId, ResourceId>,
-) -> ExportPlan {
+    typography: EditableExportTypographyInputs<'_>,
+) -> Result<ExportPlan, ScopedCapabilityError> {
     let mut features = BTreeMap::new();
     features.insert("page.geometry".into(), CapabilityLevel::Preserved);
     features.insert("story.text".into(), CapabilityLevel::Preserved);
@@ -4074,6 +4832,80 @@ fn editable_export_plan(
             origin: Some(story_id.into_canonical()),
             property_path: Some("story.text".into()),
             require_preserved: true,
+        });
+    }
+
+    let font_family_stories = typography
+        .source_typography_runs
+        .iter()
+        .filter_map(|run| {
+            graph
+                .stories
+                .contains_key(&run.story_id)
+                .then_some(run.story_id)
+        })
+        .collect::<BTreeSet<_>>();
+    let font_size_stories = typography
+        .source_typography_runs
+        .iter()
+        .map(|run| run.story_id)
+        .chain(
+            typography
+                .source_typography_size_runs
+                .iter()
+                .map(|run| run.story_id),
+        )
+        .filter(|story_id| graph.stories.contains_key(story_id))
+        .collect::<BTreeSet<_>>();
+    let color_stories = typography
+        .source_typography_runs
+        .iter()
+        .filter_map(|run| {
+            (run.color_rgb.is_some() && graph.stories.contains_key(&run.story_id))
+                .then_some(run.story_id)
+        })
+        .collect::<BTreeSet<_>>();
+    let alignment_stories = typography
+        .source_paragraph_alignments
+        .iter()
+        .filter_map(|run| {
+            graph
+                .stories
+                .contains_key(&run.story_id)
+                .then_some(run.story_id)
+        })
+        .collect::<BTreeSet<_>>();
+
+    for story_id in font_family_stories {
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_FONT_FAMILY_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.typography.font_family".into()),
+            require_preserved: false,
+        });
+    }
+    for story_id in font_size_stories {
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_FONT_SIZE_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.typography.font_size".into()),
+            require_preserved: false,
+        });
+    }
+    for story_id in color_stories {
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_TEXT_COLOR_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.typography.color".into()),
+            require_preserved: false,
+        });
+    }
+    for story_id in alignment_stories {
+        requests.push(SemanticFeatureRequest {
+            feature: STORY_PARAGRAPH_ALIGNMENT_FEATURE.into(),
+            origin: Some(story_id.into_canonical()),
+            property_path: Some("story.paragraph_alignment".into()),
+            require_preserved: false,
         });
     }
 
@@ -4160,7 +4992,48 @@ fn editable_export_plan(
         }
     }
 
-    plan_export(&manifest, requests)
+    let scoped = consumer_proven_typography_overrides_v1(target, typography.full_story_typography);
+    plan_export_with_scoped_capabilities(&manifest, requests, scoped)
+}
+
+fn consumer_proven_typography_overrides_v1(
+    target: EditorEditableTarget,
+    typography: &[FullStoryTypographyV1],
+) -> Vec<ScopedCapabilityOverride> {
+    // Consumer-proven semantic class:
+    // - #1079 proves real target-side edit -> save -> fresh reopen;
+    // - #1091 proves the exact 1050 corpus contains 60 bounded Montserrat
+    //   Stories across three source files and six independent size strata;
+    // - #1097 proves all 60 wire carriers survive Scribus and LibreOffice
+    //   save/reopen with exact family+size carrier histograms.
+    //
+    // Keep this predicate semantic: no source SHA, Story id, or tested-size
+    // hardcode. Other families remain explicit Unsupported debt.
+    let supports = |item: &FullStoryTypographyV1| match target {
+        EditorEditableTarget::Idml | EditorEditableTarget::Odg => {
+            item.font_family.trim() == "Montserrat"
+        }
+    };
+
+    typography
+        .iter()
+        .filter(|item| supports(item))
+        .flat_map(|item| {
+            let origin = item.story_id.into_canonical();
+            [
+                ScopedCapabilityOverride {
+                    origin,
+                    feature: STORY_FONT_FAMILY_FEATURE.into(),
+                    disposition: CapabilityLevel::Preserved,
+                },
+                ScopedCapabilityOverride {
+                    origin,
+                    feature: STORY_FONT_SIZE_FEATURE.into(),
+                    disposition: CapabilityLevel::Preserved,
+                },
+            ]
+        })
+        .collect()
 }
 
 fn replacement_asset_resource_id(sha256: Sha256Digest) -> ResourceId {
@@ -4550,6 +5423,12 @@ fn apply_forward(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is applied to the authored overlay state")
         }
+        EditOperation::DeleteNode { .. } => {
+            unreachable!("DeleteNode is applied to the authored overlay state")
+        }
+        EditOperation::ReorderAuthoredStack { .. } => {
+            unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
+        }
     }
     Ok(())
 }
@@ -4786,8 +5665,94 @@ fn apply_inverse(
         EditOperation::CreateShape { .. } => {
             unreachable!("CreateShape is reverted in the authored overlay state")
         }
+        EditOperation::DeleteNode { .. } => {
+            unreachable!("DeleteNode is reverted in the authored overlay state")
+        }
+        EditOperation::ReorderAuthoredStack { .. } => {
+            unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
+        }
     }
     Ok(())
+}
+
+fn authored_stack_operation_page_id_v1(operation: &EditOperation) -> Option<PageId> {
+    match operation {
+        EditOperation::CreateShape { page_id, .. } | EditOperation::DeleteNode { page_id, .. } => {
+            Some(*page_id)
+        }
+        EditOperation::ReorderAuthoredStack { transition } => Some(transition.page_id),
+        _ => None,
+    }
+}
+
+fn install_authored_stack_in_map_v1(
+    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
+    stack: AuthoredStackV1,
+) {
+    if stack.members.is_empty() {
+        stacks.remove(&stack.page_id);
+    } else {
+        stacks.insert(stack.page_id, stack);
+    }
+}
+
+fn apply_authored_stack_history_forward_v1(
+    stacks: &mut BTreeMap<PageId, AuthoredStackV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    match operation {
+        EditOperation::CreateShape { page_id, .. } => {
+            let shape = authored_shape_from_operation(operation)
+                .expect("CreateShape reconstructs authored shape");
+            let before = stacks
+                .get(page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
+            let transition = plan_create_shape_append_v1(&before, &shape)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            let after = apply_authored_stack_transition_forward_v1(&before, &transition)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::DeleteNode {
+            page_id, before, ..
+        } => {
+            let stack = stacks
+                .get(page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(*page_id));
+            let transition = plan_delete_shape_remove_v1(&stack, before)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            let after = apply_authored_stack_transition_forward_v1(&stack, &transition)
+                .map_err(|_| EditorError::StaleAuthoredStack { page_id: *page_id })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        EditOperation::ReorderAuthoredStack { transition } => {
+            let current = stacks
+                .get(&transition.page_id)
+                .cloned()
+                .unwrap_or_else(|| AuthoredStackV1::empty(transition.page_id));
+            let after =
+                apply_authored_stack_reorder_forward_v1(&current, transition).map_err(|_| {
+                    EditorError::StaleAuthoredStack {
+                        page_id: transition.page_id,
+                    }
+                })?;
+            install_authored_stack_in_map_v1(stacks, after);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn derive_authored_stacks_from_operations_v1(
+    operations: &[EditOperation],
+) -> Result<BTreeMap<PageId, AuthoredStackV1>, EditorError> {
+    let mut stacks = BTreeMap::new();
+    for operation in operations {
+        apply_authored_stack_history_forward_v1(&mut stacks, operation)?;
+    }
+    Ok(stacks)
 }
 
 fn authored_shape_from_operation(operation: &EditOperation) -> Option<AuthoredShapeRuntimeV1> {
@@ -4827,6 +5792,64 @@ fn apply_authored_shape_inverse(
         });
     }
     authored_shapes.remove(&shape.node_id);
+    Ok(())
+}
+
+fn apply_authored_shape_delete_forward(
+    authored_shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let EditOperation::DeleteNode {
+        node_id,
+        page_id,
+        before,
+        before_state_id,
+    } = operation
+    else {
+        unreachable!("DeleteNode forward receives DeleteNode operation")
+    };
+
+    if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id {
+        return Err(EditorError::NodeDeletePageMismatch {
+            node_id: *node_id,
+            page_id: *page_id,
+        });
+    }
+    if authored_shape_state_id_v1(before) != *before_state_id
+        || authored_shapes.get(node_id) != Some(before)
+    {
+        return Err(EditorError::StaleNodeDelete { node_id: *node_id });
+    }
+    authored_shapes.remove(node_id);
+    Ok(())
+}
+
+fn apply_authored_shape_delete_inverse(
+    authored_shapes: &mut BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let EditOperation::DeleteNode {
+        node_id,
+        page_id,
+        before,
+        before_state_id,
+    } = operation
+    else {
+        unreachable!("DeleteNode inverse receives DeleteNode operation")
+    };
+
+    if before.node_id != *node_id || before.page_id != *page_id || before.parent_id != *page_id {
+        return Err(EditorError::NodeDeletePageMismatch {
+            node_id: *node_id,
+            page_id: *page_id,
+        });
+    }
+    if authored_shape_state_id_v1(before) != *before_state_id
+        || authored_shapes.contains_key(node_id)
+    {
+        return Err(EditorError::StaleNodeDelete { node_id: *node_id });
+    }
+    authored_shapes.insert(*node_id, before.clone());
     Ok(())
 }
 
@@ -5003,6 +6026,43 @@ mod asset_reachability_tests {
         .into_iter()
         .collect::<Vec<_>>();
         assert_eq!(refs, vec![a, b]);
+    }
+
+    #[test]
+    fn consumer_proven_typography_override_is_montserrat_only() {
+        let montserrat_story =
+            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x31; 16]));
+        let arial_story = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x32; 16]));
+        let typography = vec![
+            FullStoryTypographyV1 {
+                story_id: montserrat_story,
+                font_family: "Montserrat".into(),
+                font_size_emu: LengthEmu::new(304_800),
+            },
+            FullStoryTypographyV1 {
+                story_id: arial_story,
+                font_family: "Arial".into(),
+                font_size_emu: LengthEmu::new(152_400),
+            },
+        ];
+
+        for target in [EditorEditableTarget::Idml, EditorEditableTarget::Odg] {
+            let overrides = consumer_proven_typography_overrides_v1(target, &typography);
+            assert_eq!(overrides.len(), 2);
+            assert!(overrides.iter().all(|item| {
+                item.origin == montserrat_story.into_canonical()
+                    && matches!(
+                        item.feature.as_str(),
+                        STORY_FONT_FAMILY_FEATURE | STORY_FONT_SIZE_FEATURE
+                    )
+                    && item.disposition == CapabilityLevel::Preserved
+            }));
+            assert!(
+                overrides
+                    .iter()
+                    .all(|item| { item.origin != arial_story.into_canonical() })
+            );
+        }
     }
 
     #[test]

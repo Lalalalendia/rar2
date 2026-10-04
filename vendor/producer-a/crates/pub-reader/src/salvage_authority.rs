@@ -129,6 +129,8 @@ mod tests {
 
     const OPNHOUS_SHA256: &str =
         "227961e2fba4a6fb814aa2da47e79b19d55ff04e87e49d9c5ceef8d07ce36d0e";
+    const TROPHY_TRADITIONAL_SHA256: &str =
+        "32b857475ae5ca8207942a40dc708d63153c9140bb06ee740d7e235944c0a027";
 
     #[test]
     fn exact_opnhous_authority_resolves_with_pinned_digest() {
@@ -146,6 +148,24 @@ mod tests {
         assert_eq!(authority.task_id, "PUB-T-650");
         assert_eq!(authority.run_id, 36072949588);
         assert_eq!(authority.artifact_id, 10838639727);
+    }
+
+    #[test]
+    fn exact_trophy_traditional_authority_resolves_with_pinned_digest() {
+        let authority = typed_corruption_authority(TROPHY_TRADITIONAL_SHA256)
+            .expect("trophy_traditional typed authority");
+        assert_eq!(authority.source_sha256, TROPHY_TRADITIONAL_SHA256);
+        assert_eq!(
+            authority.evidence_digest,
+            "sha256:cc3655207b887ccf55b20494b066c5af394ddc1d0ef579cb9cf0a48bc751fe63"
+        );
+        assert_eq!(
+            authority.classification,
+            "quill_descriptor_tail_overwritten_or_malformed"
+        );
+        assert_eq!(authority.task_id, "READER1050-TROPHY-QUILL-CENSUS-01");
+        assert_eq!(authority.run_id, 37125662981);
+        assert_eq!(authority.artifact_id, 11275135765);
     }
 
     fn registry_from_json(json: &str) -> EvidenceRegistry {

@@ -24,10 +24,11 @@ use pub_model::{
 #[cfg(feature = "projected-scene-instances")]
 use pub_viewer::ViewerProjectedSceneInstanceV1;
 use pub_viewer::{
-    ViewerGeometryDocument, ViewerParagraphAlignment, ViewerScriptFontEntryDisposition,
-    ViewerStoryFrame, ViewerTextVerticalAlignment,
+    ViewerDecorativeBorderSlotV1, ViewerGeometryDocument, ViewerParagraphAlignment,
+    ViewerScriptFontEntryDisposition, ViewerStoryFrame, ViewerTextVerticalAlignment,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fmt;
 
 pub const PAGE_RENDER_PLAN_SCHEMA_V1: &str = "chaptera.page-render-plan.v1";
@@ -60,11 +61,30 @@ pub struct NodeRenderPlanV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_line: Option<RenderSolidLineV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decorative_border: Option<RenderDecorativeBorderV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<RenderImageRefV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<RenderTextFragmentV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table: Option<RenderTableV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthoredPageRenderNodeV1 {
+    pub node_id: NodeId,
+    pub bounds: RectEmu,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid_fill_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid_line: Option<RenderSolidLineV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthoredPageRenderLaneV1 {
+    pub page_id: PageId,
+    /// Exact authored back/bottom -> front/top order.
+    pub nodes: Vec<AuthoredPageRenderNodeV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +131,301 @@ fn render_table_span_is_one(value: &u32) -> bool {
 pub struct RenderSolidLineV1 {
     pub rgb: [u8; 3],
     pub width_emu: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderDecorativeBorderSlotV1 {
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDecorativeBorderSlotRefV1 {
+    pub slot: RenderDecorativeBorderSlotV1,
+    pub resource_id: ResourceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDecorativeBorderV1 {
+    pub name: String,
+    pub corner_extent_emu: u32,
+    pub horizontal_extent_emu: u32,
+    pub vertical_extent_emu: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stretch_pictures: Option<bool>,
+    pub slots: Vec<RenderDecorativeBorderSlotRefV1>,
+}
+
+fn render_decorative_border_slot_v1(
+    slot: ViewerDecorativeBorderSlotV1,
+) -> RenderDecorativeBorderSlotV1 {
+    match slot {
+        ViewerDecorativeBorderSlotV1::TopLeft => RenderDecorativeBorderSlotV1::TopLeft,
+        ViewerDecorativeBorderSlotV1::Top => RenderDecorativeBorderSlotV1::Top,
+        ViewerDecorativeBorderSlotV1::TopRight => RenderDecorativeBorderSlotV1::TopRight,
+        ViewerDecorativeBorderSlotV1::Right => RenderDecorativeBorderSlotV1::Right,
+        ViewerDecorativeBorderSlotV1::BottomRight => RenderDecorativeBorderSlotV1::BottomRight,
+        ViewerDecorativeBorderSlotV1::Bottom => RenderDecorativeBorderSlotV1::Bottom,
+        ViewerDecorativeBorderSlotV1::BottomLeft => RenderDecorativeBorderSlotV1::BottomLeft,
+        ViewerDecorativeBorderSlotV1::Left => RenderDecorativeBorderSlotV1::Left,
+    }
+}
+
+fn render_decorative_border_v1(
+    visual: &ViewerGeometryDocument,
+    node_id: NodeId,
+) -> Option<RenderDecorativeBorderV1> {
+    let border = visual
+        .decorative_borders
+        .iter()
+        .find(|border| border.node_id == node_id)?;
+    (border.slots.len() == 8).then(|| RenderDecorativeBorderV1 {
+        name: border.name.clone(),
+        corner_extent_emu: border.corner_extent_emu,
+        horizontal_extent_emu: border.horizontal_extent_emu,
+        vertical_extent_emu: border.vertical_extent_emu,
+        stretch_pictures: border.stretch_pictures,
+        slots: border
+            .slots
+            .iter()
+            .map(|slot| RenderDecorativeBorderSlotRefV1 {
+                slot: render_decorative_border_slot_v1(slot.slot),
+                resource_id: slot.resource_id,
+            })
+            .collect(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDecorativeBorderPlacementV1 {
+    pub slot: RenderDecorativeBorderSlotV1,
+    pub resource_id: ResourceId,
+    pub bounds: RectEmu,
+}
+
+fn decorative_border_slot_rank_v1(slot: RenderDecorativeBorderSlotV1) -> u8 {
+    match slot {
+        RenderDecorativeBorderSlotV1::TopLeft => 0,
+        RenderDecorativeBorderSlotV1::Top => 1,
+        RenderDecorativeBorderSlotV1::TopRight => 2,
+        RenderDecorativeBorderSlotV1::Right => 3,
+        RenderDecorativeBorderSlotV1::BottomRight => 4,
+        RenderDecorativeBorderSlotV1::Bottom => 5,
+        RenderDecorativeBorderSlotV1::BottomLeft => 6,
+        RenderDecorativeBorderSlotV1::Left => 7,
+    }
+}
+
+fn decorative_border_resource_v1(
+    border: &RenderDecorativeBorderV1,
+    slot: RenderDecorativeBorderSlotV1,
+) -> Option<ResourceId> {
+    let mut matches = border.slots.iter().filter(|entry| entry.slot == slot);
+    let resource_id = matches.next()?.resource_id;
+    matches.next().is_none().then_some(resource_id)
+}
+
+fn rect_emu_v1(x: i64, y: i64, width: i64, height: i64) -> Option<RectEmu> {
+    (width > 0 && height > 0).then(|| {
+        RectEmu::new(
+            LengthEmu::new(x),
+            LengthEmu::new(y),
+            LengthEmu::new(width),
+            LengthEmu::new(height),
+        )
+    })
+}
+
+fn rounded_positive_tile_count_v1(interior: i64, border_width: i64) -> Option<i64> {
+    if interior <= 0 || border_width <= 0 {
+        return None;
+    }
+    Some(((interior + border_width / 2) / border_width).max(1))
+}
+
+/// Resolves only the source-neutral destination rectangles for one decorative border.
+///
+/// This deliberately consumes the already-admitted border width only as placement
+/// geometry. It does not turn BorderArt into an ordinary stroke and does not infer
+/// any authoring semantics. stretch_pictures must come from the bounded Reader
+/// marker projection; callers must fail closed when that state is unknown.
+pub fn layout_decorative_border_v1(
+    border: &RenderDecorativeBorderV1,
+    bounds: RectEmu,
+    border_width_emu: i64,
+    stretch_pictures: bool,
+) -> Option<Vec<RenderDecorativeBorderPlacementV1>> {
+    let width = bounds.width.get();
+    let height = bounds.height.get();
+    let x = bounds.x.get();
+    let y = bounds.y.get();
+    let b = border_width_emu;
+
+    if b <= 0 || width < 2 * b || height < 2 * b {
+        return None;
+    }
+
+    let ordered_slots = [
+        RenderDecorativeBorderSlotV1::TopLeft,
+        RenderDecorativeBorderSlotV1::Top,
+        RenderDecorativeBorderSlotV1::TopRight,
+        RenderDecorativeBorderSlotV1::Right,
+        RenderDecorativeBorderSlotV1::BottomRight,
+        RenderDecorativeBorderSlotV1::Bottom,
+        RenderDecorativeBorderSlotV1::BottomLeft,
+        RenderDecorativeBorderSlotV1::Left,
+    ];
+    let resources = ordered_slots
+        .iter()
+        .copied()
+        .map(|slot| decorative_border_resource_v1(border, slot).map(|resource| (slot, resource)))
+        .collect::<Option<Vec<_>>>()?;
+    if border.slots.len() != ordered_slots.len() {
+        return None;
+    }
+    let resource = |slot| {
+        resources
+            .iter()
+            .find(|(candidate, _)| *candidate == slot)
+            .map(|(_, resource_id)| *resource_id)
+    };
+
+    let mut placements = Vec::new();
+    let mut push = |slot, px, py, pw, ph| -> Option<()> {
+        placements.push(RenderDecorativeBorderPlacementV1 {
+            slot,
+            resource_id: resource(slot)?,
+            bounds: rect_emu_v1(px, py, pw, ph)?,
+        });
+        Some(())
+    };
+
+    push(RenderDecorativeBorderSlotV1::TopLeft, x, y, b, b)?;
+    push(
+        RenderDecorativeBorderSlotV1::TopRight,
+        x + width - b,
+        y,
+        b,
+        b,
+    )?;
+    push(
+        RenderDecorativeBorderSlotV1::BottomRight,
+        x + width - b,
+        y + height - b,
+        b,
+        b,
+    )?;
+    push(
+        RenderDecorativeBorderSlotV1::BottomLeft,
+        x,
+        y + height - b,
+        b,
+        b,
+    )?;
+
+    let horizontal_interior = width - 2 * b;
+    let vertical_interior = height - 2 * b;
+
+    if stretch_pictures {
+        if horizontal_interior > 0 {
+            let count = rounded_positive_tile_count_v1(horizontal_interior, b)?;
+            for index in 0..count {
+                let start = b + index * horizontal_interior / count;
+                let end = b + (index + 1) * horizontal_interior / count;
+                let tile_width = end - start;
+                push(
+                    RenderDecorativeBorderSlotV1::Top,
+                    x + start,
+                    y,
+                    tile_width,
+                    b,
+                )?;
+                push(
+                    RenderDecorativeBorderSlotV1::Bottom,
+                    x + width - end,
+                    y + height - b,
+                    tile_width,
+                    b,
+                )?;
+            }
+        }
+        if vertical_interior > 0 {
+            let count = rounded_positive_tile_count_v1(vertical_interior, b)?;
+            for index in 0..count {
+                let start = b + index * vertical_interior / count;
+                let end = b + (index + 1) * vertical_interior / count;
+                let tile_height = end - start;
+                push(
+                    RenderDecorativeBorderSlotV1::Right,
+                    x + width - b,
+                    y + start,
+                    b,
+                    tile_height,
+                )?;
+                push(
+                    RenderDecorativeBorderSlotV1::Left,
+                    x,
+                    y + height - end,
+                    b,
+                    tile_height,
+                )?;
+            }
+        }
+    } else {
+        let horizontal_count = width / b;
+        let vertical_count = height / b;
+        if horizontal_count < 2 || vertical_count < 2 {
+            return None;
+        }
+
+        if horizontal_count > 2 {
+            let residual = width - horizontal_count * b;
+            let gaps = horizontal_count - 1;
+            for index in 1..horizontal_count - 1 {
+                let offset = index * b + (index * residual + gaps / 2) / gaps;
+                push(RenderDecorativeBorderSlotV1::Top, x + offset, y, b, b)?;
+                push(
+                    RenderDecorativeBorderSlotV1::Bottom,
+                    x + width - b - offset,
+                    y + height - b,
+                    b,
+                    b,
+                )?;
+            }
+        }
+
+        if vertical_count > 2 {
+            let residual = height - vertical_count * b;
+            let gaps = vertical_count - 1;
+            for index in 1..vertical_count - 1 {
+                let offset = index * b + (index * residual + gaps / 2) / gaps;
+                push(
+                    RenderDecorativeBorderSlotV1::Right,
+                    x + width - b,
+                    y + offset,
+                    b,
+                    b,
+                )?;
+                push(
+                    RenderDecorativeBorderSlotV1::Left,
+                    x,
+                    y + height - b - offset,
+                    b,
+                    b,
+                )?;
+            }
+        }
+    }
+
+    placements.sort_by_key(|placement| decorative_border_slot_rank_v1(placement.slot));
+    Some(placements)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -471,6 +786,10 @@ pub struct RenderResolvedTextSpanV1 {
     pub x_offset_emu: i64,
     pub measured_width_emu: i64,
     pub font_size_emu: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_fingerprint_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,6 +808,16 @@ pub enum RenderPlanErrorV1 {
     #[cfg(feature = "projected-scene-instances")]
     ProjectedKindUnsupported {
         instance_id: String,
+    },
+    AuthoredLanePageMismatch {
+        plan_page_id: PageId,
+        lane_page_id: PageId,
+    },
+    AuthoredLaneDuplicateNode {
+        node_id: NodeId,
+    },
+    AuthoredLaneBaseCollision {
+        node_id: NodeId,
     },
 }
 
@@ -515,6 +844,23 @@ impl fmt::Display for RenderPlanErrorV1 {
                     "projected instance {instance_id} has unsupported projection kind"
                 )
             }
+            Self::AuthoredLanePageMismatch {
+                plan_page_id,
+                lane_page_id,
+            } => write!(
+                formatter,
+                "authored render lane page {lane_page_id:?} does not match render-plan page {plan_page_id:?}"
+            ),
+            Self::AuthoredLaneDuplicateNode { node_id } => {
+                write!(
+                    formatter,
+                    "authored render lane contains duplicate node {node_id:?}"
+                )
+            }
+            Self::AuthoredLaneBaseCollision { node_id } => write!(
+                formatter,
+                "authored render lane node {node_id:?} collides with the existing base render lane"
+            ),
         }
     }
 }
@@ -697,6 +1043,60 @@ fn resolved_vertical_offset_emu_v1(
     }
 }
 
+/// Append the authoritative Chaptera-authored lane after the existing base/imported
+/// lane without changing either lane's internal order.
+///
+/// The caller owns provenance admission and converts its authored runtime state
+/// into this source-neutral render shape. This function owns only the effective
+/// paint-order composition law shared by every render-plan consumer.
+pub fn apply_authored_page_render_lane_v1(
+    plan: &mut PageRenderPlanV1,
+    lane: &AuthoredPageRenderLaneV1,
+) -> Result<(), RenderPlanErrorV1> {
+    if plan.page_id != lane.page_id {
+        return Err(RenderPlanErrorV1::AuthoredLanePageMismatch {
+            plan_page_id: plan.page_id,
+            lane_page_id: lane.page_id,
+        });
+    }
+
+    let base_ids = plan
+        .nodes
+        .iter()
+        .map(|node| node.node_id)
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for authored in &lane.nodes {
+        if !seen.insert(authored.node_id) {
+            return Err(RenderPlanErrorV1::AuthoredLaneDuplicateNode {
+                node_id: authored.node_id,
+            });
+        }
+        if base_ids.contains(&authored.node_id) {
+            return Err(RenderPlanErrorV1::AuthoredLaneBaseCollision {
+                node_id: authored.node_id,
+            });
+        }
+    }
+
+    plan.nodes
+        .extend(lane.nodes.iter().map(|authored| NodeRenderPlanV1 {
+            node_id: authored.node_id,
+            #[cfg(feature = "projected-scene-instances")]
+            projected_scene_instance: None,
+            bounds: authored.bounds,
+            text_bounds: None,
+            transform: Affine2D::identity(),
+            solid_fill_rgb: authored.solid_fill_rgb,
+            solid_line: authored.solid_line.clone(),
+            decorative_border: None,
+            image: None,
+            text: None,
+            table: None,
+        }));
+    Ok(())
+}
+
 pub fn build_page_render_plan_v1(
     visual: &ViewerGeometryDocument,
     page_index: usize,
@@ -869,6 +1269,7 @@ pub fn build_page_render_plan_v1(
                         rgb: line.rgb,
                         width_emu: line.width_emu,
                     }),
+                decorative_border: render_decorative_border_v1(visual, node.origin),
                 image,
                 text,
                 table,
@@ -926,6 +1327,7 @@ pub fn build_page_render_plan_v1(
                     rgb: line.rgb,
                     width_emu: line.width_emu,
                 }),
+            decorative_border: render_decorative_border_v1(visual, origin_node_id),
             image,
             text: projected_text(visual, projected)?,
             table: None,
@@ -950,6 +1352,7 @@ pub fn build_page_render_plan_v1(
     })
 }
 
+#[derive(Clone)]
 struct RenderTextLayoutTargetV1 {
     page_id: PageId,
     page_size: Size2D,
@@ -972,10 +1375,33 @@ pub fn build_page_render_plan_with_text_layout_resolver_v1<'a, F>(
     visual: &ViewerGeometryDocument,
     page_index: usize,
     fallback_font: &ExplicitRenderTextFontResourceV1<'a>,
-    mut resolve_font: F,
+    resolve_font: F,
 ) -> Result<PageRenderPlanV1, RenderPlanErrorV1>
 where
     F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+{
+    build_page_render_plan_with_text_layout_resolvers_v1(
+        visual,
+        page_index,
+        fallback_font,
+        resolve_font,
+        |_, _| None,
+    )
+}
+
+pub fn build_page_render_plan_with_text_layout_resolvers_v1<'a, F, G>(
+    visual: &ViewerGeometryDocument,
+    page_index: usize,
+    fallback_font: &ExplicitRenderTextFontResourceV1<'a>,
+    mut resolve_font: F,
+    mut resolve_span_font: G,
+) -> Result<PageRenderPlanV1, RenderPlanErrorV1>
+where
+    F: FnMut(&RenderTextFragmentV1) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+    G: FnMut(
+        &RenderTextFragmentV1,
+        &RenderTypographyRunV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
 {
     let mut plan = build_page_render_plan_v1(visual, page_index)?;
     let page_id = plan.page_id;
@@ -1019,6 +1445,19 @@ where
             transform: node.transform.clone(),
         };
         let resolved_font = resolve_font(fragment);
+        if resolved_font.is_none()
+            && projected_target_frame_node_id.is_none()
+            && let Some(layout) = resolve_mixed_family_text_layout_v1(
+                visual,
+                target.clone(),
+                fragment,
+                &mut resolve_span_font,
+            )
+        {
+            fragment.backend_font_resource_id = None;
+            fragment.layout = Some(layout);
+            continue;
+        }
         fragment.backend_font_resource_id = resolved_font
             .as_ref()
             .map(|font| font.resource_id.to_owned());
@@ -1365,6 +1804,12 @@ struct AdmittedTypographyRunV1 {
 }
 
 #[derive(Debug)]
+struct PreparedTypographyRunV1 {
+    run: AdmittedTypographyRunV1,
+    advance_prefix_emu: Vec<i64>,
+}
+
+#[derive(Debug)]
 struct MixedLineCandidateV1 {
     scalar_end: u32,
     consumed_scalar_end: u32,
@@ -1433,6 +1878,118 @@ fn scalar_text_range_v1(scalars: &[char], start: u32, end: u32) -> Option<String
     (start <= end && end <= scalars.len()).then(|| scalars[start..end].iter().collect())
 }
 
+fn prepare_typography_run_v1(
+    run: AdmittedTypographyRunV1,
+    glyphs: &[pub_layout::BoundedShapedGlyph],
+) -> Result<PreparedTypographyRunV1, RenderTextLayoutFallbackReasonV1> {
+    let scalar_len = usize::try_from(
+        run.scalar_end
+            .checked_sub(run.scalar_start)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?,
+    )
+    .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    let mut advances = vec![0_i64; scalar_len.saturating_add(1)];
+    for glyph in glyphs {
+        if glyph.cluster < run.scalar_start || glyph.cluster >= run.scalar_end {
+            return Err(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+        }
+        let local = usize::try_from(glyph.cluster - run.scalar_start)
+            .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let slot = local
+            .checked_add(1)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        advances[slot] = advances[slot]
+            .checked_add(glyph.x_advance.get())
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    }
+    for index in 1..advances.len() {
+        advances[index] = advances[index - 1]
+            .checked_add(advances[index])
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    }
+    Ok(PreparedTypographyRunV1 {
+        run,
+        advance_prefix_emu: advances,
+    })
+}
+
+fn prepared_run_width_v1(
+    prepared: &PreparedTypographyRunV1,
+    scalar_start: u32,
+    scalar_end: u32,
+) -> Result<i64, RenderTextLayoutFallbackReasonV1> {
+    if scalar_start < prepared.run.scalar_start
+        || scalar_end > prepared.run.scalar_end
+        || scalar_start > scalar_end
+    {
+        return Err(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed);
+    }
+    let start = usize::try_from(scalar_start - prepared.run.scalar_start)
+        .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    let end = usize::try_from(scalar_end - prepared.run.scalar_start)
+        .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    prepared.advance_prefix_emu[end]
+        .checked_sub(prepared.advance_prefix_emu[start])
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)
+}
+
+fn reuse_mixed_line_candidate_v1(
+    scalars: &[char],
+    cursor: u32,
+    consumed_scalar_end: u32,
+    prepared_runs: &[PreparedTypographyRunV1],
+    font: &ExplicitRenderTextFontResourceV1<'_>,
+) -> Result<MixedLineCandidateV1, RenderTextLayoutFallbackReasonV1> {
+    let scalar_end = consumed_scalar_end;
+    let text = scalar_text_range_v1(scalars, cursor, scalar_end)
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    let mut spans = Vec::new();
+    let mut measured_width_emu = 0_i64;
+    let mut line_height_emu = font.default_line_height_emu;
+
+    for prepared in prepared_runs {
+        let run = prepared.run;
+        let span_start = run.scalar_start.max(cursor);
+        let span_end = run.scalar_end.min(scalar_end);
+        if span_start >= span_end {
+            continue;
+        }
+        let span_text = scalar_text_range_v1(scalars, span_start, span_end)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let Some(span_line_height_emu) = scaled_line_height_emu(
+            run.font_size_emu,
+            font.default_font_size_emu,
+            font.default_line_height_emu,
+        ) else {
+            return Err(RenderTextLayoutFallbackReasonV1::FontResourceInvalid);
+        };
+        let span_width_emu = prepared_run_width_v1(prepared, span_start, span_end)?;
+        spans.push(RenderResolvedTextSpanV1 {
+            scalar_start: span_start,
+            scalar_end: span_end,
+            text: span_text,
+            x_offset_emu: measured_width_emu,
+            measured_width_emu: span_width_emu,
+            font_size_emu: run.font_size_emu,
+            font_resource_id: None,
+            font_fingerprint_sha256: None,
+        });
+        measured_width_emu = measured_width_emu
+            .checked_add(span_width_emu)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        line_height_emu = line_height_emu.max(span_line_height_emu);
+    }
+
+    Ok(MixedLineCandidateV1 {
+        scalar_end,
+        consumed_scalar_end,
+        text,
+        measured_width_emu,
+        line_height_emu,
+        spans,
+    })
+}
+
 fn shape_mixed_line_candidate_v1(
     scalars: &[char],
     cursor: u32,
@@ -1495,6 +2052,8 @@ fn shape_mixed_line_candidate_v1(
             x_offset_emu: measured_width_emu,
             measured_width_emu: span_width_emu,
             font_size_emu: run.font_size_emu,
+            font_resource_id: None,
+            font_fingerprint_sha256: None,
         });
         measured_width_emu = measured_width_emu
             .checked_add(span_width_emu)
@@ -1542,6 +2101,7 @@ fn resolve_mixed_size_text_layout_v1(
     }
 
     let mut policy_glyphs = Vec::new();
+    let mut prepared_runs = Vec::with_capacity(runs.len());
     for run in &runs {
         let Some(run_text) = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)
         else {
@@ -1561,6 +2121,11 @@ fn resolve_mixed_size_text_layout_v1(
             Ok(shaped) => shaped,
             Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
         };
+        let prepared = match prepare_typography_run_v1(*run, &shaped.glyphs) {
+            Ok(prepared) => prepared,
+            Err(reason) => return fallback_layout(reason),
+        };
+        prepared_runs.push(prepared);
         policy_glyphs.extend(shaped.glyphs);
     }
     let policy = match break_policy_for_shaped_text(&fragment.text, &policy_glyphs) {
@@ -1569,6 +2134,7 @@ fn resolve_mixed_size_text_layout_v1(
     };
 
     let mut cursor = fragment.scalar_start;
+    let mut cursor_safe_without_reshaping = true;
     let mut used_height_emu = 0_i64;
     let mut line_index = 0_u32;
     let mut lines = Vec::new();
@@ -1580,31 +2146,47 @@ fn resolve_mixed_size_text_layout_v1(
             .iter()
             .filter(|candidate| candidate.scalar_boundary > cursor)
         {
-            let evaluated = match shape_mixed_line_candidate_v1(
-                &scalars,
-                cursor,
-                candidate.scalar_boundary,
-                candidate.kind,
-                &runs,
-                font,
-                fingerprint,
-            ) {
-                Ok(evaluated) => evaluated,
-                Err(reason) => return fallback_layout(reason),
+            let evaluated = if cursor_safe_without_reshaping
+                && candidate.safe_without_reshaping
+                && candidate.kind == BoundedBreakKind::Allowed
+            {
+                match reuse_mixed_line_candidate_v1(
+                    &scalars,
+                    cursor,
+                    candidate.scalar_boundary,
+                    &prepared_runs,
+                    font,
+                ) {
+                    Ok(evaluated) => evaluated,
+                    Err(reason) => return fallback_layout(reason),
+                }
+            } else {
+                match shape_mixed_line_candidate_v1(
+                    &scalars,
+                    cursor,
+                    candidate.scalar_boundary,
+                    candidate.kind,
+                    &runs,
+                    font,
+                    fingerprint,
+                ) {
+                    Ok(evaluated) => evaluated,
+                    Err(reason) => return fallback_layout(reason),
+                }
             };
             let fits_width = evaluated.measured_width_emu <= bounds.width.get();
             let fits_height = used_height_emu
                 .checked_add(evaluated.line_height_emu)
                 .is_some_and(|height| height <= bounds.height.get());
             if fits_width && fits_height {
-                chosen = Some(evaluated);
+                chosen = Some((evaluated, candidate.safe_without_reshaping));
             }
             if candidate.kind == BoundedBreakKind::Mandatory {
                 break;
             }
         }
 
-        let Some(chosen) = chosen else {
+        let Some((chosen, chosen_boundary_safe_without_reshaping)) = chosen else {
             break;
         };
         used_height_emu = match used_height_emu.checked_add(chosen.line_height_emu) {
@@ -1632,6 +2214,7 @@ fn resolve_mixed_size_text_layout_v1(
             spans: chosen.spans,
         });
         cursor = chosen.consumed_scalar_end;
+        cursor_safe_without_reshaping = chosen_boundary_safe_without_reshaping;
         line_index = match line_index.checked_add(1) {
             Some(value) => value,
             None => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
@@ -1667,6 +2250,333 @@ fn resolve_mixed_size_text_layout_v1(
         ),
         lines,
     }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedFamilyTypographyRunV1<'a> {
+    scalar_start: u32,
+    scalar_end: u32,
+    font_size_emu: i64,
+    font: ExplicitRenderTextFontResourceV1<'a>,
+    font_fingerprint_sha256: String,
+}
+
+fn admitted_mixed_family_typography_runs_v1<'a, G>(
+    fragment: &RenderTextFragmentV1,
+    resolve_span_font: &mut G,
+) -> Option<Vec<ResolvedFamilyTypographyRunV1<'a>>>
+where
+    G: FnMut(
+        &RenderTextFragmentV1,
+        &RenderTypographyRunV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+{
+    if fragment.text.is_empty() || !fragment.text.is_ascii() || fragment.typography.len() < 2 {
+        return None;
+    }
+
+    let mut cursor = fragment.scalar_start;
+    let mut first_family: Option<String> = None;
+    let mut mixed_family = false;
+    let mut admitted = Vec::with_capacity(fragment.typography.len());
+
+    for run in &fragment.typography {
+        if run.scalar_start != cursor
+            || run.scalar_end <= run.scalar_start
+            || run.scalar_end > fragment.scalar_end
+            || run.text_size_emu == 0
+        {
+            return None;
+        }
+        let display_family = run.source_font_name.trim();
+        if display_family.is_empty() {
+            return None;
+        }
+        let normalized_family = normalize_source_font_family_v1(display_family);
+        match first_family.as_ref() {
+            None => first_family = Some(normalized_family),
+            Some(first) if *first == normalized_family => {}
+            Some(_) => mixed_family = true,
+        }
+
+        let font = resolve_span_font(fragment, run)?;
+        if font.resource_id.is_empty()
+            || font.bytes.is_empty()
+            || font.default_font_size_emu <= 0
+            || font.default_line_height_emu <= 0
+        {
+            return None;
+        }
+        let fingerprint = font_fingerprint_sha256(font.bytes);
+        if font.expected_sha256.is_empty() || fingerprint != font.expected_sha256 {
+            return None;
+        }
+
+        admitted.push(ResolvedFamilyTypographyRunV1 {
+            scalar_start: run.scalar_start,
+            scalar_end: run.scalar_end,
+            font_size_emu: i64::from(run.text_size_emu),
+            font,
+            font_fingerprint_sha256: fingerprint,
+        });
+        cursor = run.scalar_end;
+    }
+
+    if cursor != fragment.scalar_end || !mixed_family {
+        return None;
+    }
+    Some(admitted)
+}
+
+fn mixed_family_layout_fingerprint_v1(runs: &[ResolvedFamilyTypographyRunV1<'_>]) -> String {
+    let mut fingerprint = String::from("chaptera.mixed-family-layout.v1");
+    for run in runs {
+        fingerprint.push('|');
+        fingerprint.push_str(run.font.resource_id);
+        fingerprint.push(':');
+        fingerprint.push_str(&run.font_fingerprint_sha256);
+    }
+    fingerprint
+}
+
+fn mixed_family_line_base_height_v1(
+    cursor: u32,
+    runs: &[ResolvedFamilyTypographyRunV1<'_>],
+) -> Result<i64, RenderTextLayoutFallbackReasonV1> {
+    runs.iter()
+        .find(|run| run.scalar_start <= cursor && cursor < run.scalar_end)
+        .map(|run| run.font.default_line_height_emu)
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)
+}
+
+fn shape_mixed_family_line_candidate_v1(
+    scalars: &[char],
+    cursor: u32,
+    consumed_scalar_end: u32,
+    kind: BoundedBreakKind,
+    runs: &[ResolvedFamilyTypographyRunV1<'_>],
+) -> Result<MixedLineCandidateV1, RenderTextLayoutFallbackReasonV1> {
+    let mut scalar_end = consumed_scalar_end;
+    if kind == BoundedBreakKind::Mandatory {
+        while scalar_end > cursor {
+            let index = usize::try_from(scalar_end - 1)
+                .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+            if !matches!(scalars.get(index).copied(), Some('\r' | '\n')) {
+                break;
+            }
+            scalar_end -= 1;
+        }
+    }
+
+    let text = scalar_text_range_v1(scalars, cursor, scalar_end)
+        .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+    let mut spans = Vec::new();
+    let mut measured_width_emu = 0_i64;
+    let mut line_height_emu = mixed_family_line_base_height_v1(cursor, runs)?;
+
+    for run in runs {
+        let span_start = run.scalar_start.max(cursor);
+        let span_end = run.scalar_end.min(scalar_end);
+        if span_start >= span_end {
+            continue;
+        }
+        let span_text = scalar_text_range_v1(scalars, span_start, span_end)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let Some(span_line_height_emu) = scaled_line_height_emu(
+            run.font_size_emu,
+            run.font.default_font_size_emu,
+            run.font.default_line_height_emu,
+        ) else {
+            return Err(RenderTextLayoutFallbackReasonV1::FontResourceInvalid);
+        };
+        let runtime = BoundedShapingRuntime {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: run.font_fingerprint_sha256.clone(),
+                resource_fingerprint: run.font.resource_id.to_owned(),
+            },
+            face_index: run.font.face_index,
+            font_size_emu: LengthEmu::new(run.font_size_emu),
+            font_bytes: run.font.bytes,
+        };
+        let shaped = shape_bounded_ltr_segment(&span_text, span_start, &runtime)
+            .map_err(|_| RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        let span_width_emu = shaped.total_x_advance.get();
+        spans.push(RenderResolvedTextSpanV1 {
+            scalar_start: span_start,
+            scalar_end: span_end,
+            text: span_text,
+            x_offset_emu: measured_width_emu,
+            measured_width_emu: span_width_emu,
+            font_size_emu: run.font_size_emu,
+            font_resource_id: Some(run.font.resource_id.to_owned()),
+            font_fingerprint_sha256: Some(run.font_fingerprint_sha256.clone()),
+        });
+        measured_width_emu = measured_width_emu
+            .checked_add(span_width_emu)
+            .ok_or(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed)?;
+        line_height_emu = line_height_emu.max(span_line_height_emu);
+    }
+
+    Ok(MixedLineCandidateV1 {
+        scalar_end,
+        consumed_scalar_end,
+        text,
+        measured_width_emu,
+        line_height_emu,
+        spans,
+    })
+}
+
+fn resolve_mixed_family_text_layout_v1<'a, G>(
+    visual: &ViewerGeometryDocument,
+    target: RenderTextLayoutTargetV1,
+    fragment: &RenderTextFragmentV1,
+    resolve_span_font: &mut G,
+) -> Option<RenderTextLayoutV1>
+where
+    G: FnMut(
+        &RenderTextFragmentV1,
+        &RenderTypographyRunV1,
+    ) -> Option<ExplicitRenderTextFontResourceV1<'a>>,
+{
+    if target.projected_target_frame_node_id.is_some()
+        || target.bounds.width.get() <= 0
+        || target.bounds.height.get() <= 0
+    {
+        return None;
+    }
+
+    let story = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)?;
+    let story_scalar_len = u32::try_from(story.text.chars().count()).ok()?;
+    if fragment.scalar_start != 0
+        || fragment.scalar_end != story_scalar_len
+        || fragment.text != story.text
+    {
+        return None;
+    }
+    admitted_layout_frame_ordinal(
+        visual,
+        fragment.story_id,
+        target.node_id,
+        target.projected_target_frame_node_id,
+    )
+    .ok()?;
+
+    let runs = admitted_mixed_family_typography_runs_v1(fragment, resolve_span_font)?;
+    let scalars: Vec<char> = fragment.text.chars().collect();
+
+    let mut policy_glyphs = Vec::new();
+    for run in &runs {
+        let run_text = scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end)?;
+        let runtime = BoundedShapingRuntime {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                font_set_fingerprint: run.font_fingerprint_sha256.clone(),
+                resource_fingerprint: run.font.resource_id.to_owned(),
+            },
+            face_index: run.font.face_index,
+            font_size_emu: LengthEmu::new(run.font_size_emu),
+            font_bytes: run.font.bytes,
+        };
+        let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).ok()?;
+        policy_glyphs.extend(shaped.glyphs);
+    }
+    let policy = break_policy_for_shaped_text(&fragment.text, &policy_glyphs).ok()?;
+    let layout_fingerprint = mixed_family_layout_fingerprint_v1(&runs);
+
+    let mut cursor = fragment.scalar_start;
+    let mut used_height_emu = 0_i64;
+    let mut line_index = 0_u32;
+    let mut lines = Vec::new();
+
+    while cursor < fragment.scalar_end {
+        let mut chosen = None;
+        for candidate in policy
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.scalar_boundary > cursor)
+        {
+            let evaluated = shape_mixed_family_line_candidate_v1(
+                &scalars,
+                cursor,
+                candidate.scalar_boundary,
+                candidate.kind,
+                &runs,
+            )
+            .ok()?;
+            let fits_width = evaluated.measured_width_emu <= target.bounds.width.get();
+            let fits_height = used_height_emu
+                .checked_add(evaluated.line_height_emu)
+                .is_some_and(|height| height <= target.bounds.height.get());
+            if fits_width && fits_height {
+                chosen = Some(evaluated);
+            }
+            if candidate.kind == BoundedBreakKind::Mandatory {
+                break;
+            }
+        }
+
+        let chosen = chosen?;
+        used_height_emu = used_height_emu.checked_add(chosen.line_height_emu)?;
+        let x_offset_emu = resolved_line_x_offset_emu_v1(
+            fragment,
+            target.node_id,
+            &target.bounds,
+            line_index,
+            cursor..chosen.scalar_end,
+            chosen.measured_width_emu,
+            &layout_fingerprint,
+        );
+        lines.push(RenderResolvedTextLineV1 {
+            line_index,
+            scalar_start: cursor,
+            scalar_end: chosen.scalar_end,
+            consumed_scalar_end: chosen.consumed_scalar_end,
+            text: chosen.text,
+            measured_width_emu: chosen.measured_width_emu,
+            line_height_emu: chosen.line_height_emu,
+            x_offset_emu,
+            spans: chosen.spans,
+        });
+        cursor = chosen.consumed_scalar_end;
+        line_index = line_index.checked_add(1)?;
+    }
+
+    if cursor != fragment.scalar_end {
+        return None;
+    }
+
+    let first = runs.first()?;
+    let max_font_size_emu = runs
+        .iter()
+        .map(|run| run.font_size_emu)
+        .max()
+        .unwrap_or(first.font_size_emu);
+    let max_line_height_emu = lines
+        .iter()
+        .map(|line| line.line_height_emu)
+        .max()
+        .unwrap_or(first.font.default_line_height_emu);
+
+    Some(RenderTextLayoutV1 {
+        disposition: RenderTextLayoutDispositionV1::SharedResolved {
+            font_resource_id: first.font.resource_id.to_owned(),
+            font_fingerprint_sha256: first.font_fingerprint_sha256.clone(),
+            font_size_emu: max_font_size_emu,
+            line_height_emu: max_line_height_emu,
+        },
+        vertical_offset_emu: resolved_vertical_offset_emu_v1(
+            target.vertical_alignment,
+            target.bounds.height.get(),
+            used_height_emu,
+        ),
+        lines,
+    })
 }
 
 fn scaled_line_height_emu(
@@ -1709,6 +2619,140 @@ mod tests {
 
     fn canonical(byte: u8) -> CanonicalId {
         CanonicalId::from_bytes([byte; 16])
+    }
+
+    fn decorative_border_fixture() -> RenderDecorativeBorderV1 {
+        let slots = [
+            RenderDecorativeBorderSlotV1::TopLeft,
+            RenderDecorativeBorderSlotV1::Top,
+            RenderDecorativeBorderSlotV1::TopRight,
+            RenderDecorativeBorderSlotV1::Right,
+            RenderDecorativeBorderSlotV1::BottomRight,
+            RenderDecorativeBorderSlotV1::Bottom,
+            RenderDecorativeBorderSlotV1::BottomLeft,
+            RenderDecorativeBorderSlotV1::Left,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, slot)| RenderDecorativeBorderSlotRefV1 {
+            slot,
+            resource_id: ResourceId::from_canonical(canonical(
+                u8::try_from(index + 20).expect("fixture id"),
+            )),
+        })
+        .collect();
+
+        RenderDecorativeBorderV1 {
+            name: "fixture-border".to_owned(),
+            corner_extent_emu: 20,
+            horizontal_extent_emu: 20,
+            vertical_extent_emu: 20,
+            stretch_pictures: Some(true),
+            slots,
+        }
+    }
+
+    #[test]
+    fn decorative_border_stretch_partitions_edge_interiors_exactly() {
+        let border = decorative_border_fixture();
+        let bounds = RectEmu::new(
+            LengthEmu::new(10),
+            LengthEmu::new(20),
+            LengthEmu::new(100),
+            LengthEmu::new(80),
+        );
+        let placements =
+            layout_decorative_border_v1(&border, bounds, 20, true).expect("stretch layout");
+
+        let slots = placements.iter().map(|row| row.slot).collect::<Vec<_>>();
+        assert_eq!(slots[0], RenderDecorativeBorderSlotV1::TopLeft);
+        assert_eq!(slots[1], RenderDecorativeBorderSlotV1::Top);
+        assert_eq!(slots[4], RenderDecorativeBorderSlotV1::TopRight);
+        assert_eq!(slots[5], RenderDecorativeBorderSlotV1::Right);
+        assert_eq!(slots[7], RenderDecorativeBorderSlotV1::BottomRight);
+        assert_eq!(slots[8], RenderDecorativeBorderSlotV1::Bottom);
+        assert_eq!(slots[11], RenderDecorativeBorderSlotV1::BottomLeft);
+        assert_eq!(slots[12], RenderDecorativeBorderSlotV1::Left);
+
+        let top = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Top)
+            .collect::<Vec<_>>();
+        assert_eq!(top.len(), 3);
+        assert_eq!(top.first().expect("first top").bounds.x.get(), 30);
+        let top_end = top.last().expect("last top").bounds.x.get()
+            + top.last().expect("last top").bounds.width.get();
+        assert_eq!(top_end, 90);
+
+        let right = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Right)
+            .collect::<Vec<_>>();
+        assert_eq!(right.len(), 2);
+        assert_eq!(right.first().expect("first right").bounds.y.get(), 40);
+        let right_end = right.last().expect("last right").bounds.y.get()
+            + right.last().expect("last right").bounds.height.get();
+        assert_eq!(right_end, 80);
+    }
+
+    #[test]
+    fn decorative_border_repeat_distributes_residual_space_deterministically() {
+        let border = decorative_border_fixture();
+        let bounds = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(105),
+            LengthEmu::new(85),
+        );
+        let placements =
+            layout_decorative_border_v1(&border, bounds, 20, false).expect("repeat layout");
+
+        let top = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Top)
+            .collect::<Vec<_>>();
+        assert_eq!(top.len(), 3);
+        assert_eq!(
+            top.iter().map(|row| row.bounds.x.get()).collect::<Vec<_>>(),
+            vec![21, 43, 64]
+        );
+        assert!(
+            top.iter()
+                .all(|row| row.bounds.width.get() == 20 && row.bounds.height.get() == 20)
+        );
+
+        let left = placements
+            .iter()
+            .filter(|row| row.slot == RenderDecorativeBorderSlotV1::Left)
+            .collect::<Vec<_>>();
+        assert_eq!(left.len(), 2);
+        assert!(
+            left[0].bounds.y.get() > left[1].bounds.y.get(),
+            "left edge must preserve bottom-to-top traversal"
+        );
+    }
+
+    #[test]
+    fn decorative_border_layout_fails_closed_for_degenerate_or_ambiguous_input() {
+        let border = decorative_border_fixture();
+        let small = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(30),
+            LengthEmu::new(40),
+        );
+        assert!(layout_decorative_border_v1(&border, small, 20, true).is_none());
+        assert!(layout_decorative_border_v1(&border, small, 0, true).is_none());
+
+        let mut ambiguous = border.clone();
+        ambiguous.slots.push(ambiguous.slots[0].clone());
+        let regular = RectEmu::new(
+            LengthEmu::new(0),
+            LengthEmu::new(0),
+            LengthEmu::new(100),
+            LengthEmu::new(100),
+        );
+        assert!(layout_decorative_border_v1(&ambiguous, regular, 20, true).is_none());
     }
 
     fn fixture() -> ViewerGeometryDocument {
@@ -1818,6 +2862,8 @@ mod tests {
                 }],
                 bytes: vec![0x89, b'P', b'N', b'G'],
             }],
+            decorative_borders: Vec::new(),
+            decorative_border_resources: Vec::new(),
         }
     }
 
@@ -1886,6 +2932,87 @@ mod tests {
                 ),
             ],
             source_story_text_sha256: viewer_story_text_sha256(text),
+        }
+    }
+
+    #[test]
+    fn shaping_safe_mixed_candidate_reuse_matches_independent_reshape() {
+        let text = "Hello wide world";
+        let scalars = text.chars().collect::<Vec<_>>();
+        let font_bytes = font_test_data::NOTOSERIF_AUTOHINT_SHAPING;
+        let fingerprint = pub_layout::font_fingerprint_sha256(font_bytes);
+        let font = ExplicitRenderTextFontResourceV1 {
+            resource_id: "test:noto-serif",
+            expected_sha256: &fingerprint,
+            face_index: 0,
+            default_font_size_emu: 12 * 12_700,
+            default_line_height_emu: 14 * 12_700,
+            bytes: font_bytes,
+        };
+        let runs = vec![
+            AdmittedTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 6,
+                font_size_emu: 12 * 12_700,
+            },
+            AdmittedTypographyRunV1 {
+                scalar_start: 6,
+                scalar_end: 16,
+                font_size_emu: 18 * 12_700,
+            },
+        ];
+
+        let mut prepared = Vec::new();
+        let mut policy_glyphs = Vec::new();
+        for run in &runs {
+            let run_text =
+                scalar_text_range_v1(&scalars, run.scalar_start, run.scalar_end).unwrap();
+            let runtime = BoundedShapingRuntime {
+                layout: BoundedLayoutEnvironment {
+                    engine_revision: SHARED_TEXT_LAYOUT_REVISION_V1.to_owned(),
+                    font_set_fingerprint: fingerprint.clone(),
+                    resource_fingerprint: font.resource_id.to_owned(),
+                },
+                face_index: font.face_index,
+                font_size_emu: LengthEmu::new(run.font_size_emu),
+                font_bytes,
+            };
+            let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).unwrap();
+            prepared.push(prepare_typography_run_v1(*run, &shaped.glyphs).unwrap());
+            policy_glyphs.extend(shaped.glyphs);
+        }
+
+        let policy = break_policy_for_shaped_text(text, &policy_glyphs).unwrap();
+        for (cursor, boundary) in [(0, 11), (6, 11)] {
+            let candidate = policy
+                .candidates
+                .iter()
+                .find(|candidate| candidate.scalar_boundary == boundary)
+                .expect("space boundary");
+            assert!(candidate.safe_without_reshaping);
+            assert!(!candidate.requires_reshaping);
+            assert_eq!(candidate.kind, BoundedBreakKind::Allowed);
+
+            let reshaped = shape_mixed_line_candidate_v1(
+                &scalars,
+                cursor,
+                boundary,
+                candidate.kind,
+                &runs,
+                &font,
+                &fingerprint,
+            )
+            .unwrap();
+            let reused =
+                reuse_mixed_line_candidate_v1(&scalars, cursor, boundary, &prepared, &font)
+                    .unwrap();
+
+            assert_eq!(reused.scalar_end, reshaped.scalar_end);
+            assert_eq!(reused.consumed_scalar_end, reshaped.consumed_scalar_end);
+            assert_eq!(reused.text, reshaped.text);
+            assert_eq!(reused.measured_width_emu, reshaped.measured_width_emu);
+            assert_eq!(reused.line_height_emu, reshaped.line_height_emu);
+            assert_eq!(reused.spans, reshaped.spans);
         }
     }
 
@@ -2154,6 +3281,239 @@ mod tests {
         );
 
         assert_eq!(effective_source_font_family_v1(&visual, &fragment), None);
+    }
+
+    #[test]
+    fn mixed_family_line_height_uses_family_at_line_cursor() {
+        let first_bytes: &[u8] = b"source-free-first-font";
+        let second_bytes: &[u8] = b"source-free-second-font";
+        let first_sha = font_fingerprint_sha256(first_bytes);
+        let second_sha = font_fingerprint_sha256(second_bytes);
+        let runs = vec![
+            ResolvedFamilyTypographyRunV1 {
+                scalar_start: 0,
+                scalar_end: 2,
+                font_size_emu: 152_400,
+                font: ExplicitRenderTextFontResourceV1 {
+                    resource_id: "font-first",
+                    expected_sha256: &first_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 300_000,
+                    bytes: first_bytes,
+                },
+                font_fingerprint_sha256: first_sha.clone(),
+            },
+            ResolvedFamilyTypographyRunV1 {
+                scalar_start: 2,
+                scalar_end: 4,
+                font_size_emu: 152_400,
+                font: ExplicitRenderTextFontResourceV1 {
+                    resource_id: "font-second",
+                    expected_sha256: &second_sha,
+                    face_index: 0,
+                    default_font_size_emu: 152_400,
+                    default_line_height_emu: 100_000,
+                    bytes: second_bytes,
+                },
+                font_fingerprint_sha256: second_sha.clone(),
+            },
+        ];
+
+        assert_eq!(mixed_family_line_base_height_v1(0, &runs), Ok(300_000));
+        assert_eq!(mixed_family_line_base_height_v1(2, &runs), Ok(100_000));
+    }
+
+    #[test]
+    fn mixed_family_layout_executes_real_shaping_with_per_span_resources() {
+        let mut visual = fixture();
+        let story_id = visual.document.stories[0].id;
+        let node_id = visual.scene.nodes[0].origin;
+        let page_id = visual.document.pages[0].id;
+        visual.document.stories[0].text = "ABCD".to_owned();
+        visual.story_frames.push(pub_viewer::ViewerStoryFrame {
+            story_id,
+            frame_id: node_id,
+            ordinal: 0,
+            text_content_bounds: None,
+            vertical_alignment: None,
+        });
+
+        let fragment = render_fragment(
+            story_id,
+            "ABCD",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Family A".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Family B".to_owned(),
+                    text_size_emu: 152_400,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                },
+            ],
+        );
+
+        let first_bytes: &[u8] = font_test_data::AHEM;
+        let second_bytes: &[u8] = font_test_data::TINOS_SUBSET;
+        let first_sha = font_fingerprint_sha256(first_bytes);
+        let second_sha = font_fingerprint_sha256(second_bytes);
+        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| match run
+            .source_font_name
+            .as_str()
+        {
+            "Family A" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-family-a",
+                expected_sha256: &first_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: first_bytes,
+            }),
+            "Family B" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-family-b",
+                expected_sha256: &second_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: second_bytes,
+            }),
+            _ => None,
+        };
+
+        let layout = resolve_mixed_family_text_layout_v1(
+            &visual,
+            RenderTextLayoutTargetV1 {
+                page_id,
+                page_size: Size2D::new(LengthEmu::new(10_000_000), LengthEmu::new(10_000_000)),
+                node_id,
+                projected_target_frame_node_id: None,
+                vertical_alignment: None,
+                bounds: RectEmu::new(
+                    LengthEmu::new(0),
+                    LengthEmu::new(0),
+                    LengthEmu::new(5_000_000),
+                    LengthEmu::new(5_000_000),
+                ),
+                transform: Affine2D::identity(),
+            },
+            &fragment,
+            &mut resolver,
+        )
+        .expect("real mixed-family shaping must produce one shared layout");
+
+        let RenderTextLayoutDispositionV1::SharedResolved {
+            font_resource_id, ..
+        } = &layout.disposition
+        else {
+            panic!("mixed-family execution must remain shared-resolved");
+        };
+        assert_eq!(font_resource_id, "font-family-a");
+        assert!(!layout.lines.is_empty());
+
+        let spans = layout
+            .lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+        assert!(spans.iter().any(|span| {
+            span.font_resource_id.as_deref() == Some("font-family-a")
+                && span.scalar_start == 0
+                && span.scalar_end == 2
+        }));
+        assert!(spans.iter().any(|span| {
+            span.font_resource_id.as_deref() == Some("font-family-b")
+                && span.scalar_start == 2
+                && span.scalar_end == 4
+        }));
+        assert_eq!(
+            layout
+                .lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<String>(),
+            "ABCD"
+        );
+    }
+
+    #[test]
+    fn mixed_family_admission_binds_exact_resource_per_typography_run() {
+        let story_id = fixture().document.stories[0].id;
+        let fragment = render_fragment(
+            story_id,
+            "ABCD",
+            vec![
+                RenderTypographyRunV1 {
+                    scalar_start: 0,
+                    scalar_end: 2,
+                    source_font_name: "Elephant".to_owned(),
+                    text_size_emu: 304_800,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                },
+                RenderTypographyRunV1 {
+                    scalar_start: 2,
+                    scalar_end: 4,
+                    source_font_name: "Times New Roman".to_owned(),
+                    text_size_emu: 228_600,
+                    font_inherited: false,
+                    size_inherited: false,
+                    color_rgb: None,
+                    color_inherited: false,
+                },
+            ],
+        );
+        let elephant_bytes: &[u8] = b"source-free-elephant-test-font";
+        let times_bytes: &[u8] = b"source-free-times-test-font";
+        let elephant_sha = font_fingerprint_sha256(elephant_bytes);
+        let times_sha = font_fingerprint_sha256(times_bytes);
+
+        let mut resolver = |_: &RenderTextFragmentV1, run: &RenderTypographyRunV1| match run
+            .source_font_name
+            .as_str()
+        {
+            "Elephant" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-elephant",
+                expected_sha256: &elephant_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: elephant_bytes,
+            }),
+            "Times New Roman" => Some(ExplicitRenderTextFontResourceV1 {
+                resource_id: "font-times",
+                expected_sha256: &times_sha,
+                face_index: 0,
+                default_font_size_emu: 152_400,
+                default_line_height_emu: 190_500,
+                bytes: times_bytes,
+            }),
+            _ => None,
+        };
+
+        let runs = admitted_mixed_family_typography_runs_v1(&fragment, &mut resolver)
+            .expect("complete mixed-family runs must be admitted");
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].scalar_start..runs[0].scalar_end, 0..2);
+        assert_eq!(runs[0].font.resource_id, "font-elephant");
+        assert_eq!(runs[0].font_fingerprint_sha256, elephant_sha);
+        assert_eq!(runs[1].scalar_start..runs[1].scalar_end, 2..4);
+        assert_eq!(runs[1].font.resource_id, "font-times");
+        assert_eq!(runs[1].font_fingerprint_sha256, times_sha);
     }
 
     #[test]
@@ -2553,6 +3913,231 @@ mod tests {
         }
         assert!(json.contains("image/png"));
         assert!(json.contains("hello"));
+    }
+
+    #[test]
+    fn authored_lane_appends_after_base_in_exact_back_to_front_order() {
+        let mut plan = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
+        let base_len = plan.nodes.len();
+        let page_id = plan.page_id;
+        let back: NodeId = serde_json::from_str("\"01890f47-0d10-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
+        let front: NodeId = serde_json::from_str("\"01890f47-0d11-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
+        let lane = AuthoredPageRenderLaneV1 {
+            page_id,
+            nodes: vec![
+                AuthoredPageRenderNodeV1 {
+                    node_id: back,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(10),
+                        LengthEmu::new(20),
+                        LengthEmu::new(300),
+                        LengthEmu::new(400),
+                    ),
+                    solid_fill_rgb: Some([1, 2, 3]),
+                    solid_line: None,
+                },
+                AuthoredPageRenderNodeV1 {
+                    node_id: front,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(30),
+                        LengthEmu::new(40),
+                        LengthEmu::new(300),
+                        LengthEmu::new(400),
+                    ),
+                    solid_fill_rgb: Some([4, 5, 6]),
+                    solid_line: Some(RenderSolidLineV1 {
+                        rgb: [7, 8, 9],
+                        width_emu: 12_700,
+                    }),
+                },
+            ],
+        };
+
+        apply_authored_page_render_lane_v1(&mut plan, &lane).expect("authored lane projection");
+        assert_eq!(plan.nodes.len(), base_len + 2);
+        assert_eq!(plan.nodes[base_len].node_id, back);
+        assert_eq!(plan.nodes[base_len + 1].node_id, front);
+        assert_eq!(plan.nodes[base_len].solid_fill_rgb, Some([1, 2, 3]));
+        assert_eq!(
+            plan.nodes[base_len + 1]
+                .solid_line
+                .as_ref()
+                .map(|line| line.rgb),
+            Some([7, 8, 9])
+        );
+    }
+
+    #[test]
+    fn authored_lane_reorder_changes_only_effective_paint_order() {
+        let base = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
+        let base_ids = base
+            .nodes
+            .iter()
+            .map(|node| node.node_id)
+            .collect::<Vec<_>>();
+        let page_id = base.page_id;
+        let a: NodeId = serde_json::from_str("\"01890f47-0d20-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
+        let b: NodeId = serde_json::from_str("\"01890f47-0d21-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
+        let bounds_a = RectEmu::new(
+            LengthEmu::new(100),
+            LengthEmu::new(200),
+            LengthEmu::new(300),
+            LengthEmu::new(400),
+        );
+        let bounds_b = RectEmu::new(
+            LengthEmu::new(110),
+            LengthEmu::new(210),
+            LengthEmu::new(300),
+            LengthEmu::new(400),
+        );
+        let node = |node_id, bounds, color| AuthoredPageRenderNodeV1 {
+            node_id,
+            bounds,
+            solid_fill_rgb: Some(color),
+            solid_line: None,
+        };
+
+        let mut first = base.clone();
+        apply_authored_page_render_lane_v1(
+            &mut first,
+            &AuthoredPageRenderLaneV1 {
+                page_id,
+                nodes: vec![node(a, bounds_a, [1, 2, 3]), node(b, bounds_b, [4, 5, 6])],
+            },
+        )
+        .expect("A then B");
+
+        let mut reordered = base;
+        apply_authored_page_render_lane_v1(
+            &mut reordered,
+            &AuthoredPageRenderLaneV1 {
+                page_id,
+                nodes: vec![node(b, bounds_b, [4, 5, 6]), node(a, bounds_a, [1, 2, 3])],
+            },
+        )
+        .expect("B then A");
+
+        assert_eq!(
+            first.nodes[..base_ids.len()]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            base_ids,
+            "base/imported lane order must remain untouched"
+        );
+        assert_eq!(
+            reordered.nodes[..base_ids.len()]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            base_ids,
+            "reorder must not perturb the base/imported lane"
+        );
+        assert_eq!(
+            first.nodes[base_ids.len()..]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            vec![a, b]
+        );
+        assert_eq!(
+            reordered.nodes[base_ids.len()..]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            vec![b, a]
+        );
+
+        let first_a = first
+            .nodes
+            .iter()
+            .find(|node| node.node_id == a)
+            .expect("A");
+        let reordered_a = reordered
+            .nodes
+            .iter()
+            .find(|node| node.node_id == a)
+            .expect("A reordered");
+        let first_b = first
+            .nodes
+            .iter()
+            .find(|node| node.node_id == b)
+            .expect("B");
+        let reordered_b = reordered
+            .nodes
+            .iter()
+            .find(|node| node.node_id == b)
+            .expect("B reordered");
+        assert_eq!(first_a.bounds, reordered_a.bounds);
+        assert_eq!(first_b.bounds, reordered_b.bounds);
+        assert_eq!(first_a.solid_fill_rgb, reordered_a.solid_fill_rgb);
+        assert_eq!(first_b.solid_fill_rgb, reordered_b.solid_fill_rgb);
+    }
+
+    #[test]
+    fn authored_lane_rejects_duplicate_and_base_collision_without_partial_append() {
+        let mut plan = build_page_render_plan_v1(&fixture(), 0).expect("base render plan");
+        let original = plan.clone();
+        let base_node = plan.nodes[0].node_id;
+        let duplicate: NodeId = serde_json::from_str("\"01890f47-0d12-7abc-8def-0123456789ab\"")
+            .expect("authored NodeId");
+
+        let duplicate_lane = AuthoredPageRenderLaneV1 {
+            page_id: plan.page_id,
+            nodes: vec![
+                AuthoredPageRenderNodeV1 {
+                    node_id: duplicate,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(0),
+                        LengthEmu::new(0),
+                        LengthEmu::new(10),
+                        LengthEmu::new(10),
+                    ),
+                    solid_fill_rgb: None,
+                    solid_line: None,
+                },
+                AuthoredPageRenderNodeV1 {
+                    node_id: duplicate,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(0),
+                        LengthEmu::new(0),
+                        LengthEmu::new(10),
+                        LengthEmu::new(10),
+                    ),
+                    solid_fill_rgb: None,
+                    solid_line: None,
+                },
+            ],
+        };
+        assert!(matches!(
+            apply_authored_page_render_lane_v1(&mut plan, &duplicate_lane),
+            Err(RenderPlanErrorV1::AuthoredLaneDuplicateNode { .. })
+        ));
+        assert_eq!(plan, original);
+
+        let collision_lane = AuthoredPageRenderLaneV1 {
+            page_id: plan.page_id,
+            nodes: vec![AuthoredPageRenderNodeV1 {
+                node_id: base_node,
+                bounds: RectEmu::new(
+                    LengthEmu::new(0),
+                    LengthEmu::new(0),
+                    LengthEmu::new(10),
+                    LengthEmu::new(10),
+                ),
+                solid_fill_rgb: None,
+                solid_line: None,
+            }],
+        };
+        assert!(matches!(
+            apply_authored_page_render_lane_v1(&mut plan, &collision_lane),
+            Err(RenderPlanErrorV1::AuthoredLaneBaseCollision { .. })
+        ));
+        assert_eq!(plan, original);
     }
 
     #[test]

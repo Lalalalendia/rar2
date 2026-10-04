@@ -269,6 +269,7 @@ try {
       .sort((left, right) => left.order - right.order)
       .map((pageModel) => ({
         page_id: pageModel.page_id,
+        page_identity_sha256: sha256(Buffer.from(pageModel.page_id, "utf8")),
         order: pageModel.order,
         width_emu: pageModel.width_emu,
         height_emu: pageModel.height_emu
