@@ -53,7 +53,9 @@ impl ViewerApp {
         Err("Selected visual instance is not an admitted authored Rectangle.".to_owned())
     }
 
-    pub(super) fn duplicate_selected_authored_rectangle(&mut self) -> Result<pub_editor::NodeId, String> {
+    pub(super) fn duplicate_selected_authored_rectangle(
+        &mut self,
+    ) -> Result<pub_editor::NodeId, String> {
         let (source_node_id, page_id) = self.selected_authored_rectangle_target()?;
         let destination_node_id =
             pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
