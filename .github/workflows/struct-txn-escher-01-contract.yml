@@ -1,0 +1,45 @@
+name: struct-txn-escher-01-contract
+
+on:
+  pull_request:
+    paths:
+      - tools/research-runner/experiments/struct-txn-escher-01.packet.json
+      - tools/research-runner/operations/struct_txn_escher_01.ps1
+      - tools/windows/run_struct_txn_escher_01_direct.ps1
+      - vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+      - .github/workflows/struct-txn-escher-01-contract.yml
+
+jobs:
+  windows-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse PowerShell
+        shell: powershell
+        run: |
+          foreach ($path in @(
+            'tools\research-runner\operations\struct_txn_escher_01.ps1',
+            'tools\windows\run_struct_txn_escher_01_direct.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+            if ($errors.Count -ne 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+          }
+      - name: Parse packet
+        shell: powershell
+        run: |
+          $packet = Get-Content tools\research-runner\experiments\struct-txn-escher-01.packet.json -Raw | ConvertFrom-Json
+          if ([string]$packet.id -ne 'STRUCT-TXN-ESCHER-01') { throw 'wrong experiment id' }
+
+  rust-helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt
+      - run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+      - working-directory: vendor/producer-a
+        run: cargo check -p pub-reader --bin structural_base_manifest
