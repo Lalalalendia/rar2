@@ -6038,9 +6038,8 @@ mod asset_reachability_tests {
     #[test]
     fn fixed_image_resources_replace_source_bytes_for_the_same_node() {
         let mut session = EditorSession::new(fixed_image_test_graph()).expect("session");
-        let node_id: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId");
+        let node_id: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
         let source_resource: ResourceId =
             serde_json::from_str("\"44000000-0000-4000-8000-000000000001\"")
                 .expect("canonical ResourceId");
@@ -6077,12 +6076,10 @@ mod asset_reachability_tests {
     #[test]
     fn fixed_image_resources_group_shared_source_bytes_deterministically() {
         let mut session = EditorSession::new(fixed_image_test_graph()).expect("session");
-        let node_a: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId");
-        let node_b: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
-                .expect("canonical NodeId");
+        let node_a: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
+        let node_b: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+            .expect("canonical NodeId");
         let resource_id: ResourceId =
             serde_json::from_str("\"44000000-0000-4000-8000-000000000001\"")
                 .expect("canonical ResourceId");
@@ -6117,9 +6114,8 @@ mod asset_reachability_tests {
 
     #[test]
     fn fixed_node_paint_projects_only_visible_resolved_solid_state() {
-        let node_id: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId");
+        let node_id: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
         let paint = pub_reader::PubEffectiveShapePaintSource {
             fill: pub_reader::PubEffectiveFillSource {
                 solid: Some(paint_value(true)),
@@ -6162,9 +6158,8 @@ mod asset_reachability_tests {
     #[test]
     fn fixed_output_state_snapshots_authoritative_rust_state_without_replay() {
         let mut session = EditorSession::new(fixed_image_test_graph()).expect("session");
-        let node_id: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId");
+        let node_id: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
         let replacement_bytes = b"\x89PNG\r\n\x1a\ncurrent-state".to_vec();
         let replacement_sha = session
             .import_replacement_asset("image/png", replacement_bytes.clone())
