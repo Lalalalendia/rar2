@@ -1788,13 +1788,13 @@ mod tests {
         env, fs,
     };
 
-    use pub_editor::LengthEmu;
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
         uniform_text_color_rgb_v1,
     };
+    use pub_editor::LengthEmu;
     use pub_layout::{
         BoundedLayoutEnvironment, BoundedShapingRuntime, compatible_natural_line_height_emu_v1,
         font_fingerprint_sha256, shape_bounded_ltr,
