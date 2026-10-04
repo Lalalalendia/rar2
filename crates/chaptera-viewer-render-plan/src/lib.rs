@@ -1668,8 +1668,7 @@ fn scale_proportional_line_height_emu_v1(
         return None;
     }
 
-    let numerator =
-        i128::from(natural_line_height_emu) * i128::from(point_equivalent_emu);
+    let numerator = i128::from(natural_line_height_emu) * i128::from(point_equivalent_emu);
     let denominator = i128::from(PUBLISHER_SINGLE_POINT_EQUIVALENT_EMU_V1);
     let rounded = (numerator + denominator / 2) / denominator;
     let line_height_emu = i64::try_from(rounded).ok()?;
@@ -1697,10 +1696,11 @@ fn resolved_uniform_line_height_emu_v1(
                     LengthEmu::new(font_size_emu),
                 )
                 .map(LengthEmu::get)
-                && let Some(line_height_emu) = scale_proportional_line_height_emu_v1(
-                    natural_line_height_emu,
-                    point_equivalent_emu,
-                ) {
+                    && let Some(line_height_emu) = scale_proportional_line_height_emu_v1(
+                        natural_line_height_emu,
+                        point_equivalent_emu,
+                    )
+                {
                     return Some(line_height_emu);
                 }
             }
@@ -3194,13 +3194,7 @@ mod tests {
         };
 
         assert_eq!(
-            resolved_uniform_line_height_emu_v1(
-                &visual,
-                &fragment,
-                12 * 12_700,
-                &font,
-                false,
-            ),
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
             Some(fallback)
         );
 
@@ -3215,13 +3209,7 @@ mod tests {
             source_story_text_sha256: viewer_story_text_sha256(&story_text),
         }];
         assert_eq!(
-            resolved_uniform_line_height_emu_v1(
-                &visual,
-                &fragment,
-                12 * 12_700,
-                &font,
-                false,
-            ),
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
             Some(absolute)
         );
 
@@ -3229,13 +3217,7 @@ mod tests {
             point_equivalent_emu: 18 * 12_700,
         };
         assert_eq!(
-            resolved_uniform_line_height_emu_v1(
-                &visual,
-                &fragment,
-                12 * 12_700,
-                &font,
-                false,
-            ),
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
             Some(fallback)
         );
 
@@ -3244,13 +3226,7 @@ mod tests {
         };
         visual.paragraph_line_spacings[0].scalar_end = fragment.scalar_end - 1;
         assert_eq!(
-            resolved_uniform_line_height_emu_v1(
-                &visual,
-                &fragment,
-                12 * 12_700,
-                &font,
-                false,
-            ),
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
             Some(fallback)
         );
 
@@ -3259,13 +3235,7 @@ mod tests {
             .paragraph_line_spacings
             .push(visual.paragraph_line_spacings[0].clone());
         assert_eq!(
-            resolved_uniform_line_height_emu_v1(
-                &visual,
-                &fragment,
-                12 * 12_700,
-                &font,
-                false,
-            ),
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
             Some(fallback)
         );
 
@@ -3273,17 +3243,10 @@ mod tests {
         visual.paragraph_line_spacings[0].source_story_text_sha256 =
             viewer_story_text_sha256("stale");
         assert_eq!(
-            resolved_uniform_line_height_emu_v1(
-                &visual,
-                &fragment,
-                12 * 12_700,
-                &font,
-                false,
-            ),
+            resolved_uniform_line_height_emu_v1(&visual, &fragment, 12 * 12_700, &font, false),
             Some(fallback)
         );
     }
-
 
     #[test]
     fn proportional_line_height_scales_only_proven_single_and_one_point_five_modes() {
