@@ -68,6 +68,10 @@ struct CurrentViewerPlanCensusV1 {
     non_identity_transform_node_count: usize,
     text_node_count: usize,
     missing_text_layout_count: usize,
+    node_id_sort_reordered_page_count: usize,
+    node_id_sort_position_mismatch_count: usize,
+    visible_node_id_sort_reordered_page_count: usize,
+    visible_node_id_sort_position_mismatch_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -179,6 +183,44 @@ fn census(plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
     let mut projected_ids = BTreeSet::new();
 
     for page in plans {
+        let plan_order = page.nodes.iter().map(|node| node.node_id).collect::<Vec<_>>();
+        let mut sorted_order = plan_order.clone();
+        sorted_order.sort();
+        let position_mismatches = plan_order
+            .iter()
+            .zip(&sorted_order)
+            .filter(|(left, right)| left != right)
+            .count();
+        if position_mismatches > 0 {
+            out.node_id_sort_reordered_page_count += 1;
+            out.node_id_sort_position_mismatch_count += position_mismatches;
+        }
+
+        let visible_order = page
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.solid_fill_rgb.is_some()
+                    || node.solid_line.is_some()
+                    || node.decorative_border.is_some()
+                    || node.image.is_some()
+                    || node.text.is_some()
+                    || node.table.is_some()
+            })
+            .map(|node| node.node_id)
+            .collect::<Vec<_>>();
+        let mut visible_sorted_order = visible_order.clone();
+        visible_sorted_order.sort();
+        let visible_position_mismatches = visible_order
+            .iter()
+            .zip(&visible_sorted_order)
+            .filter(|(left, right)| left != right)
+            .count();
+        if visible_position_mismatches > 0 {
+            out.visible_node_id_sort_reordered_page_count += 1;
+            out.visible_node_id_sort_position_mismatch_count += visible_position_mismatches;
+        }
+
         out.node_count += page.nodes.len();
         for node in &page.nodes {
             *node_counts.entry(node.node_id).or_default() += 1;
@@ -373,7 +415,7 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
@@ -390,6 +432,10 @@ fn run(
         packet.census.non_identity_transform_node_count,
         packet.census.text_node_count,
         packet.census.missing_text_layout_count,
+        packet.census.node_id_sort_reordered_page_count,
+        packet.census.node_id_sort_position_mismatch_count,
+        packet.census.visible_node_id_sort_reordered_page_count,
+        packet.census.visible_node_id_sort_position_mismatch_count,
     );
     Ok(())
 }
