@@ -16,11 +16,11 @@ jobs:
         with:
           toolchain: 1.89.0
           components: rustfmt
-      - name: Rustfmt pub-writer
-        run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs
       - name: Test bounded structural replay planner
         working-directory: vendor/producer-a
         run: cargo test -p pub-writer structural_replay -- --nocapture
+      - name: Rustfmt pub-writer
+        run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs
 
 
   format-artifact:
