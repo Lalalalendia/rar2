@@ -24,9 +24,9 @@ mod suite_handoff_cli;
 mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
-mod supporter_ui;
 #[allow(dead_code)]
 mod supporter_routes;
+mod supporter_ui;
 mod text_session;
 #[cfg(target_os = "windows")]
 mod windows_dll_search;
@@ -2558,11 +2558,7 @@ impl ViewerApp {
         }
     }
 
-    fn handle_supporter_action(
-        &mut self,
-        ctx: &egui::Context,
-        action: supporter::SupporterAction,
-    ) {
+    fn handle_supporter_action(&mut self, ctx: &egui::Context, action: supporter::SupporterAction) {
         let now = current_unix_seconds();
         match action {
             supporter::SupporterAction::Later => {
