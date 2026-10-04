@@ -65,6 +65,8 @@ struct CurrentNode {
 #[derive(Debug, Deserialize)]
 struct CurrentProjectedSceneInstance {
     instance_id: String,
+    #[serde(default)]
+    projection_kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +175,11 @@ struct MappingSummary {
     mapped_image_use_count: usize,
     mapped_text_node_count: usize,
     mapped_text_run_count: usize,
+    mapped_resource_node_count: usize,
+    text_node_count: usize,
+    text_resource_residual_node_count: usize,
+    text_resource_residual_signature_counts: BTreeMap<String, usize>,
+    text_partial_residual_signature_counts: BTreeMap<String, usize>,
     backend_fallback_reason_counts: BTreeMap<String, usize>,
     cropped_image_use_count: usize,
     table_node_count: usize,
@@ -181,6 +188,8 @@ struct MappingSummary {
     shaped_span_line_count: usize,
     missing_shaping_line_count: usize,
     unresolved_text_color_line_count: usize,
+    residual_node_signature_counts: BTreeMap<String, usize>,
+    residual_projection_lane_counts: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -306,6 +315,10 @@ fn main() -> Result<()> {
     let mut text_runs = Vec::<FixedTextRun>::new();
     let mut used_glyph_ids = BTreeSet::<u32>::new();
     let mut mapped_text_nodes = BTreeSet::<NodeId>::new();
+    let mut mapped_resource_nodes = BTreeSet::<NodeId>::new();
+    let mut text_node_ids = BTreeSet::<NodeId>::new();
+    let mut residual_reasons = BTreeMap::<NodeId, BTreeSet<String>>::new();
+    let mut text_residual_reasons = BTreeMap::<NodeId, BTreeSet<String>>::new();
     let mut summary = MappingSummary {
         input_page_count: input.pages.len(),
         input_node_count: actual_node_count,
@@ -354,6 +367,10 @@ fn main() -> Result<()> {
             }
             if node.table.is_some() {
                 summary.table_node_count += 1;
+                residual_reasons
+                    .entry(resolved_node_id)
+                    .or_default()
+                    .insert("table".into());
             }
 
             if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
@@ -366,11 +383,16 @@ fn main() -> Result<()> {
                     }),
                 });
                 summary.mapped_paint_node_count += 1;
+                mapped_resource_nodes.insert(resolved_node_id);
             }
 
             if let Some(image) = &node.image {
                 if image.source_window.is_some() {
                     summary.cropped_image_use_count += 1;
+                    residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert("cropped_image".into());
                 } else {
                     let asset = image_assets.get(&image.resource_id).copied().ok_or_else(|| {
                         anyhow::anyhow!(
@@ -389,14 +411,24 @@ fn main() -> Result<()> {
                         .or_default()
                         .push(resolved_node_id);
                     summary.mapped_image_use_count += 1;
+                    mapped_resource_nodes.insert(resolved_node_id);
                 }
             }
 
             let Some(text) = &node.text else {
                 continue;
             };
+            text_node_ids.insert(resolved_node_id);
             let Some(layout) = &text.layout else {
                 summary.missing_shaping_line_count += 1;
+                residual_reasons
+                    .entry(resolved_node_id)
+                    .or_default()
+                    .insert("text_layout_missing".into());
+                text_residual_reasons
+                    .entry(resolved_node_id)
+                    .or_default()
+                    .insert("text_layout_missing".into());
                 continue;
             };
 
@@ -406,6 +438,15 @@ fn main() -> Result<()> {
                         .backend_fallback_reason_counts
                         .entry(reason.clone())
                         .or_default() += 1;
+                    let tag = format!("backend_fallback:{reason}");
+                    residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert(tag.clone());
+                    text_residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert(tag);
                 }
                 CurrentTextLayoutDisposition::SharedResolved {
                     font_resource_id,
@@ -445,10 +486,26 @@ fn main() -> Result<()> {
                         }
                         if !line.spans.is_empty() {
                             summary.shaped_span_line_count += 1;
+                            residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("shaped_span".into());
+                            text_residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("shaped_span".into());
                             continue;
                         }
                         let Some(shaping) = &line.shaping else {
                             summary.missing_shaping_line_count += 1;
+                            residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("missing_shaping".into());
+                            text_residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("missing_shaping".into());
                             continue;
                         };
                         if shaping.units_per_em == 0 {
@@ -472,6 +529,14 @@ fn main() -> Result<()> {
                             line.scalar_end,
                         ) else {
                             summary.unresolved_text_color_line_count += 1;
+                            residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("unresolved_text_color".into());
+                            text_residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("unresolved_text_color".into());
                             continue;
                         };
 
@@ -515,12 +580,98 @@ fn main() -> Result<()> {
 
                     if node_mapped {
                         mapped_text_nodes.insert(resolved_node_id);
+                        mapped_resource_nodes.insert(resolved_node_id);
+                    } else if !text_residual_reasons.contains_key(&resolved_node_id) {
+                        let tag = if layout.lines.is_empty() {
+                            "shared_resolved:no_lines"
+                        } else if layout.lines.iter().all(|line| line.text.is_empty()) {
+                            "shared_resolved:empty_only"
+                        } else {
+                            "shared_resolved:no_emittable_run"
+                        };
+                        residual_reasons
+                            .entry(resolved_node_id)
+                            .or_default()
+                            .insert(tag.into());
+                        text_residual_reasons
+                            .entry(resolved_node_id)
+                            .or_default()
+                            .insert(tag.into());
                     }
                 }
             }
         }
     }
     summary.mapped_text_node_count = mapped_text_nodes.len();
+    summary.mapped_resource_node_count = mapped_resource_nodes.len();
+    summary.text_node_count = text_node_ids.len();
+
+    for node_id in &text_node_ids {
+        let Some(reasons) = text_residual_reasons.get(node_id) else {
+            continue;
+        };
+        let signature = reasons.iter().cloned().collect::<Vec<_>>().join("+");
+        if mapped_text_nodes.contains(node_id) {
+            *summary
+                .text_partial_residual_signature_counts
+                .entry(signature)
+                .or_default() += 1;
+        } else {
+            *summary
+                .text_resource_residual_signature_counts
+                .entry(signature)
+                .or_default() += 1;
+            summary.text_resource_residual_node_count += 1;
+        }
+    }
+    if mapped_text_nodes.len() + summary.text_resource_residual_node_count != text_node_ids.len() {
+        bail!("current Viewer text-resource partition does not cover every text node exactly once");
+    }
+
+    for page in &input.pages {
+        for node in &page.nodes {
+            let resolved_node_id = resolved_output_node_id_v1(node)?;
+            if mapped_resource_nodes.contains(&resolved_node_id) {
+                continue;
+            }
+            let signature = residual_reasons
+                .get(&resolved_node_id)
+                .filter(|reasons| !reasons.is_empty())
+                .map(|reasons| reasons.iter().cloned().collect::<Vec<_>>().join("+"))
+                .unwrap_or_else(|| {
+                    if node.text.is_some() {
+                        "text:no_supported_text_resource".into()
+                    } else if node.decorative_border.is_some() {
+                        "decorative_border".into()
+                    } else {
+                        "geometry_only".into()
+                    }
+                });
+            *summary
+                .residual_node_signature_counts
+                .entry(signature)
+                .or_default() += 1;
+
+            let lane = node
+                .projected_scene_instance
+                .as_ref()
+                .and_then(|instance| instance.projection_kind.as_deref())
+                .unwrap_or("base")
+                .to_owned();
+            *summary
+                .residual_projection_lane_counts
+                .entry(lane)
+                .or_default() += 1;
+        }
+    }
+    let residual_total = summary
+        .residual_node_signature_counts
+        .values()
+        .copied()
+        .sum::<usize>();
+    if residual_total + mapped_resource_nodes.len() != actual_node_count {
+        bail!("current Viewer residual partition does not cover every node exactly once");
+    }
 
     let image_resources = image_uses
         .into_iter()
