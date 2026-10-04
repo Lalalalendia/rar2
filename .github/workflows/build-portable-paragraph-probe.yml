@@ -1,0 +1,35 @@
+name: Build portable paragraph metrics probe
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/build-portable-paragraph-probe.yml"
+      - "tools/research-runner/paragraph-metrics-probe/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Build exact standalone probe
+        shell: pwsh
+        run: |
+          cargo build --offline --locked --release --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "probe build failed" }
+          $exe = "tools/research-runner/paragraph-metrics-probe/target/release/paragraph-metrics-probe.exe"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "probe exe missing" }
+          Get-FileHash -LiteralPath $exe -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paragraph-metrics-probe-windows-x64
+          path: tools/research-runner/paragraph-metrics-probe/target/release/paragraph-metrics-probe.exe
+          if-no-files-found: error
+          retention-days: 7
