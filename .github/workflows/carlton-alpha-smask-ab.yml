@@ -277,6 +277,7 @@ jobs:
           Path(os.environ["CHAPTERA_ALPHA_AB_RECEIPT"]).write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           print(json.dumps(receipt, sort_keys=True))
           '@ | python -
+          "CHAPTERA_ALPHA_AB_RECEIPT=$receipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Stage retained A/B artifacts
         shell: pwsh
