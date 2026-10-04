@@ -1,4 +1,5 @@
 //! Bounded single-Rectangle Duplicate semantics for Chaptera-authored objects.
+//! CI negative-control note: this feature-owned module must not require Continuity V2 Windows.
 //!
 //! Duplicate is intentionally lowered to the existing canonical CreateShape
 //! operation. This module owns only admission and the named placement policy;
