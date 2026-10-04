@@ -17,6 +17,30 @@ from yab259_order_preserving_donor import (
 EXPECTED_ALPHA_REPAIR_FILES = EXPECTED_ORDERED_REPAIR_FILES
 
 
+def replace_between_once(
+    path: pathlib.Path,
+    start_marker: str,
+    end_marker: str,
+    replacement: str,
+    *,
+    label: str,
+) -> None:
+    text = path.read_text(encoding="utf-8")
+    start_count = text.count(start_marker)
+    end_count = text.count(end_marker)
+    if start_count != 1 or end_count != 1:
+        raise RuntimeError(
+            f"{label} marker mismatch in {path}: "
+            f"start={start_count} end={end_count}"
+        )
+    start = text.index(start_marker)
+    end = text.index(end_marker, start + len(start_marker))
+    path.write_text(
+        text[:start] + replacement + text[end:],
+        encoding="utf-8",
+    )
+
+
 def prepare_alpha_image_pdf_donor(
     repository: pathlib.Path,
     checkout: pathlib.Path,
@@ -198,27 +222,10 @@ def prepare_alpha_image_pdf_donor(
         label="Yab #259 alpha page XObject identity",
     )
 
-    replace_once(
+    replace_between_once(
         pdf,
-        """    for resource_id in image_ids {
-        let PreparedImage::Rgb {
-            width,
-            height,
-            bytes,
-        } = &prepared_images[&resource_id]
-        else {
-            unreachable!("image object list contains only RGB images")
-        };
-        let mut stream = format!(
-            "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length {} >>\nstream\n",
-            bytes.len()
-        )
-        .into_bytes();
-        stream.extend_from_slice(bytes);
-        stream.extend_from_slice(b"\nendstream");
-        objects.push(stream);
-    }
-""",
+        "    for resource_id in image_ids {\n",
+        "    for identity in font_ids {\n",
         """    for resource_id in image_ids {
         match &prepared_images[&resource_id] {
             PreparedImage::Rgb {
@@ -267,6 +274,7 @@ def prepare_alpha_image_pdf_donor(
             }
         }
     }
+
 """,
         label="Yab #259 exact PDF soft-mask image emission",
     )
