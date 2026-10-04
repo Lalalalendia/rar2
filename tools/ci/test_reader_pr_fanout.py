@@ -54,6 +54,35 @@ mod tests {
         old_test_line=old_marker,
         new_test_line=new_marker,
     )
+
+
+    valid_dll_bootstrap = """#[cfg(target_os = "windows")]
+mod windows_dll_search;
+
+fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "windows")]
+    if let Err(error) = windows_dll_search::install_process_policy() {
+        eprintln!("failed to establish safe DLL search policy: {error}");
+        std::process::exit(2);
+    }
+
+    let mut args = std::env::args_os().skip(1).peekable();
+}
+"""
+    assert mod.windows_dll_bootstrap_errors(valid_dll_bootstrap) == []
+    assert mod.windows_dll_bootstrap_errors(
+        valid_dll_bootstrap.replace(
+            '#[cfg(target_os = "windows")]\nmod windows_dll_search;\n\n', ""
+        )
+    )
+    assert mod.windows_dll_bootstrap_errors(
+        valid_dll_bootstrap.replace(
+            "windows_dll_search::install_process_policy()", "Ok::<(), String>(())"
+        )
+    )
+    assert mod.windows_dll_bootstrap_errors(
+        valid_dll_bootstrap.replace("std::process::exit(2);", "return Ok(());")
+    )
     assert_scope(
         ["apps/chaptera-server/src/reader_scene_v1.rs"],
         evidence_only_paths={"apps/chaptera-server/src/reader_scene_v1.rs"},
