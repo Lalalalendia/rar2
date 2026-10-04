@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import re
 import time
@@ -158,8 +157,10 @@ def main() -> int:
             rows, errors = request_json_lines_with_retry(query)
             return crawl_id, variant, rows, errors
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            results = list(executor.map(run_query, tasks))
+        results = []
+        for task in tasks:
+            results.append(run_query(task))
+            time.sleep(0.3)
 
         for crawl_id, variant, rows_found, errors in results:
             query_receipts.append(
