@@ -13,11 +13,7 @@ pub(super) struct TextBoxFrameOutcome {
 }
 
 impl ViewerApp {
-    pub(super) fn show_text_box_tool_control(
-        &mut self,
-        ui: &mut egui::Ui,
-        editor_available: bool,
-    ) {
+    pub(super) fn show_text_box_tool_control(&mut self, ui: &mut egui::Ui, editor_available: bool) {
         let text_box_active = self.text_box_creation.active();
         let text_box_response = ui.add_enabled(
             editor_available && self.visual.is_some(),
@@ -35,8 +31,7 @@ impl ViewerApp {
                     self.edit_status = Some("Text Box tool deactivated.".to_owned());
                 }
                 Err(error) => {
-                    self.edit_status =
-                        Some(format!("Text Box tool could not deactivate: {error}"));
+                    self.edit_status = Some(format!("Text Box tool could not deactivate: {error}"));
                 }
             }
             return;
@@ -78,8 +73,7 @@ impl ViewerApp {
                     self.edit_status = Some("Text Box tool deactivated.".to_owned());
                 }
                 Err(error) => {
-                    self.edit_status =
-                        Some(format!("Text Box tool could not deactivate: {error}"));
+                    self.edit_status = Some(format!("Text Box tool could not deactivate: {error}"));
                 }
             }
         }
