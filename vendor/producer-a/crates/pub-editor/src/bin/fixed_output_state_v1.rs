@@ -1,6 +1,4 @@
-use pub_editor::{
-    EditorProject, Sha256Digest, open_mature_0x2c_editor,
-};
+use pub_editor::{EditorProject, Sha256Digest, open_mature_0x2c_editor};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -34,12 +32,24 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
 
     while let Some(arg) = values.next() {
         match arg.as_str() {
-            "--source" => source = Some(PathBuf::from(values.next().ok_or("--source requires a path")?)),
-            "--project" => {
-                project = Some(PathBuf::from(values.next().ok_or("--project requires a path")?))
+            "--source" => {
+                source = Some(PathBuf::from(
+                    values.next().ok_or("--source requires a path")?,
+                ))
             }
-            "--asset" => assets.push(PathBuf::from(values.next().ok_or("--asset requires a path")?)),
-            "--output" => output = Some(PathBuf::from(values.next().ok_or("--output requires a path")?)),
+            "--project" => {
+                project = Some(PathBuf::from(
+                    values.next().ok_or("--project requires a path")?,
+                ))
+            }
+            "--asset" => assets.push(PathBuf::from(
+                values.next().ok_or("--asset requires a path")?,
+            )),
+            "--output" => {
+                output = Some(PathBuf::from(
+                    values.next().ok_or("--output requires a path")?,
+                ))
+            }
             other => return Err(format!("unknown argument: {other}").into()),
         }
     }
@@ -106,7 +116,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     session.apply_project_with_assets(&project, &asset_bytes)?;
     let state = session.fixed_output_state_v1()?;
 
-    if let Some(parent) = args.output.parent().filter(|path| !path.as_os_str().is_empty()) {
+    if let Some(parent) = args
+        .output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
     fs::write(&args.output, serde_json::to_vec_pretty(&state)?)?;
