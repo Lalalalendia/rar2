@@ -40,6 +40,10 @@ pub use writer_assessment::{
     EditorStoryWriterProbeState, EffectiveStoryTextMutation,
 };
 
+use chaptera_text_format_overlay::{
+    BaseCharacterFormatV1, BaseFormatRunV1, TextFormatOverlayStateV1,
+    build_text_format_overlay_state_v1,
+};
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
@@ -70,7 +74,7 @@ use pub_odg::{
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
-    PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
+    PubResolvedStoryFrame, PubTypographyBooleanV1, PubTypographyRun, PubTypographySizeRun,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
@@ -1463,6 +1467,183 @@ impl fmt::Display for EditorOpenError {
 impl std::error::Error for EditorOpenError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorTextFormatBaseErrorV1 {
+    SourceIdentityChanged,
+    MissingStory { story_id: StoryId },
+    StoryChanged { story_id: StoryId },
+    UnsupportedBase { story_id: StoryId, reason: String },
+    Overlay { story_id: StoryId, message: String },
+}
+
+impl fmt::Display for EditorTextFormatBaseErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SourceIdentityChanged => formatter.write_str(
+                "editor source identity changed before text-format base projection",
+            ),
+            Self::MissingStory { story_id } => write!(
+                formatter,
+                "text-format base Story {} is missing",
+                story_id.as_canonical()
+            ),
+            Self::StoryChanged { story_id } => write!(
+                formatter,
+                "text-format base Story {} no longer matches its immutable source text revision",
+                story_id.as_canonical()
+            ),
+            Self::UnsupportedBase { story_id, reason } => write!(
+                formatter,
+                "text-format base for Story {} is unsupported: {reason}",
+                story_id.as_canonical()
+            ),
+            Self::Overlay { story_id, message } => write!(
+                formatter,
+                "text-format overlay rejected Story {} base: {message}",
+                story_id.as_canonical()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EditorTextFormatBaseErrorV1 {}
+
+fn source_font_binding_id_v1(
+    source_hash: Sha256Digest,
+    source_font_index: u32,
+    source_font_name: &str,
+) -> String {
+    let source_object_key = format!("quill-font-index:{source_font_index}:{source_font_name}");
+    let identity = derive_source_canonical_id(SourceDerivedIdInput {
+        source_hash: &source_hash,
+        adapter_id: "pub-editor",
+        source_object_key: &source_object_key,
+        semantic_role: "chaptera.text-format.base-font-binding",
+    })
+    .expect("bounded source font binding uses fixed valid identity namespaces");
+    format!("pub-source-font:{identity}")
+}
+
+fn source_text_format_overlay_from_runs_v1(
+    source_hash: Sha256Digest,
+    story_id: StoryId,
+    base_revision_id: &str,
+    story_scalar_len: u32,
+    source_runs: &[PubTypographyRun],
+) -> Result<TextFormatOverlayStateV1, EditorTextFormatBaseErrorV1> {
+    if story_scalar_len == 0 {
+        return build_text_format_overlay_state_v1(
+            story_id.as_canonical().to_string(),
+            base_revision_id,
+            0,
+            Vec::new(),
+            Vec::new(),
+        )
+        .map_err(|error| EditorTextFormatBaseErrorV1::Overlay {
+            story_id,
+            message: error.to_string(),
+        });
+    }
+
+    let mut runs = source_runs
+        .iter()
+        .filter(|run| run.story_id == story_id)
+        .collect::<Vec<_>>();
+    runs.sort_by_key(|run| (run.story_scalar_start, run.story_scalar_end));
+
+    if runs.is_empty() {
+        return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+            story_id,
+            reason: "no source effective typography runs".to_owned(),
+        });
+    }
+
+    let mut cursor = 0_u32;
+    let mut base_runs = Vec::with_capacity(runs.len());
+    for run in runs {
+        if run.story_scalar_start != cursor
+            || run.story_scalar_end <= run.story_scalar_start
+            || run.story_scalar_end > story_scalar_len
+        {
+            return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "source effective typography does not form one contiguous scalar partition"
+                    .to_owned(),
+            });
+        }
+        if run.source_font_name.trim().is_empty() || run.text_size_emu == 0 {
+            return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "source font binding or effective font size is unavailable".to_owned(),
+            });
+        }
+
+        let bold = run.bold.as_ref().ok_or_else(|| {
+            EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "bounded effective bold is unavailable".to_owned(),
+            }
+        })?;
+        let italic = run.italic.as_ref().ok_or_else(|| {
+            EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "bounded effective italic is unavailable".to_owned(),
+            }
+        })?;
+        if bold.effective_value != (bold.inherited_value ^ bold.local_toggle)
+            || italic.effective_value != (italic.inherited_value ^ italic.local_toggle)
+        {
+            return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "Reader boolean projection violates the admitted XOR invariant".to_owned(),
+            });
+        }
+
+        let [red, green, blue] =
+            run.color_rgb
+                .ok_or_else(|| EditorTextFormatBaseErrorV1::UnsupportedBase {
+                    story_id,
+                    reason: "bounded effective direct-RGB text color is unavailable".to_owned(),
+                })?;
+
+        base_runs.push(BaseFormatRunV1 {
+            start_scalar: run.story_scalar_start,
+            end_scalar: run.story_scalar_end,
+            format: BaseCharacterFormatV1 {
+                font_resource_id: source_font_binding_id_v1(
+                    source_hash,
+                    run.source_font_index,
+                    &run.source_font_name,
+                ),
+                font_size_emu: u64::from(run.text_size_emu),
+                bold: bold.effective_value,
+                italic: italic.effective_value,
+                text_color_rgb: format!("#{red:02X}{green:02X}{blue:02X}"),
+            },
+        });
+        cursor = run.story_scalar_end;
+    }
+
+    if cursor != story_scalar_len {
+        return Err(EditorTextFormatBaseErrorV1::UnsupportedBase {
+            story_id,
+            reason: "source effective typography does not cover the full Story".to_owned(),
+        });
+    }
+
+    build_text_format_overlay_state_v1(
+        story_id.as_canonical().to_string(),
+        base_revision_id,
+        story_scalar_len,
+        base_runs,
+        Vec::new(),
+    )
+    .map_err(|error| EditorTextFormatBaseErrorV1::Overlay {
+        story_id,
+        message: error.to_string(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorProjectError {
     UnsupportedSchema {
         found: String,
@@ -1872,6 +2053,40 @@ impl EditorSession {
 
     pub fn operations(&self) -> &[EditOperation] {
         &self.undo
+    }
+
+    pub fn source_text_format_overlay_v1(
+        &self,
+        story_id: StoryId,
+    ) -> Result<TextFormatOverlayStateV1, EditorTextFormatBaseErrorV1> {
+        self.validate_source_identity()
+            .map_err(|_| EditorTextFormatBaseErrorV1::SourceIdentityChanged)?;
+        let story = self
+            .graph
+            .stories
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        let source_revision_id = self
+            .source_story_state_ids
+            .get(&story_id)
+            .ok_or(EditorTextFormatBaseErrorV1::MissingStory { story_id })?;
+        if story_state_id_v1(story_id, &story.text) != *source_revision_id {
+            return Err(EditorTextFormatBaseErrorV1::StoryChanged { story_id });
+        }
+        let story_scalar_len = u32::try_from(story.text.chars().count()).map_err(|_| {
+            EditorTextFormatBaseErrorV1::UnsupportedBase {
+                story_id,
+                reason: "Story scalar length exceeds u32".to_owned(),
+            }
+        })?;
+
+        source_text_format_overlay_from_runs_v1(
+            self.source_hash,
+            story_id,
+            source_revision_id,
+            story_scalar_len,
+            &self.source_typography_runs,
+        )
     }
 
     pub fn prove_author_created_story_v1(
@@ -6260,6 +6475,105 @@ mod asset_reachability_tests {
                 sha256: replacement_sha,
             }
         );
+    }
+
+    #[test]
+    fn source_text_format_base_preserves_effective_bools_without_inventing_defaults() {
+        let source_hash: Sha256Digest =
+            "1111111111111111111111111111111111111111111111111111111111111111"
+                .parse()
+                .expect("test source hash");
+        let story_id =
+            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x51; 16]));
+        let run = PubTypographyRun {
+            story_id,
+            story_utf16_start: 0,
+            story_utf16_end: 3,
+            story_scalar_start: 0,
+            story_scalar_end: 3,
+            source_font_index: 4,
+            source_font_name: "Montserrat".to_owned(),
+            text_size_emu: 304_800,
+            font_inherited: true,
+            size_inherited: true,
+            color_rgb: Some([0x11, 0x22, 0x33]),
+            color_inherited: true,
+            bold: Some(PubTypographyBooleanV1 {
+                local_toggle: true,
+                inherited_value: true,
+                effective_value: false,
+            }),
+            italic: Some(PubTypographyBooleanV1 {
+                local_toggle: false,
+                inherited_value: true,
+                effective_value: true,
+            }),
+        };
+
+        let state = source_text_format_overlay_from_runs_v1(
+            source_hash,
+            story_id,
+            "sha256:source-story",
+            3,
+            &[run],
+        )
+        .expect("complete bounded source format");
+        assert_eq!(state.base_runs.len(), 1);
+        let format = &state.base_runs[0].format;
+        assert!(!format.bold);
+        assert!(format.italic);
+        assert_eq!(format.font_size_emu, 304_800);
+        assert_eq!(format.text_color_rgb, "#112233");
+        assert!(format.font_resource_id.starts_with("pub-source-font:"));
+        assert!(state.overrides.is_empty());
+    }
+
+    #[test]
+    fn source_text_format_base_refuses_to_invent_missing_color() {
+        let source_hash: Sha256Digest =
+            "2222222222222222222222222222222222222222222222222222222222222222"
+                .parse()
+                .expect("test source hash");
+        let story_id =
+            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x52; 16]));
+        let run = PubTypographyRun {
+            story_id,
+            story_utf16_start: 0,
+            story_utf16_end: 1,
+            story_scalar_start: 0,
+            story_scalar_end: 1,
+            source_font_index: 0,
+            source_font_name: "Arial".to_owned(),
+            text_size_emu: 152_400,
+            font_inherited: false,
+            size_inherited: false,
+            color_rgb: None,
+            color_inherited: false,
+            bold: Some(PubTypographyBooleanV1 {
+                local_toggle: false,
+                inherited_value: false,
+                effective_value: false,
+            }),
+            italic: Some(PubTypographyBooleanV1 {
+                local_toggle: false,
+                inherited_value: false,
+                effective_value: false,
+            }),
+        };
+
+        let error = source_text_format_overlay_from_runs_v1(
+            source_hash,
+            story_id,
+            "sha256:source-story",
+            1,
+            &[run],
+        )
+        .expect_err("missing color must fail closed");
+        assert!(matches!(
+            error,
+            EditorTextFormatBaseErrorV1::UnsupportedBase { .. }
+        ));
+        assert!(error.to_string().contains("text color"));
     }
 
     #[test]
