@@ -204,13 +204,9 @@ mod tests {
     fn source_story_edit_invalidates_projection_and_exact_restore_recovers_ids() {
         let source = "alpha\rbeta";
         let source_state = story_state_id_v1(story_id(), source);
-        let before = project_imported_story_paragraphs_v1(
-            source_hash(),
-            story_id(),
-            &source_state,
-            source,
-        )
-        .expect("source projection");
+        let before =
+            project_imported_story_paragraphs_v1(source_hash(), story_id(), &source_state, source)
+                .expect("source projection");
         assert_eq!(before.len(), 2);
 
         let edited = project_imported_story_paragraphs_v1(
@@ -222,13 +218,9 @@ mod tests {
         .expect("edited projection");
         assert!(edited.is_empty());
 
-        let restored = project_imported_story_paragraphs_v1(
-            source_hash(),
-            story_id(),
-            &source_state,
-            source,
-        )
-        .expect("restored projection");
+        let restored =
+            project_imported_story_paragraphs_v1(source_hash(), story_id(), &source_state, source)
+                .expect("restored projection");
         assert_eq!(restored, before);
     }
 
