@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import zipfile
 from collections import Counter
@@ -138,9 +139,9 @@ def verify_wire(root: Path, items: list[dict]) -> dict:
     }
 
 
-def scribus_story_alignment_counts(path: Path) -> Counter:
+def scribus_story_alignment_fingerprints(path: Path) -> Counter:
     root = ET.parse(path).getroot()
-    counts = Counter()
+    observed = Counter()
     for story in (node for node in root.iter() if local(node.tag) == "StoryText"):
         values = {
             child.attrib.get("ALIGN")
@@ -148,29 +149,51 @@ def scribus_story_alignment_counts(path: Path) -> Counter:
             if local(child.tag) in {"DefaultStyle", "para", "trail"}
             and child.attrib.get("ALIGN") is not None
         }
-        if "1" in values:
-            counts["center"] += 1
-        if "2" in values:
-            counts["right"] += 1
-    return counts
+        alignment = None
+        if "1" in values and "2" not in values:
+            alignment = "center"
+        elif "2" in values and "1" not in values:
+            alignment = "right"
+        if alignment is None:
+            continue
+
+        text = "".join(
+            node.attrib.get("CH", "")
+            for node in story.iter()
+            if local(node.tag) == "ITEXT"
+        )
+        non_whitespace = "".join(
+            character for character in text if not character.isspace()
+        )
+        if not non_whitespace:
+            continue
+        digest = hashlib.sha256(non_whitespace.encode("utf-8")).hexdigest()
+        observed[(alignment, digest)] += 1
+    return observed
 
 
 def verify_scribus(path: Path, items: list[dict]) -> dict:
-    expected = expected_counts(items)
-    observed = scribus_story_alignment_counts(path)
-    for alignment, count in expected.items():
-        if observed[alignment] != count:
-            raise AssertionError(
-                f"Scribus save/reopen {alignment} Story carrier count mismatch: "
-                f"expected exactly {count}, observed {observed[alignment]}"
-            )
+    expected = Counter(
+        (
+            str(item["alignment"]).casefold(),
+            str(item["story_non_whitespace_sha256"]),
+        )
+        for item in items
+    )
+    observed = scribus_story_alignment_fingerprints(path)
+    missing = expected - observed
+    if missing:
+        raise AssertionError(
+            "Scribus save/reopen lost content-bearing alignment Story fingerprints: "
+            f"missing={dict(sorted(missing.items()))!r}"
+        )
     return {
-        "expected_story_counts": dict(sorted(expected.items())),
-        "scribus_storytext_alignment_counts": dict(sorted(observed.items())),
-        "scribus_expected_alignment_counts_match_exactly": True,
+        "expected_content_story_fingerprint_count": sum(expected.values()),
+        "scribus_matched_content_story_fingerprint_count": sum(expected.values()),
+        "scribus_content_story_fingerprints_match": True,
         "accepted_sla_carriers": ["DefaultStyle", "para", "trail"],
+        "story_text_recorded": False,
     }
-
 
 def libreoffice_paragraph_alignment_counts(path: Path) -> Counter:
     root = ET.parse(path).getroot()
