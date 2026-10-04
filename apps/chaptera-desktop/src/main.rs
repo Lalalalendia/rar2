@@ -654,8 +654,6 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-
-
     let initial_path = first_arg.map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -678,10 +676,6 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
-
-
-
-
 
 struct CachedImageTexture {
     texture: egui::TextureHandle,
