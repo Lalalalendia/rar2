@@ -3,7 +3,8 @@ name: Editor Desktop History Shortcuts V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/history.rs"
+      - "apps/chaptera-desktop/src/history_gui_tests.rs"
       - ".github/workflows/editor-desktop-history-shortcuts-v1.yml"
   workflow_dispatch:
 
@@ -44,5 +45,5 @@ jobs:
       - name: Format Desktop history slice
         run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
 
-      - name: Test real GUI Undo Redo shortcut walkthrough
-        run: cargo test -p chaptera-desktop gui_only_v0_walkthrough_uses_real_widgets -- --ignored --nocapture
+      - name: Prove Ctrl Z Ctrl Y through bounded real-PUB history witness
+        run: cargo test -p chaptera-desktop gui_history_shortcuts_undo_redo_real_pub -- --ignored --nocapture
