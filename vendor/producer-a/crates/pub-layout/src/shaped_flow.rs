@@ -248,8 +248,9 @@ pub fn resolve_bounded_shaped_flow(
                 runtime.shaping.face_index,
                 runtime.shaping.font_size_emu,
             )
-            .unwrap_or(runtime.line_height)
-            .get();
+            .map(LengthEmu::get)
+            .map(|extent| extent.min(runtime.line_height.get()))
+            .unwrap_or(runtime.line_height.get());
             let row_count = shaped_line_capacity_v1(
                 bounds.height.get(),
                 first_line_extent_emu,
