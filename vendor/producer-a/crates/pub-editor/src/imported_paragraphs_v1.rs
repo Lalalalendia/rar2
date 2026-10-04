@@ -1,7 +1,6 @@
 use crate::{EditorSession, story_state_id_v1};
 use pub_model::{
-    ParagraphId, Sha256Digest, SourceDerivedIdInput, StoryId, TextRange,
-    derive_source_canonical_id,
+    ParagraphId, Sha256Digest, SourceDerivedIdInput, StoryId, TextRange, derive_source_canonical_id,
 };
 use std::fmt;
 
@@ -118,10 +117,7 @@ fn derive_imported_paragraph_id_v1(
     story_id: StoryId,
     ordinal: usize,
 ) -> Result<ParagraphId, ImportedParagraphProjectionErrorV1> {
-    let source_object_key = format!(
-        "story/{}/paragraph/{ordinal}",
-        story_id.as_canonical()
-    );
+    let source_object_key = format!("story/{}/paragraph/{ordinal}", story_id.as_canonical());
     let id = derive_source_canonical_id(SourceDerivedIdInput {
         source_hash: &source_hash,
         adapter_id: IMPORTED_PARAGRAPH_ADAPTER_V1,
@@ -185,10 +181,7 @@ mod tests {
 
     #[test]
     fn paragraph_ranges_use_unicode_scalar_coordinates() {
-        assert_eq!(
-            canonical_paragraph_ranges_v1("😀\rx"),
-            vec![(0, 2), (2, 3)]
-        );
+        assert_eq!(canonical_paragraph_ranges_v1("😀\rx"), vec![(0, 2), (2, 3)]);
     }
 
     #[test]
