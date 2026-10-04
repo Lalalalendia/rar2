@@ -54,7 +54,6 @@ jobs:
 
 
   format-push:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
