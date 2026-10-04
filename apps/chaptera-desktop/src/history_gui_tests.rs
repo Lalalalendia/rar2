@@ -14,8 +14,10 @@ fn gui_history_shortcuts_undo_redo_real_pub() {
         .map(PathBuf::from)
         .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
     let original = fs::read(&fixture_source).expect("read pinned SampleNewsletter fixture");
-    let root =
-        std::env::temp_dir().join(format!("chaptera-gui-history-shortcuts-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "chaptera-gui-history-shortcuts-{}",
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create history GUI temp directory");
     let fixture = root.join("SampleNewsletter.pub");
