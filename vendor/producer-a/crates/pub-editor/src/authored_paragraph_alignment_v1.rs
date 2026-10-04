@@ -327,4 +327,90 @@ mod tests {
         ));
         assert_eq!(state, original);
     }
+
+    #[test]
+    fn history_replay_is_the_single_override_state_authority() {
+        let first = paragraph(1);
+        let second = paragraph(2);
+        let set = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids: vec![first, second],
+            value: AuthoredParagraphAlignmentValueV1::Right,
+            before: vec![
+                ParagraphAlignmentOverrideSnapshotV1 {
+                    paragraph_id: first,
+                    value: None,
+                },
+                ParagraphAlignmentOverrideSnapshotV1 {
+                    paragraph_id: second,
+                    value: None,
+                },
+            ],
+            after: vec![
+                ParagraphAlignmentOverrideSnapshotV1 {
+                    paragraph_id: first,
+                    value: Some(AuthoredParagraphAlignmentValueV1::Right),
+                },
+                ParagraphAlignmentOverrideSnapshotV1 {
+                    paragraph_id: second,
+                    value: Some(AuthoredParagraphAlignmentValueV1::Right),
+                },
+            ],
+        };
+        let clear_first = EditOperation::ClearParagraphAlignmentOverride {
+            paragraph_ids: vec![first],
+            before: vec![ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: first,
+                value: Some(AuthoredParagraphAlignmentValueV1::Right),
+            }],
+            after: vec![ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: first,
+                value: None,
+            }],
+        };
+
+        let state =
+            paragraph_alignment_override_state_from_history_v1(&[set, clear_first]).expect("history replay");
+        assert_eq!(
+            state,
+            BTreeMap::from([(second, AuthoredParagraphAlignmentValueV1::Right)])
+        );
+    }
+
+    #[test]
+    fn malformed_history_is_rejected_instead_of_becoming_effective_state() {
+        let first = paragraph(1);
+        let valid = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids: vec![first],
+            value: AuthoredParagraphAlignmentValueV1::Center,
+            before: vec![ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: first,
+                value: None,
+            }],
+            after: vec![ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: first,
+                value: Some(AuthoredParagraphAlignmentValueV1::Center),
+            }],
+        };
+        let stale = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids: vec![first],
+            value: AuthoredParagraphAlignmentValueV1::Right,
+            before: vec![ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: first,
+                value: None,
+            }],
+            after: vec![ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: first,
+                value: Some(AuthoredParagraphAlignmentValueV1::Right),
+            }],
+        };
+
+        assert!(matches!(
+            paragraph_alignment_override_state_from_history_v1(&[valid, stale]),
+            Err(ParagraphAlignmentTransitionErrorV1::Stale {
+                paragraph_id,
+                expected: None,
+                found: Some(AuthoredParagraphAlignmentValueV1::Center),
+            }) if paragraph_id == first
+        ));
+    }
 }
