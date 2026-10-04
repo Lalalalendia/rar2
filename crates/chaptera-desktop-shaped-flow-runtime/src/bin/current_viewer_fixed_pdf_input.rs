@@ -184,7 +184,11 @@ fn census(plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
     let mut projected_ids = BTreeSet::new();
 
     for page in plans {
-        let plan_order = page.nodes.iter().map(|node| node.node_id).collect::<Vec<_>>();
+        let plan_order = page
+            .nodes
+            .iter()
+            .map(|node| node.node_id)
+            .collect::<Vec<_>>();
         let mut sorted_order = plan_order.clone();
         sorted_order.sort();
         let position_mismatches = plan_order
