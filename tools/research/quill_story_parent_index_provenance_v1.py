@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
 import time
@@ -35,8 +36,8 @@ def request_json(url: str, timeout: int = 25):
 def request_json_lines_with_retry(
     url: str,
     *,
-    timeout: int = 18,
-    attempts: int = 3,
+    timeout: int = 12,
+    attempts: int = 2,
 ) -> tuple[list[dict], list[str]]:
     errors: list[str] = []
     for attempt in range(attempts):
@@ -68,7 +69,7 @@ def request_json_lines_with_retry(
             errors.append(type(exc).__name__)
 
         if attempt + 1 < attempts:
-            time.sleep((1, 3, 7)[attempt])
+            time.sleep(1)
     return [], errors
 
 
@@ -123,6 +124,7 @@ def main() -> int:
         records: dict[tuple[str, str, str], dict] = {}
         query_receipts = []
 
+        tasks = []
         for crawl in crawls:
             crawl_id = str(crawl.get("id", ""))
             endpoint = str(crawl["cdx-api"])
@@ -136,35 +138,44 @@ def main() -> int:
                     "limit": str(MAX_ROWS_PER_QUERY),
                 }
                 query = endpoint + "?" + urllib.parse.urlencode(params)
-                rows, errors = request_json_lines_with_retry(query)
-                query_receipts.append(
-                    {
-                        "crawl": crawl_id,
-                        "query_parent": variant,
-                        "row_count": len(rows),
-                        "errors": errors,
-                    }
-                )
+                tasks.append((crawl_id, variant, query))
 
-                for row in rows:
-                    url = str(row.get("url", ""))
-                    if not url or is_pub(url):
-                        continue
-                    digest = str(row.get("digest", ""))
-                    timestamp = str(row.get("timestamp", ""))
-                    key = (crawl_id, timestamp, digest or url)
-                    records[key] = {
-                        "crawl": crawl_id,
-                        "timestamp": timestamp,
-                        "url": url,
-                        "status": str(row.get("status", "")),
-                        "mime": str(row.get("mime", "")),
-                        "digest": digest,
-                        "length": str(row.get("length", "")),
-                        "filename": str(row.get("filename", "")),
-                        "offset": str(row.get("offset", "")),
-                        "query_parent": variant,
-                    }
+        def run_query(task: tuple[str, str, str]) -> tuple[str, str, list[dict], list[str]]:
+            crawl_id, variant, query = task
+            rows, errors = request_json_lines_with_retry(query)
+            return crawl_id, variant, rows, errors
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(run_query, tasks))
+
+        for crawl_id, variant, rows_found, errors in results:
+            query_receipts.append(
+                {
+                    "crawl": crawl_id,
+                    "query_parent": variant,
+                    "row_count": len(rows_found),
+                    "errors": errors,
+                }
+            )
+            for row in rows_found:
+                url = str(row.get("url", ""))
+                if not url or is_pub(url):
+                    continue
+                digest = str(row.get("digest", ""))
+                timestamp = str(row.get("timestamp", ""))
+                key = (crawl_id, timestamp, digest or url)
+                records[key] = {
+                    "crawl": crawl_id,
+                    "timestamp": timestamp,
+                    "url": url,
+                    "status": str(row.get("status", "")),
+                    "mime": str(row.get("mime", "")),
+                    "digest": digest,
+                    "length": str(row.get("length", "")),
+                    "filename": str(row.get("filename", "")),
+                    "offset": str(row.get("offset", "")),
+                    "query_parent": variant,
+                }
 
         rows = sorted(
             records.values(),
