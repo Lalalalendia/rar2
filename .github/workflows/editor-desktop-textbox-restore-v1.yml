@@ -76,6 +76,11 @@ jobs:
             --head "$HEAD_SHA" \
             --receipt target/pub-editor-pr-fanout/receipt.json \
             --github-output "$GITHUB_OUTPUT"
+          if ! grep -q '^textbox_restore=' "$GITHUB_OUTPUT"; then
+            echo "textbox_restore=true" >> "$GITHUB_OUTPUT"
+            echo "textbox_reason=base_classifier_missing_textbox_output" >> "$GITHUB_OUTPUT"
+            python -c 'import json, pathlib; p=pathlib.Path("target/pub-editor-pr-fanout/receipt.json"); d=json.loads(p.read_text()); d["textbox_restore"]=True; d["textbox_reason"]="base_classifier_missing_textbox_output"; p.write_text(json.dumps(d, indent=2, sort_keys=True) + "\n")'
+          fi
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
