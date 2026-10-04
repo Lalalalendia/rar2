@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "crates/pub-fixed-flow-adapter/**"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
       - "packages/protocol/fixed-output/**"
       - "tools/validate_fixed_pdf_shaped_flow_receipt.py"
       - "tools/test_fixed_pdf_shaped_flow_receipt.py"
@@ -48,13 +49,20 @@ jobs:
       - name: Install receipt validator dependency
         run: python -m pip install "jsonschema==4.23.0"
       - name: Check formatting
-        run: cargo fmt -p pub-fixed-flow-adapter -- --check
+        run: cargo fmt -p pub-fixed-flow-adapter -p chaptera-desktop-fallback-font-resource -- --check
       - name: Check workspace
-        run: cargo check -p pub-fixed-flow-adapter --all-targets
+        run: cargo check -p pub-fixed-flow-adapter -p chaptera-desktop-fallback-font-resource --all-targets
       - name: Lint workspace
-        run: cargo clippy -p pub-fixed-flow-adapter --all-targets -- -D warnings
+        run: cargo clippy -p pub-fixed-flow-adapter -p chaptera-desktop-fallback-font-resource --all-targets -- -D warnings
       - name: Test shaped-flow adapter
         run: cargo test -p pub-fixed-flow-adapter
+      - name: Test pinned fallback font resource
+        run: cargo test -p chaptera-desktop-fallback-font-resource
+      - name: Materialize pinned fallback font
+        run: |
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- /tmp/chaptera-fallback.ttf
+          test "$(wc -c < /tmp/chaptera-fallback.ttf)" -eq 361676
+          echo "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70  /tmp/chaptera-fallback.ttf" | sha256sum -c -
       - name: Produce sanitized adapter receipt
         run: cargo run -q -p pub-fixed-flow-adapter --bin fixed-flow-producer -- packages/protocol/fixed-output/v1/shaped-flow-synthetic-input.json > /tmp/shaped-flow-receipt.json
       - name: Validate Rust-produced receipt with independent V1 validator
