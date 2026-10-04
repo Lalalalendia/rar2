@@ -1,4 +1,4 @@
-//! Desktop Rectangle creation shell integration.
+//! Desktop Rectangle creation shell integration. Admission positive-control note.
 //!
 //! RectangleCreateSessionV1 remains the semantic interaction owner. This
 //! module owns only Desktop toolbar, pointer, preview, Escape and commit wiring.
