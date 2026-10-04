@@ -8,7 +8,7 @@ on:
       - .github/workflows/paragraph-v15-process-runner-smoke.yml
 jobs:
   smoke:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
