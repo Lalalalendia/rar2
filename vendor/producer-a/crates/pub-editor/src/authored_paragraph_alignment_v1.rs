@@ -219,10 +219,10 @@ pub(crate) fn validate_paragraph_alignment_operation_against_history_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
+    use pub_model::CanonicalId;
 
     fn paragraph(raw: u128) -> ParagraphId {
-        ParagraphId::from_canonical(Uuid::from_u128(raw))
+        ParagraphId::from_canonical(CanonicalId::from_bytes(raw.to_be_bytes()))
     }
 
     #[test]
