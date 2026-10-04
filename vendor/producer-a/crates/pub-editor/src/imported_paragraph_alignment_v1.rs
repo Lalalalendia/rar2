@@ -189,8 +189,8 @@ mod tests {
         let source_hash = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
             .parse::<Sha256Digest>()
             .expect("pinned Carlton source hash");
-        let session =
-            crate::open_mature_0x2c_editor(&bytes, source_hash).expect("open Carlton EditorSession");
+        let session = crate::open_mature_0x2c_editor(&bytes, source_hash)
+            .expect("open Carlton EditorSession");
 
         let paragraphs = session
             .imported_paragraphs_v1()
@@ -203,7 +203,10 @@ mod tests {
             .imported_paragraph_base_alignments_v1()
             .expect("bind Carlton imported paragraph base alignment");
 
-        assert!(!paragraph_ids.is_empty(), "Carlton must expose imported ParagraphIds");
+        assert!(
+            !paragraph_ids.is_empty(),
+            "Carlton must expose imported ParagraphIds"
+        );
         assert!(
             !base.is_empty(),
             "Carlton's grounded FDPP alignment runs must bind to at least one current imported ParagraphId"
