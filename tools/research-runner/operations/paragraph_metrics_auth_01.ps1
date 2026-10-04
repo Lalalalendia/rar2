@@ -100,8 +100,8 @@ function New-SeedFixture() {
         $range.Text = "Chaptera paragraph metric alpha." + $cr + "Chaptera paragraph metric beta with enough words to make spacing visible." + $cr + "Chaptera paragraph metric gamma."
         $range.Font.Name = "Arial"
         $range.Font.Size = 12
-        if ([int]$range.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs in synthetic seed fixture" }
-        $paragraphRange = $range.Paragraphs.Item(2)
+        if ([int]$range.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs in synthetic seed fixture" }
+        $paragraphRange = $range.Paragraphs(2)
         $paragraph = $paragraphRange.ParagraphFormat
         $seedParagraph = Get-ParagraphSnapshot $paragraph "seed_before_save"
         $seedFrame = Get-FrameSnapshot $shape "seed_before_save"
@@ -128,8 +128,8 @@ function New-SeedFixture() {
         if ([int]$doc2.Pages.Item(1).Shapes.Count -ne 1) { throw "Expected one shape in fresh-reopened seed fixture" }
         $shape2 = $doc2.Pages.Item(1).Shapes.Item(1)
         $range2 = $shape2.TextFrame.TextRange
-        if ([int]$range2.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs in fresh-reopened seed fixture" }
-        $paragraphRange2 = $range2.Paragraphs.Item(2)
+        if ([int]$range2.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs in fresh-reopened seed fixture" }
+        $paragraphRange2 = $range2.Paragraphs(2)
         $paragraph2 = $paragraphRange2.ParagraphFormat
         $seedFresh = Get-ParagraphSnapshot $paragraph2 "seed_fresh_reopen"
         $seedFrameFresh = Get-FrameSnapshot $shape2 "seed_fresh_reopen"
@@ -174,8 +174,8 @@ function Invoke-Arm([string]$name, [string]$kind, [double]$value) {
         if ([int]$doc.Pages.Item(1).Shapes.Count -ne 1) { throw "Expected one shape copied from the common seed fixture" }
         $shape = $doc.Pages.Item(1).Shapes.Item(1)
         $range = $shape.TextFrame.TextRange
-        if ([int]$range.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs copied from the common seed fixture" }
-        $paragraphRange = $range.Paragraphs.Item(2)
+        if ([int]$range.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs copied from the common seed fixture" }
+        $paragraphRange = $range.Paragraphs(2)
         $paragraph = $paragraphRange.ParagraphFormat
 
         $before = Get-ParagraphSnapshot $paragraph "before_mutation"
@@ -207,8 +207,8 @@ function Invoke-Arm([string]$name, [string]$kind, [double]$value) {
         if ([int]$doc2.Pages.Item(1).Shapes.Count -ne 1) { throw "Expected one shape after fresh reopen" }
         $shape2 = $doc2.Pages.Item(1).Shapes.Item(1)
         $range2 = $shape2.TextFrame.TextRange
-        if ([int]$range2.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs after reopen" }
-        $paragraphRange2 = $range2.Paragraphs.Item(2)
+        if ([int]$range2.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs after reopen" }
+        $paragraphRange2 = $range2.Paragraphs(2)
         $paragraph2 = $paragraphRange2.ParagraphFormat
         $fresh = Get-ParagraphSnapshot $paragraph2 "fresh_reopen"
         $frameFresh = Get-FrameSnapshot $shape2 "fresh_reopen"
