@@ -4,6 +4,7 @@
 )]
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
+// CI negative control: ordinary main.rs changes must not imply updater acceptance.
 mod acceptance;
 mod acceptance_v2;
 mod acceptance_v2_cli;
