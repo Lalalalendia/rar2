@@ -169,6 +169,10 @@ fn derive_imported_paragraph_id_v1(
     Ok(ParagraphId::from_canonical(id))
 }
 
+// Uses the same persisted-source evidence contract as the current text-input
+// StoryEditDomainV1 authority: mature 0x2C + exact authoritative Quill
+// SYID/TEXT refs sharing one persisted Story object key. Never infer from a
+// trailing U+000D alone.
 fn imported_mature_quill_terminal_cr_is_proven_v1(
     session: &EditorSession,
     story_id: StoryId,
