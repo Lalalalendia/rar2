@@ -3,8 +3,9 @@ name: Editor Desktop Text Session Restore V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
+      - "apps/chaptera-desktop/src/text_session_shell.rs"
+      - "apps/chaptera-desktop/src/text_session_gui_tests.rs"
       - "apps/chaptera-desktop/Cargo.toml"
       - ".github/workflows/editor-desktop-text-session-restore-v1.yml"
   push:
