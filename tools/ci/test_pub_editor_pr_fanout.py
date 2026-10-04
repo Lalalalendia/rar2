@@ -109,6 +109,8 @@ pub fn shared_core() {}
         "vendor/producer-a/crates/pub-odg/src/lib.rs",
         "crates/chaptera-scene-instance/src/lib.rs",
         ".github/workflows/editor-desktop-continuity-v2-windows.yml",
+        "tools/ci/pub_editor_pr_fanout.py",
+        "tools/ci/test_pub_editor_pr_fanout.py",
     ):
         run, reason = classify([path])
         assert run is True and reason == "direct_continuity_owner_changed", (path, reason)
