@@ -131,6 +131,7 @@ def assert_duplicate_consumer_wiring() -> None:
     required = (
         "Classify pub-editor Duplicate Rectangle scope",
         "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
+        "if: ${{ github.event_name == 'pull_request' }}",
         "python tools/ci/pub_editor_pr_fanout.py",
         "needs: classify",
         "needs.classify.result != 'success'",
