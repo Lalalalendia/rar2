@@ -56,6 +56,14 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
     );
 
+    let lifecycle_error = session
+        .replace_story_text(paragraph.story_id, "blocked while paragraph override is active")
+        .expect_err("Story text mutation must be fenced while ParagraphId override is active");
+    assert_eq!(
+        lifecycle_error.code(),
+        "paragraph_alignment_lifecycle_unsupported"
+    );
+
     session.undo().expect("undo authored paragraph alignment");
     let undone = session
         .effective_paragraph_alignment_v1(paragraph_id)
@@ -111,5 +119,23 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
     assert_eq!(
         cleared.authority,
         Some(ParagraphAlignmentAuthorityV1::ImportedBase)
+    );
+
+    reopened
+        .set_paragraph_alignment_override_v1(
+            vec![paragraph_id],
+            AuthoredParagraphAlignmentValueV1::Left,
+        )
+        .expect("set authored Left override");
+    let left = reopened
+        .effective_paragraph_alignment_v1(paragraph_id)
+        .expect("Left effective alignment");
+    assert_eq!(
+        left.effective,
+        Some(EffectiveParagraphAlignmentValueV1::Left)
+    );
+    assert_eq!(
+        left.authority,
+        Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
     );
 }
