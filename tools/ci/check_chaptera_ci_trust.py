@@ -17,6 +17,13 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/editor-desktop-history-shortcuts-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/history.rs",
+            "apps/chaptera-desktop/src/history_gui_tests.rs",
+        ),
+    },
     ".github/workflows/editor-desktop-page-nav-shortcuts-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
