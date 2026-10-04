@@ -39,6 +39,15 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertIn("shaped_span_line_count", text)
         self.assertIn("missing_shaping_line_count", text)
         self.assertIn("unresolved_text_color_line_count", text)
+        self.assertIn("residual_node_signature_counts", text)
+        self.assertIn("residual_projection_lane_counts", text)
+        self.assertIn("text_resource_residual_signature_counts", text)
+        self.assertIn("text_partial_residual_signature_counts", text)
+        self.assertIn("mapped_resource_node_count", text)
+        self.assertIn("text_resource_residual_node_count", text)
+        self.assertIn("current Viewer residual partition does not cover every node exactly once", text)
+        self.assertIn("current Viewer text-resource partition does not cover every text node exactly once", text)
+        self.assertIn("shared_resolved:no_emittable_run", text)
 
     def test_runner_reuses_order_preserving_donor_and_existing_renderer(self) -> None:
         text = RUNNER.read_text(encoding="utf-8")
