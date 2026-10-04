@@ -173,7 +173,7 @@ fn validate_rgb(value: &str) -> Result<String> {
     let bytes = value.as_bytes();
     if bytes.len() != 7
         || bytes.first() != Some(&b'#')
-        || !bytes[1..].iter().all(u8::is_ascii_hexdigit)
+        || !bytes[1..].iter().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(TextFormatOverlayError::new(
             "text_color_rgb must be #RRGGBB",
@@ -776,6 +776,19 @@ mod tests {
             end_scalar: 6,
             format,
         }]
+    }
+
+    #[test]
+    fn state_hash_matches_historical_python_v1_canonical_json() {
+        let state = state(
+            one_base(fmt(12_000, false, false, "#000000", "font:resolved")),
+            vec![],
+            6,
+        );
+        assert_eq!(
+            state_hash_v1(&state).unwrap(),
+            "affcae388b3f9aeb5c63fd3cdfc49a081ee148d9e98934f5d0cb91863b04448d"
+        );
     }
 
     #[test]
