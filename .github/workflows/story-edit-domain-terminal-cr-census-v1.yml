@@ -1,6 +1,10 @@
 name: Story Edit Domain Terminal CR Census V1
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/story-edit-domain-terminal-cr-census-v1.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/story_edit_domain_terminal_cr_probe.rs"
   push:
     branches:
       - research/story-edit-domain-terminal-cr-census-01
