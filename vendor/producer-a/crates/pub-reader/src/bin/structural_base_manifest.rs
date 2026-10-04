@@ -1,19 +1,19 @@
 use std::{env, fs, io::Cursor, path::PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use pub_contents::{
-    Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32, parse_0x2c_header,
+    BLOCK_TYPE_U32, Contents0x2cChunk, RawContentsBlockBody, parse_0x2c_header,
     parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
-    PublisherFieldRecord, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
-    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
+    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
+    PUBLISHER_FIELD_YS, PublisherFieldRecord,
 };
 use pub_model::{NodeId, PageId, Sha256Digest};
 use pub_reader::{
-    build_mature_0x2c_structural_base_manifest, PubStructuralBaseManifest,
-    PUB_STRUCTURAL_BASE_SCHEMA_V1,
+    PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseManifest,
+    build_mature_0x2c_structural_base_manifest,
 };
 use serde::Serialize;
 
@@ -84,7 +84,9 @@ struct Receipt {
     manifest: PubStructuralBaseManifest,
 }
 
-fn contents_reference_inventory(pub_bytes: &[u8]) -> Result<(usize, Vec<ContentsReferenceSummary>)> {
+fn contents_reference_inventory(
+    pub_bytes: &[u8],
+) -> Result<(usize, Vec<ContentsReferenceSummary>)> {
     let contents = pub_cfb::read_stream_reader(Cursor::new(pub_bytes), "/Contents")
         .context("read /Contents for structural reference inventory")?;
     let stream = StreamPath("/Contents".into());
@@ -96,12 +98,9 @@ fn contents_reference_inventory(pub_bytes: &[u8]) -> Result<(usize, Vec<Contents
     let slot_count = trailer.directory.slots.len();
     let mut references = Vec::new();
     for seq_num in 0..slot_count {
-        let Some(reference) = parse_confirmed_chunk_reference(
-            &contents,
-            &trailer.directory,
-            seq_num,
-        )
-        .with_context(|| format!("parse Contents reference slot {seq_num}"))?
+        let Some(reference) =
+            parse_confirmed_chunk_reference(&contents, &trailer.directory, seq_num)
+                .with_context(|| format!("parse Contents reference slot {seq_num}"))?
         else {
             continue;
         };
@@ -128,7 +127,11 @@ fn contents_reference_inventory(pub_bytes: &[u8]) -> Result<(usize, Vec<Contents
         references.push(ContentsReferenceSummary {
             seq_num,
             source: reference.source,
-            raw_types: reference.raw_types.into_iter().map(|field| field.value).collect(),
+            raw_types: reference
+                .raw_types
+                .into_iter()
+                .map(|field| field.value)
+                .collect(),
             chunk_offsets: reference
                 .chunk_offsets
                 .into_iter()
