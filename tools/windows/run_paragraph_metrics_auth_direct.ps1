@@ -9,6 +9,8 @@ $ErrorActionPreference = "Stop"
 $ExpectedFixtureSha256 = "5bf6057b8b11c8ee4a421d93885ae6e9e7c03a7a42d541e6d0df33497c08c33b"
 $ExpectedPublisherVersion = "16.0"
 $ExpectedPublisherBuild = "12527"
+$ExpectedPublisherFileVersion = "16.0.12527.22145"
+$ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $Packet = Join-Path $RepoRoot "tools/research-runner/experiments/paragraph-metrics-auth-01.packet.json"
@@ -94,6 +96,19 @@ try {
     }
     if ($publisher.build.state -ne "value" -or [string]$publisher.build.value -ne $ExpectedPublisherBuild) {
         throw "Publisher Build mismatch: expected $ExpectedPublisherBuild"
+    }
+    if ($publisher.path.state -ne "value") { throw "Publisher executable directory is unavailable." }
+    $publisherExe = Join-Path ([string]$publisher.path.value) "MSPUB.EXE"
+    if (-not (Test-Path -LiteralPath $publisherExe -PathType Leaf)) {
+        throw "Publisher executable missing at COM-reported path."
+    }
+    $fileVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($publisherExe).FileVersion
+    if ([string]$fileVersion -ne $ExpectedPublisherFileVersion) {
+        throw "MSPUB.EXE file version mismatch: expected $ExpectedPublisherFileVersion got $fileVersion"
+    }
+    $exeSha = (Get-FileHash -LiteralPath $publisherExe -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($exeSha -ne $ExpectedPublisherExeSha256) {
+        throw "MSPUB.EXE SHA mismatch: expected $ExpectedPublisherExeSha256 got $exeSha"
     }
 
     Write-Host "PARAGRAPH-METRICS direct oracle: exact packet, fixture and Publisher2019 identity verified."
