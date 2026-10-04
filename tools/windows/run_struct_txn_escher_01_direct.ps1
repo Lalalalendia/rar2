@@ -23,7 +23,7 @@ $Finalize = Join-Path $RepoRoot "tools/research-runner/finalize_native_run.ps1"
 
 $ExpectedPacketBlob = "1fac96af8893f3706746aaf57dd033a82c949c55"
 $ExpectedOperationBlob = "f7009dd5712393ce49ad4ba6f42a598d29034462"
-$ExpectedHelperSourceBlob = "1afe88d65eed91d2b73c3814e6997b29572ecc4c"
+$ExpectedHelperSourceBlob = "59f0cc84f2730fb58249800512abbd13f7f75c79"
 $ExpectedStructuralModuleBlob = "50ae3b989446f07e62838f39bef073c4bbea0c33"
 $ExpectedRuntimeBlob = "fed4c890a34d39401d3b5848cc16d1087f862a27"
 $ExpectedFinalizeBlob = "2a97d6f2c8be1265010a744c015ce8d288eb7e75"
