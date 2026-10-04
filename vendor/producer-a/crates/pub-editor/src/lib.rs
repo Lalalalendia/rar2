@@ -511,6 +511,57 @@ pub struct EditorFixedImageResourceV1 {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorFixedStrokeV1 {
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorFixedNodePaintV1 {
+    pub node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<EditorFixedStrokeV1>,
+}
+
+fn fixed_node_paint_from_effective_v1(
+    node_id: NodeId,
+    paint: &pub_reader::PubEffectiveShapePaintSource,
+) -> Option<EditorFixedNodePaintV1> {
+    let fill_rgb = match (
+        paint.fill.solid.as_ref(),
+        paint.fill.visible.as_ref(),
+        paint.fill.color_rgb.as_ref(),
+    ) {
+        (Some(solid), Some(visible), Some(color)) if solid.value && visible.value => {
+            Some(color.value)
+        }
+        _ => None,
+    };
+
+    let stroke = match (
+        paint.line.visible.as_ref(),
+        paint.line.color_rgb.as_ref(),
+        paint.line.width_emu.as_ref(),
+    ) {
+        (Some(visible), Some(color), Some(width)) if visible.value && width.value > 0 => {
+            Some(EditorFixedStrokeV1 {
+                rgb: color.value,
+                width_emu: width.value,
+            })
+        }
+        _ => None,
+    };
+
+    (fill_rgb.is_some() || stroke.is_some()).then_some(EditorFixedNodePaintV1 {
+        node_id,
+        fill_rgb,
+        stroke,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorFixedImageResourceError {
     MissingSourceAsset {
@@ -558,6 +609,7 @@ pub struct EditorFixedOutputStateV1 {
     pub source_hash: Sha256Digest,
     pub project_state_id: String,
     pub current_graph: PubResolvedGraph,
+    pub node_paints: Vec<EditorFixedNodePaintV1>,
     pub image_resources: Vec<EditorFixedImageResourceV1>,
 }
 
@@ -2052,6 +2104,19 @@ impl EditorSession {
     /// resource set. Source image bytes are retained only for nodes without an
     /// active ReplaceImage binding; replacement bytes always override the source
     /// resource for that node.
+    pub fn fixed_node_paints_v1(&self) -> Vec<EditorFixedNodePaintV1> {
+        self.graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| {
+                node.payload
+                    .effective_paint
+                    .as_ref()
+                    .and_then(|paint| fixed_node_paint_from_effective_v1(*node_id, paint))
+            })
+            .collect()
+    }
+
     pub fn fixed_image_resources_v1(
         &self,
     ) -> Result<Vec<EditorFixedImageResourceV1>, EditorFixedImageResourceError> {
@@ -2148,6 +2213,7 @@ impl EditorSession {
             source_hash: self.source_hash,
             project_state_id: project.state_id_v1(),
             current_graph: self.graph.clone(),
+            node_paints: self.fixed_node_paints_v1(),
             image_resources,
         })
     }
@@ -6046,6 +6112,61 @@ mod asset_reachability_tests {
         assert_eq!(resources[0].node_ids, vec![node_a, node_b]);
     }
 
+    fn paint_value<T>(
+        value: T,
+    ) -> pub_reader::PubEffectivePaintValue<T> {
+        pub_reader::PubEffectivePaintValue {
+            value,
+            authority: pub_reader::PubEffectivePaintAuthority::NormativeDefault,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn fixed_node_paint_projects_only_visible_resolved_solid_state() {
+        let node_id: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId");
+        let paint = pub_reader::PubEffectiveShapePaintSource {
+            fill: pub_reader::PubEffectiveFillSource {
+                solid: Some(paint_value(true)),
+                color_rgb: Some(paint_value([0x11, 0x22, 0x33])),
+                visible: Some(paint_value(true)),
+            },
+            line: pub_reader::PubEffectiveLineSource {
+                color_rgb: Some(paint_value([0x44, 0x55, 0x66])),
+                width_emu: Some(paint_value(12_700)),
+                visible: Some(paint_value(true)),
+            },
+        };
+
+        let projected =
+            fixed_node_paint_from_effective_v1(node_id, &paint).expect("visible paint");
+        assert_eq!(projected.node_id, node_id);
+        assert_eq!(projected.fill_rgb, Some([0x11, 0x22, 0x33]));
+        assert_eq!(
+            projected.stroke,
+            Some(EditorFixedStrokeV1 {
+                rgb: [0x44, 0x55, 0x66],
+                width_emu: 12_700,
+            })
+        );
+
+        let hidden = pub_reader::PubEffectiveShapePaintSource {
+            fill: pub_reader::PubEffectiveFillSource {
+                solid: Some(paint_value(true)),
+                color_rgb: Some(paint_value([1, 2, 3])),
+                visible: Some(paint_value(false)),
+            },
+            line: pub_reader::PubEffectiveLineSource {
+                color_rgb: Some(paint_value([4, 5, 6])),
+                width_emu: Some(paint_value(12_700)),
+                visible: Some(paint_value(false)),
+            },
+        };
+        assert!(fixed_node_paint_from_effective_v1(node_id, &hidden).is_none());
+    }
+
     #[test]
     fn fixed_output_state_snapshots_authoritative_rust_state_without_replay() {
         let mut session = EditorSession::new(fixed_image_test_graph()).expect("session");
@@ -6074,6 +6195,7 @@ mod asset_reachability_tests {
         assert_eq!(state.source_hash, session.source_hash());
         assert_eq!(state.project_state_id, expected_project_state);
         assert_eq!(state.current_graph, *session.graph());
+        assert!(state.node_paints.is_empty());
         assert_eq!(state.image_resources.len(), 1);
         assert_eq!(state.image_resources[0].node_ids, vec![node_id]);
         assert_eq!(state.image_resources[0].bytes, replacement_bytes);
