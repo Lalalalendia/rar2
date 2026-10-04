@@ -3,7 +3,8 @@
 use crate::{ViewerApp, ViewerGeometryDocument, fallback_font, source_font};
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderPlanErrorV1,
-    build_page_render_plan_with_text_layout_resolver_v1, build_page_render_plan_with_text_layout_v1,
+    build_page_render_plan_with_text_layout_resolver_v1,
+    build_page_render_plan_with_text_layout_v1,
 };
 use eframe::egui;
 
