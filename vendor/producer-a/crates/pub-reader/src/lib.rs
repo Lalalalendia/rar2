@@ -25,7 +25,6 @@ mod legacy22_page_role;
 mod master_bridge;
 mod mature_wmf;
 mod ole_presentation;
-mod paragraph_bridge;
 mod resolve;
 mod salvage;
 mod salvage_authority;
@@ -3419,9 +3418,6 @@ pub fn build_mature_0x2c_from_streams(
             },
         );
     }
-
-    paragraph_bridge::materialize_imported_story_paragraphs_v1(&mut graph)
-        .context("materialize canonical imported Story paragraphs")?;
 
     add_missing_link_target_diagnostics(&graph, &mut diagnostics);
 
