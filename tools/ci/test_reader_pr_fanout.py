@@ -320,9 +320,11 @@ fn main() -> eframe::Result<()> {
             "apps/chaptera-desktop/src/ordinary_feature_module.rs",
         ],
         tier_a=True,
-        reader_windows_smoke=False,
-        reader_windows=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
         editor_windows=True,
+        visual_oracle=True,
+        typography_golden=True,
         update_accept=False,
     )
     assert_scope(
