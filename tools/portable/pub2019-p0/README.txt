@@ -16,7 +16,7 @@ NOT REQUIRED:
 - GitHub Actions runner registration
 
 Run:
-1. Close Publisher.
+1. Save any Publisher work. The launcher will safely close an already-running Publisher session only when it has zero open documents; it never kills MSPUB.EXE or closes user documents automatically.
 2. Extract the ZIP.
 3. Double-click RUN_NATIVE.cmd as the normal interactive user. DO NOT Run as Administrator.
 4. When complete, send RETURN-TO-CHAT-<timestamp>.zip back to ChatGPT.
