@@ -60,6 +60,7 @@ def main() -> int:
                 stderr=subprocess.PIPE,
                 input=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
                 text=True,
+                encoding="utf-8",
                 check=False,
             )
             if completed.returncode != 0:
