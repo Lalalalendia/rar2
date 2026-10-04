@@ -123,6 +123,66 @@ impl ViewerApp {
         }
     }
 
+    pub(super) fn canvas_boolean_format_state_v1(
+        &self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) -> Result<text_session::DesktopBooleanSelectionStateV1, String> {
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let mode = self
+            .text_mode
+            .as_ref()
+            .ok_or_else(|| "Text editing is not active.".to_owned())?;
+        text_session::boolean_format_selection_state_v1(editor, mode, property)
+    }
+
+    pub(super) fn apply_canvas_boolean_format_toggle_v1(
+        &mut self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::apply_boolean_format_toggle_v1(editor, mode, property)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_authoring_change(&format!(
+                "{} formatting committed through one canonical text-format operation.",
+                property.label()
+            )),
+            Err(error) => {
+                self.edit_status = Some(format!("{} formatting rejected: {error}", property.label()));
+            }
+        }
+    }
+
+    pub(super) fn clear_canvas_boolean_format_override_v1(
+        &mut self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::clear_boolean_format_override_v1(editor, mode, property)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_authoring_change(&format!(
+                "{} Chaptera override cleared; source/base formatting is effective again.",
+                property.label()
+            )),
+            Err(error) => {
+                self.edit_status = Some(format!(
+                    "{} override clear rejected: {error}",
+                    property.label()
+                ));
+            }
+        }
+    }
+
     fn apply_canvas_text_keyboard(
         &mut self,
         command: chaptera_text_input_adapter::keyboard::KeyboardCommandV1,
@@ -218,6 +278,28 @@ impl ViewerApp {
                     }
 
                     if self.process_story_object_keyboard(key, modifiers) {
+                        continue;
+                    }
+
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::B
+                    {
+                        self.apply_canvas_boolean_format_toggle_v1(
+                            text_session::DesktopBooleanFormatPropertyV1::Bold,
+                        );
+                        continue;
+                    }
+
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::I
+                    {
+                        self.apply_canvas_boolean_format_toggle_v1(
+                            text_session::DesktopBooleanFormatPropertyV1::Italic,
+                        );
                         continue;
                     }
 
