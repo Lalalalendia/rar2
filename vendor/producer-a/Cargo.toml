@@ -13,6 +13,7 @@ members = [
   "crates/pub-viewer",
   "crates/pub-interaction",
   "crates/pub-export",
+  "crates/pub-output",
   "crates/pub-idml",
   "crates/pub-odg",
   "crates/pub-writer",
