@@ -609,6 +609,10 @@ pub struct EditorFixedOutputStateV1 {
     pub source_hash: Sha256Digest,
     pub project_state_id: String,
     pub current_graph: PubResolvedGraph,
+    pub story_mutation_ids: Vec<StoryId>,
+    pub move_node_ids: Vec<NodeId>,
+    pub resize_node_ids: Vec<NodeId>,
+    pub replacement_node_ids: Vec<NodeId>,
     pub node_paints: Vec<EditorFixedNodePaintV1>,
     pub image_resources: Vec<EditorFixedImageResourceV1>,
 }
@@ -2208,11 +2212,41 @@ impl EditorSession {
             .fixed_image_resources_v1()
             .map_err(EditorFixedOutputStateError::ImageResources)?;
 
+        let mut story_mutation_ids = Vec::new();
+        let mut move_node_ids = Vec::new();
+        let mut resize_node_ids = Vec::new();
+        let mut replacement_node_ids = Vec::new();
+        for operation in &self.undo {
+            match operation {
+                EditOperation::ReplaceStoryRange { story_id, .. } => {
+                    story_mutation_ids.push(*story_id);
+                }
+                EditOperation::MoveNode { node_id, .. } => move_node_ids.push(*node_id),
+                EditOperation::ResizeNode { node_id, .. } => resize_node_ids.push(*node_id),
+                EditOperation::ReplaceImage { node_id, .. } => {
+                    replacement_node_ids.push(*node_id);
+                }
+                _ => {}
+            }
+        }
+        story_mutation_ids.sort_unstable();
+        story_mutation_ids.dedup();
+        move_node_ids.sort_unstable();
+        move_node_ids.dedup();
+        resize_node_ids.sort_unstable();
+        resize_node_ids.dedup();
+        replacement_node_ids.sort_unstable();
+        replacement_node_ids.dedup();
+
         Ok(EditorFixedOutputStateV1 {
             schema_version: "chaptera.editor-fixed-output-private-state.v1".into(),
             source_hash: self.source_hash,
             project_state_id: project.state_id_v1(),
             current_graph: self.graph.clone(),
+            story_mutation_ids,
+            move_node_ids,
+            resize_node_ids,
+            replacement_node_ids,
             node_paints: self.fixed_node_paints_v1(),
             image_resources,
         })
@@ -6195,6 +6229,10 @@ mod asset_reachability_tests {
         assert_eq!(state.source_hash, session.source_hash());
         assert_eq!(state.project_state_id, expected_project_state);
         assert_eq!(state.current_graph, *session.graph());
+        assert!(state.story_mutation_ids.is_empty());
+        assert!(state.move_node_ids.is_empty());
+        assert!(state.resize_node_ids.is_empty());
+        assert_eq!(state.replacement_node_ids, vec![node_id]);
         assert!(state.node_paints.is_empty());
         assert_eq!(state.image_resources.len(), 1);
         assert_eq!(state.image_resources[0].node_ids, vec![node_id]);
