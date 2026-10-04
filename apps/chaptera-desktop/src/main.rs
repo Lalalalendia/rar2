@@ -28,6 +28,7 @@ mod suite_handoff_cli;
 mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
+mod text_box_creation;
 mod text_session;
 #[cfg(target_os = "windows")]
 mod windows_dll_search;
@@ -1269,6 +1270,7 @@ struct ViewerApp {
     canvas_drag: Option<MoveTransaction>,
     canvas_resize: Option<ResizeTransaction>,
     rectangle_creation: rectangle_creation::RectangleCreateSessionV1,
+    text_box_creation: text_box_creation::TextBoxCreateSessionV1,
     created_text_box_scene_nodes: BTreeSet<pub_editor::NodeId>,
     text_mode: Option<text_session::DesktopTextMode>,
     zoom: f32,
@@ -1334,6 +1336,7 @@ impl ViewerApp {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -1879,6 +1882,7 @@ impl ViewerApp {
 
     fn load_path(&mut self, path: PathBuf) {
         self.rectangle_creation = rectangle_creation::RectangleCreateSessionV1::default();
+        self.text_box_creation = text_box_creation::TextBoxCreateSessionV1::default();
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
         let generation = self.open_state.begin_attempt();
@@ -2199,6 +2203,9 @@ impl ViewerApp {
                         }
                     }
                 } else {
+                    if self.text_box_creation.active() {
+                        let _ = self.text_box_creation.deactivate_to_select();
+                    }
                     if self.text_mode.is_some() {
                         self.exit_canvas_text_mode("rectangle_tool_activation");
                     }
@@ -2212,6 +2219,46 @@ impl ViewerApp {
                         Err(error) => {
                             self.edit_status =
                                 Some(format!("Rectangle tool could not activate: {error}"));
+                        }
+                    }
+                }
+            }
+
+            let text_box_active = self.text_box_creation.active();
+            let text_box_response = ui.add_enabled(
+                editor_available && self.visual.is_some(),
+                egui::SelectableLabel::new(text_box_active, "Text Box"),
+            );
+            if text_box_response.clicked() {
+                self.canvas_drag = None;
+                self.canvas_resize = None;
+                if text_box_active {
+                    match self.text_box_creation.deactivate_to_select() {
+                        Ok(()) => {
+                            self.edit_status = Some("Text Box tool deactivated.".to_owned());
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Text Box tool could not deactivate: {error}"));
+                        }
+                    }
+                } else {
+                    if self.rectangle_creation.active() {
+                        let _ = self.rectangle_creation.deactivate_to_select();
+                    }
+                    if self.text_mode.is_some() {
+                        self.exit_canvas_text_mode("textbox_tool_activation");
+                    }
+                    match self.text_box_creation.activate() {
+                        Ok(()) => {
+                            self.edit_status = Some(
+                                "Text Box tool active. Drag on the page to create one empty Story."
+                                    .to_owned(),
+                            );
+                        }
+                        Err(error) => {
+                            self.edit_status =
+                                Some(format!("Text Box tool could not activate: {error}"));
                         }
                     }
                 }
@@ -6997,6 +7044,7 @@ mod tests {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -7066,6 +7114,7 @@ mod tests {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
@@ -7350,6 +7399,7 @@ mod tests {
             canvas_drag: None,
             canvas_resize: None,
             rectangle_creation: rectangle_creation::RectangleCreateSessionV1::default(),
+            text_box_creation: text_box_creation::TextBoxCreateSessionV1::default(),
             created_text_box_scene_nodes: BTreeSet::new(),
             text_mode: None,
             zoom: 1.0,
