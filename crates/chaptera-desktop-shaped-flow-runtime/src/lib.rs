@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
-pub const DESKTOP_FIXED_OUTPUT_PACKET_V1: &str =
-    "chaptera.desktop-fixed-output-packet.v1";
+pub const DESKTOP_FIXED_OUTPUT_PACKET_V1: &str = "chaptera.desktop-fixed-output-packet.v1";
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExplicitDesktopFontResourceV1<'a> {
@@ -334,14 +333,19 @@ mod tests {
 
         let fixed_packet =
             build_current_fixed_output_packet_v1(&editor, &font).expect("current fixed packet");
-        assert_eq!(fixed_packet.protocol_version, DESKTOP_FIXED_OUTPUT_PACKET_V1);
+        assert_eq!(
+            fixed_packet.protocol_version,
+            DESKTOP_FIXED_OUTPUT_PACKET_V1
+        );
         assert_eq!(fixed_packet.source_hash, source_hash.to_string());
         assert_eq!(fixed_packet.shaped_flow, after_layout.shaped_flow);
-        assert!(fixed_packet
-            .shaped_flow
-            .lines
-            .iter()
-            .all(|line| line.units_per_em > 0));
+        assert!(
+            fixed_packet
+                .shaped_flow
+                .lines
+                .iter()
+                .all(|line| line.units_per_em > 0)
+        );
         assert_eq!(fixed_packet.font.bytes, font.bytes);
         assert_eq!(
             fixed_packet.font.fingerprint_sha256,
@@ -349,7 +353,9 @@ mod tests {
         );
         assert!(fixed_packet.invariants.authoritative_rust_project_replay);
         assert_eq!(
-            fixed_packet.invariants.source_reparse_after_project_apply_count,
+            fixed_packet
+                .invariants
+                .source_reparse_after_project_apply_count,
             0
         );
         assert!(!fixed_packet.invariants.source_refs_in_renderer_packet);
