@@ -4,6 +4,7 @@
 )]
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
+// CI-READER-VISUAL-CRITICAL-PATH-01 post-Carlton measurement marker.
 mod acceptance;
 mod acceptance_cli;
 mod acceptance_v2;
