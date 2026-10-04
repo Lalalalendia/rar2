@@ -18,9 +18,9 @@ RENDERER = ROOT / "tools" / "yab259_fixed_pdf_packet_renderer.rs"
 
 sys.path.insert(0, str(ROOT / "tools"))
 from run_yab259_fixed_pdf_closure import Yab259ClosureError  # noqa: E402
-from yab259_order_preserving_donor import (  # noqa: E402
+from yab259_alpha_image_donor import (  # noqa: E402
     bind_yab_repository,
-    prepare_order_preserving_pdf_donor,
+    prepare_alpha_image_pdf_donor,
 )
 
 INPUT_VERSION = "chaptera.current-viewer-fixed-pdf-input.v1"
@@ -98,7 +98,7 @@ def main() -> int:
 
         with tempfile.TemporaryDirectory(prefix="chaptera-yab259-carlton-alpha-") as tmp:
             donor = pathlib.Path(tmp) / "donor"
-            base_digest, ordered_digest = prepare_order_preserving_pdf_donor(
+            base_digest, ordered_digest, alpha_digest = prepare_alpha_image_pdf_donor(
                 repository,
                 donor,
             )
@@ -125,9 +125,10 @@ def main() -> int:
             write_json(
                 args.mapping_output,
                 {
-                    "schema": "chaptera.current-viewer-yab-supported-mapping.v1",
+                    "schema": "chaptera.current-viewer-yab-alpha-mapping.v1",
                     "base_repair_sha256": base_digest,
                     "ordered_repair_sha256": ordered_digest,
+                    "alpha_repair_sha256": alpha_digest,
                     "binding": binding,
                     "mapping": mapping,
                 },
@@ -147,9 +148,10 @@ def main() -> int:
             write_json(
                 args.renderer_result_output,
                 {
-                    "schema": "chaptera.current-viewer-yab-supported-render.v1",
+                    "schema": "chaptera.current-viewer-yab-alpha-render.v1",
                     "base_repair_sha256": base_digest,
                     "ordered_repair_sha256": ordered_digest,
+                    "alpha_repair_sha256": alpha_digest,
                     "renderer_result": renderer,
                 },
             )
