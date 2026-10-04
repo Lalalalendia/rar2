@@ -396,6 +396,106 @@ struct BlockObservation {
     value: Option<u32>,
 }
 
+/// Framed observations for research, without assigning paragraph semantics.
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuillRawFdppProperty {
+    pub field_id: u16,
+    pub block_type: u8,
+    pub raw_tag: [u8; 2],
+    pub scalar_value: Option<u32>,
+    pub source: RawSpan,
+}
+
+#[cfg(feature = "research-inspection")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuillRawFdppStyle {
+    pub descriptor_ordinal: u32,
+    pub style_ordinal: u32,
+    pub global_start_utf16: u32,
+    pub global_end_utf16: u32,
+    pub source: RawSpan,
+    pub properties: Vec<QuillRawFdppProperty>,
+}
+
+/// Reuse the existing FDPP and style-block grammar as a strict microscope.
+/// Unlike historical archaeology, unknown framing is never assumed empty.
+/// Neither raw 0x34 nor packed 0x234 is assigned units, defaults or a mode.
+#[cfg(feature = "research-inspection")]
+pub fn inspect_raw_fdpp_styles(
+    bytes: &[u8],
+    story_catalog: &QuillStoryCatalog,
+) -> Result<Vec<QuillRawFdppStyle>, QuillTypographyReadError> {
+    let descriptors = story_catalog
+        .descriptor_nodes
+        .iter()
+        .flat_map(|node| node.descriptors.iter())
+        .enumerate()
+        .collect::<Vec<_>>();
+    let mut unknown = BTreeSet::new();
+    let styles = parse_fdpp_styles(bytes, story_catalog, &descriptors, &mut unknown)?;
+    if !unknown.is_empty() {
+        return Err(QuillTypographyReadError::new(
+            "raw FDPP inspection requires fully known block framing",
+        ));
+    }
+    validate_monotone_fdpp_text_offsets(&styles)?;
+    let text_start = u32::try_from(story_catalog.text.source.offset)
+        .map_err(|_| QuillTypographyReadError::new("TEXT offset exceeds u32"))?;
+    let text_len = u32::try_from(story_catalog.text.source.len)
+        .map_err(|_| QuillTypographyReadError::new("TEXT length exceeds u32"))?;
+    let text_end = text_start
+        .checked_add(text_len)
+        .ok_or_else(|| QuillTypographyReadError::new("TEXT span overflows u32"))?;
+    if text_len % 2 != 0 {
+        return Err(QuillTypographyReadError::new("TEXT byte length is odd"));
+    }
+    // This checks in-TEXT, aligned, monotone and complete range coverage.
+    materialize_paragraph_ranges(&styles, text_start, text_end, text_len / 2)?;
+    let mut previous_end = 0;
+    let mut result = Vec::new();
+    for style in styles {
+        let start = usize::try_from(style.style_source.offset)
+            .map_err(|_| QuillTypographyReadError::new("FDPP offset exceeds usize"))?;
+        let len = usize::try_from(style.style_source.len)
+            .map_err(|_| QuillTypographyReadError::new("FDPP length exceeds usize"))?;
+        let end = checked_end(start, len, bytes.len(), "raw FDPP style")?;
+        let mut cursor = start + 4;
+        let mut properties = Vec::new();
+        while cursor < end {
+            let (block, next) = parse_block(bytes, cursor, end, &mut unknown)?;
+            if !unknown.is_empty() {
+                return Err(QuillTypographyReadError::new(
+                    "unknown raw FDPP block framing",
+                ));
+            }
+            properties.push(QuillRawFdppProperty {
+                field_id: block.id,
+                block_type: block.block_type,
+                raw_tag: [bytes[cursor], bytes[cursor + 1]],
+                scalar_value: block.value,
+                source: RawSpan {
+                    stream: style.style_source.stream.clone(),
+                    offset: cursor as u64,
+                    len: (next - cursor) as u64,
+                },
+            });
+            cursor = next;
+        }
+        let global_end_utf16 = (style.absolute_text_end - text_start) / 2;
+        result.push(QuillRawFdppStyle {
+            descriptor_ordinal: style.fdpp_descriptor_ordinal,
+            style_ordinal: style.fdpp_style_ordinal,
+            global_start_utf16: previous_end,
+            global_end_utf16,
+            source: style.style_source,
+            properties,
+        });
+        previous_end = global_end_utf16;
+    }
+    Ok(result)
+}
+
 pub fn parse_bounded_typography(
     bytes: &[u8],
     story_catalog: &QuillStoryCatalog,
