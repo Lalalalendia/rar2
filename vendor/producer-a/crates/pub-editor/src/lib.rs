@@ -6,6 +6,7 @@
 //! resolved authoring graph. Native PUB materialization remains a separate
 //! writer gate.
 
+mod authored_paragraph_alignment_v1;
 mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
@@ -14,6 +15,11 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraphs_v1;
 mod writer_assessment;
 
+pub use authored_paragraph_alignment_v1::{
+    AuthoredParagraphAlignmentValueV1, EffectiveParagraphAlignmentV1,
+    EffectiveParagraphAlignmentValueV1, ParagraphAlignmentAuthorityV1,
+    ParagraphAlignmentOverrideSnapshotV1,
+};
 pub use authored_stack_lifecycle_v1::{
     AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
     AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
@@ -69,7 +75,9 @@ use pub_model::{
     EffectiveTableTrackV1, Node, NodeHeader, NodeKind, ResourceId, SourceDerivedIdInput, Story,
     StoryFrame, TableColumnId, TableRowId, derive_source_canonical_id, validate_story_frames,
 };
-pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
+pub use pub_model::{
+    LengthEmu, NodeId, PageId, ParagraphId, RectEmu, Sha256Digest, StoryId, TableCellId,
+};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
     OdgFullStoryTypographyPlacement, add_embedded_images_to_odg, add_full_story_typography_to_odg,
@@ -101,7 +109,8 @@ pub const EDITOR_PROJECT_VERSION_V0_10: &str = "pub-editor-v0.10";
 pub const EDITOR_PROJECT_VERSION_V0_11: &str = "pub-editor-v0.11";
 pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
 pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_13;
+pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_14;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -314,6 +323,17 @@ pub enum EditOperation {
     ReorderAuthoredStack {
         transition: AuthoredStackReorderTransitionV1,
     },
+    SetParagraphAlignmentOverride {
+        paragraph_ids: Vec<ParagraphId>,
+        value: AuthoredParagraphAlignmentValueV1,
+        before: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+        after: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+    },
+    ClearParagraphAlignmentOverride {
+        paragraph_ids: Vec<ParagraphId>,
+        before: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+        after: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+    },
 }
 
 impl EditOperation {
@@ -349,7 +369,9 @@ impl EditOperation {
             | Self::CreateTextBox { .. }
             | Self::CreateShape { .. }
             | Self::DeleteNode { .. }
-            | Self::ReorderAuthoredStack { .. } => Vec::new(),
+            | Self::ReorderAuthoredStack { .. }
+            | Self::SetParagraphAlignmentOverride { .. }
+            | Self::ClearParagraphAlignmentOverride { .. } => Vec::new(),
         }
     }
 }
@@ -483,6 +505,15 @@ impl PersistenceRequirements for EditOperation {
                 origin: Some(transition.node_id.into_canonical()),
                 property_path: Some("page.authored_stack".into()),
             }],
+            Self::SetParagraphAlignmentOverride { paragraph_ids, .. }
+            | Self::ClearParagraphAlignmentOverride { paragraph_ids, .. } => paragraph_ids
+                .iter()
+                .map(|paragraph_id| PersistenceRequirement {
+                    feature: "story.paragraph_alignment".into(),
+                    origin: Some(paragraph_id.into_canonical()),
+                    property_path: Some("paragraph.alignment".into()),
+                })
+                .collect(),
         }
     }
 }
@@ -1064,6 +1095,16 @@ pub enum EditorError {
     StaleOperation {
         story_id: StoryId,
     },
+    ParagraphAlignmentTargetsEmpty,
+    ParagraphAlignmentProjectionUnavailable,
+    ParagraphAlignmentParagraphUnavailable {
+        paragraph_id: ParagraphId,
+    },
+    ParagraphAlignmentNoChange,
+    StaleParagraphAlignmentOverride {
+        paragraph_id: ParagraphId,
+    },
+    ParagraphAlignmentTransitionInvalid,
     NothingToUndo,
     NothingToRedo,
 }
@@ -1367,6 +1408,28 @@ impl fmt::Display for EditorError {
                 "story {} no longer matches the edit operation precondition",
                 story_id.as_canonical()
             ),
+            Self::ParagraphAlignmentTargetsEmpty => {
+                formatter.write_str("paragraph alignment operation requires at least one ParagraphId")
+            }
+            Self::ParagraphAlignmentProjectionUnavailable => formatter.write_str(
+                "current Story state does not expose a canonical imported Paragraph projection",
+            ),
+            Self::ParagraphAlignmentParagraphUnavailable { paragraph_id } => write!(
+                formatter,
+                "paragraph {} is not a current imported Paragraph target",
+                paragraph_id.as_canonical()
+            ),
+            Self::ParagraphAlignmentNoChange => {
+                formatter.write_str("paragraph alignment operation produces no canonical state change")
+            }
+            Self::StaleParagraphAlignmentOverride { paragraph_id } => write!(
+                formatter,
+                "paragraph alignment override for {} changed since the operation was recorded",
+                paragraph_id.as_canonical()
+            ),
+            Self::ParagraphAlignmentTransitionInvalid => {
+                formatter.write_str("paragraph alignment override transition is not canonical")
+            }
             Self::NothingToUndo => formatter.write_str("editor session has nothing to undo"),
             Self::NothingToRedo => formatter.write_str("editor session has nothing to redo"),
         }
@@ -1436,6 +1499,20 @@ impl EditorError {
             Self::StaleNodeResize { .. } => "stale_node_resize",
             Self::NoChange { .. } => "no_change",
             Self::StaleOperation { .. } => "stale_operation",
+            Self::ParagraphAlignmentTargetsEmpty => "paragraph_alignment_targets_empty",
+            Self::ParagraphAlignmentProjectionUnavailable => {
+                "paragraph_alignment_projection_unavailable"
+            }
+            Self::ParagraphAlignmentParagraphUnavailable { .. } => {
+                "paragraph_alignment_paragraph_unavailable"
+            }
+            Self::ParagraphAlignmentNoChange => "paragraph_alignment_no_change",
+            Self::StaleParagraphAlignmentOverride { .. } => {
+                "stale_paragraph_alignment_override"
+            }
+            Self::ParagraphAlignmentTransitionInvalid => {
+                "paragraph_alignment_transition_invalid"
+            }
             Self::NothingToUndo => "nothing_to_undo",
             Self::NothingToRedo => "nothing_to_redo",
         }
@@ -1510,6 +1587,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesReorderAuthoredStackOperation {
         index: usize,
     },
+    LegacyProjectCarriesParagraphAlignmentOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTableGrids,
     LegacyProjectCarriesIdentity,
     MissingProjectIdentity,
@@ -1558,7 +1638,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, or {EDITOR_PROJECT_VERSION_V0_13:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, or {EDITOR_PROJECT_VERSION_V0_14:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -1610,6 +1690,10 @@ impl fmt::Display for EditorProjectError {
                 formatter,
                 "editor project operation {index} uses ReorderAuthoredStack but the project schema predates pub-editor-v0.13"
             ),
+            Self::LegacyProjectCarriesParagraphAlignmentOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses paragraph alignment overrides but the project schema predates pub-editor-v0.14"
+            ),
             Self::LegacyProjectCarriesTableGrids => formatter.write_str(
                 "editor projects before pub-editor-v0.6 cannot carry EffectiveTableGridV1 state",
             ),
@@ -1617,7 +1701,7 @@ impl fmt::Display for EditorProjectError {
                 "editor projects before pub-editor-v0.11 cannot carry durable project identity",
             ),
             Self::MissingProjectIdentity => formatter.write_str(
-                "pub-editor-v0.11 requires durable project identity",
+                "pub-editor-v0.11+ requires durable project identity",
             ),
             Self::TableGridMismatch => formatter.write_str(
                 "editor project EffectiveTableGridV1 state does not match deterministic replay",
@@ -1833,6 +1917,7 @@ pub struct EditorSession {
     image_replacements: BTreeMap<NodeId, Sha256Digest>,
     authored_shapes: BTreeMap<NodeId, AuthoredShapeRuntimeV1>,
     authored_stacks: BTreeMap<PageId, AuthoredStackV1>,
+    paragraph_alignment_overrides: BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>,
     undo: Vec<EditOperation>,
     redo: Vec<EditOperation>,
 }
@@ -1864,6 +1949,7 @@ impl EditorSession {
             image_replacements: BTreeMap::new(),
             authored_shapes: BTreeMap::new(),
             authored_stacks: BTreeMap::new(),
+            paragraph_alignment_overrides: BTreeMap::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         })
@@ -2134,6 +2220,163 @@ impl EditorSession {
         let sha256 = asset.sha256;
         self.replacement_assets.insert(sha256, asset);
         Ok(sha256)
+    }
+
+    fn canonical_paragraph_alignment_target_ids_v1(
+        &self,
+        mut paragraph_ids: Vec<ParagraphId>,
+    ) -> Result<Vec<ParagraphId>, EditorError> {
+        if paragraph_ids.is_empty() {
+            return Err(EditorError::ParagraphAlignmentTargetsEmpty);
+        }
+        paragraph_ids.sort_unstable();
+        paragraph_ids.dedup();
+
+        let available = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .map(|paragraph| paragraph.paragraph_id)
+            .collect::<BTreeSet<_>>();
+        for paragraph_id in &paragraph_ids {
+            if !available.contains(paragraph_id) {
+                return Err(EditorError::ParagraphAlignmentParagraphUnavailable {
+                    paragraph_id: *paragraph_id,
+                });
+            }
+        }
+        Ok(paragraph_ids)
+    }
+
+    pub fn authored_paragraph_alignment_override_v1(
+        &self,
+        paragraph_id: ParagraphId,
+    ) -> Option<AuthoredParagraphAlignmentValueV1> {
+        self.paragraph_alignment_overrides.get(&paragraph_id).copied()
+    }
+
+    pub fn effective_paragraph_alignment_v1(
+        &self,
+        paragraph_id: ParagraphId,
+    ) -> Result<EffectiveParagraphAlignmentV1, EditorError> {
+        let paragraph = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .find(|paragraph| paragraph.paragraph_id == paragraph_id)
+            .ok_or(EditorError::ParagraphAlignmentParagraphUnavailable { paragraph_id })?;
+        let imported_base = self
+            .imported_paragraph_base_alignment_v1(paragraph_id)
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .map(|value| value.alignment);
+        let authored_override = self
+            .paragraph_alignment_overrides
+            .get(&paragraph_id)
+            .copied();
+        let (effective, authority) = if let Some(value) = authored_override {
+            (
+                Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
+            )
+        } else if let Some(value) = imported_base {
+            (
+                Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                Some(ParagraphAlignmentAuthorityV1::ImportedBase),
+            )
+        } else {
+            (None, None)
+        };
+
+        Ok(EffectiveParagraphAlignmentV1 {
+            paragraph_id,
+            story_id: paragraph.story_id,
+            range: paragraph.range,
+            imported_base,
+            authored_override,
+            effective,
+            authority,
+        })
+    }
+
+    pub fn set_paragraph_alignment_override_v1(
+        &mut self,
+        paragraph_ids: Vec<ParagraphId>,
+        value: AuthoredParagraphAlignmentValueV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph_ids = self.canonical_paragraph_alignment_target_ids_v1(paragraph_ids)?;
+        let before = authored_paragraph_alignment_v1::paragraph_alignment_override_snapshots_v1(
+            &self.paragraph_alignment_overrides,
+            &paragraph_ids,
+        );
+        let mut after = Vec::with_capacity(paragraph_ids.len());
+        for paragraph_id in &paragraph_ids {
+            let imported_base = self
+                .imported_paragraph_base_alignment_v1(*paragraph_id)
+                .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+                .map(|value| value.alignment);
+            after.push(ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: *paragraph_id,
+                value: authored_paragraph_alignment_v1::normalized_paragraph_alignment_override_v1(
+                    imported_base,
+                    value,
+                ),
+            });
+        }
+        if before == after {
+            return Err(EditorError::ParagraphAlignmentNoChange);
+        }
+
+        let operation = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids,
+            value,
+            before,
+            after,
+        };
+        apply_paragraph_alignment_operation_forward_v1(
+            &mut self.paragraph_alignment_overrides,
+            &operation,
+        )?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn clear_paragraph_alignment_override_v1(
+        &mut self,
+        paragraph_ids: Vec<ParagraphId>,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph_ids = self.canonical_paragraph_alignment_target_ids_v1(paragraph_ids)?;
+        let before = authored_paragraph_alignment_v1::paragraph_alignment_override_snapshots_v1(
+            &self.paragraph_alignment_overrides,
+            &paragraph_ids,
+        );
+        let after = paragraph_ids
+            .iter()
+            .map(|paragraph_id| ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: *paragraph_id,
+                value: None,
+            })
+            .collect::<Vec<_>>();
+        if before == after {
+            return Err(EditorError::ParagraphAlignmentNoChange);
+        }
+
+        let operation = EditOperation::ClearParagraphAlignmentOverride {
+            paragraph_ids,
+            before,
+            after,
+        };
+        apply_paragraph_alignment_operation_forward_v1(
+            &mut self.paragraph_alignment_overrides,
+            &operation,
+        )?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
     }
 
     pub fn project(&self) -> EditorProject {
