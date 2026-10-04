@@ -1,14 +1,17 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
-use pub_editor::EditorSession;
+use pub_editor::{EditorFixedImageResourceV1, EditorFixedNodePaintV1, EditorSession};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
 use pub_model::{LengthEmu, StoryId};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
+pub const DESKTOP_FIXED_OUTPUT_PACKET_V1: &str =
+    "chaptera.desktop-fixed-output-packet.v1";
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExplicitDesktopFontResourceV1<'a> {
@@ -28,6 +31,36 @@ pub struct DesktopStoryLayoutV1 {
     pub font_fingerprint_sha256: String,
     pub shaped_flow: BoundedShapedFlowScene,
     pub caret_map: ResolvedTextCaretMapV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopFixedOutputFontV1 {
+    pub resource_id: String,
+    pub fingerprint_sha256: String,
+    pub face_index: u32,
+    pub font_size_emu: LengthEmu,
+    pub line_height_emu: LengthEmu,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopFixedOutputPacketV1 {
+    pub protocol_version: String,
+    pub source_hash: String,
+    pub project_state_id: String,
+    pub shaped_flow: BoundedShapedFlowScene,
+    pub node_paints: Vec<EditorFixedNodePaintV1>,
+    pub image_resources: Vec<EditorFixedImageResourceV1>,
+    pub font: DesktopFixedOutputFontV1,
+    pub invariants: DesktopFixedOutputInvariantsV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopFixedOutputInvariantsV1 {
+    pub authoritative_rust_project_replay: bool,
+    pub source_reparse_after_project_apply_count: u32,
+    pub source_refs_in_renderer_packet: bool,
+    pub output_adapter_reshaping_calls: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +125,50 @@ pub fn validate_explicit_font_resource_v1(
         ));
     }
     Ok(actual)
+}
+
+fn resolve_current_shaped_flow_v1(
+    editor: &EditorSession,
+    font: &ExplicitDesktopFontResourceV1<'_>,
+) -> Result<(String, BoundedShapedFlowScene), DesktopShapedFlowRuntimeError> {
+    let (fingerprint, shaped_flow) = resolve_current_shaped_flow_v1(editor, font)?;
+    Ok((fingerprint, shaped_flow))
+}
+
+pub fn build_current_fixed_output_packet_v1(
+    editor: &EditorSession,
+    font: &ExplicitDesktopFontResourceV1<'_>,
+) -> Result<DesktopFixedOutputPacketV1, DesktopShapedFlowRuntimeError> {
+    let (fingerprint, shaped_flow) = resolve_current_shaped_flow_v1(editor, font)?;
+    let state = editor.fixed_output_state_v1().map_err(|error| {
+        DesktopShapedFlowRuntimeError::new(
+            "fixed_output_state_failed",
+            format!("authoritative EditorSession fixed-output state failed: {error}"),
+        )
+    })?;
+
+    Ok(DesktopFixedOutputPacketV1 {
+        protocol_version: DESKTOP_FIXED_OUTPUT_PACKET_V1.to_owned(),
+        source_hash: state.source_hash.to_string(),
+        project_state_id: state.project_state_id,
+        shaped_flow,
+        node_paints: state.node_paints,
+        image_resources: state.image_resources,
+        font: DesktopFixedOutputFontV1 {
+            resource_id: font.resource_id.to_owned(),
+            fingerprint_sha256: fingerprint,
+            face_index: font.face_index,
+            font_size_emu: font.font_size_emu,
+            line_height_emu: font.line_height_emu,
+            bytes: font.bytes.to_vec(),
+        },
+        invariants: DesktopFixedOutputInvariantsV1 {
+            authoritative_rust_project_replay: true,
+            source_reparse_after_project_apply_count: 0,
+            source_refs_in_renderer_packet: false,
+            output_adapter_reshaping_calls: 0,
+        },
+    })
 }
 
 pub fn build_current_story_layout_v1(
@@ -254,6 +331,29 @@ mod tests {
         );
         assert_eq!(after_layout.caret_map.layout_revision_id, "layout:after");
         assert_eq!(editor.source_hash(), source_hash);
+
+        let fixed_packet =
+            build_current_fixed_output_packet_v1(&editor, &font).expect("current fixed packet");
+        assert_eq!(fixed_packet.protocol_version, DESKTOP_FIXED_OUTPUT_PACKET_V1);
+        assert_eq!(fixed_packet.source_hash, source_hash.to_string());
+        assert_eq!(fixed_packet.shaped_flow, after_layout.shaped_flow);
+        assert!(fixed_packet
+            .shaped_flow
+            .lines
+            .iter()
+            .all(|line| line.units_per_em > 0));
+        assert_eq!(fixed_packet.font.bytes, font.bytes);
+        assert_eq!(
+            fixed_packet.font.fingerprint_sha256,
+            before_layout.font_fingerprint_sha256
+        );
+        assert!(fixed_packet.invariants.authoritative_rust_project_replay);
+        assert_eq!(
+            fixed_packet.invariants.source_reparse_after_project_apply_count,
+            0
+        );
+        assert!(!fixed_packet.invariants.source_refs_in_renderer_packet);
+        assert_eq!(fixed_packet.invariants.output_adapter_reshaping_calls, 0);
 
         editor.undo().expect("undo real Story insertion");
         let restored = build_current_story_layout_v1(&editor, story_id, "layout:undo", &font)
