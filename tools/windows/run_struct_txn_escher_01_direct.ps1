@@ -22,7 +22,7 @@ $Runtime = Join-Path $RepoRoot "tools/windows/pub-runtime/PubRuntime.psm1"
 $Finalize = Join-Path $RepoRoot "tools/research-runner/finalize_native_run.ps1"
 
 $ExpectedPacketBlob = "1fac96af8893f3706746aaf57dd033a82c949c55"
-$ExpectedOperationBlob = "bec79bec8f270d81b2e4896c5b22afbb31880ccc"
+$ExpectedOperationBlob = "7ce2a8bdc4ad5c66a1e2f7e937b1ea6d40a9e4ca"
 $ExpectedHelperSourceBlob = "1afe88d65eed91d2b73c3814e6997b29572ecc4c"
 $ExpectedStructuralModuleBlob = "50ae3b989446f07e62838f39bef073c4bbea0c33"
 $ExpectedRuntimeBlob = "fed4c890a34d39401d3b5848cc16d1087f862a27"
