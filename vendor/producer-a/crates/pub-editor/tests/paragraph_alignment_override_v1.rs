@@ -61,6 +61,19 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         authored.authority,
         Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
     );
+    let authored_export = session
+        .effective_paragraph_alignment_export_v1()
+        .expect("project authored effective paragraph alignment for export");
+    let authored_export_paragraph = authored_export
+        .iter()
+        .find(|item| item.paragraph_id == paragraph_id)
+        .expect("export projection must retain the canonical ParagraphId");
+    assert_eq!(authored_export_paragraph.story_id, paragraph.story_id);
+    assert_eq!(authored_export_paragraph.range, paragraph.range);
+    assert_eq!(
+        authored_export_paragraph.alignment,
+        Some(pub_export::ParagraphAlignmentV1::Center)
+    );
 
     let lifecycle_error = session
         .replace_story_text(
@@ -153,6 +166,17 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         cleared.authority,
         Some(ParagraphAlignmentAuthorityV1::ImportedBase)
     );
+    let cleared_export = reopened
+        .effective_paragraph_alignment_export_v1()
+        .expect("project cleared effective paragraph alignment for export");
+    assert_eq!(
+        cleared_export
+            .iter()
+            .find(|item| item.paragraph_id == paragraph_id)
+            .expect("cleared export projection keeps ParagraphId")
+            .alignment,
+        Some(pub_export::ParagraphAlignmentV1::Right)
+    );
 
     let redundant = reopened
         .set_paragraph_alignment_override_v1(
@@ -190,5 +214,15 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
     assert_eq!(
         left.authority,
         Some(ParagraphAlignmentAuthorityV1::ChapteraOverride)
+    );
+    assert_eq!(
+        reopened
+            .effective_paragraph_alignment_export_v1()
+            .expect("project Left effective paragraph alignment for export")
+            .iter()
+            .find(|item| item.paragraph_id == paragraph_id)
+            .expect("Left export projection keeps ParagraphId")
+            .alignment,
+        Some(pub_export::ParagraphAlignmentV1::Left)
     );
 }
