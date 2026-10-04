@@ -651,3 +651,21 @@ fn sync_directory_if_supported(path: &Path) -> Result<()> {
 fn sync_directory_if_supported(_path: &Path) -> Result<()> {
     Ok(())
 }
+
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn rename_failure_reports_source_and_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("missing-source");
+        let dst = temp.path().join("target").join("renamed");
+
+        let error = rename_path(&src, &dst).unwrap_err().to_string();
+        assert!(error.contains(&src.display().to_string()), "{error}");
+        assert!(error.contains(&dst.display().to_string()), "{error}");
+        assert!(error.contains("rename"), "{error}");
+    }
+}
