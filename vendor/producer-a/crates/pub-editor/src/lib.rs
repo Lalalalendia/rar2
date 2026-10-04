@@ -2702,7 +2702,9 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesDeleteNodeOperation { index });
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_13 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+        {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
             }) {
