@@ -3,9 +3,10 @@ name: Editor Desktop Selection Keyboard Restore V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/src/selection_keyboard.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_shell.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_gui_tests.rs"
       - "apps/chaptera-desktop/Cargo.toml"
       - ".github/workflows/editor-desktop-selection-keyboard-restore-v1.yml"
   push:
@@ -86,3 +87,4 @@ jobs:
 
       - name: Prove Story focus and Alt Arrow on real PUB
         run: cargo test -p chaptera-desktop gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub -- --ignored --nocapture
+

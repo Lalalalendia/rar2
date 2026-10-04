@@ -17,6 +17,14 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/editor-desktop-selection-keyboard-restore-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/selection_keyboard.rs",
+            "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
+            "apps/chaptera-desktop/src/selection_keyboard_gui_tests.rs",
+        ),
+    },
     ".github/workflows/chaptera-suite-handoff-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
@@ -186,3 +194,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
