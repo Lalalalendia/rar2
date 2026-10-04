@@ -121,6 +121,18 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
         Some(ParagraphAlignmentAuthorityV1::ImportedBase)
     );
 
+    let redundant = reopened
+        .set_paragraph_alignment_override_v1(
+            vec![paragraph_id],
+            AuthoredParagraphAlignmentValueV1::Right,
+        )
+        .expect_err("setting the known Right base must normalize to inherit/no change");
+    assert_eq!(redundant.code(), "paragraph_alignment_no_change");
+    assert_eq!(
+        reopened.authored_paragraph_alignment_override_v1(paragraph_id),
+        None
+    );
+
     reopened
         .set_paragraph_alignment_override_v1(
             vec![paragraph_id],
