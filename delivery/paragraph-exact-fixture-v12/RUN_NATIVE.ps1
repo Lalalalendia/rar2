@@ -62,14 +62,14 @@ function Find-ExactFixture([string]$DiagPath){
     return $null
 }
 function Quote-PsLiteral([string]$Value){return "'"+$Value.Replace("'","''")+"'"}
-function Start-EncodedPowerShell([string]$Script,[string[]]$Args,[string]$Stdout,[string]$Stderr){
-    $parts=@('&',(Quote-PsLiteral $Script));foreach($a in $Args){$parts+=(Quote-PsLiteral $a)};$command=$parts -join ' ';$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command));$argLine='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
+function Start-EncodedPowerShell([string]$Script,[string[]]$ChildArgs,[string]$Stdout,[string]$Stderr){
+    $parts=@('&',(Quote-PsLiteral $Script));foreach($a in $ChildArgs){$parts+=(Quote-PsLiteral $a)};$command=$parts -join ' ';$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command));$argLine='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
     return Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $argLine -NoNewWindow -PassThru -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
 }
-function Invoke-Step([string]$Label,[string]$Script,[string[]]$Args,[int]$TimeoutSeconds,[string]$LogDir,[string]$LiveLog,[string]$WatchRoot){
+function Invoke-Step([string]$Label,[string]$Script,[string[]]$ChildArgs,[int]$TimeoutSeconds,[string]$LogDir,[string]$LiveLog,[string]$WatchRoot){
     New-Item -ItemType Directory -Force -Path $LogDir|Out-Null;$stdout=Join-Path $LogDir 'stdout.txt';$stderr=Join-Path $LogDir 'stderr.txt';$start=Get-Date
     Write-Host '';Write-Host ('=== '+$Label+' ===') -ForegroundColor Cyan
-    $p=Start-EncodedPowerShell $Script $Args $stdout $stderr
+    $p=Start-EncodedPowerShell $Script $ChildArgs $stdout $stderr
     while(-not $p.HasExited){
         Start-Sleep -Seconds 10;$p.Refresh();$elapsed=[int]((Get-Date)-$start).TotalSeconds;$mp=@(Get-MspubPids)-join ',';$files=0;if(Test-Path -LiteralPath $WatchRoot){$files=@(Get-ChildItem -LiteralPath $WatchRoot -File -Recurse -ErrorAction SilentlyContinue).Count}
         $line=('['+(Get-Date -Format 'HH:mm:ss')+"] $Label RUNNING elapsed=${elapsed}s child=$($p.Id) MSPUB=[$mp] evidence_files=$files");Write-Host $line;$line|Add-Content -LiteralPath $LiveLog -Encoding UTF8
