@@ -8298,8 +8298,10 @@ mod tests {
                 .expect("editor")
                 .operations()
                 .len(),
-            history_operation_count,
-            "Ctrl+Z must not append a new authoring operation"
+            history_operation_count
+                .checked_sub(1)
+                .expect("walkthrough has one operation to undo"),
+            "Ctrl+Z must move exactly one applied operation onto the redo stack"
         );
 
         harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::Y);
