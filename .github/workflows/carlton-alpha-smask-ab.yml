@@ -213,6 +213,8 @@ jobs:
           $alphaDiff = Join-Path $env:CHAPTERA_CARLTON_AB_ROOT "alpha-diff.json"
           $env:CHAPTERA_BASELINE_DIFF = $baselineDiff
           $env:CHAPTERA_ALPHA_DIFF = $alphaDiff
+          "CHAPTERA_BASELINE_DIFF=$baselineDiff" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_ALPHA_DIFF=$alphaDiff" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           @'
           import json, os, pathlib, sys
           root = pathlib.Path.cwd()
