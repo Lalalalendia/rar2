@@ -52,13 +52,33 @@ jobs:
           [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "tools/portable/pub2019-p0/run-native.ps1").Path,[ref]$tokens,[ref]$errors)
           if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_.Message }; throw "portable runner parse failed" }
 
-      - name: Build paragraph metrics probe
+      - name: Build self-contained paragraph metrics probe
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $env:RUSTFLAGS = "-C target-feature=+crt-static"
           cargo build --locked --release --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml
           $exe = "tools/research-runner/paragraph-metrics-probe/target/release/paragraph-metrics-probe.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "probe exe missing" }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw "vswhere.exe missing" }
+          $install = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if ([string]::IsNullOrWhiteSpace($install)) { throw "Visual Studio VC tools not found" }
+          $dumpbin = Get-ChildItem -LiteralPath (Join-Path $install "VC/Tools/MSVC") -Directory |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "bin/Hostx64/x64/dumpbin.exe" } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+          if ([string]::IsNullOrWhiteSpace([string]$dumpbin)) { throw "dumpbin.exe not found" }
+
+          $deps = (& $dumpbin /dependents $exe 2>&1 | Out-String)
+          $deps | Set-Content -LiteralPath paragraph-metrics-probe-dependencies.txt -Encoding UTF8
+          foreach ($forbidden in @("VCRUNTIME", "MSVCP", "api-ms-win-crt", "ucrtbase.dll")) {
+            if ($deps -match [regex]::Escape($forbidden)) {
+              throw "Portable paragraph probe still depends on external CRT component: $forbidden"
+            }
+          }
 
       - name: Fetch pinned embedded Python
         shell: pwsh
@@ -120,6 +140,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $runtime,$fixtures | Out-Null
           Copy-Item -LiteralPath python-embed.zip -Destination (Join-Path $runtime "python-3.13.16-embed-amd64.zip") -Force
           Copy-Item -LiteralPath "tools/research-runner/paragraph-metrics-probe/target/release/paragraph-metrics-probe.exe" -Destination (Join-Path $runtime "paragraph-metrics-probe.exe") -Force
+          Copy-Item -LiteralPath "paragraph-metrics-probe-dependencies.txt" -Destination (Join-Path $runtime "paragraph-metrics-probe-dependencies.txt") -Force
 
           $stack = Join-Path $PWD ("corpus/materialized/native/" + $env:STACK_SHA + ".pub")
           $surface = Join-Path $PWD ("corpus/materialized/native/" + $env:SURFACE_SHA + ".pub")
@@ -149,6 +170,8 @@ jobs:
             corpus_artifact_id = [int64]$env:CORPUS_ARTIFACT_ID
             corpus_artifact_sha256 = $env:CORPUS_ARTIFACT_SHA256
             paragraph_seed_mode = "publisher-native-new-document"
+            paragraph_probe_crt = "static-msvc"
+            paragraph_probe_dependency_audit = "no-vcruntime-msvcp-ucrt-imports"
             files = $records
           } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
 
