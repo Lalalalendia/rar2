@@ -42,9 +42,9 @@ mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
 mod text_box_creation;
-mod text_box_creation_shell;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod text_box_creation_gui_tests;
+mod text_box_creation_shell;
 mod text_session;
 #[cfg(test)]
 mod text_session_gui_tests;
