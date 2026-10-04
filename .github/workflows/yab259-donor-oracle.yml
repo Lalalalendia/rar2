@@ -1,0 +1,70 @@
+name: Yab 259 donor oracle
+
+on:
+  push:
+    branches:
+      - research/yab259-donor-oracle
+    paths:
+      - ".github/workflows/yab259-donor-oracle.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yab259-donor-oracle
+  cancel-in-progress: true
+
+jobs:
+  validate-yab259:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact Yab donor
+        uses: actions/checkout@v4
+        with:
+          repository: HeisLuka/yab
+          ref: 4f5d8a57abc089d1ed8eb1326cf9bed602281f7e
+          path: donor
+          persist-credentials: false
+
+      - name: Install workspace Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Verify exact donor identity
+        working-directory: donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "4f5d8a57abc089d1ed8eb1326cf9bed602281f7e"
+          git status --short
+          grep -q 'name = "pub-pdf"' crates/pub-pdf/Cargo.toml
+          grep -q 'const FIXED_FLOW_RECEIPT_VERSION: &str = "chaptera.fixed-pdf-shaped-flow-receipt.v1";' crates/pub-cli/src/fixed_pdf.rs
+
+      - name: Rustfmt
+        working-directory: donor
+        run: cargo fmt --all -- --check
+
+      - name: Check owning packages
+        working-directory: donor
+        run: cargo check -p pub-layout -p pub-pdf -p pub-viewer -p pub-cli --all-targets
+
+      - name: Clippy owning packages
+        working-directory: donor
+        run: cargo clippy -p pub-layout -p pub-pdf -p pub-viewer -p pub-cli --all-targets -- -D warnings
+
+      - name: Test shaped-flow layout
+        working-directory: donor
+        run: cargo test -p pub-layout
+
+      - name: Test deterministic PDF backend
+        working-directory: donor
+        run: cargo test -p pub-pdf
+
+      - name: Test viewer projection handoff
+        working-directory: donor
+        run: cargo test -p pub-viewer
+
+      - name: Test real SampleNewsletter shaped-flow PDF witness
+        working-directory: donor
+        run: cargo test -p pub-cli sample_newsletter_pdf_is_deterministic_with_explicit_fallback_and_losses -- --nocapture
