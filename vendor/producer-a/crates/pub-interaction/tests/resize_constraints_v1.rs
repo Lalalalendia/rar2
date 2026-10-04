@@ -107,10 +107,7 @@ fn normalized_change_tie_chooses_x() {
         },
     )
     .expect("normalized tie");
-    assert_eq!(
-        plan.aspect_control_axis,
-        Some(ResizeAspectControlAxisV1::X)
-    );
+    assert_eq!(plan.aspect_control_axis, Some(ResizeAspectControlAxisV1::X));
     assert_eq!(plan.constrained_rect, rect(10, 20, 150, 75));
 }
 
@@ -143,10 +140,7 @@ fn centered_aspect_nearest_required_parity_tie_chooses_larger() {
         },
     )
     .expect("centered aspect");
-    assert_eq!(
-        plan.aspect_control_axis,
-        Some(ResizeAspectControlAxisV1::X)
-    );
+    assert_eq!(plan.aspect_control_axis, Some(ResizeAspectControlAxisV1::X));
     assert_eq!(plan.constrained_rect, rect(-3, -2, 10, 6));
     assert_eq!(
         base.x.get() + base.right().unwrap().get(),
