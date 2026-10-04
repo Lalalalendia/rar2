@@ -1,0 +1,184 @@
+name: Carlton fixed-PDF residual census
+
+on:
+  pull_request:
+    paths:
+      - "tools/current_viewer_fixed_pdf_residual_census.py"
+      - "tools/test_current_viewer_fixed_pdf_residual_census.py"
+      - "tools/run_yab259_current_viewer_supported_subset_alpha_pdf.py"
+      - "tools/yab259_alpha_smask_donor.py"
+      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - "apps/chaptera-desktop/src/acceptance.rs"
+      - "tools/acquire_carlton_march_pair.py"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - ".github/workflows/carlton-fixed-pdf-residual-census.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carlton-fixed-pdf-residual-census-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Source-safe residual census tests
+        run: python tools/test_current_viewer_fixed_pdf_residual_census.py -v
+
+  carlton-census:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact public Carlton source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "carlton-fixed-pdf-residual-census"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          python tools/acquire_carlton_march_pair.py $root
+          if ($LASTEXITCODE -ne 0) { throw "Carlton acquisition failed" }
+          $pub = Join-Path $root "March-2026.pub"
+          if ((Get-FileHash $pub -Algorithm SHA256).Hash.ToLowerInvariant() -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") { throw "Carlton PUB identity drift" }
+          "CHAPTERA_RESIDUAL_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_PUB=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Editor and Viewer packet producer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build -p chaptera-desktop --release --bin chaptera-editor
+          cargo build --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --release --bin current_viewer_fixed_pdf_input --target-dir target
+
+      - name: Reproduce exact Story plus Move project
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $project = Join-Path $env:CHAPTERA_RESIDUAL_ROOT "carlton-march.project.json"
+          $export = Join-Path $env:CHAPTERA_RESIDUAL_ROOT "carlton-march.edited.odg"
+          $observation = Join-Path $env:CHAPTERA_RESIDUAL_ROOT "carlton-march-editor-observation.json"
+          $before = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+          $env:CHAPTERA_DESKTOP_ACCEPTANCE_V1 = "1"
+          $env:CHAPTERA_DESKTOP_ACCEPTANCE_VISIBLE_STORY = "1"
+          $env:CHAPTERA_RAR_COMMIT = "${{ github.sha }}"
+          $env:CHAPTERA_SOURCE_HASH = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          $env:CHAPTERA_CARLTON_OBSERVATION = $observation
+          @'
+          import os, pathlib, subprocess, sys
+          command = [
+              "target/release/chaptera-editor.exe",
+              "--desktop-acceptance-v1",
+              os.environ["CHAPTERA_CARLTON_PUB"],
+              os.path.join(os.environ["CHAPTERA_RESIDUAL_ROOT"], "carlton-march.project.json"),
+              os.path.join(os.environ["CHAPTERA_RESIDUAL_ROOT"], "carlton-march.edited.odg"),
+          ]
+          completed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", check=False)
+          if completed.stdout:
+              pathlib.Path(os.environ["CHAPTERA_CARLTON_OBSERVATION"]).write_text(completed.stdout, encoding="utf-8")
+          if completed.returncode != 0:
+              sys.stderr.write(completed.stderr or completed.stdout or "Carlton Editor acceptance failed without diagnostic\n")
+              raise SystemExit(completed.returncode)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Carlton Story+Move Editor acceptance failed" }
+          $after = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($after -ne $before) { throw "Carlton source PUB changed" }
+          "CHAPTERA_CARLTON_PROJECT=$project" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize one private current Viewer packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $font = Join-Path $env:CHAPTERA_RESIDUAL_ROOT "chaptera-fixed-output-font.ttf"
+          cargo run --quiet -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$font"
+          $packet = Join-Path $env:CHAPTERA_RESIDUAL_ROOT "current-viewer-fixed-pdf-input.private.json"
+          target/release/current_viewer_fixed_pdf_input.exe "$env:CHAPTERA_CARLTON_PUB" "$env:CHAPTERA_CARLTON_PROJECT" "$font" "$packet"
+          if (-not (Test-Path $packet)) { throw "current Viewer packet missing" }
+          "CHAPTERA_CURRENT_VIEWER_PACKET=$packet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Acquire exact public Yab donor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $source = Join-Path $env:RUNNER_TEMP "source259-residual-census"
+          git clone --quiet https://github.com/HeisLuka/yab "$source"
+          git -C "$source" cat-file -e "4f5d8a57abc089d1ed8eb1326cf9bed602281f7e^{commit}"
+          "CHAPTERA_SOURCE259_CHECKOUT=$source" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Render current alpha path and retain only source-safe renderer receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $root = $env:CHAPTERA_RESIDUAL_ROOT
+          $request = Join-Path $root "alpha-request.private.json"
+          $mapping = Join-Path $root "alpha-mapping.json"
+          $renderer = Join-Path $root "alpha-renderer.json"
+          $pdf = Join-Path $root "alpha.private.pdf"
+          python tools/run_yab259_current_viewer_supported_subset_alpha_pdf.py --yab-checkout "$env:CHAPTERA_SOURCE259_CHECKOUT" --input "$env:CHAPTERA_CURRENT_VIEWER_PACKET" --request-output "$request" --mapping-output "$mapping" --pdf-output "$pdf" --renderer-result-output "$renderer"
+          if ($LASTEXITCODE -ne 0) { throw "alpha render failed" }
+          "CHAPTERA_ALPHA_RENDERER=$renderer" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_ALPHA_MAPPING=$mapping" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Classify the 24 resource-missing nodes without source content
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $census = Join-Path $env:CHAPTERA_RESIDUAL_ROOT "carlton-fixed-pdf-residual-census.json"
+          python tools/current_viewer_fixed_pdf_residual_census.py --packet "$env:CHAPTERA_CURRENT_VIEWER_PACKET" --renderer "$env:CHAPTERA_ALPHA_RENDERER" --output "$census"
+          if ($LASTEXITCODE -ne 0) { throw "residual census failed" }
+          $env:CHAPTERA_RESIDUAL_CENSUS = $census
+          @'
+          import json, os
+          from pathlib import Path
+          census = json.loads(Path(os.environ["CHAPTERA_RESIDUAL_CENSUS"]).read_text(encoding="utf-8"))
+          renderer = json.loads(Path(os.environ["CHAPTERA_ALPHA_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
+          if census["resource_missing_node_count"] != 24:
+              raise SystemExit(f"expected 24 resource-missing nodes, got {census['resource_missing_node_count']}")
+          if renderer["summary"].get("node_painted") != 78 or renderer["summary"].get("node_unsupported") != 24:
+              raise SystemExit(f"alpha summary drift: {renderer['summary']!r}")
+          if set(census["source_safe"].values()) != {False}:
+              raise SystemExit("source-safe declaration drift")
+          print(json.dumps({
+              "resource_missing_node_count": census["resource_missing_node_count"],
+              "reason_node_counts": census["reason_node_counts"],
+              "reason_combination_counts": census["reason_combination_counts"],
+              "line_reason_counts": census["line_reason_counts"],
+              "per_page_resource_missing_counts": census["per_page_resource_missing_counts"],
+          }, sort_keys=True))
+          '@ | python -
+          "CHAPTERA_RESIDUAL_CENSUS=$census" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Stage only source-safe census evidence
+        shell: pwsh
+        run: |
+          $out = "target/carlton-fixed-pdf-residual-census"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "$env:CHAPTERA_RESIDUAL_CENSUS" "$out/carlton-fixed-pdf-residual-census.json"
+          Copy-Item "$env:CHAPTERA_ALPHA_RENDERER" "$out/alpha-renderer.json"
+          Copy-Item "$env:CHAPTERA_ALPHA_MAPPING" "$out/alpha-mapping.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carlton-fixed-pdf-residual-census
+          path: target/carlton-fixed-pdf-residual-census
+          if-no-files-found: error
