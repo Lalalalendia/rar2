@@ -403,7 +403,7 @@ pub fn run(fixture: &Path, project_path: &Path, export_path: &Path) -> Result<Va
         return Err("projected SceneInstance unexpectedly admits MoveNode".to_owned());
     }
 
-    Ok(json!({
+    let mut observation = json!({
         "protocol_version": PROTOCOL_VERSION,
         "source_hash": expected_source_hash,
         "rar_commit": rar_commit,
@@ -453,7 +453,10 @@ pub fn run(fixture: &Path, project_path: &Path, export_path: &Path) -> Result<Va
             "direct_page_local_gate_used": move_admission.admitted,
             "projected_object_mutation_fails_closed": projected_denied,
             "reopen_used_fresh_session": true,
-            "visible_story_gate_used": visible_story_gate,
         },
-    }))
+    });
+    if visible_story_gate {
+        observation["invariants"]["visible_story_gate_used"] = json!(true);
+    }
+    Ok(observation)
 }
