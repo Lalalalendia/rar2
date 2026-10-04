@@ -245,7 +245,7 @@ function Json-Compact($Value) {
 function Diff-References($Before, $After) {
     $beforeMap = Ref-Map $Before
     $afterMap = Ref-Map $After
-    $keys = @($beforeMap.Keys + $afterMap.Keys | Sort-Object {[int]$_} -Unique)
+    $keys = @(@($beforeMap.Keys) + @($afterMap.Keys) | Sort-Object {[int]$_} -Unique)
     $added = @()
     $removed = @()
     $changed = @()
@@ -276,7 +276,7 @@ function Diff-References($Before, $After) {
 function Diff-Streams($Before, $After) {
     $beforeMap = Stream-Map $Before
     $afterMap = Stream-Map $After
-    $keys = @($beforeMap.Keys + $afterMap.Keys | Sort-Object -Unique)
+    $keys = @(@($beforeMap.Keys) + @($afterMap.Keys) | Sort-Object -Unique)
     $changed = @()
     foreach ($key in $keys) {
         $b = if ($beforeMap.ContainsKey($key)) { $beforeMap[$key] } else { $null }
@@ -319,6 +319,21 @@ $sourceBefore = Get-PubFileRecord -Path $sourcePath
 $toolInfo = Build-StructuralBaseTool
 
 $environment = Get-PubEnvironmentManifest -SnapshotId $ExperimentId -RequirePublisher
+if ($environment.publisher.path.state -ne "value") {
+    throw "Publisher executable directory is unavailable in native environment manifest."
+}
+$publisherExe = Join-Path ([string]$environment.publisher.path.value) "MSPUB.EXE"
+if (-not (Test-Path -LiteralPath $publisherExe -PathType Leaf)) {
+    throw "Publisher executable is missing at the COM-reported path."
+}
+$publisherExeSha256 = (Get-FileHash -LiteralPath $publisherExe -Algorithm SHA256).Hash.ToLowerInvariant()
+if ([string]$packet.publisher.exe_sha256 -and $publisherExeSha256 -ne ([string]$packet.publisher.exe_sha256).ToLowerInvariant()) {
+    throw "Publisher executable SHA-256 mismatch."
+}
+$publisherFileVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($publisherExe).FileVersion
+if ([string]$packet.publisher.version_prefix -and -not [string]$publisherFileVersion.StartsWith([string]$packet.publisher.version_prefix)) {
+    throw "Publisher file version mismatch: expected prefix $($packet.publisher.version_prefix), got $publisherFileVersion"
+}
 $environment.machine = $null
 $environment.default_printer = $null
 Write-PubJson -Value $environment -Path (Join-Path $OutputRoot "environment.json")
@@ -509,7 +524,8 @@ $result = [ordered]@{
     publisher = [ordered]@{
         version = $environment.publisher.version
         build = $environment.publisher.build
-        executable_sha256 = $environment.publisher.sha256
+        file_version = $publisherFileVersion
+        executable_sha256 = $publisherExeSha256
     }
     tooling = [ordered]@{
         structural_base_helper_source = [string]$toolInfo.source
