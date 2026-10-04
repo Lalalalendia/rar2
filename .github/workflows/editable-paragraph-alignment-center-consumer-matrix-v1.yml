@@ -111,14 +111,28 @@ jobs:
           assert receipt["schema"] == "chaptera.editable-paragraph-alignment-center-consumer-matrix.v1"
           assert receipt["source_count"] == 53, receipt["source_count"]
           assert receipt["center_story_count"] == 183, receipt["center_story_count"]
+          assert receipt["materializable_source_count"] == 51, receipt[
+              "materializable_source_count"
+          ]
+          assert receipt["materializable_center_story_count"] == 181, receipt[
+              "materializable_center_story_count"
+          ]
+          assert receipt["non_materializable_source_count"] == 2, receipt[
+              "non_materializable_source_count"
+          ]
+          assert receipt["non_materializable_center_story_count"] == 2, receipt[
+              "non_materializable_center_story_count"
+          ]
           assert receipt["summary"] == {
-              "all_libreoffice_save_reopen_verified": True,
-              "all_materialized": True,
-              "all_scribus_save_reopen_verified": True,
-              "all_wire_verified": True,
+              "all_center_source_routes_accounted": True,
+              "all_materializable_libreoffice_save_reopen_verified": True,
+              "all_materializable_scribus_save_reopen_verified": True,
+              "all_materializable_wire_verified": True,
           }
           assert receipt["claims"] == {
-              "consumer_survival_proven_for_center_class": True,
+              "all_center_sources_materializable": False,
+              "consumer_survival_proven_for_full_center_source_class": False,
+              "consumer_survival_proven_for_materializable_center_class": True,
               "loss_report_or_manifest_changed": False,
               "measurement_only": True,
               "right_class_fully_proven": False,
@@ -127,6 +141,19 @@ jobs:
           print(json.dumps({
               "source_count": receipt["source_count"],
               "center_story_count": receipt["center_story_count"],
+              "materializable_source_count": receipt["materializable_source_count"],
+              "materializable_center_story_count": receipt[
+                  "materializable_center_story_count"
+              ],
+              "non_materializable_source_count": receipt[
+                  "non_materializable_source_count"
+              ],
+              "non_materializable_center_story_count": receipt[
+                  "non_materializable_center_story_count"
+              ],
+              "non_materializable_source_sha256": receipt[
+                  "non_materializable_source_sha256"
+              ],
               "right_story_count_in_selected_sources": receipt[
                   "right_story_count_in_selected_sources"
               ],
