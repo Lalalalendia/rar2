@@ -1,0 +1,14 @@
+{
+  "schema": "chaptera.publisher-page-membership-authority.v2",
+  "authorities": [],
+  "guardrails": [
+    "page count equality is validation only and is not customer PAGE membership authority",
+    "visual fingerprints are acceptance evidence only and are not PUB semantic selector inputs",
+    "reference_state does not bypass PAGE transition authorization; every rendered pair is guarded",
+    "reference surface stage is independent authority and must be logical_page on both baseline and current sides",
+    "production_sheet, viewport_spread and unknown references cannot authorize Reader logical PAGE identity/count transitions",
+    "raw PageId values are not retained in this registry",
+    "a baseline without PAGE identity digest cannot authorize same-count or count-changing membership transitions",
+    "each authority binds exact source SHA, logical_page stage, count transition, ordered PAGE-identity digests, evidence issue and evidence digest"
+  ]
+}
