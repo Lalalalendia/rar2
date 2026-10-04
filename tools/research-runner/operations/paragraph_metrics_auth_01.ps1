@@ -27,7 +27,17 @@ $seedPub = Join-Path $seedDir "seed.pub"
 New-Item -ItemType Directory -Force -Path $analysisDir,$logDir,$privateDir,$seedDir | Out-Null
 
 $progressPath = Join-Path $logDir "paragraph-metrics-progress.txt"
-function Write-ProgressMarker([string]$stage) {\n    try {\n        ((Get-Date).ToString("o") + "`t" + $stage) | Add-Content -LiteralPath $progressPath -Encoding UTF8\n    }\n    catch {\n        # Diagnostic telemetry only: a transient file-share race with the outer watchdog\n        # must never abort an otherwise valid Publisher semantic arm.\n    }\n}\n\nfunction Release-Com($value) {
+function Write-ProgressMarker([string]$stage) {
+    try {
+        ((Get-Date).ToString("o") + "`t" + $stage) | Add-Content -LiteralPath $progressPath -Encoding UTF8
+    }
+    catch {
+        # Diagnostic telemetry only: a transient file-share race with the outer watchdog
+        # must never abort an otherwise valid Publisher semantic arm.
+    }
+}
+
+function Release-Com($value) {
     if ($null -ne $value -and [Runtime.InteropServices.Marshal]::IsComObject($value)) {
         try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($value) } catch {}
     }
