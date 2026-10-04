@@ -234,7 +234,11 @@ jobs:
 
       - name: Build exact Yab donor CLI
         working-directory: donor
-        run: cargo build -p pub-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p pub-cli
+          test -x target/debug/pub
 
       - name: Materialize exact Apache POI SampleNewsletter fixture
         shell: bash
@@ -257,7 +261,7 @@ jobs:
             --fallback-font "$RUNNER_TEMP/Ubuntu-Light.ttf" \
             --pdf-output "$RUNNER_TEMP/SampleNewsletter.shaped-flow.pdf" \
             --receipt-output "$RUNNER_TEMP/fixed-pdf-shaped-flow.real.json" \
-            -- "$GITHUB_WORKSPACE/donor/target/debug/pub-cli" convert {fixture} --to pdf --output {pdf} --fallback-font {font} --json
+            -- "$GITHUB_WORKSPACE/donor/target/debug/pub" convert {fixture} --to pdf --output {pdf} --fallback-font {font} --json
 
       - name: Independently validate sanitized receipt
         run: python tools/validate_fixed_pdf_shaped_flow_receipt.py "$RUNNER_TEMP/fixed-pdf-shaped-flow.real.json"
