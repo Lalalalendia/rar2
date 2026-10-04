@@ -26,6 +26,11 @@ $seedDir = Join-Path $privateDir "seed"
 $seedPub = Join-Path $seedDir "seed.pub"
 New-Item -ItemType Directory -Force -Path $analysisDir,$logDir,$privateDir,$seedDir | Out-Null
 
+$progressPath = Join-Path $logDir "paragraph-metrics-progress.txt"
+function Write-ProgressMarker([string]$stage) {
+    ((Get-Date).ToString("o") + "`t" + $stage) | Add-Content -LiteralPath $progressPath -Encoding UTF8
+}
+
 function Release-Com($value) {
     if ($null -ne $value -and [Runtime.InteropServices.Marshal]::IsComObject($value)) {
         try { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($value) } catch {}
@@ -81,8 +86,8 @@ function Apply-Arm($paragraph, [string]$kind, [double]$value) {
 }
 
 function New-SeedFixture() {
-    $seedInput = Join-Path $seedDir "input.pub"
-    Copy-Item -LiteralPath $env:PUB_RESEARCH_FIXTURE -Destination $seedInput -Force
+    Copy-Item -LiteralPath $env:PUB_RESEARCH_FIXTURE -Destination $seedPub -Force
+    Write-ProgressMarker "seed_copy_ready"
 
     $app = $null
     $doc = $null
@@ -91,21 +96,33 @@ function New-SeedFixture() {
     $paragraphRange = $null
     $paragraph = $null
     try {
+        Write-ProgressMarker "seed_app_create_begin"
         $app = New-PubPublisherApplication
-        $doc = $app.Open($seedInput, $false, $false)
+        Write-ProgressMarker "seed_app_create_done"
+        Write-ProgressMarker "seed_open_begin"
+        $doc = $app.Open($seedPub, $false, $false)
+        Write-ProgressMarker "seed_open_done"
         if ([int]$doc.Pages.Item(1).Shapes.Count -ne 0) { throw "Expected blank seed fixture before synthetic TextBox creation" }
+        Write-ProgressMarker "seed_add_textbox_begin"
         $shape = $doc.Pages.Item(1).Shapes.AddTextbox($MsoTextOrientationHorizontal, 72, 72, 360, 180)
+        Write-ProgressMarker "seed_add_textbox_done"
         $range = $shape.TextFrame.TextRange
         $cr = [char]13
+        Write-ProgressMarker "seed_set_text_begin"
         $range.Text = "Chaptera paragraph metric alpha." + $cr + "Chaptera paragraph metric beta with enough words to make spacing visible." + $cr + "Chaptera paragraph metric gamma."
         $range.Font.Name = "Arial"
         $range.Font.Size = 12
-        if ([int]$range.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs in synthetic seed fixture" }
-        $paragraphRange = $range.Paragraphs.Item(2)
+        Write-ProgressMarker "seed_set_text_done"
+        if ([int]$range.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs in synthetic seed fixture" }
+        Write-ProgressMarker "seed_select_paragraph_begin"
+        $paragraphRange = $range.Paragraphs(2)
         $paragraph = $paragraphRange.ParagraphFormat
+        Write-ProgressMarker "seed_select_paragraph_done"
         $seedParagraph = Get-ParagraphSnapshot $paragraph "seed_before_save"
         $seedFrame = Get-FrameSnapshot $shape "seed_before_save"
-        $doc.SaveAs($seedPub, $PbFilePublication, $false)
+        Write-ProgressMarker "seed_save_begin"
+        $doc.Save()
+        Write-ProgressMarker "seed_save_done"
     }
     finally {
         Release-Com $paragraph
@@ -123,16 +140,21 @@ function New-SeedFixture() {
     $paragraphRange2 = $null
     $paragraph2 = $null
     try {
+        Write-ProgressMarker "seed_reopen_app_begin"
         $app2 = New-PubPublisherApplication
+        Write-ProgressMarker "seed_reopen_app_done"
+        Write-ProgressMarker "seed_reopen_begin"
         $doc2 = $app2.Open($seedPub, $true, $false)
+        Write-ProgressMarker "seed_reopen_done"
         if ([int]$doc2.Pages.Item(1).Shapes.Count -ne 1) { throw "Expected one shape in fresh-reopened seed fixture" }
         $shape2 = $doc2.Pages.Item(1).Shapes.Item(1)
         $range2 = $shape2.TextFrame.TextRange
-        if ([int]$range2.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs in fresh-reopened seed fixture" }
-        $paragraphRange2 = $range2.Paragraphs.Item(2)
+        if ([int]$range2.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs in fresh-reopened seed fixture" }
+        $paragraphRange2 = $range2.Paragraphs(2)
         $paragraph2 = $paragraphRange2.ParagraphFormat
         $seedFresh = Get-ParagraphSnapshot $paragraph2 "seed_fresh_reopen"
         $seedFrameFresh = Get-FrameSnapshot $shape2 "seed_fresh_reopen"
+        Write-ProgressMarker "seed_reopen_snapshot_done"
     }
     finally {
         Release-Com $paragraph2
@@ -161,6 +183,8 @@ function Invoke-Arm([string]$name, [string]$kind, [double]$value) {
     $input = Join-Path $armDir "input.pub"
     $output = Join-Path $armDir "output.pub"
     Copy-Item -LiteralPath $seedPub -Destination $input -Force
+    Copy-Item -LiteralPath $seedPub -Destination $output -Force
+    Write-ProgressMarker ("arm_" + $name + "_copies_ready")
 
     $app = $null
     $doc = $null
@@ -169,22 +193,29 @@ function Invoke-Arm([string]$name, [string]$kind, [double]$value) {
     $paragraphRange = $null
     $paragraph = $null
     try {
+        Write-ProgressMarker ("arm_" + $name + "_open_begin")
         $app = New-PubPublisherApplication
-        $doc = $app.Open($input, $false, $false)
+        $doc = $app.Open($output, $false, $false)
+        Write-ProgressMarker ("arm_" + $name + "_open_done")
         if ([int]$doc.Pages.Item(1).Shapes.Count -ne 1) { throw "Expected one shape copied from the common seed fixture" }
         $shape = $doc.Pages.Item(1).Shapes.Item(1)
         $range = $shape.TextFrame.TextRange
-        if ([int]$range.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs copied from the common seed fixture" }
-        $paragraphRange = $range.Paragraphs.Item(2)
+        if ([int]$range.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs copied from the common seed fixture" }
+        $paragraphRange = $range.Paragraphs(2)
         $paragraph = $paragraphRange.ParagraphFormat
+        Write-ProgressMarker ("arm_" + $name + "_paragraph_ready")
 
         $before = Get-ParagraphSnapshot $paragraph "before_mutation"
         $frameBefore = Get-FrameSnapshot $shape "before_mutation"
+        Write-ProgressMarker ("arm_" + $name + "_mutation_begin")
         Apply-Arm $paragraph $kind $value
+        Write-ProgressMarker ("arm_" + $name + "_mutation_done")
         $afterMutation = Get-ParagraphSnapshot $paragraph "after_mutation"
         $frameAfter = Get-FrameSnapshot $shape "after_mutation"
 
-        $doc.SaveAs($output, $PbFilePublication, $false)
+        Write-ProgressMarker ("arm_" + $name + "_save_begin")
+        $doc.Save()
+        Write-ProgressMarker ("arm_" + $name + "_save_done")
     }
     finally {
         Release-Com $paragraph
@@ -202,16 +233,19 @@ function Invoke-Arm([string]$name, [string]$kind, [double]$value) {
     $paragraphRange2 = $null
     $paragraph2 = $null
     try {
+        Write-ProgressMarker ("arm_" + $name + "_reopen_begin")
         $app2 = New-PubPublisherApplication
         $doc2 = $app2.Open($output, $true, $false)
+        Write-ProgressMarker ("arm_" + $name + "_reopen_done")
         if ([int]$doc2.Pages.Item(1).Shapes.Count -ne 1) { throw "Expected one shape after fresh reopen" }
         $shape2 = $doc2.Pages.Item(1).Shapes.Item(1)
         $range2 = $shape2.TextFrame.TextRange
-        if ([int]$range2.Paragraphs.Count -lt 3) { throw "Expected at least three paragraphs after reopen" }
-        $paragraphRange2 = $range2.Paragraphs.Item(2)
+        if ([int]$range2.ParagraphsCount -lt 3) { throw "Expected at least three paragraphs after reopen" }
+        $paragraphRange2 = $range2.Paragraphs(2)
         $paragraph2 = $paragraphRange2.ParagraphFormat
         $fresh = Get-ParagraphSnapshot $paragraph2 "fresh_reopen"
         $frameFresh = Get-FrameSnapshot $shape2 "fresh_reopen"
+        Write-ProgressMarker ("arm_" + $name + "_reopen_snapshot_done")
     }
     finally {
         Release-Com $paragraph2
