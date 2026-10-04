@@ -286,6 +286,7 @@ mod tests {
                         },
                         face_index: 0,
                         font_size_emu: LengthEmu::new(1),
+                        shaper_revision: pub_layout::BOUNDED_SHAPER_REVISION.into(),
                     },
                     line_height: LengthEmu::new(2),
                 },
