@@ -104,7 +104,7 @@ fn main() -> eframe::Result<()> {
 """
     assert mod.reader_product_cli_bootstrap_errors(valid_reader_cli_bootstrap) == []
     assert mod.reader_product_cli_bootstrap_errors(
-        valid_reader_cli_bootstrap.replace("mod reader_product_cli;\\n", "")
+        valid_reader_cli_bootstrap.replace("mod reader_product_cli;\n", "")
     )
     assert mod.reader_product_cli_bootstrap_errors(
         valid_reader_cli_bootstrap.replace(
