@@ -14,6 +14,7 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 mod image;
 mod semantic;
+mod typography;
 
 pub use image::{
     IMAGE_BYTES_FEATURE, IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE,
@@ -21,6 +22,9 @@ pub use image::{
 };
 
 pub use semantic::{OdgSemanticError, project_resolved_graph_to_odg};
+pub use typography::{
+    OdgFullStoryTypographyPlacement, OdgTypographyError, add_full_story_typography_to_odg,
+};
 
 pub const ODG_ADAPTER_VERSION_V0_1: &str = "odg-v0.1";
 pub const ODG_FORMAT_PROFILE_ID: &str = "odg-bounded-v0.1";

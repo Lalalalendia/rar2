@@ -422,7 +422,7 @@ fn content_xml<
     writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
     writeln!(
         xml,
-        "<office:document-content xmlns:office=\"{OFFICE_NS}\" xmlns:draw=\"{DRAW_NS}\" xmlns:text=\"{TEXT_NS}\" xmlns:style=\"{STYLE_NS}\" xmlns:svg=\"{SVG_NS}\" xmlns:xlink=\"{XLINK_NS}\" office:version=\"1.4\">"
+        "<office:document-content xmlns:office=\"{OFFICE_NS}\" xmlns:draw=\"{DRAW_NS}\" xmlns:text=\"{TEXT_NS}\" xmlns:style=\"{STYLE_NS}\" xmlns:svg=\"{SVG_NS}\" xmlns:fo=\"{FO_NS}\" xmlns:xlink=\"{XLINK_NS}\" office:version=\"1.4\">"
     )
     .unwrap();
     xml.push_str("  <office:automatic-styles/>\n");

@@ -1,0 +1,69 @@
+name: Yab 259 source-neutral packet renderer
+
+on:
+  pull_request:
+    paths:
+      - "tools/yab259_fixed_pdf_packet_renderer.rs"
+      - "tools/run_yab259_fixed_pdf_packet_renderer.py"
+      - "tools/test_yab259_fixed_pdf_packet_renderer.py"
+      - "tools/run_yab259_fixed_pdf_closure.py"
+      - ".github/workflows/yab259-fixed-pdf-packet-renderer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yab259-fixed-pdf-packet-renderer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fence adapter from PUB reparse
+        run: python tools/test_yab259_fixed_pdf_packet_renderer.py -v
+      - name: Materialize exact Yab donor repository
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/HeisLuka/yab.git /tmp/yab-source
+          git -C /tmp/yab-source cat-file -e 4f5d8a57abc089d1ed8eb1326cf9bed602281f7e^{commit}
+      - name: Prepare repaired donor and compile packet renderer
+        run: |
+          python - <<'PY'
+          import pathlib
+          import shutil
+          import subprocess
+          import sys
+
+          root = pathlib.Path.cwd()
+          sys.path.insert(0, str(root / "tools"))
+          from run_yab259_fixed_pdf_closure import bind_yab_repository, prepare_repaired_donor
+
+          source = bind_yab_repository(pathlib.Path("/tmp/yab-source"))
+          donor = pathlib.Path("/tmp/yab-packet-donor")
+          digest = prepare_repaired_donor(source, donor)
+          bin_dir = donor / "crates" / "pub-cli" / "src" / "bin"
+          bin_dir.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(
+              root / "tools" / "yab259_fixed_pdf_packet_renderer.rs",
+              bin_dir / "fixed-pdf-packet.rs",
+          )
+          subprocess.run(
+              [
+                  "cargo",
+                  "check",
+                  "--manifest-path",
+                  str(donor / "Cargo.toml"),
+                  "-p",
+                  "pub-cli",
+                  "--bin",
+                  "fixed-pdf-packet",
+              ],
+              cwd=donor,
+              check=True,
+          )
+          print(f"repair_sha256={digest}")
+          PY

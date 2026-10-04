@@ -3,9 +3,10 @@ name: Editor Desktop Selection Keyboard Restore V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/src/selection_keyboard.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_shell.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_gui_tests.rs"
       - "apps/chaptera-desktop/Cargo.toml"
       - ".github/workflows/editor-desktop-selection-keyboard-restore-v1.yml"
   push:
@@ -21,7 +22,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  format-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Format Desktop keyboard slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
   contract:
+    needs: format-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -31,9 +47,6 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
-
-      - name: Format Desktop keyboard slice
-        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
 
       - name: Check Desktop keyboard integration
         run: cargo check -p chaptera-desktop --all-targets
@@ -52,6 +65,7 @@ jobs:
         run: cargo test -p chaptera-desktop selection_keyboard::tests -- --nocapture
 
   real-gui:
+    needs: format-preflight
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

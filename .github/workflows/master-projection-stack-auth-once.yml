@@ -19,8 +19,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('master-projection-stack-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   contract:
@@ -46,6 +46,7 @@ jobs:
         with:
           ref: ${{ steps.trust.outputs.trusted_sha }}
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Parse native operation
         shell: pwsh
@@ -62,6 +63,22 @@ jobs:
           if ($errors.Count -ne 0) {
             $errors | ForEach-Object { Write-Error $_.Message }
             throw "PowerShell parser rejected master stack oracle."
+          }
+
+      - name: Parse exact direct launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "tools/windows/run_master_projection_stack_auth_direct.ps1").Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell parser rejected direct stack launcher."
           }
 
       - name: Enforce bounded source/output contract
@@ -98,6 +115,32 @@ jobs:
             }
           }
 
+      - name: Reject wrong-source stack before Publisher activation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP ("stack wrong source " + [guid]::NewGuid().ToString() + ".pub")
+          $output = Join-Path $env:RUNNER_TEMP ("stack-rejected-output-" + [guid]::NewGuid().ToString())
+          [IO.File]::WriteAllBytes($fixture, [byte[]]@(0, 1, 2, 3))
+          try {
+            $ErrorActionPreference = "Continue"
+            $nativeOutput = & pwsh -NoProfile -File tools/windows/run_master_projection_stack_auth_direct.ps1 -InputPath $fixture -OutputRoot $output 2>&1
+            $nativeExit = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            $text = ($nativeOutput | ForEach-Object { [string]$_ }) -join "`n"
+            if ($nativeExit -eq 0 -or -not $text.Contains("Stack fixture size mismatch")) {
+              throw "Direct route failed its pre-Publisher wrong-source rejection: $text"
+            }
+            if (Test-Path -LiteralPath $output) {
+              throw "Rejected source created native output before identity admission."
+            }
+          } finally {
+            $ErrorActionPreference = "Stop"
+            Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue
+          }
+          Write-Host "Direct route rejected wrong source before Publisher; no native output created."
+          exit 0
+
   native:
     needs: contract
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -117,6 +160,7 @@ jobs:
           ref: ${{ needs.contract.outputs.trusted_sha }}
           clean: true
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Verify exact trusted checkout
         shell: pwsh
@@ -156,9 +200,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path $env:OUTPUT_ROOT | Out-Null
-          pwsh -NoProfile -File tools/research-runner/operations/master_projection_stack_auth_01.ps1 \
-            -InputPath "${{ steps.fixture.outputs.path }}" \
-            -OutputRoot "$env:OUTPUT_ROOT"
+          pwsh -NoProfile -File tools/windows/run_master_projection_stack_auth_direct.ps1 -InputPath "${{ steps.fixture.outputs.path }}" -OutputRoot "$env:OUTPUT_ROOT"
+          if ($LASTEXITCODE -ne 0) { throw "Direct stack launcher exited with code $LASTEXITCODE" }
 
       - name: Publish stack verdict
         if: always()

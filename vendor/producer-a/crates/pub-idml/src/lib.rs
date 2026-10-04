@@ -14,6 +14,7 @@ mod image;
 mod package_writer;
 mod semantic;
 mod table;
+mod typography;
 
 pub use image::{
     IMAGE_BYTES_FEATURE, IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE,
@@ -28,6 +29,7 @@ pub use semantic::{
     project_resolved_graph_to_idml, project_resolved_graph_to_idml_with_tables,
 };
 pub use table::{IdmlSimpleTable, IdmlTableCell, IdmlTableError};
+pub use typography::{IdmlTypographyError, add_full_story_typography_to_idml};
 
 pub const IDML_ADAPTER_VERSION_V0_1: &str = "idml-v0.1";
 pub const IDML_FORMAT_PROFILE_ID: &str = "idml-bounded-v0.1";

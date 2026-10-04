@@ -6,7 +6,7 @@ on:
       - ".github/workflows/editor-desktop-continuity-v2-windows.yml"
       - "apps/chaptera-desktop/src/acceptance.rs"
       - "apps/chaptera-desktop/src/acceptance_v2.rs"
-      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/acceptance_v2_cli.rs"
       - "packages/product/editor-desktop-continuity/v2/**"
       - "tools/run_editor_desktop_continuity_v2.py"
       - "tools/validate_editor_desktop_continuity_v2_receipt.py"
