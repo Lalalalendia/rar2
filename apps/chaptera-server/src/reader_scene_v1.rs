@@ -2440,10 +2440,9 @@ mod tests {
         // Exact Publisher2019 Arial authority from the retained native font
         // receipt: natural Single = 2288/2048 em. This is diagnostic only; it
         // is not promoted as a fallback-font or default paragraph rule.
-        let native_arial_14pt_single_emu = i64::try_from(
-            (i128::from(177_800_i64) * 2_288_i128 + 1_024_i128) / 2_048_i128,
-        )
-        .expect("14pt native Arial Single metric must fit i64");
+        let native_arial_14pt_single_emu =
+            i64::try_from((i128::from(177_800_i64) * 2_288_i128 + 1_024_i128) / 2_048_i128)
+                .expect("14pt native Arial Single metric must fit i64");
         let mut target_14pt_first_line_fit_counts = BTreeMap::<String, usize>::new();
 
         let mut text_nodes = 0_usize;
@@ -2535,7 +2534,8 @@ mod tests {
                         .iter()
                         .filter(|run| run.story_id == text.story_id)
                         .filter(|run| {
-                            story_text.is_some_and(|story_text| run.applies_to_story_text(story_text))
+                            story_text
+                                .is_some_and(|story_text| run.applies_to_story_text(story_text))
                         })
                         .any(|run| {
                             run.scalar_end > text.scalar_start && run.scalar_start < text.scalar_end
@@ -2573,8 +2573,7 @@ mod tests {
                         .unwrap_or(&node.bounds)
                         .height
                         .get();
-                    let native_single_fits =
-                        available_height_emu >= native_arial_14pt_single_emu;
+                    let native_single_fits = available_height_emu >= native_arial_14pt_single_emu;
                     let key = format!(
                         "spacing_absent={spacing_absent}|backend={backend}|current={current_layout}|probe={probe_layout}|native_single_fits={native_single_fits}"
                     );
@@ -2749,9 +2748,7 @@ mod tests {
 
         println!(
             "CLOUD_READER_FIRST_LINE_FIT_CENSUS source_sha256={} native_arial_14pt_single_emu={} target_14pt_counts={}",
-            actual_sha256,
-            native_arial_14pt_single_emu,
-            target_14pt_first_line_fit_counts_json,
+            actual_sha256, native_arial_14pt_single_emu, target_14pt_first_line_fit_counts_json,
         );
 
         println!(
