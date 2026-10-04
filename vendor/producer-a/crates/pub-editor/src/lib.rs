@@ -1576,9 +1576,7 @@ impl EditorError {
                 "paragraph_alignment_paragraph_unavailable"
             }
             Self::ParagraphAlignmentNoChange => "paragraph_alignment_no_change",
-            Self::StaleParagraphAlignmentOverride { .. } => {
-                "stale_paragraph_alignment_override"
-            }
+            Self::StaleParagraphAlignmentOverride { .. } => "stale_paragraph_alignment_override",
             Self::ParagraphAlignmentTransitionInvalid => "paragraph_alignment_transition_invalid",
             Self::ParagraphAlignmentLifecycleUnsupported { .. } => {
                 "paragraph_alignment_lifecycle_unsupported"
@@ -2633,8 +2631,7 @@ impl EditorSession {
             after,
         };
         authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
-            &self.undo,
-            &operation,
+            &self.undo, &operation,
         )
         .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
         self.undo.push(operation.clone());
@@ -2671,8 +2668,7 @@ impl EditorSession {
             after,
         };
         authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
-            &self.undo,
-            &operation,
+            &self.undo, &operation,
         )
         .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
         self.undo.push(operation.clone());
@@ -5485,7 +5481,9 @@ fn replay_canonical_operation(
             )
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::SetParagraphAlignmentOverride {
-            paragraph_ids, value, ..
+            paragraph_ids,
+            value,
+            ..
         } => session
             .set_paragraph_alignment_override_v1(paragraph_ids.clone(), *value)
             .map_err(|error| EditorProjectError::Operation { index, error }),
