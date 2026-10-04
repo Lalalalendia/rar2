@@ -1,6 +1,6 @@
 use crate::{EditorSession, story_state_id_v1};
 use pub_model::{
-    CanonicalId, ParagraphId, Sha256Digest, SourceDerivedIdInput, StoryId, TextRange,
+    ParagraphId, Sha256Digest, SourceDerivedIdInput, StoryId, TextRange,
     derive_source_canonical_id,
 };
 use std::fmt;
@@ -156,6 +156,7 @@ fn canonical_paragraph_ranges_v1(text: &str) -> Vec<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pub_model::CanonicalId;
 
     fn story_id() -> StoryId {
         StoryId::from_canonical(CanonicalId::from_bytes([0x42; 16]))
