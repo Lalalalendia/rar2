@@ -490,6 +490,10 @@ pub struct RenderTypographyRunV1 {
     pub color_rgb: Option<[u8; 3]>,
     #[serde(default)]
     pub color_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1001,6 +1005,8 @@ fn projected_text(
                 size_inherited: run.size_inherited,
                 color_rgb: run.color_rgb,
                 color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| value.effective_value),
+                italic: run.italic.map(|value| value.effective_value),
             })
         })
         .collect();
@@ -1168,6 +1174,8 @@ pub fn build_page_render_plan_v1(
                                 size_inherited: run.size_inherited,
                                 color_rgb: run.color_rgb,
                                 color_inherited: run.color_inherited,
+                                bold: run.bold.map(|value| value.effective_value),
+                                italic: run.italic.map(|value| value.effective_value),
                             })
                         })
                         .collect(),
@@ -2888,6 +2896,8 @@ mod tests {
                 size_inherited: true,
                 color_rgb: None,
                 color_inherited: false,
+                bold: None,
+                italic: None,
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
@@ -3174,6 +3184,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3184,6 +3196,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: Some([255, 204, 0]),
                     color_inherited: true,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3220,6 +3234,8 @@ mod tests {
                 size_inherited: false,
                 color_rgb: None,
                 color_inherited: false,
+                bold: None,
+                italic: None,
             }],
         );
 
@@ -3319,6 +3335,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3329,6 +3347,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3405,6 +3425,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3415,6 +3437,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );
@@ -3522,6 +3546,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
                 RenderTypographyRunV1 {
                     scalar_start: 2,
@@ -3532,6 +3558,8 @@ mod tests {
                     size_inherited: false,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                 },
             ],
         );

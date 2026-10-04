@@ -408,11 +408,12 @@ fn paint_shared_resolved_text(
     if font_resource_id.is_empty() {
         return None;
     }
-    let font_id = egui::FontId::new(
+    let default_font_id = egui::FontId::new(
         font_size_px,
         egui::FontFamily::Name(font_resource_id.into()),
     );
     let mut max_width_px = 0.0_f32;
+    let mut executed_font_sizes_px = Vec::new();
     let text_color = uniform_text_color_rgb_v1(fragment)
         .map(|rgb| egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
         .unwrap_or(egui::Color32::BLACK);
@@ -424,12 +425,42 @@ fn paint_shared_resolved_text(
             return None;
         }
 
-        let job = shared_resolved_line_job(&line.text, font_id.clone(), text_color);
-        let galley = painter.layout_job(job);
-        max_width_px = max_width_px.max(galley.size().x);
         let y = clip_rect.top() + line.line_index as f32 * line_height_px;
-        let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
-        painter.galley(egui::pos2(x, y), galley, text_color);
+        if line.spans.is_empty() {
+            let job = shared_resolved_line_job(&line.text, default_font_id.clone(), text_color);
+            let galley = painter.layout_job(job);
+            max_width_px = max_width_px.max(galley.size().x);
+            let x = clip_rect.left() + line.x_offset_emu as f32 * scene_scale;
+            painter.galley(egui::pos2(x, y), galley, text_color);
+            executed_font_sizes_px.push(font_size_px);
+            continue;
+        }
+
+        for span in &line.spans {
+            let resource_id = span
+                .font_resource_id
+                .as_deref()
+                .filter(|value| !value.is_empty())?;
+            if span.font_size_emu <= 0 {
+                return None;
+            }
+            let span_font_size_px = span.font_size_emu as f32 * scene_scale;
+            if !span_font_size_px.is_finite() || span_font_size_px <= 0.0 {
+                return None;
+            }
+            let span_font_id = egui::FontId::new(
+                span_font_size_px.clamp(4.0, 512.0),
+                egui::FontFamily::Name(resource_id.into()),
+            );
+            let job = shared_resolved_line_job(&span.text, span_font_id, text_color);
+            let galley = painter.layout_job(job);
+            let relative_x_emu = line.x_offset_emu.checked_add(span.x_offset_emu)?;
+            let x = clip_rect.left() + relative_x_emu as f32 * scene_scale;
+            max_width_px =
+                max_width_px.max((relative_x_emu as f32 * scene_scale).max(0.0) + galley.size().x);
+            painter.galley(egui::pos2(x, y), galley, text_color);
+            executed_font_sizes_px.push(span_font_size_px.clamp(4.0, 512.0));
+        }
     }
 
     let resolved_height_px = lines.len() as f32 * line_height_px;
@@ -440,11 +471,7 @@ fn paint_shared_resolved_text(
         layout_section_count: lines.len(),
         source_typography_sections,
         fallback_sections,
-        executed_font_sizes_px: if lines.is_empty() {
-            Vec::new()
-        } else {
-            vec![font_size_px]
-        },
+        executed_font_sizes_px,
         // Shared lines are already broken upstream; zero deliberately records
         // that the backend did not choose a wrapping width for this path.
         wrap_width_px: 0.0,
