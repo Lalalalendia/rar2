@@ -6,6 +6,10 @@ on:
       - vendor/producer-a/crates/pub-writer/**
       - .github/workflows/struct-writer-replay-01.yml
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust:
     runs-on: ubuntu-latest
