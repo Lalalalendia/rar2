@@ -701,122 +701,97 @@ mod tests {
     }
 
     #[test]
-    fn real_sample_newsletter_seeded_boolean_override_is_durable_and_reversible() {
-        let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
+    fn real_text_style_boolean_format_helper_is_durable_and_reversible() {
+        let Some(path) = env::var_os("CHAPTERA_TEXT_STYLE_FIXTURE") else {
             eprintln!(
-                "CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated direct-text gate owns real evidence"
+                "CHAPTERA_TEXT_STYLE_FIXTURE not set; dedicated text-format gate owns real evidence"
             );
             return;
         };
 
-        let original = fs::read(&path).expect("read pinned SampleNewsletter");
+        let original = fs::read(&path).expect("read pinned text-style.pub");
         let digest = Sha256::digest(&original);
         let mut digest_bytes = [0_u8; 32];
         digest_bytes.copy_from_slice(&digest);
         let source_hash = Sha256Digest::from_bytes(digest_bytes);
         let mut editor =
-            open_mature_0x2c_editor(&original, source_hash).expect("open real SampleNewsletter");
+            open_mature_0x2c_editor(&original, source_hash).expect("open real text-style.pub");
         let visual = pub_viewer::open_mature_0x2c_geometry(
             &original,
             pub_viewer::viewer_geometry_environment_v0_1(),
         )
-        .expect("open real SampleNewsletter Viewer geometry");
+        .expect("open real text-style.pub Viewer geometry");
 
-        let (story_id, frame_id) = visual
+        let (story_id, frame_id, before) = visual
             .text_fragments
             .iter()
             .find_map(|fragment| {
-                let story = editor.graph().stories.get(&fragment.story_id)?;
-                (!story.text.is_empty()).then_some((fragment.story_id, fragment.frame_id))
+                let mut mode =
+                    enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id).ok()?;
+                select_all(&mut mode);
+                let before = boolean_format_selection_state_v1(
+                    &editor,
+                    &mode,
+                    DesktopBooleanFormatPropertyV1::Bold,
+                )
+                .ok()?;
+                Some((fragment.story_id, fragment.frame_id, before))
             })
-            .expect("real fixture should expose one non-empty placed Story");
+            .expect("text-style.pub exposes one Story with bounded source-effective Bold");
 
         let source_text = editor.graph().stories[&story_id].text.clone();
-        let scalar_end =
-            u32::try_from(source_text.chars().count()).expect("Story scalar length fits u32");
-        let state_hash = editor
-            .current_text_format_state_hash_v1(story_id)
-            .expect("source text-format overlay state");
-        editor
-            .set_text_format_property_v1(
-                story_id,
-                0,
-                scalar_end,
-                pub_editor::FormatPropertyV1::Bold,
-                pub_editor::FormatValueV1::Bool(false),
-                &state_hash,
-            )
-            .expect("seed canonical Chaptera Bold override");
-
+        let operations_before = editor.operations().len();
         let mut mode =
             enter_explicit_text_mode(&editor, story_id, frame_id).expect("enter format Story");
         select_all(&mut mode);
-        let before =
-            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
-                .expect("read seeded Bold state");
-        assert_eq!(
-            before,
-            DesktopBooleanSelectionStateV1 {
-                effective: DesktopBooleanEffectiveStateV1::Uniform(false),
-                provenance: DesktopBooleanProvenanceStateV1::ChapteraOverride,
-            }
-        );
+        let expected = before.next_explicit_value();
 
-        let operations_before = editor.operations().len();
         let operation = apply_boolean_format_toggle_v1(
             &mut editor,
             &mut mode,
             DesktopBooleanFormatPropertyV1::Bold,
         )
-        .expect("commit canonical Bold toggle");
+        .expect("commit canonical Bold operation");
         assert_eq!(editor.operations().len(), operations_before + 1);
         assert!(matches!(
             operation,
             EditOperation::SetTextFormatProperty {
                 story_id: id,
                 property: pub_editor::FormatPropertyV1::Bold,
-                value: pub_editor::FormatValueV1::Bool(true),
+                value: pub_editor::FormatValueV1::Bool(value),
                 ..
-            } if id == story_id
+            } if id == story_id && value == expected
         ));
         assert_eq!(editor.graph().stories[&story_id].text, source_text);
+        assert_eq!(mode.session.revision_id, editor.project().state_id_v1());
 
         let after =
             boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
-                .expect("read toggled Bold state");
+                .expect("read edited Bold state");
         assert_eq!(
-            after,
-            DesktopBooleanSelectionStateV1 {
-                effective: DesktopBooleanEffectiveStateV1::Uniform(true),
-                provenance: DesktopBooleanProvenanceStateV1::ChapteraOverride,
-            }
+            after.effective,
+            DesktopBooleanEffectiveStateV1::Uniform(expected)
+        );
+        assert_eq!(
+            after.provenance,
+            DesktopBooleanProvenanceStateV1::ChapteraOverride
         );
 
-        editor.undo().expect("Undo Bold toggle");
+        editor.undo().expect("Undo Bold formatting");
         rebind_after_non_text_document_change(&editor, &mut mode)
             .expect("rebind after format Undo");
-        assert_eq!(
-            boolean_format_selection_state_v1(
-                &editor,
-                &mode,
-                DesktopBooleanFormatPropertyV1::Bold,
-            )
-            .expect("read undone Bold state"),
-            before
-        );
+        let undone =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read undone Bold state");
+        assert_eq!(undone, before);
 
-        editor.redo().expect("Redo Bold toggle");
+        editor.redo().expect("Redo Bold formatting");
         rebind_after_non_text_document_change(&editor, &mut mode)
             .expect("rebind after format Redo");
-        assert_eq!(
-            boolean_format_selection_state_v1(
-                &editor,
-                &mode,
-                DesktopBooleanFormatPropertyV1::Bold,
-            )
-            .expect("read redone Bold state"),
-            after
-        );
+        let redone =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read redone Bold state");
+        assert_eq!(redone, after);
 
         let project = editor.project();
         let mut reopened =
