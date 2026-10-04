@@ -23,6 +23,9 @@ mod product_smoke;
 mod reader_product_ui;
 mod reader_salvage;
 mod rectangle_creation;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod rectangle_creation_gui_tests;
+mod rectangle_creation_shell;
 mod render_backend;
 mod selection_keyboard;
 #[cfg(all(test, not(feature = "reader-only")))]
@@ -1954,45 +1957,7 @@ impl ViewerApp {
                 self.open_pub_folder_diagnostics();
             }
 
-            let rectangle_active = self.rectangle_creation.active();
-            let rectangle_response = ui.add_enabled(
-                editor_available && self.visual.is_some(),
-                egui::SelectableLabel::new(rectangle_active, "Rectangle"),
-            );
-            if rectangle_response.clicked() {
-                self.canvas_drag = None;
-                self.canvas_resize = None;
-                if rectangle_active {
-                    match self.rectangle_creation.deactivate_to_select() {
-                        Ok(()) => {
-                            self.edit_status = Some("Rectangle tool deactivated.".to_owned());
-                        }
-                        Err(error) => {
-                            self.edit_status =
-                                Some(format!("Rectangle tool could not deactivate: {error}"));
-                        }
-                    }
-                } else {
-                    if self.text_box_creation.active() {
-                        let _ = self.text_box_creation.deactivate_to_select();
-                    }
-                    if self.text_mode.is_some() {
-                        self.exit_canvas_text_mode("rectangle_tool_activation");
-                    }
-                    match self.rectangle_creation.activate() {
-                        Ok(()) => {
-                            self.edit_status = Some(
-                                "Rectangle tool active. Drag on the page to create one rectangle."
-                                    .to_owned(),
-                            );
-                        }
-                        Err(error) => {
-                            self.edit_status =
-                                Some(format!("Rectangle tool could not activate: {error}"));
-                        }
-                    }
-                }
-            }
+            self.show_rectangle_tool_control(ui, editor_available && self.visual.is_some());
 
             let text_box_active = self.text_box_creation.active();
             let text_box_response = ui.add_enabled(
@@ -4685,52 +4650,21 @@ impl ViewerApp {
                     .ctx()
                     .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
 
-                if !reader_only_mode()
-                    && self.text_mode.is_none()
-                    && self.rectangle_creation.active()
-                {
-                    if self.rectangle_creation.gesture_token.is_none()
-                        && primary_pressed
-                        && let (Some(pointer_start_screen), Some(pointer_start)) =
-                            (press_screen, press_document)
-                        && page_rect.contains(pointer_start_screen)
-                        && let Err(error) = self.rectangle_creation.pointer_down(
-                            page.id,
-                            pointer_start,
-                            "rectangle-draw-v1".to_owned(),
-                        )
-                    {
-                        rectangle_error = Some(format!("Rectangle draw could not start: {error}"));
-                    }
-
-                    if self.rectangle_creation.gesture_token.is_some()
-                        && primary_down
-                        && let Some(point) = pointer_document
-                        && let Err(error) = self.rectangle_creation.pointer_move(point)
-                    {
-                        let _ = self.rectangle_creation.cancel();
-                        rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
-                    }
-
-                    if self.rectangle_creation.gesture_token.is_some() && primary_released {
-                        if let Some(point) = pointer_document {
-                            match self.rectangle_creation.pointer_up(point) {
-                                Ok(release) => rectangle_release = Some(release),
-                                Err(error) => {
-                                    let _ = self.rectangle_creation.cancel();
-                                    rectangle_error =
-                                        Some(format!("Rectangle draw could not finish: {error}"));
-                                }
-                            }
-                        } else {
-                            let _ = self.rectangle_creation.cancel();
-                            rectangle_error = Some(
-                                "Rectangle draw ended outside the document coordinate boundary."
-                                    .to_owned(),
-                            );
-                        }
-                    }
-                }
+                rectangle_creation_shell::process_primary_pointer_events(
+                    &mut self.rectangle_creation,
+                    reader_only_mode(),
+                    self.text_mode.is_some(),
+                    page.id,
+                    page_rect,
+                    press_screen,
+                    press_document,
+                    pointer_document,
+                    primary_pressed,
+                    primary_down,
+                    primary_released,
+                    &mut rectangle_release,
+                    &mut rectangle_error,
+                );
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
@@ -4786,31 +4720,16 @@ impl ViewerApp {
                     && let (Some(pointer_start), Some(pointer_current)) =
                         (press_document, pointer_document)
                 {
-                    if self.rectangle_creation.active() {
-                        next_canvas_drag = None;
-                        next_canvas_resize = None;
-                        let result = if self.rectangle_creation.gesture_token.is_none() {
-                            self.rectangle_creation
-                                .pointer_down(
-                                    page.id,
-                                    pointer_start,
-                                    "rectangle-draw-v1".to_owned(),
-                                )
-                                .and_then(|()| {
-                                    self.rectangle_creation
-                                        .pointer_move(pointer_current)
-                                        .map(|_| ())
-                                })
-                        } else {
-                            self.rectangle_creation
-                                .pointer_move(pointer_current)
-                                .map(|_| ())
-                        };
-                        if let Err(error) = result {
-                            let _ = self.rectangle_creation.cancel();
-                            rectangle_error =
-                                Some(format!("Rectangle draw could not start: {error}"));
-                        }
+                    if rectangle_creation_shell::process_drag_started(
+                        &mut self.rectangle_creation,
+                        page.id,
+                        pointer_start,
+                        pointer_current,
+                        &mut next_canvas_drag,
+                        &mut next_canvas_resize,
+                        &mut rectangle_error,
+                    ) {
+                        // Rectangle shell owns this gesture.
                     } else if self.text_box_creation.active() {
                         text_box_pointer_owned = true;
                         next_canvas_drag = None;
@@ -4911,25 +4830,13 @@ impl ViewerApp {
                     && self.text_mode.is_none()
                     && response.drag_stopped_by(egui::PointerButton::Primary)
                 {
-                    if self.rectangle_creation.active()
-                        && self.rectangle_creation.gesture_token.is_some()
-                    {
-                        if let Some(point) = pointer_document {
-                            match self.rectangle_creation.pointer_up(point) {
-                                Ok(release) => rectangle_release = Some(release),
-                                Err(error) => {
-                                    let _ = self.rectangle_creation.cancel();
-                                    rectangle_error =
-                                        Some(format!("Rectangle draw could not finish: {error}"));
-                                }
-                            }
-                        } else {
-                            let _ = self.rectangle_creation.cancel();
-                            rectangle_error = Some(
-                                "Rectangle draw ended outside the document coordinate boundary."
-                                    .to_owned(),
-                            );
-                        }
+                    if rectangle_creation_shell::process_drag_stopped(
+                        &mut self.rectangle_creation,
+                        pointer_document,
+                        &mut rectangle_release,
+                        &mut rectangle_error,
+                    ) {
+                        // Rectangle shell owns this release.
                     } else if self.text_box_creation.active()
                         && self.text_box_creation.gesture_token.is_some()
                     {
@@ -4986,15 +4893,12 @@ impl ViewerApp {
                     && response.dragged_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
-                    if self.rectangle_creation.active()
-                        && self.rectangle_creation.gesture_token.is_some()
-                    {
-                        if let Some(point) = pointer_document
-                            && let Err(error) = self.rectangle_creation.pointer_move(point)
-                        {
-                            let _ = self.rectangle_creation.cancel();
-                            rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
-                        }
+                    if rectangle_creation_shell::process_dragged(
+                        &mut self.rectangle_creation,
+                        point,
+                        &mut rectangle_error,
+                    ) {
+                        // Rectangle shell owns this preview update.
                     } else if self.text_box_creation.active()
                         && self.text_box_creation.gesture_token.is_some()
                     {
@@ -5195,30 +5099,13 @@ impl ViewerApp {
                     }
                 }
 
-                if self.rectangle_creation.page_id == Some(page.id)
-                    && let Ok(rectangle_creation::RectangleCreatePreviewV1::Bounds(bounds)) =
-                        self.rectangle_creation.preview()
-                    && let Some(preview_rect) = render_backend::physical_rect_to_egui(
-                        page_rect,
-                        scene_scale,
-                        bounds.x.get(),
-                        bounds.y.get(),
-                        bounds.width.get(),
-                        bounds.height.get(),
-                    )
-                {
-                    painter.rect_filled(
-                        preview_rect,
-                        0,
-                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 48),
-                    );
-                    painter.rect_stroke(
-                        preview_rect,
-                        0,
-                        egui::Stroke::new(1.5_f32, egui::Color32::BLACK),
-                        egui::StrokeKind::Inside,
-                    );
-                }
+                rectangle_creation_shell::paint_preview(
+                    &self.rectangle_creation,
+                    &painter,
+                    page.id,
+                    page_rect,
+                    scene_scale,
+                );
 
                 if self.text_box_creation.page_id == Some(page.id)
                     && let Ok(text_box_creation::TextBoxCreatePreviewV1::Bounds(bounds)) =
@@ -5352,40 +5239,7 @@ impl ViewerApp {
             self.edit_status = Some(error);
         }
         if let Some(release) = rectangle_release {
-            let created_page_id = match release {
-                rectangle_creation::RectangleCreateReleaseV1::Commit { page_id, .. } => {
-                    Some(page_id)
-                }
-                rectangle_creation::RectangleCreateReleaseV1::NoChange => None,
-            };
-            let outcome = match self.editor.as_mut() {
-                Some(editor) => self.rectangle_creation.commit_release(editor, release),
-                None => Err("Editor session is unavailable.".to_owned()),
-            };
-            match outcome {
-                Ok(Some(node_id)) => {
-                    self.finish_authoring_change(
-                        "Created Rectangle in the authoring session. One CreateShape operation was committed.",
-                    );
-                    if let Some(page_id) = created_page_id {
-                        match direct_page_local_instance_v1(
-                            &node_id.as_canonical().to_string(),
-                            &page_id.as_canonical().to_string(),
-                        ) {
-                            Ok(instance) => self.canvas_selection.select_only(instance.instance_id),
-                            Err(error) => {
-                                self.edit_status = Some(format!(
-                                    "Rectangle was created, but durable selection could not bind: {error}"
-                                ));
-                            }
-                        }
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    self.edit_status = Some(error);
-                }
-            }
+            self.commit_rectangle_creation_release(release);
         }
 
         if let Some(error) = text_box_error {
