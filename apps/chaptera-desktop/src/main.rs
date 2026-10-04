@@ -4,6 +4,7 @@
 )]
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
+// CI-READER-VISUAL-CRITICAL-PATH-01 parallel-smoke measurement marker.
 mod acceptance;
 mod acceptance_v2;
 mod acceptance_v2_cli;
