@@ -24,6 +24,15 @@ class Yab259PacketRendererSourceTests(unittest.TestCase):
         self.assertIn("binding: Value", text)
         self.assertIn("binding: request.binding", text)
 
+    def test_adapter_emits_canonical_per_node_report(self) -> None:
+        text = ADAPTER.read_text(encoding="utf-8")
+        self.assertIn("struct RenderNodeReport", text)
+        self.assertIn("origin_node_id", text)
+        self.assertIn('"painted"', text)
+        self.assertIn('"partial"', text)
+        self.assertIn('"unsupported"', text)
+        self.assertIn("node_reports.sort_by", text)
+
 
 if __name__ == "__main__":
     unittest.main()
