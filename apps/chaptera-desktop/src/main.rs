@@ -5,6 +5,7 @@
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
 mod acceptance;
+mod acceptance_cli;
 mod acceptance_v2;
 mod acceptance_v2_cli;
 mod agent;
@@ -608,38 +609,8 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    if first_arg.as_deref() == Some(std::ffi::OsStr::new("--desktop-acceptance-v1")) {
-        let Some(fixture) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v1 FIXTURE PROJECT EXPORT");
-            std::process::exit(2);
-        };
-        let Some(project) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v1 FIXTURE PROJECT EXPORT");
-            std::process::exit(2);
-        };
-        let Some(export) = args.next().map(PathBuf::from) else {
-            eprintln!("usage: chaptera --desktop-acceptance-v1 FIXTURE PROJECT EXPORT");
-            std::process::exit(2);
-        };
-        if args.next().is_some() {
-            eprintln!("desktop acceptance mode accepts exactly three path arguments");
-            std::process::exit(2);
-        }
-
-        match acceptance::run(&fixture, &project, &export) {
-            Ok(observation) => {
-                println!(
-                    "{}",
-                    serde_json::to_string(&observation)
-                        .expect("desktop acceptance observation is JSON-serializable")
-                );
-                return Ok(());
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(2);
-            }
-        }
+    if acceptance_cli::try_handle(first_arg.as_deref(), &mut args) {
+        return Ok(());
     }
 
     if acceptance_v2_cli::try_handle(first_arg.as_deref(), &mut args) {

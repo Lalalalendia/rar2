@@ -17,6 +17,15 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/carlton-march-editor-sample-smoke.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "tools/acquire_carlton_march_pair.py",
+            "apps/chaptera-desktop/src/acceptance.rs",
+            "apps/chaptera-desktop/src/acceptance_cli.rs",
+            "vendor/producer-a/crates/pub-editor/**",
+        ),
+    },
     ".github/workflows/editor-desktop-textbox-restore-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
