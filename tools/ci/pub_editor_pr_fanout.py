@@ -18,6 +18,9 @@ SAFE_CONTINUITY_V2_MODULES = {
     "duplicate_authored_rectangle_v1": PUB_EDITOR_PREFIX + "src/duplicate_authored_rectangle_v1.rs",
     "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
 }
+# Stage 3 intentionally starts with the same tiny proven-safe set. Grow this
+# only with consumer-specific negative controls.
+SAFE_TEXTBOX_RESTORE_MODULES = SAFE_CONTINUITY_V2_MODULES
 
 DIRECT_CONTINUITY_V2_OWNERS = (
     ".github/workflows/editor-desktop-continuity-v2-windows.yml",
@@ -32,6 +35,21 @@ DIRECT_CONTINUITY_V2_OWNERS = (
     "tools/verify_editable_export_geometry.py",
     "vendor/producer-a/crates/pub-odg/**",
     "crates/chaptera-scene-instance/**",
+)
+
+DIRECT_TEXTBOX_RESTORE_OWNERS = (
+    ".github/workflows/editor-desktop-textbox-restore-v1.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
+    "apps/chaptera-desktop/src/text_box_creation.rs",
+    "apps/chaptera-desktop/src/text_box_creation_shell.rs",
+    "apps/chaptera-desktop/src/text_box_creation_gui_tests.rs",
+    "apps/chaptera-desktop/src/text_session.rs",
+    "apps/chaptera-desktop/src/text_session_shell.rs",
+    "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
+    "apps/chaptera-desktop/Cargo.toml",
+    "crates/chaptera-canvas-creation-interaction/**",
+    "crates/chaptera-desktop-fallback-font-resource/**",
 )
 
 
@@ -136,6 +154,35 @@ def classify_continuity_v2_windows(
     return False, "proven_non_continuity_pub_editor_slice"
 
 
+def classify_textbox_restore(
+    paths: list[str],
+    *,
+    base_lib_source: str | None = None,
+    head_lib_source: str | None = None,
+) -> tuple[bool, str]:
+    if any(matches(path, DIRECT_TEXTBOX_RESTORE_OWNERS) for path in paths):
+        return True, "direct_textbox_owner_changed"
+
+    pub_editor_paths = [
+        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+    ]
+    if not pub_editor_paths:
+        return False, "no_textbox_owner_changed"
+
+    allowed_paths = set(SAFE_TEXTBOX_RESTORE_MODULES.values()) | {PUB_EDITOR_LIB}
+    unknown = sorted(set(pub_editor_paths) - allowed_paths)
+    if unknown:
+        return True, "unknown_or_core_pub_editor_path"
+
+    if PUB_EDITOR_LIB in pub_editor_paths:
+        if base_lib_source is None or head_lib_source is None:
+            return True, "lib_changed_without_source_proof"
+        if not facade_change_is_safe(base_lib_source, head_lib_source):
+            return True, "pub_editor_lib_core_change"
+
+    return False, "proven_non_textbox_pub_editor_slice"
+
+
 def git_show(revision: str, path: str) -> str | None:
     try:
         return subprocess.check_output(
@@ -162,6 +209,11 @@ def main() -> int:
         base_lib_source=base_lib,
         head_lib_source=head_lib,
     )
+    run_textbox, textbox_reason = classify_textbox_restore(
+        paths,
+        base_lib_source=base_lib,
+        head_lib_source=head_lib,
+    )
 
     receipt = {
         "schema": "chaptera.pub-editor-pr-fanout.v1",
@@ -171,6 +223,9 @@ def main() -> int:
         "continuity_v2_windows": run_windows,
         "reason": reason,
         "safe_continuity_v2_modules": sorted(SAFE_CONTINUITY_V2_MODULES.values()),
+        "textbox_restore": run_textbox,
+        "textbox_reason": textbox_reason,
+        "safe_textbox_restore_modules": sorted(SAFE_TEXTBOX_RESTORE_MODULES.values()),
     }
 
     payload = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
@@ -184,6 +239,8 @@ def main() -> int:
         with args.github_output.open("a", encoding="utf-8") as handle:
             handle.write(f"continuity_v2_windows={'true' if run_windows else 'false'}\n")
             handle.write(f"reason={reason}\n")
+            handle.write(f"textbox_restore={'true' if run_textbox else 'false'}\n")
+            handle.write(f"textbox_reason={textbox_reason}\n")
 
     return 0
 
