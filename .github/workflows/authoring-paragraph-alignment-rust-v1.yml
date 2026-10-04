@@ -1,0 +1,75 @@
+name: Authoring Paragraph Alignment Rust V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/authoring-paragraph-alignment-rust-v1.yml"
+      - "tools/acquire_carlton_march_pair.py"
+      - "vendor/producer-a/crates/pub-editor/src/authored_paragraph_alignment_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/imported_paragraph_alignment_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/imported_paragraphs_v1.rs"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/tests/paragraph_alignment_override_v1.rs"
+      - "vendor/producer-a/crates/pub-reader/src/story_provenance.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authoring-paragraph-alignment-rust-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check changed Rust formatting
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo fmt --manifest-path vendor/producer-a/crates/pub-editor/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { throw "pub-editor rustfmt failed" }
+
+      - name: Run bounded paragraph alignment unit tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor paragraph_alignment --lib
+          if ($LASTEXITCODE -ne 0) { throw "paragraph alignment unit tests failed" }
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire pinned Carlton March source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "paragraph-alignment-carlton"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          python tools/acquire_carlton_march_pair.py $root
+          if ($LASTEXITCODE -ne 0) { throw "Carlton acquisition failed" }
+          $pub = Join-Path $root "March-2026.pub"
+          $expected = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          $found = (Get-FileHash $pub -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($found -ne $expected) { throw "Carlton PUB identity drift: $found" }
+          "CHAPTERA_CARLTON_PUB=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove real Set Clear history project and lifecycle fence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --test paragraph_alignment_override_v1 -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw "real paragraph alignment override acceptance failed" }
