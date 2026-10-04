@@ -6820,10 +6820,7 @@ mod tests {
 
         let feedback = update_drag_preview_with_snap(
             &mut drag,
-            DocumentPoint::new(
-                pub_editor::LengthEmu::new(-5),
-                pub_editor::LengthEmu::ZERO,
-            ),
+            DocumentPoint::new(pub_editor::LengthEmu::new(-5), pub_editor::LengthEmu::ZERO),
             Some(&snap_index),
             Some(pub_editor::LengthEmu::new(10)),
         )
