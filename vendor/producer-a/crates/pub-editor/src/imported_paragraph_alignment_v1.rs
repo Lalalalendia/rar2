@@ -142,27 +142,22 @@ fn resolve_paragraph_alignment_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pub_core::{RawSpan, StreamPath};
     use pub_model::{
-        AuthorityClass, ByteRange, ReadConfidence, Sha256Digest, SourceDescriptor, SourceRef,
-        SourceRole,
+        AuthorityClass, ByteRange, ReadConfidence, Sha256Digest, SourceRef, SourceRole,
     };
 
     fn source_ref() -> SourceRef {
         SourceRef {
-            source: SourceDescriptor {
-                format: "pub".to_owned(),
-                format_version: Some("0x2c".to_owned()),
-                adapter_version: "test".to_owned(),
-                source_hash: Sha256Digest::from_bytes([0x11; 32]),
-            },
-            stream: StreamPath::new("/Quill/QuillSub/CONTENTS").expect("stream path"),
-            range: ByteRange { start: 0, end: 1 },
+            format: "pub".to_owned(),
+            adapter_version: "test".to_owned(),
+            source_hash: Sha256Digest::from_bytes([0x11; 32]),
+            carrier: "/Quill/QuillSub/CONTENTS".to_owned(),
             object_key: Some("story/test".to_owned()),
-            property_path: Some("FDPP/ParagraphAlignment".to_owned()),
+            path: Some("FDPP/ParagraphAlignment".to_owned()),
+            byte_range: Some(ByteRange::new(0, 1)),
             role: SourceRole::Semantic,
             authority: AuthorityClass::Authoritative,
-            confidence: ReadConfidence::Exact,
+            confidence: Some(ReadConfidence::Exact),
         }
     }
 
