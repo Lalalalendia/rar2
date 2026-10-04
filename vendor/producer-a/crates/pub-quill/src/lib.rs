@@ -44,3 +44,6 @@ pub use typography::{
     QuillTextSizeRun, QuillTypographyCatalog, QuillTypographyRange, QuillTypographyReadError,
     QuillTypographyStoryIntersection, QuillTypographyValueSource, parse_bounded_typography,
 };
+
+#[cfg(feature = "research-inspection")]
+pub use typography::{QuillRawFdppProperty, QuillRawFdppStyle, inspect_raw_fdpp_styles};
