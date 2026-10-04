@@ -43,21 +43,19 @@ pub use writer_assessment::{
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
-    LossKind, LossSeverity, ParagraphAlignmentV1,
-    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
-    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
-    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
-    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
-    assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
-    render_human_summary,
+    LossKind, LossSeverity, ParagraphAlignmentV1, PersistenceCompatibilityAssessment,
+    PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
+    PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
+    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError,
+    ScopedCapabilityOverride, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
+    WriterCapabilityManifest, assess_persistence_compatibility, build_export_report,
+    plan_export_with_scoped_capabilities, render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
     IdmlWireProfile, add_embedded_images_to_idml, add_full_story_paragraph_alignment_to_idml,
-    add_full_story_typography_to_idml,
-    project_resolved_graph_to_idml, write_idml_ucf,
+    add_full_story_typography_to_idml, project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
     Affine2D, EFFECTIVE_TABLE_GRID_V1, EffectiveTableCellV1, EffectiveTableGridV1,
@@ -69,13 +67,11 @@ use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
     OdgFullStoryParagraphAlignmentPlacement, OdgFullStoryTypographyPlacement,
     add_embedded_images_to_odg, add_full_story_paragraph_alignment_to_odg,
-    add_full_story_typography_to_odg,
-    project_resolved_graph_to_odg, write_odg,
+    add_full_story_typography_to_odg, project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignment, PubParagraphAlignmentRun, PubResolvedGraph,
-    PubResolvedNodePayload,
-    PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
+    PubResolvedNodePayload, PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
@@ -2490,10 +2486,8 @@ impl EditorSession {
                         message: error.to_string(),
                     })?;
                     let paragraph_alignments = self.full_story_paragraph_alignment_v1();
-                    let paragraph_alignment_placements =
-                        self.odg_full_story_paragraph_alignment_placements_v1(
-                            &paragraph_alignments,
-                        );
+                    let paragraph_alignment_placements = self
+                        .odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
                     add_full_story_paragraph_alignment_to_odg(
                         &plan,
                         &mut package,
