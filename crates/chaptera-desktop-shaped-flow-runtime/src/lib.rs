@@ -145,6 +145,132 @@ pub fn validate_explicit_font_resource_v1(
     Ok(actual)
 }
 
+fn overlay_rgb_v1(value: &str) -> Result<[u8; 3], DesktopShapedFlowRuntimeError> {
+    let hex = value.strip_prefix('#').ok_or_else(|| {
+        DesktopShapedFlowRuntimeError::new("text_format_overlay_invalid", "color is not #RRGGBB")
+    })?;
+    if hex.len() != 6 {
+        return Err(DesktopShapedFlowRuntimeError::new(
+            "text_format_overlay_invalid",
+            "color is not #RRGGBB",
+        ));
+    }
+    let component = |start: usize| {
+        u8::from_str_radix(&hex[start..start + 2], 16).map_err(|_| {
+            DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_invalid",
+                "color contains non-hex digits",
+            )
+        })
+    };
+    Ok([component(0)?, component(2)?, component(4)?])
+}
+
+fn effective_value_v1(
+    state: &pub_editor::TextFormatOverlayStateV1,
+    property: FormatPropertyV1,
+    start: u32,
+    end: u32,
+) -> Result<FormatValueV1, DesktopShapedFlowRuntimeError> {
+    let segments = effective_property_segments_v1(state, property, start, end).map_err(|error| {
+        DesktopShapedFlowRuntimeError::new(
+            "text_format_overlay_invalid",
+            format!("effective property resolution failed: {error}"),
+        )
+    })?;
+    match segments.as_slice() {
+        [segment] => Ok(segment.value.clone()),
+        _ => Err(DesktopShapedFlowRuntimeError::new(
+            "text_format_overlay_invalid",
+            "effective property is not uniform inside one canonical style segment",
+        )),
+    }
+}
+
+pub fn current_story_effective_typography_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+) -> Result<Vec<DesktopEffectiveTypographyRunV1>, DesktopShapedFlowRuntimeError> {
+    let state = editor.current_text_format_overlay_v1(story_id).map_err(|error| {
+        DesktopShapedFlowRuntimeError::new(
+            "text_format_overlay_unavailable",
+            format!("current Story text-format overlay is unavailable: {error}"),
+        )
+    })?;
+    if state.story_scalar_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut boundaries = BTreeSet::from([0, state.story_scalar_len]);
+    for run in &state.base_runs {
+        boundaries.insert(run.start_scalar);
+        boundaries.insert(run.end_scalar);
+    }
+    for run in &state.overrides {
+        boundaries.insert(run.start_scalar);
+        boundaries.insert(run.end_scalar);
+    }
+
+    let points = boundaries.into_iter().collect::<Vec<_>>();
+    let mut out = Vec::with_capacity(points.len().saturating_sub(1));
+    for pair in points.windows(2) {
+        let start = pair[0];
+        let end = pair[1];
+        let base = state
+            .base_runs
+            .iter()
+            .find(|run| run.start_scalar <= start && end <= run.end_scalar)
+            .ok_or_else(|| {
+                DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "canonical style segment has no base format",
+                )
+            })?;
+
+        let bold = match effective_value_v1(&state, FormatPropertyV1::Bold, start, end)? {
+            FormatValueV1::Bool(value) => value,
+            _ => return Err(DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_invalid",
+                "Bold is not boolean",
+            )),
+        };
+        let italic = match effective_value_v1(&state, FormatPropertyV1::Italic, start, end)? {
+            FormatValueV1::Bool(value) => value,
+            _ => return Err(DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_invalid",
+                "Italic is not boolean",
+            )),
+        };
+        let font_size_emu =
+            match effective_value_v1(&state, FormatPropertyV1::FontSizeEmu, start, end)? {
+                FormatValueV1::Integer(value) => value,
+                _ => return Err(DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "font size is not integer",
+                )),
+            };
+        let text_color_rgb =
+            match effective_value_v1(&state, FormatPropertyV1::TextColorRgb, start, end)? {
+                FormatValueV1::String(value) => overlay_rgb_v1(&value)?,
+                _ => return Err(DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "text color is not string",
+                )),
+            };
+
+        out.push(DesktopEffectiveTypographyRunV1 {
+            scalar_start: start,
+            scalar_end: end,
+            font_resource_id: base.format.font_resource_id.clone(),
+            font_size_emu,
+            bold,
+            italic,
+            text_color_rgb,
+        });
+    }
+    Ok(out)
+}
+
 pub fn build_current_story_layout_v1(
     editor: &EditorSession,
     story_id: StoryId,
