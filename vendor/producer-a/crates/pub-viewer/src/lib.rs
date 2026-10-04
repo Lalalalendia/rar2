@@ -221,8 +221,11 @@ impl ViewerDocument {
 pub struct ViewerProjectedSceneInstanceV1 {
     /// Canonical visual identity/projection semantics from chaptera-scene-instance.
     pub scene_instance: SceneInstanceV1,
-    /// Paint placement metadata only; not an identity authority.
-    pub target_frame_node_id: NodeId,
+    /// Optional Cmo host-frame placement metadata only; not an identity authority.
+    /// Non-Cmo projected kinds such as inherited master instances do not require
+    /// a target text frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_frame_node_id: Option<NodeId>,
     /// Story-global direct-paint cutoff from native Cmo slot-flow.
     /// Scalars at or after this authoritative first-nonfitting boundary remain
     /// canonical source text but are overset and must not paint in the target frame.
@@ -4171,7 +4174,7 @@ fn project_carlton_march_cmo_instances(
 
             projected.push(ViewerProjectedSceneInstanceV1 {
                 scene_instance,
-                target_frame_node_id,
+                target_frame_node_id: Some(target_frame_node_id),
                 target_frame_paint_scalar_end,
                 bounds,
                 text_content_bounds,
