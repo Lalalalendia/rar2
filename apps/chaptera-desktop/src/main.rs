@@ -10654,6 +10654,42 @@ mod tests {
                     },
                 );
             }
+
+            for resource in &self.visual.decorative_border_resources {
+                let key = format!("{:?}", resource.resource_id);
+                if self.image_textures.contains_key(&key) {
+                    continue;
+                }
+                let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+                let admitted = image_decode_adapter::decode_texture_image_v1(
+                    &resource.bytes,
+                    &resource.mime,
+                    &expected_sha256,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "clean golden BorderArt decode failed for {} / {}: {error}",
+                        key, resource.mime
+                    )
+                });
+                let [width, height] = admitted.color_image.size;
+                assert!(
+                    width <= max_texture_side && height <= max_texture_side,
+                    "BorderArt golden image {width}x{height} exceeds active egui texture limit {max_texture_side}"
+                );
+                let texture = ctx.load_texture(
+                    format!("borderart-golden-{key}"),
+                    admitted.color_image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.image_textures.insert(
+                    key,
+                    CachedImageTexture {
+                        texture,
+                        _cache_identity_sha256: admitted.cache_identity_sha256,
+                    },
+                );
+            }
         }
     }
 
@@ -10698,6 +10734,13 @@ mod tests {
                             node,
                             node_rect,
                             texture.map(|cached| cached.texture.id()),
+                        );
+                        paint_document_node_decorative_border(
+                            &painter,
+                            page_rect,
+                            scene_scale,
+                            node,
+                            &self.image_textures,
                         );
                         let outcome = render_backend::paint_document_node_foreground(
                             &painter,
