@@ -2428,6 +2428,8 @@ mod tests {
                 }],
                 bytes: vec![0x89, b'P', b'N', b'G'],
             }],
+            decorative_borders: Vec::new(),
+            decorative_border_resources: Vec::new(),
         }
     }
 
