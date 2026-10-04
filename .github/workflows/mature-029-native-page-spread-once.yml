@@ -12,6 +12,7 @@ on:
     paths:
       - ".github/workflows/mature-029-native-page-spread-once.yml"
       - "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
+      - "tools/windows/run_mature_029_native_page_spread_direct.ps1"
 
 permissions:
   contents: read
