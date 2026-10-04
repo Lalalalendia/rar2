@@ -1,19 +1,10 @@
 name: struct-writer-replay-01
 
 on:
-  push:
-    branches:
-      - writer/struct-writer-replay-01
-    paths:
-      - vendor/producer-a/crates/pub-writer/**
-      - .github/workflows/struct-writer-replay-01.yml
   pull_request:
     paths:
       - vendor/producer-a/crates/pub-writer/**
       - .github/workflows/struct-writer-replay-01.yml
-
-permissions:
-  contents: write
 
 jobs:
   rust:
@@ -30,49 +21,3 @@ jobs:
         run: cargo test -p pub-writer structural_replay -- --nocapture
       - name: Rustfmt pub-writer
         run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs
-
-
-  format-artifact:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.89.0
-          components: rustfmt
-      - name: Format T406 writer files
-        run: |
-          rustfmt --edition 2024 vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: t406-rustfmt
-          path: |
-            vendor/producer-a/crates/pub-writer/src/lib.rs
-            vendor/producer-a/crates/pub-writer/src/structural_replay.rs
-          if-no-files-found: error
-
-
-  format-push:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: writer/struct-writer-replay-01
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.89.0
-          components: rustfmt
-      - name: Apply rustfmt and push only when needed
-        run: |
-          rustfmt --edition 2024 vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs
-          if git diff --quiet -- vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs; then
-            echo "Already formatted."
-            exit 0
-          fi
-          git config user.name "chaptera-ci"
-          git config user.email "chaptera-ci@users.noreply.github.com"
-          git add vendor/producer-a/crates/pub-writer/src/lib.rs vendor/producer-a/crates/pub-writer/src/structural_replay.rs
-          git commit -m "Writer: apply rustfmt to T406 replay"
-          git push origin HEAD:writer/struct-writer-replay-01
