@@ -139,7 +139,8 @@ pub fn add_full_story_typography_to_idml(
         };
 
         let marker = "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\">\n";
-        if xml.matches(marker).count() != 1 {
+        let range_count = xml.matches(marker).count();
+        if range_count == 0 {
             return Err(IdmlTypographyError::UnexpectedStoryMarkup {
                 story_id: item.story_id,
             });
@@ -154,7 +155,7 @@ pub fn add_full_story_typography_to_idml(
         let replacement = format!(
             "      <CharacterStyleRange AppliedCharacterStyle=\"CharacterStyle/$ID/[No character style]\" FontStyle=\"Regular\" PointSize=\"{point_size}\">\n        <Properties>\n          <AppliedFont type=\"string\">{font_family}</AppliedFont>\n        </Properties>\n"
         );
-        *xml = xml.replacen(marker, &replacement, 1);
+        *xml = xml.replace(marker, &replacement);
     }
 
     if !font_resources.is_empty() {
