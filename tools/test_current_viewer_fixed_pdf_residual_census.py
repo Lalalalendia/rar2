@@ -41,6 +41,7 @@ class ResidualCensusTests(unittest.TestCase):
                             "node_id": "n-backend",
                             "bounds": {},
                             "transform": {},
+                            "projected_scene_instance": {"secret_instance": "must-not-leak"},
                             "text": {
                                 "typography": [],
                                 "layout": {
@@ -159,6 +160,8 @@ class ResidualCensusTests(unittest.TestCase):
             census["reason_node_counts"]["text_backend_fallback:story_extent_mismatch"],
             1,
         )
+        self.assertEqual(census["reason_node_counts"]["scene_projection:projected"], 1)
+        self.assertEqual(census["reason_node_counts"]["scene_projection:base"], 5)
         self.assertEqual(
             census["reason_node_counts"]["text_backend_fallback:shared_layout_incomplete"],
             2,
@@ -183,6 +186,8 @@ class ResidualCensusTests(unittest.TestCase):
             "SECRET-TEXT",
             "OTHER-SECRET",
             "SECRET-RESOURCE-ID",
+            "must-not-leak",
+            "secret_instance",
             '"color_rgb"',
             '"bounds"',
             '"source_window"',
