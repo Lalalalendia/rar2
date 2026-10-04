@@ -74,10 +74,8 @@ pub(crate) fn materialize_imported_story_paragraphs_v1(
 
         let mut paragraph_ids = Vec::with_capacity(ranges.len());
         for (ordinal, (start, end)) in ranges.into_iter().enumerate() {
-            let source_object_key = format!(
-                "story/{}/paragraph/{ordinal}",
-                story_id.as_canonical()
-            );
+            let source_object_key =
+                format!("story/{}/paragraph/{ordinal}", story_id.as_canonical());
             let canonical = derive_source_canonical_id(SourceDerivedIdInput {
                 source_hash: &source_hash,
                 adapter_id: PUB_ADAPTER_ID,
@@ -113,9 +111,7 @@ pub(crate) fn materialize_imported_story_paragraphs_v1(
                 )
                 .is_some()
             {
-                return Err(PubParagraphMaterializationError::DuplicateIdentity {
-                    paragraph_id,
-                });
+                return Err(PubParagraphMaterializationError::DuplicateIdentity { paragraph_id });
             }
             paragraph_ids.push(paragraph_id);
         }
