@@ -1,0 +1,32 @@
+name: delivery-reader-native-v7-smoke
+
+on:
+  push:
+    branches:
+      - delivery/reader-native-remaining-v7-smoke
+    paths:
+      - delivery/reader-native-remaining-v7/RUN_NATIVE.ps1
+      - .github/workflows/delivery-reader-native-v7-smoke.yml
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse Windows PowerShell 5.1 launcher
+        shell: powershell
+        run: |
+          $path = Join-Path $PWD 'delivery\reader-native-remaining-v7\RUN_NATIVE.ps1'
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+      - name: Exercise encoded child invocation and fail-closed evidence gate
+        shell: powershell
+        run: |
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File delivery\reader-native-remaining-v7\RUN_NATIVE.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
