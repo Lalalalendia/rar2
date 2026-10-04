@@ -60,8 +60,10 @@ use chaptera_text_format_overlay::{
     set_text_format_property_v1 as overlay_set_text_format_property_v1, state_hash_v1,
 };
 use pub_export::{
-    CapabilityLevel, EffectiveParagraphAlignmentExportV1, ExportPlan, ExportReport,\n    ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,\n    ParagraphAlignmentV1,
+    CapabilityLevel, EffectiveParagraphAlignmentExportV1, ExportPlan, ExportReport,
+    ExportReportSource, FormatCompatibilityManifest,
+    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
+    ParagraphAlignmentV1,
     PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
     PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
     STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
