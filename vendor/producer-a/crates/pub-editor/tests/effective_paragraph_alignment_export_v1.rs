@@ -1,6 +1,5 @@
 use pub_editor::{
-    AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest,
-    open_mature_0x2c_editor,
+    AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest, open_mature_0x2c_editor,
 };
 use pub_export::ParagraphAlignmentV1;
 
