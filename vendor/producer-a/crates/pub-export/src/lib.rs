@@ -26,7 +26,7 @@ pub use report::{
     ExportReportItem, ExportReportSource, build_export_report, render_human_summary,
 };
 
-use pub_model::{CanonicalId, LengthEmu, StoryId};
+use pub_model::{CanonicalId, LengthEmu, ParagraphId, StoryId, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -93,6 +93,32 @@ pub struct FullStoryTypographyV1 {
     pub story_id: StoryId,
     pub font_family: String,
     pub font_size_emu: LengthEmu,
+}
+
+pub const PARAGRAPH_ALIGNMENT_EXPORT_SCHEMA_V1: &str =
+    "chaptera.paragraph-alignment-export.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphAlignmentV1 {
+    Left,
+    Center,
+    Right,
+    InterWord,
+    Distribute,
+}
+
+/// Target-neutral effective paragraph alignment after authoring precedence has
+/// already been resolved. The range is the canonical ParagraphId-owned
+/// Unicode-scalar range; target adapters must not recover paragraph identity
+/// by splitting source text independently.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct EffectiveParagraphAlignmentExportV1 {
+    pub paragraph_id: ParagraphId,
+    pub story_id: StoryId,
+    pub range: TextRange,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<ParagraphAlignmentV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
