@@ -1788,13 +1788,20 @@ mod tests {
         env, fs,
     };
 
+    use pub_editor::LengthEmu;
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
         uniform_text_color_rgb_v1,
     };
-    use pub_viewer::{open_pub_bundle, viewer_geometry_environment_v0_1};
+    use pub_layout::{
+        BoundedLayoutEnvironment, BoundedShapingRuntime, compatible_natural_line_height_emu_v1,
+        font_fingerprint_sha256, shape_bounded_ltr,
+    };
+    use pub_viewer::{
+        ViewerParagraphLineSpacing, open_pub_bundle, viewer_geometry_environment_v0_1,
+    };
     use sha2::{Digest, Sha256};
 
     use super::{
@@ -2445,6 +2452,22 @@ mod tests {
         let mut projected_text_bounds_nodes = 0_usize;
         let mut projected_uniform_insets_emu = BTreeMap::<i64, usize>::new();
         let mut projected_measured_width_total_emu = 0_i128;
+        let mut paragraph_spacing_run_modes = BTreeMap::<String, usize>::new();
+        for run in &bundle.geometry.paragraph_line_spacings {
+            let mode = match run.line_spacing {
+                ViewerParagraphLineSpacing::Absolute { spacing_emu } => {
+                    format!("absolute:{spacing_emu}")
+                }
+                ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                } => format!("proportional:{point_equivalent_emu}"),
+            };
+            *paragraph_spacing_run_modes.entry(mode).or_default() += 1;
+        }
+        let mut text_size_spacing_layout_counts = BTreeMap::<String, usize>::new();
+        let mut target_14pt_spacing_layout_counts = BTreeMap::<String, usize>::new();
+        let fallback_font_fingerprint = font_fingerprint_sha256(font.bytes);
+        let mut target_14pt_first_line_fit_counts = BTreeMap::<String, usize>::new();
 
         for page_index in 0..bundle.geometry.document.pages.len() {
             let plan =
@@ -2458,10 +2481,156 @@ mod tests {
                     .is_some_and(|instance| {
                         instance.projection_kind == SceneProjectionKindV1::CmoStorySlot
                     });
+                let text_bounds_size_emu = node
+                    .text_bounds
+                    .as_ref()
+                    .map(|bounds| (bounds.width.get(), bounds.height.get()));
                 let Some(text) = node.text else {
                     continue;
                 };
                 text_nodes += 1;
+
+                let mut typography_cursor = text.scalar_start;
+                let mut complete_typography = !text.typography.is_empty();
+                let mut source_sizes = std::collections::BTreeSet::<u32>::new();
+                for run in &text.typography {
+                    complete_typography &= run.scalar_start == typography_cursor
+                        && run.scalar_end > run.scalar_start
+                        && run.scalar_end <= text.scalar_end;
+                    typography_cursor = run.scalar_end;
+                    source_sizes.insert(run.text_size_emu);
+                }
+                complete_typography &= typography_cursor == text.scalar_end;
+                let source_size = if complete_typography && source_sizes.len() == 1 {
+                    source_sizes
+                        .iter()
+                        .next()
+                        .expect("one source size")
+                        .to_string()
+                } else if text.typography.is_empty() {
+                    "none".to_owned()
+                } else {
+                    "mixed_or_incomplete".to_owned()
+                };
+
+                let story_text = bundle
+                    .geometry
+                    .document
+                    .stories
+                    .iter()
+                    .find(|story| story.id == text.story_id)
+                    .map(|story| story.text.as_str());
+                let spacing_matches = bundle
+                    .geometry
+                    .paragraph_line_spacings
+                    .iter()
+                    .filter(|run| run.story_id == text.story_id)
+                    .filter(|run| {
+                        story_text.is_some_and(|story_text| run.applies_to_story_text(story_text))
+                    })
+                    .filter(|run| {
+                        run.scalar_end > text.scalar_start && run.scalar_start < text.scalar_end
+                    })
+                    .collect::<Vec<_>>();
+                let spacing = match spacing_matches.as_slice() {
+                    [] => "absent".to_owned(),
+                    [run]
+                        if run.scalar_start <= text.scalar_start
+                            && run.scalar_end >= text.scalar_end =>
+                    {
+                        match run.line_spacing {
+                            ViewerParagraphLineSpacing::Absolute { spacing_emu } => {
+                                format!("absolute:{spacing_emu}")
+                            }
+                            ViewerParagraphLineSpacing::Proportional {
+                                point_equivalent_emu,
+                            } => format!("proportional:{point_equivalent_emu}"),
+                        }
+                    }
+                    [_] => "partial".to_owned(),
+                    _ => "ambiguous".to_owned(),
+                };
+                let backend_font = if text.backend_font_resource_id.is_some() {
+                    "source"
+                } else {
+                    "none"
+                };
+                let layout = match text.layout.as_ref() {
+                    None => "none".to_owned(),
+                    Some(layout) => match &layout.disposition {
+                        RenderTextLayoutDispositionV1::SharedResolved { .. } => {
+                            "shared_resolved".to_owned()
+                        }
+                        RenderTextLayoutDispositionV1::BackendFallback { reason } => {
+                            format!("fallback:{}", reason.code())
+                        }
+                    },
+                };
+                let activation_key = format!(
+                    "size={source_size}|spacing={spacing}|backend={backend_font}|layout={layout}"
+                );
+                *text_size_spacing_layout_counts
+                    .entry(activation_key.clone())
+                    .or_default() += 1;
+                if source_size == "177800" {
+                    *target_14pt_spacing_layout_counts
+                        .entry(activation_key)
+                        .or_default() += 1;
+                }
+
+                if source_size == "177800" && spacing == "absent" && backend_font == "none" {
+                    let natural_metric_emu = compatible_natural_line_height_emu_v1(
+                        font.bytes,
+                        font.face_index,
+                        LengthEmu::new(177_800),
+                    )
+                    .map(|metric| metric.get());
+                    let natural_fit = match (natural_metric_emu, text_bounds_size_emu) {
+                        (Some(metric), Some((_, height))) => Some(metric <= height),
+                        _ => None,
+                    };
+                    let one_line_width_fit = if text.line_count == 1 {
+                        text_bounds_size_emu.and_then(|(width, _)| {
+                            let runtime = BoundedShapingRuntime {
+                                layout: BoundedLayoutEnvironment {
+                                    engine_revision: "carlton-first-line-fit-measurement-v1"
+                                        .to_owned(),
+                                    font_set_fingerprint: fallback_font_fingerprint.clone(),
+                                    resource_fingerprint: font.resource_id.to_owned(),
+                                },
+                                face_index: font.face_index,
+                                font_size_emu: LengthEmu::new(177_800),
+                                font_bytes: font.bytes,
+                            };
+                            shape_bounded_ltr(&text.text, &runtime)
+                                .ok()
+                                .map(|shaped| shaped.total_x_advance.get() <= width)
+                        })
+                    } else {
+                        None
+                    };
+                    let candidate = text.line_count == 1
+                        && natural_fit == Some(true)
+                        && one_line_width_fit == Some(true);
+                    let first_line_fit_key = format!(
+                        "layout={layout}|source_lines={}|natural_metric={}|natural_fit={}|one_line_width_fit={}|candidate={candidate}",
+                        text.line_count,
+                        if natural_metric_emu.is_some() {
+                            "available"
+                        } else {
+                            "unavailable"
+                        },
+                        natural_fit
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "unknown".to_owned()),
+                        one_line_width_fit
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "unknown".to_owned()),
+                    );
+                    *target_14pt_first_line_fit_counts
+                        .entry(first_line_fit_key)
+                        .or_default() += 1;
+                }
 
                 if projected {
                     projected_text_nodes += 1;
@@ -2579,6 +2748,17 @@ mod tests {
             .expect("serialize projected line heights");
         let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
             .expect("serialize projected uniform text insets");
+        let paragraph_spacing_run_modes_json = serde_json::to_string(&paragraph_spacing_run_modes)
+            .expect("serialize paragraph spacing run modes");
+        let text_size_spacing_layout_counts_json =
+            serde_json::to_string(&text_size_spacing_layout_counts)
+                .expect("serialize size/spacing/layout activation census");
+        let target_14pt_spacing_layout_counts_json =
+            serde_json::to_string(&target_14pt_spacing_layout_counts)
+                .expect("serialize 14pt spacing/layout activation census");
+        let target_14pt_first_line_fit_counts_json =
+            serde_json::to_string(&target_14pt_first_line_fit_counts)
+                .expect("serialize 14pt first-line fit census");
 
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
@@ -2620,6 +2800,19 @@ mod tests {
             }
             _ => {}
         }
+
+        println!(
+            "CLOUD_READER_PARAGRAPH_SPACING_ACTIVATION_CENSUS source_sha256={} paragraph_spacing_run_modes={} text_size_spacing_layout_counts={} target_14pt_spacing_layout_counts={}",
+            actual_sha256,
+            paragraph_spacing_run_modes_json,
+            text_size_spacing_layout_counts_json,
+            target_14pt_spacing_layout_counts_json,
+        );
+
+        println!(
+            "CLOUD_READER_FIRST_LINE_FIT_CENSUS source_sha256={} target_14pt_first_line_fit_counts={}",
+            actual_sha256, target_14pt_first_line_fit_counts_json,
+        );
 
         println!(
             "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
