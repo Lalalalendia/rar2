@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+pub-docx = { path = "../pub-docx" }
 pub-export = { path = "../pub-export" }
 pub-idml = { path = "../pub-idml" }
 pub-model = { path = "../pub-model" }
