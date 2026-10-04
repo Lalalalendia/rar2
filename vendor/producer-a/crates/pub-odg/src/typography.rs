@@ -379,11 +379,15 @@ fn is_xml_10_scalar(value: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgPart};
-    use pub_export::{
-        SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, plan_export,
+    use crate::{
+        ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgParagraphAlignmentPlacementV1,
+        OdgPart, add_effective_paragraph_alignment_to_odg_v1,
     };
-    use pub_model::CanonicalId;
+    use pub_export::{
+        EffectiveParagraphAlignmentExportV1, ParagraphAlignmentV1, SemanticFeatureRequest,
+        TargetCapabilityManifest, TargetProfile, plan_export,
+    };
+    use pub_model::{CanonicalId, ParagraphId, TextRange};
     use std::collections::BTreeMap;
 
     fn id(byte: u8) -> CanonicalId {
@@ -472,6 +476,70 @@ mod tests {
             loss.origin == Some(story_id.into_canonical())
                 && loss.feature == STORY_FONT_SIZE_FEATURE
         }));
+    }
+
+    #[test]
+    fn composes_after_paragraph_alignment_styles_without_erasing_them() {
+        let story_id = story(7);
+        let frame_id = frame(8);
+        let paragraph_id = ParagraphId::from_canonical(id(9));
+        let export_plan = plan(story_id);
+        let content = format!(
+            "<?xml version=\"1.0\"?><office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\">\n  <office:automatic-styles/>\n<office:body><office:drawing><draw:page><draw:frame draw:name=\"{}\">\n          <draw:text-box>\n            <text:p>Hello</text:p>\n          </draw:text-box>\n        </draw:frame></draw:page></office:drawing></office:body></office:document-content>",
+            frame_name(frame_id)
+        );
+        let mut package = OdgPackage {
+            target: export_plan.target.clone(),
+            conversion_fence: None,
+            parts: vec![OdgPart {
+                path: ODG_CONTENT_PATH.into(),
+                kind: OdgPartKind::Content,
+                media_type: "text/xml".into(),
+                content: content.into_bytes(),
+            }],
+        };
+
+        add_effective_paragraph_alignment_to_odg_v1(
+            &mut package,
+            &[OdgParagraphAlignmentPlacementV1 {
+                story_id,
+                story_text: "Hello".into(),
+                frame_ids: vec![frame_id],
+                paragraphs: vec![EffectiveParagraphAlignmentExportV1 {
+                    paragraph_id,
+                    story_id,
+                    range: TextRange::new(0, 5).unwrap(),
+                    alignment: Some(ParagraphAlignmentV1::Center),
+                }],
+            }],
+        )
+        .expect("paragraph alignment");
+
+        add_full_story_typography_to_odg(
+            &export_plan,
+            &mut package,
+            &[OdgFullStoryTypographyPlacement {
+                typography: FullStoryTypographyV1 {
+                    story_id,
+                    font_family: "A&B Sans".into(),
+                    font_size_emu: LengthEmu::new(12 * EMU_PER_POINT),
+                },
+                frame_ids: vec![frame_id],
+            }],
+        )
+        .expect("typography after paragraph alignment");
+
+        let xml = std::str::from_utf8(&package.parts[0].content).unwrap();
+        assert!(xml.contains("style:family=\"paragraph\""));
+        assert!(xml.contains("fo:text-align=\"center\""));
+        assert!(xml.contains("style:family=\"text\""));
+        assert!(xml.contains(
+            "<text:p text:style-name=\"PubParaP"
+        ));
+        assert!(xml.contains(
+            "><text:span text:style-name=\"PubStoryT_"
+        ));
+        assert!(xml.contains(">Hello</text:span></text:p>"));
     }
 
     #[test]
