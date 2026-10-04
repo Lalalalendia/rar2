@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-// The cadence API is intentionally staged one PR before its UI consumer (#227).
+// The cadence API is intentionally staged one PR before its UI consumer (#227). Post-#1314 latency measurement.
 mod acceptance;
 mod acceptance_v2;
 mod acceptance_v2_cli;
