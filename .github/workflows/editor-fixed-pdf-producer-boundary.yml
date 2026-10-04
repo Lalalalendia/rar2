@@ -13,6 +13,7 @@ on:
       - "crates/chaptera-layout-projection/**"
       - "crates/chaptera-scene-instance/**"
       - "services/editor-api/story_range_v1.py"
+      - "vendor/producer-a/crates/pub-editor/src/lib.rs"
       - ".github/workflows/editor-fixed-pdf-producer-boundary.yml"
   workflow_dispatch:
 
@@ -29,5 +30,7 @@ jobs:
           python-version: "3.12"
       - name: Run current-state assembly tests
         run: python tools/test_editor_fixed_output_current_state_v1.py -v
+      - name: Prove current effective image resources in Rust EditorSession
+        run: cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor fixed_image_resources -- --nocapture
       - name: Run fixed-PDF producer boundary tests
         run: python tools/test_build_editor_fixed_pdf_receipt.py -v
