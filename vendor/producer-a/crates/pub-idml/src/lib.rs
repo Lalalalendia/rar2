@@ -12,6 +12,7 @@ use std::fmt;
 
 mod image;
 mod package_writer;
+mod paragraph_alignment_v1;
 mod semantic;
 mod table;
 mod typography;
@@ -23,6 +24,10 @@ pub use image::{
 pub use package_writer::{
     IDML_CONTAINER_PATH, IDML_MIMETYPE, IDML_MIMETYPE_PATH, IDML_ROOT_PATH, IdmlPackageWriteError,
     write_idml_ucf,
+};
+pub use paragraph_alignment_v1::{
+    IdmlParagraphAlignmentErrorV1, IdmlParagraphAlignmentPlacementV1,
+    add_effective_paragraph_alignment_to_idml_v1,
 };
 pub use semantic::{
     IDML_PACKAGING_NAMESPACE, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IdmlSemanticError, IdmlWireProfile,
