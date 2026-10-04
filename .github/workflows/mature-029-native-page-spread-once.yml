@@ -19,8 +19,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: mature-029-native-page-spread-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
-  cancel-in-progress: false
+  group: mature-029-native-page-spread-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   contract:
@@ -104,6 +104,30 @@ jobs:
             throw "Probe must bind the exact 029 SHA."
           }
 
+      - name: Reject wrong-source mature-029 before Publisher activation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $env:RUNNER_TEMP ("mature-029 wrong source " + [guid]::NewGuid().ToString() + ".pub")
+          $output = Join-Path $env:RUNNER_TEMP ("mature-029-rejected-output-" + [guid]::NewGuid().ToString())
+          [IO.File]::WriteAllBytes($fixture, [byte[]]@(0, 1, 2, 3))
+          try {
+            $ErrorActionPreference = "Continue"
+            $nativeOutput = & pwsh -NoProfile -File tools/windows/run_mature_029_native_page_spread_direct.ps1 -InputPath $fixture -OutputRoot $output 2>&1
+            $nativeExit = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            $text = ($nativeOutput | ForEach-Object { [string]$_ }) -join "`n"
+            if ($nativeExit -eq 0 -or -not $text.Contains("029 source size mismatch")) {
+              throw "Direct route failed its pre-Publisher wrong-source rejection: $text"
+            }
+            if (Test-Path -LiteralPath $output) {
+              throw "Rejected source created native output before identity admission."
+            }
+          } finally {
+            $ErrorActionPreference = "Stop"
+            Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue
+          }
+
   native:
     needs: contract
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -162,7 +186,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path $env:OUTPUT_ROOT | Out-Null
-          pwsh -NoProfile -File tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1 -InputPath "${{ steps.fixture.outputs.path }}" -OutputRoot "$env:OUTPUT_ROOT"
+          pwsh -NoProfile -File tools/windows/run_mature_029_native_page_spread_direct.ps1 -InputPath "${{ steps.fixture.outputs.path }}" -OutputRoot "$env:OUTPUT_ROOT"
+          if ($LASTEXITCODE -ne 0) { throw "Direct 029 launcher exited with code $LASTEXITCODE" }
 
       - name: Publish native verdict
         if: always()
