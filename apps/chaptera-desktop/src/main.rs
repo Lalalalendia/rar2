@@ -45,9 +45,9 @@ use chaptera_viewer_render_plan::{
 };
 use eframe::egui;
 use pub_interaction::{
-    MoveTransaction, ResizeCommit, ResizeHandle, ResizePointerDown, ResizeTransaction,
-    ResizeUpdate, ScreenPoint, ScreenRect, ViewTransform, classify_resize_pointer_down,
-    resize_handle_center,
+    DocumentPoint, MoveTransaction, ResizeCommit, ResizeHandle, ResizePointerDown,
+    ResizeTransaction, ResizeUpdate, ScreenPoint, ScreenRect, SnapFeedback, SnapIndex, SnapObject,
+    ViewTransform, classify_resize_pointer_down, resize_handle_center,
 };
 use pub_viewer::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
@@ -97,6 +97,7 @@ fn resolve_supporter_market() -> supporter::MarketProfile {
 }
 const SUPPORTER_STORAGE_KEY: &str = "chaptera.supporter.v1";
 const PAGE_MARGIN: f32 = 24.0;
+const SNAP_TOLERANCE_PX: f32 = 6.0;
 const EMU_PER_INCH: f32 = 914_400.0;
 const NUMERIC_ZOOM_POINTS_PER_INCH: f32 = 96.0;
 const MIN_NUMERIC_ZOOM: f32 = 0.10;
@@ -1248,6 +1249,7 @@ struct CachedPageFrameWork {
     page_index: usize,
     render_plan: PageRenderPlanV1,
     hit_index: SceneHitTestIndex,
+    snap_index: Option<SnapIndex>,
     movable_nodes: BTreeMap<String, (pub_editor::NodeId, pub_editor::RectEmu)>,
     resizable_nodes: BTreeMap<String, (pub_editor::NodeId, pub_editor::RectEmu)>,
 }
@@ -4850,6 +4852,7 @@ impl ViewerApp {
         let page_id_text = page.id.as_canonical().to_string();
 
         let mut hit_entries = Vec::new();
+        let mut snap_objects = Vec::new();
         let mut movable_nodes = BTreeMap::new();
         let mut resizable_nodes = BTreeMap::new();
 
@@ -4870,6 +4873,16 @@ impl ViewerApp {
                 }
             };
             let instance_id = instance.instance_id.clone();
+
+            if projected.is_none()
+                && let Some(editor) = self.editor.as_ref()
+                && let Some(authored_node) = editor.graph().nodes.get(&render_node.node_id)
+            {
+                snap_objects.push(SnapObject {
+                    node_id: render_node.node_id,
+                    bounds: authored_node.header.bounds,
+                });
+            }
 
             if projected.is_none() {
                 if let Some(editor) = self.editor.as_ref() {
@@ -4920,10 +4933,18 @@ impl ViewerApp {
             });
         }
 
+        let snap_index = SnapIndex::new(
+            render_plan.page_size.width,
+            render_plan.page_size.height,
+            snap_objects,
+        )
+        .ok();
+
         Ok(CachedPageFrameWork {
             page_index,
             render_plan,
             hit_index: SceneHitTestIndex::new(hit_entries),
+            snap_index,
             movable_nodes,
             resizable_nodes,
         })
@@ -5102,6 +5123,7 @@ impl ViewerApp {
         debug_assert_eq!(frame_work.page_index, self.selected_page);
         let render_plan = &frame_work.render_plan;
         let hit_index = &frame_work.hit_index;
+        let snap_index = frame_work.snap_index.as_ref();
         let movable_nodes = &frame_work.movable_nodes;
         let resizable_nodes = &frame_work.resizable_nodes;
 
@@ -5158,6 +5180,8 @@ impl ViewerApp {
         let mut next_canvas_resize = self.canvas_resize;
         let mut drag_commit = None;
         let mut drag_error = None;
+        let mut snap_feedback_x = None;
+        let mut snap_feedback_y = None;
         let mut resize_commit = None;
         let mut resize_error = None;
         let mut rectangle_release = None;
@@ -5244,6 +5268,7 @@ impl ViewerApp {
                 let primary_released = ui
                     .ctx()
                     .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
+                let snap_tolerance = snap_tolerance_emu(scene_scale);
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
@@ -5454,10 +5479,19 @@ impl ViewerApp {
                             {
                                 match MoveTransaction::begin(node_id, before, pointer_start)
                                     .and_then(|mut drag| {
-                                        drag.update(pointer_current)?;
-                                        Ok(drag)
+                                        let feedback = update_drag_preview_with_snap(
+                                            &mut drag,
+                                            pointer_current,
+                                            snap_index,
+                                            snap_tolerance,
+                                        )?;
+                                        Ok((drag, feedback))
                                     }) {
-                                    Ok(drag) => next_canvas_drag = Some(drag),
+                                    Ok((drag, feedback)) => {
+                                        snap_feedback_x = feedback.0;
+                                        snap_feedback_y = feedback.1;
+                                        next_canvas_drag = Some(drag);
+                                    }
                                     Err(error) => {
                                         next_canvas_drag = None;
                                         drag_error =
@@ -5530,8 +5564,17 @@ impl ViewerApp {
                     } else if let (Some(mut drag), Some(point)) =
                         (next_canvas_drag, pointer_document)
                     {
-                        match drag.update(point) {
-                            Ok(_) => drag_commit = Some(drag),
+                        match update_drag_preview_with_snap(
+                            &mut drag,
+                            point,
+                            snap_index,
+                            snap_tolerance,
+                        ) {
+                            Ok(feedback) => {
+                                snap_feedback_x = feedback.0;
+                                snap_feedback_y = feedback.1;
+                                drag_commit = Some(drag);
+                            }
                             Err(error) => {
                                 next_canvas_drag = None;
                                 drag_error = Some(format!("Object move cancelled: {error}"));
@@ -5574,8 +5617,17 @@ impl ViewerApp {
                             }
                         }
                     } else if let Some(mut drag) = next_canvas_drag {
-                        match drag.update(point) {
-                            Ok(_) => next_canvas_drag = Some(drag),
+                        match update_drag_preview_with_snap(
+                            &mut drag,
+                            point,
+                            snap_index,
+                            snap_tolerance,
+                        ) {
+                            Ok(feedback) => {
+                                snap_feedback_x = feedback.0;
+                                snap_feedback_y = feedback.1;
+                                next_canvas_drag = Some(drag);
+                            }
                             Err(error) => {
                                 next_canvas_drag = None;
                                 drag_error = Some(format!("Object move cancelled: {error}"));
@@ -5778,6 +5830,14 @@ impl ViewerApp {
                         );
                     }
                 }
+
+                paint_snap_feedback(
+                    &painter,
+                    page_rect,
+                    scene_scale,
+                    snap_feedback_x,
+                    snap_feedback_y,
+                );
 
                 if self.rectangle_creation.page_id == Some(page.id)
                     && let Ok(rectangle_creation::RectangleCreatePreviewV1::Bounds(bounds)) =
@@ -6195,6 +6255,62 @@ impl eframe::App for ViewerApp {
         if self.text_mode.is_some() && ctx.wants_keyboard_input() {
             self.exit_canvas_text_mode("explicit_exit");
         }
+    }
+}
+
+fn snap_tolerance_emu(scene_scale: f32) -> Option<pub_editor::LengthEmu> {
+    if !scene_scale.is_finite() || scene_scale <= 0.0 {
+        return None;
+    }
+    let tolerance = f64::from(SNAP_TOLERANCE_PX) / f64::from(scene_scale);
+    if !tolerance.is_finite() || tolerance < 0.0 || tolerance > i64::MAX as f64 {
+        return None;
+    }
+    Some(pub_editor::LengthEmu::new(tolerance.round() as i64))
+}
+
+fn update_drag_preview_with_snap(
+    drag: &mut MoveTransaction,
+    pointer: DocumentPoint,
+    snap_index: Option<&SnapIndex>,
+    tolerance: Option<pub_editor::LengthEmu>,
+) -> Result<(Option<SnapFeedback>, Option<SnapFeedback>), pub_interaction::MoveTransactionError> {
+    let raw = drag.update(pointer)?;
+
+    let (Some(snap_index), Some(tolerance)) = (snap_index, tolerance) else {
+        return Ok((None, None));
+    };
+
+    let snapped = match snap_index.snap_rect(drag.node_id(), raw, tolerance) {
+        Ok(snapped) => snapped,
+        Err(_) => return Ok((None, None)),
+    };
+    drag.set_preview_origin(snapped.bounds.x, snapped.bounds.y)?;
+
+    Ok((snapped.x, snapped.y))
+}
+
+fn paint_snap_feedback(
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    x: Option<SnapFeedback>,
+    y: Option<SnapFeedback>,
+) {
+    let stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(210, 45, 120));
+    if let Some(feedback) = x {
+        let x = page_rect.left() + feedback.position.get() as f32 * scene_scale;
+        painter.line_segment(
+            [egui::pos2(x, page_rect.top()), egui::pos2(x, page_rect.bottom())],
+            stroke,
+        );
+    }
+    if let Some(feedback) = y {
+        let y = page_rect.top() + feedback.position.get() as f32 * scene_scale;
+        painter.line_segment(
+            [egui::pos2(page_rect.left(), y), egui::pos2(page_rect.right(), y)],
+            stroke,
+        );
     }
 }
 
@@ -6680,6 +6796,47 @@ mod tests {
 
         assert_eq!(point.x.get(), 100);
         assert_eq!(point.y.get(), 150);
+    }
+
+    #[test]
+    fn move_snap_adjusts_preview_origin_without_changing_size() {
+        let node_id: pub_editor::NodeId =
+            serde_json::from_str("\"44444444-4444-4444-4444-444444444444\"")
+                .expect("canonical NodeId");
+        let before = pub_editor::RectEmu::new(
+            pub_editor::LengthEmu::new(10),
+            pub_editor::LengthEmu::new(20),
+            pub_editor::LengthEmu::new(100),
+            pub_editor::LengthEmu::new(80),
+        );
+        let mut drag = MoveTransaction::begin(
+            node_id,
+            before,
+            DocumentPoint::new(pub_editor::LengthEmu::ZERO, pub_editor::LengthEmu::ZERO),
+        )
+        .expect("valid move transaction");
+        let snap_index = SnapIndex::new(
+            pub_editor::LengthEmu::new(1_000),
+            pub_editor::LengthEmu::new(1_000),
+            Vec::new(),
+        )
+        .expect("valid page snap index");
+
+        let feedback = update_drag_preview_with_snap(
+            &mut drag,
+            DocumentPoint::new(pub_editor::LengthEmu::new(-5), pub_editor::LengthEmu::ZERO),
+            Some(&snap_index),
+            Some(pub_editor::LengthEmu::new(10)),
+        )
+        .expect("snapped preview");
+
+        let preview = drag.preview_bounds();
+        assert_eq!(preview.x, pub_editor::LengthEmu::ZERO);
+        assert_eq!(preview.y, before.y);
+        assert_eq!(preview.width, before.width);
+        assert_eq!(preview.height, before.height);
+        assert!(feedback.0.is_some());
+        assert!(feedback.1.is_none());
     }
 
     #[test]
