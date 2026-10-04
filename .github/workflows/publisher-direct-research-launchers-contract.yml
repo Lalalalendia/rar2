@@ -69,7 +69,8 @@ jobs:
             foreach ($required in @(
               "git hash-object",
               "Publisher Build mismatch",
-              "MSPUB.EXE"
+              "MSPUB.EXE",
+              "OutputRoot is not empty"
             )) {
               if (-not $text.Contains($required)) {
                 throw "Missing bounded direct-launcher marker '$required' in $path"
