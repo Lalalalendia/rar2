@@ -236,6 +236,18 @@ jobs:
         working-directory: donor
         run: cargo build -p pub-cli
 
+      - name: Materialize exact Apache POI SampleNewsletter fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .web-v0
+          curl -fsSL \
+            -H "Accept: application/vnd.github.raw+json" \
+            "https://api.github.com/repos/apache/poi/git/blobs/94900925af5832c493784f3cb51563f838a64df8" \
+            -o .web-v0/SampleNewsletter.pub
+          test "$(wc -c < .web-v0/SampleNewsletter.pub)" -eq 291840
+          echo "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf  .web-v0/SampleNewsletter.pub" | sha256sum -c -
+
       - name: Produce exact rar2 shaped-flow receipt through Yab donor
         shell: bash
         run: |
