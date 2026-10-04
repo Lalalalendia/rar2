@@ -3,8 +3,6 @@ name: Editor current fixed-PDF resource input
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/Cargo.toml"
-      - "apps/chaptera-desktop/src/bin/current_fixed_pdf_input.rs"
       - "crates/chaptera-desktop-shaped-flow-runtime/**"
       - ".github/workflows/editor-current-fixed-pdf-resource-input.yml"
   workflow_dispatch:
@@ -28,9 +26,8 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: |
-          cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
           cargo fmt --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml -- --check
       - name: Check fresh-reopen input binary
-        run: cargo check --manifest-path apps/chaptera-desktop/Cargo.toml --bin chaptera-current-fixed-pdf-input
+        run: cargo check --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --bin current_fixed_pdf_input
       - name: Test current shaped-flow resource builder
         run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml
