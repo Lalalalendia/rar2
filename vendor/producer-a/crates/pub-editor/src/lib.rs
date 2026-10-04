@@ -5135,6 +5135,16 @@ impl EditorSession {
                 let before_state = self.current_text_format_overlay_v1(story_id)?;
                 let _after_state =
                     apply_text_format_history_operation_v1(&before_state, &operation)?;
+            } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
+                &operation,
+            )
+            .is_some()
+            {
+                authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+                    &self.undo,
+                    &operation,
+                )
+                .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
             } else {
                 apply_inverse(&mut self.graph, &operation)?;
             }
@@ -5186,6 +5196,16 @@ impl EditorSession {
                 let before_state = self.current_text_format_overlay_v1(story_id)?;
                 let _after_state =
                     apply_text_format_history_operation_v1(&before_state, &operation)?;
+            } else if authored_paragraph_alignment_v1::paragraph_alignment_operation_snapshots_v1(
+                &operation,
+            )
+            .is_some()
+            {
+                authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+                    &self.undo,
+                    &operation,
+                )
+                .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
             } else {
                 apply_forward(&mut self.graph, &operation)?;
             }
