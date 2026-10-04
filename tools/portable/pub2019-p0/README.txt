@@ -21,6 +21,12 @@ Run:
 3. Double-click RUN_NATIVE.cmd as the normal interactive user. DO NOT Run as Administrator.
 4. When complete, send RETURN-TO-CHAT-<timestamp>.zip back to ChatGPT.
 
+Validation:
+- bundle manifest verifies every carried file before COM
+- 033 receipt is checked against the same verdict/arm/visibility/source fences as the direct launcher
+- 029 native receipt + classifier are checked fail-closed before success
+- paragraph native/blast/structural receipts + evidence manifest are cross-checked before success
+
 Payload:
 - exact 033 and 029 PUB bytes recovered from retained corpus artifact 11038217075
 - pinned current research operations and PubRuntime
