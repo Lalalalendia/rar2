@@ -1,0 +1,34 @@
+name: Editor snap policy V1
+
+on:
+  pull_request:
+    paths:
+      - 'vendor/producer-a/crates/pub-interaction/**'
+      - 'vendor/producer-a/crates/pub-model/**'
+      - '.github/workflows/editor-snap-policy-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'vendor/producer-a/crates/pub-interaction/**'
+      - 'vendor/producer-a/crates/pub-model/**'
+      - '.github/workflows/editor-snap-policy-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-snap-policy-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: vendor/producer-a
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test deterministic snap policy
+        run: cargo test -p pub-interaction
