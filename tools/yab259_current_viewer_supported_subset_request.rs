@@ -766,7 +766,7 @@ fn main() -> Result<()> {
         } else {
             *summary
                 .text_resource_residual_signature_counts
-                .entry(signature)
+                .entry(signature.clone())
                 .or_default() += 1;
             let cooccurrence = text_cooccurrence_by_node
                 .get(node_id)
@@ -824,7 +824,7 @@ fn main() -> Result<()> {
                 });
             *summary
                 .residual_node_signature_counts
-                .entry(signature)
+                .entry(signature.clone())
                 .or_default() += 1;
 
             let lane = node
