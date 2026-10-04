@@ -276,6 +276,45 @@ def prepare_alpha_smask_pdf_donor(
         label="Yab #259 PDF alpha SMask serialization",
     )
 
+    replace_once(
+        pdf,
+        """    #[test]
+    fn deterministic_pdf_has_sorted_pages_exact_media_boxes_and_origin_report() {
+""",
+        """    #[test]
+    fn deterministic_pdf_preserves_input_pages_exact_media_boxes_and_origin_report() {
+""",
+        label="Yab #259 alpha donor inherited page-order test name",
+    )
+    replace_once(
+        pdf,
+        """        assert_eq!(left.report.pages.len(), 2);
+        assert_eq!(left.report.pages[0].origin, page_id(1));
+        assert_eq!(
+            left.report.pages[0].media_box_points,
+            ["0", "0", "600", "780"]
+        );
+        assert_eq!(left.report.pages[1].origin, page_id(2));
+        assert_eq!(
+            left.report.pages[1].media_box_points,
+            ["0", "0", "595.275590551", "841.88976378"]
+        );
+""",
+        """        assert_eq!(left.report.pages.len(), 2);
+        assert_eq!(left.report.pages[0].origin, page_id(2));
+        assert_eq!(
+            left.report.pages[0].media_box_points,
+            ["0", "0", "595.275590551", "841.88976378"]
+        );
+        assert_eq!(left.report.pages[1].origin, page_id(1));
+        assert_eq!(
+            left.report.pages[1].media_box_points,
+            ["0", "0", "600", "780"]
+        );
+""",
+        label="Yab #259 alpha donor inherited page-order expectations",
+    )
+
     run_checked(
         ["git", "diff", "--check"],
         cwd=checkout,
