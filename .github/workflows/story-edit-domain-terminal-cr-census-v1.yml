@@ -77,7 +77,8 @@ jobs:
       - name: Build source-safe terminal CR probe
         run: |
           set -euo pipefail
-          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-reader -- --check
+          rustfmt --edition 2024 --check \
+            vendor/producer-a/crates/pub-reader/src/bin/story_edit_domain_terminal_cr_probe.rs
           cargo build \
             --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-reader \
