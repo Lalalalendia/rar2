@@ -7955,8 +7955,7 @@ mod tests {
         let dx = raw_x
             .checked_sub(before.x)
             .expect("bounded pointer delta to page edge");
-        let pointer_current =
-            pub_interaction::DocumentPoint::new(dx, pub_editor::LengthEmu::ZERO);
+        let pointer_current = pub_interaction::DocumentPoint::new(dx, pub_editor::LengthEmu::ZERO);
         let mut drag =
             MoveTransaction::begin(node_id, before, pointer_start).expect("valid drag start");
         let feedback = update_drag_preview_with_snap(
@@ -7966,7 +7965,10 @@ mod tests {
             Some(pub_editor::LengthEmu::new(10)),
         )
         .expect("valid snapped drag preview");
-        assert!(feedback.0.is_some(), "page-edge snap feedback should be present");
+        assert!(
+            feedback.0.is_some(),
+            "page-edge snap feedback should be present"
+        );
         let expected = drag.preview_bounds();
         assert_eq!(expected.x, pub_editor::LengthEmu::ZERO);
 
