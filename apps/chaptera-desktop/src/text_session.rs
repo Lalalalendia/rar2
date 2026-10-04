@@ -75,7 +75,8 @@ impl DesktopBooleanSelectionStateV1 {
     pub const fn next_explicit_value(self) -> bool {
         match self.effective {
             DesktopBooleanEffectiveStateV1::Uniform(true) => false,
-            DesktopBooleanEffectiveStateV1::Uniform(false) | DesktopBooleanEffectiveStateV1::Mixed => true,
+            DesktopBooleanEffectiveStateV1::Uniform(false)
+            | DesktopBooleanEffectiveStateV1::Mixed => true,
         }
     }
 
@@ -743,12 +744,9 @@ mod tests {
         let mut mode =
             enter_explicit_text_mode(&editor, story_id, frame_id).expect("enter format Story");
         select_all(&mut mode);
-        let before = boolean_format_selection_state_v1(
-            &editor,
-            &mode,
-            DesktopBooleanFormatPropertyV1::Bold,
-        )
-        .expect("read source-effective Bold state");
+        let before =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read source-effective Bold state");
         let expected = before.next_explicit_value();
 
         let operation = apply_boolean_format_toggle_v1(
@@ -770,12 +768,9 @@ mod tests {
         assert_eq!(editor.graph().stories[&story_id].text, source_text);
         assert_eq!(mode.session.revision_id, editor.project().state_id_v1());
 
-        let after = boolean_format_selection_state_v1(
-            &editor,
-            &mode,
-            DesktopBooleanFormatPropertyV1::Bold,
-        )
-        .expect("read edited Bold state");
+        let after =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read edited Bold state");
         assert_eq!(
             after.effective,
             DesktopBooleanEffectiveStateV1::Uniform(expected)
@@ -784,23 +779,17 @@ mod tests {
         editor.undo().expect("Undo Bold formatting");
         rebind_after_non_text_document_change(&editor, &mut mode)
             .expect("rebind after format Undo");
-        let undone = boolean_format_selection_state_v1(
-            &editor,
-            &mode,
-            DesktopBooleanFormatPropertyV1::Bold,
-        )
-        .expect("read undone Bold state");
+        let undone =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read undone Bold state");
         assert_eq!(undone, before);
 
         editor.redo().expect("Redo Bold formatting");
         rebind_after_non_text_document_change(&editor, &mut mode)
             .expect("rebind after format Redo");
-        let redone = boolean_format_selection_state_v1(
-            &editor,
-            &mode,
-            DesktopBooleanFormatPropertyV1::Bold,
-        )
-        .expect("read redone Bold state");
+        let redone =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read redone Bold state");
         assert_eq!(redone, after);
 
         let project = editor.project();
@@ -809,8 +798,8 @@ mod tests {
         reopened
             .apply_project(&project)
             .expect("replay saved-format project onto fresh source");
-        let mut reopened_mode =
-            enter_explicit_text_mode(&reopened, story_id, frame_id).expect("reenter reopened Story");
+        let mut reopened_mode = enter_explicit_text_mode(&reopened, story_id, frame_id)
+            .expect("reenter reopened Story");
         select_all(&mut reopened_mode);
         assert_eq!(
             boolean_format_selection_state_v1(
