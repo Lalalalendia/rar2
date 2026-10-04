@@ -652,7 +652,6 @@ fn sync_directory_if_supported(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod diagnostic_tests {
     use super::*;
