@@ -302,8 +302,8 @@ fn main() -> eframe::Result<()> {
         reader_windows_smoke=False,
         reader_windows=False,
         editor_windows=False,
-        visual_oracle=False,
-        typography_golden=False,
+        visual_oracle=True,
+        typography_golden=True,
         update_accept=False,
     )
     assert_scope(
@@ -333,8 +333,8 @@ fn main() -> eframe::Result<()> {
         reader_windows_smoke=True,
         reader_windows=False,
         editor_windows=True,
-        visual_oracle=True,
-        typography_golden=True,
+        visual_oracle=False,
+        typography_golden=False,
         update_accept=False,
     )
     assert_scope(
