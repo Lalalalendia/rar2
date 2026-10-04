@@ -2456,6 +2456,16 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
+                    let paragraph_alignments = self.full_story_paragraph_alignment_v1();
+                    add_full_story_paragraph_alignment_to_idml(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignments,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 }
                 EditorEditableTarget::Odg => {
                     let mut package =
@@ -2476,6 +2486,20 @@ impl EditorSession {
                         self.odg_full_story_typography_placements_v1(&typography);
                     add_full_story_typography_to_odg(&plan, &mut package, &typography_placements)
                         .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
+                    let paragraph_alignments = self.full_story_paragraph_alignment_v1();
+                    let paragraph_alignment_placements =
+                        self.odg_full_story_paragraph_alignment_placements_v1(
+                            &paragraph_alignments,
+                        );
+                    add_full_story_paragraph_alignment_to_odg(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignment_placements,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
                         target,
                         message: error.to_string(),
                     })?;
@@ -2532,6 +2556,16 @@ impl EditorSession {
                         message: error.to_string(),
                     },
                 )?;
+                let paragraph_alignments = self.full_story_paragraph_alignment_v1();
+                add_full_story_paragraph_alignment_to_idml(
+                    &plan,
+                    &mut package,
+                    &paragraph_alignments,
+                )
+                .map_err(|error| EditorExportError::Projection {
+                    target,
+                    message: error.to_string(),
+                })?;
                 write_idml_ucf(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
@@ -2560,6 +2594,18 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
+                let paragraph_alignments = self.full_story_paragraph_alignment_v1();
+                let paragraph_alignment_placements =
+                    self.odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
+                add_full_story_paragraph_alignment_to_odg(
+                    &plan,
+                    &mut package,
+                    &paragraph_alignment_placements,
+                )
+                .map_err(|error| EditorExportError::Projection {
+                    target,
+                    message: error.to_string(),
+                })?;
                 write_odg(&package).map_err(|error| EditorExportError::Write {
                     target,
                     message: error.to_string(),
