@@ -597,7 +597,7 @@ impl std::error::Error for EditorFixedImageResourceError {}
 /// current_graph is intentionally not renderer-safe because it can retain
 /// source provenance. A downstream bridge must project it to a source-neutral
 /// Scene before invoking a PDF backend.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct EditorFixedOutputStateV1 {
     pub schema_version: String,
     pub source_hash: Sha256Digest,
