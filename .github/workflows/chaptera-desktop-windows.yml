@@ -3,13 +3,37 @@ name: Chaptera Editor Desktop Windows V0
 on:
   workflow_call:
   workflow_dispatch:
+  # Default-branch builds seed a cache that subsequent PRs can actually restore.
+  # Ordinary feature commits do not schedule an extra cache producer.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/chaptera-desktop-windows.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "vendor/producer-a/Cargo.toml"
+      - "vendor/producer-a/Cargo.lock"
+      - "apps/chaptera-desktop/Cargo.toml"
+      - "crates/**/Cargo.toml"
+      - "vendor/producer-a/crates/**/Cargo.toml"
+      - ".cargo/**"
+      - "rust-toolchain*"
 
 permissions:
   contents: read
 
+# A distinct group avoids colliding with the calling Reader PR DAG.
+concurrency:
+  group: editor-windows-product-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-windows-editor:
     runs-on: windows-latest
+    env:
+      # Root, vendor and standalone-crate commands reuse the same Cargo outputs.
+      # Keep the existing target/release executable and artifact paths intact.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@v4
 
@@ -17,6 +41,20 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
+
+      - name: Restore validated Windows Cargo dependencies
+        id: desktop-cargo-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-windows-desktop-deps-v1
+          add-job-id-key: "false"
+          # Include virtual-workspace profile/dependency settings explicitly.
+          key: ${{ hashFiles('Cargo.toml', 'vendor/producer-a/Cargo.toml') }}
+          workspaces: ". -> target"
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-python@v5
         with:
