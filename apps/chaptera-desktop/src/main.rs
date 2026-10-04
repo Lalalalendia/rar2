@@ -2380,6 +2380,21 @@ impl ViewerApp {
                 }
             }
 
+            let duplicate_enabled =
+                !self.rectangle_creation.active() && self.selected_authored_rectangle_target().is_ok();
+            let duplicate_response =
+                ui.add_enabled(duplicate_enabled, egui::Button::new("Duplicate"));
+            if duplicate_response.clicked()
+                && let Err(error) = self.duplicate_selected_authored_rectangle()
+            {
+                self.edit_status = Some(error);
+            }
+            if !duplicate_enabled {
+                duplicate_response.on_disabled_hover_text(
+                    "Select exactly one authored Rectangle to duplicate it.",
+                );
+            }
+
             if let Some(label) = document_label {
                 ui.label(label);
             } else {
@@ -4170,6 +4185,99 @@ impl ViewerApp {
                 scene_node.bounds = bounds;
             }
         }
+    }
+
+    fn selected_authored_rectangle_target(
+        &self,
+    ) -> Result<(pub_editor::NodeId, pub_editor::PageId), String> {
+        if self.canvas_selection.len() != 1 {
+            return Err("Duplicate requires exactly one selected authored Rectangle.".to_owned());
+        }
+        let selected_instance = self
+            .canvas_selection
+            .primary()
+            .ok_or_else(|| "Select one authored Rectangle first.".to_owned())?;
+        let visual = self
+            .visual
+            .as_ref()
+            .ok_or_else(|| "Document scene is unavailable.".to_owned())?;
+        let page = visual
+            .document
+            .pages
+            .get(self.selected_page)
+            .ok_or_else(|| "Selected page is unavailable.".to_owned())?;
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let stack = editor
+            .authored_stack(page.id)
+            .ok_or_else(|| "Selected page is unavailable in the authoring session.".to_owned())?;
+        let page_id_text = page.id.as_canonical().to_string();
+
+        for node_id in stack.members {
+            let Some(shape) = editor.authored_shape(node_id) else {
+                continue;
+            };
+            if shape.page_id != page.id || shape.parent_id != page.id {
+                continue;
+            }
+            let instance =
+                direct_page_local_instance_v1(&node_id.as_canonical().to_string(), &page_id_text)
+                    .map_err(|error| format!("Duplicate selection identity is invalid: {error}"))?;
+            if instance.instance_id != selected_instance {
+                continue;
+            }
+            editor
+                .can_duplicate_authored_rectangle(node_id)
+                .map_err(|error| format!("Duplicate is unavailable: {error}"))?;
+            return Ok((node_id, page.id));
+        }
+
+        Err("Selected visual instance is not an admitted authored Rectangle.".to_owned())
+    }
+
+    fn duplicate_selected_authored_rectangle(&mut self) -> Result<pub_editor::NodeId, String> {
+        let (source_node_id, page_id) = self.selected_authored_rectangle_target()?;
+        let destination_node_id =
+            pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        let editor = self
+            .editor
+            .as_mut()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let before_operations = editor.operations().len();
+        let operation = editor
+            .duplicate_authored_rectangle(
+                source_node_id,
+                destination_node_id,
+                pub_editor::DUPLICATE_PLACEMENT_POLICY_V1,
+            )
+            .map_err(|error| format!("Duplicate rejected: {error}"))?;
+        if editor.operations().len() != before_operations + 1 {
+            return Err("Duplicate must append exactly one CreateShape operation.".to_owned());
+        }
+        if !matches!(
+            operation,
+            pub_editor::EditOperation::CreateShape { node_id, .. }
+                if node_id == destination_node_id
+        ) {
+            return Err(
+                "Duplicate must persist as one canonical CreateShape operation.".to_owned(),
+            );
+        }
+
+        self.finish_authoring_change(
+            "Duplicated authored Rectangle. One CreateShape operation was committed.",
+        );
+        let instance = direct_page_local_instance_v1(
+            &destination_node_id.as_canonical().to_string(),
+            &page_id.as_canonical().to_string(),
+        )
+        .map_err(|error| {
+            format!("Duplicate committed, but durable selection could not bind: {error}")
+        })?;
+        self.canvas_selection.select_only(instance.instance_id);
+        Ok(destination_node_id)
     }
 
     fn selected_direct_replace_image_target(&self) -> Result<pub_editor::NodeId, String> {
@@ -8463,6 +8571,168 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_duplicate_button_commits_one_create_shape_and_selects_duplicate_on_real_pub() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let original = fs::read(&fixture).expect("read pinned SampleNewsletter fixture");
+        let fixture_for_app = fixture.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(32)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
+            });
+        harness.step();
+        harness.step();
+
+        let (page_index, page_id, source_bounds) = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let page = visual
+                .document
+                .pages
+                .first()
+                .expect("real fixture exposes a first page");
+            let surface = visual
+                .scene
+                .surfaces
+                .iter()
+                .find(|surface| surface.origin == page.id)
+                .expect("first page has a scene surface");
+            let width = (surface.size.width.get() / 5).max(127_000);
+            let height = (surface.size.height.get() / 8).max(127_000);
+            (
+                0,
+                page.id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(surface.size.width.get() / 4),
+                    pub_editor::LengthEmu::new(surface.size.height.get() / 4),
+                    pub_editor::LengthEmu::new(width),
+                    pub_editor::LengthEmu::new(height),
+                ),
+            )
+        };
+
+        let source_node_id =
+            pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        {
+            let app = harness.state_mut();
+            app.selected_page = page_index;
+            app.editor
+                .as_mut()
+                .expect("editor")
+                .create_shape(
+                    source_node_id,
+                    page_id,
+                    source_bounds,
+                    rectangle_creation::chaptera_rectangle_paint_v1(),
+                )
+                .expect("seed authored Rectangle through canonical CreateShape");
+            app.finish_authoring_change("Seeded Duplicate GUI witness.");
+            let instance = direct_page_local_instance_v1(
+                &source_node_id.as_canonical().to_string(),
+                &page_id.as_canonical().to_string(),
+            )
+            .expect("canonical source instance");
+            app.canvas_selection.select_only(instance.instance_id);
+        }
+        harness.step();
+
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.get_by_label("Duplicate").click();
+        harness.step();
+        harness.step();
+
+        let duplicate_node_id = {
+            let app = harness.state();
+            let editor = app.editor.as_ref().expect("editor");
+            assert_eq!(
+                editor.operations().len(),
+                operations_before + 1,
+                "one Duplicate click must append exactly one document operation"
+            );
+            let Some(pub_editor::EditOperation::CreateShape { node_id, .. }) =
+                editor.operations().last()
+            else {
+                panic!("Duplicate must persist as CreateShape")
+            };
+            assert_ne!(*node_id, source_node_id);
+            let source = editor
+                .authored_shape(source_node_id)
+                .expect("source authored shape");
+            let duplicate = editor
+                .authored_shape(*node_id)
+                .expect("duplicate authored shape");
+            assert_eq!(duplicate.paint, source.paint);
+            assert_eq!(duplicate.bounds.width, source.bounds.width);
+            assert_eq!(duplicate.bounds.height, source.bounds.height);
+            assert_eq!(
+                duplicate.bounds.x.get(),
+                source.bounds.x.get() + pub_editor::DUPLICATE_OFFSET_EMU_V1
+            );
+            assert_eq!(
+                duplicate.bounds.y.get(),
+                source.bounds.y.get() + pub_editor::DUPLICATE_OFFSET_EMU_V1
+            );
+            let expected_instance = direct_page_local_instance_v1(
+                &node_id.as_canonical().to_string(),
+                &page_id.as_canonical().to_string(),
+            )
+            .expect("canonical duplicate instance");
+            assert_eq!(
+                app.canvas_selection.primary(),
+                Some(expected_instance.instance_id.as_str()),
+                "accepted Duplicate must select the durable duplicate"
+            );
+            *node_id
+        };
+
+        harness.get_by_label("Undo").click();
+        harness.step();
+        assert!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .authored_shape(duplicate_node_id)
+                .is_none(),
+            "Undo must remove the duplicate"
+        );
+
+        harness.get_by_label("Redo").click();
+        harness.step();
+        let app = harness.state();
+        assert!(
+            app.editor
+                .as_ref()
+                .expect("editor")
+                .authored_shape(duplicate_node_id)
+                .is_some(),
+            "Redo must restore the same duplicate identity"
+        );
+        assert_eq!(
+            fs::read(&fixture).expect("re-read source PUB"),
+            original,
+            "Duplicate must never mutate source PUB bytes"
+        );
     }
 
     #[cfg(not(feature = "reader-only"))]
