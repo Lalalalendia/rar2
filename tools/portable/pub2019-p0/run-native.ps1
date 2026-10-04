@@ -159,7 +159,28 @@ try {
     try {
         Invoke-PowerShellStep "033 MASTER/PAGE STACK" (Join-Path $Root "tools\research-runner\operations\master_projection_stack_auth_01.ps1") @("-InputPath",$stackFixture,"-OutputRoot",$stackOut) $stackConsole
         $receipt = Get-Content -LiteralPath (Join-Path $stackOut "analysis\master-projection-stack-auth-01.json") -Raw | ConvertFrom-Json
-        $summary.tasks += [ordered]@{ id="033-stack"; status="success"; verdict=[string]$receipt.verdict }
+        if ([string]$receipt.schema -ne "chaptera.master-projection-stack-auth.v1") { throw "Unexpected stack receipt schema: $($receipt.schema)" }
+        if ([string]$receipt.experiment_id -ne "MASTER-PROJECTION-STACK-AUTH-01") { throw "Unexpected stack experiment identity: $($receipt.experiment_id)" }
+        $stackVerdict = [string]$receipt.verdict
+        if ($stackVerdict -notin @("save_as_picture_master_visibility_not_proven","page_local_above_master","master_above_page_local","ambiguous_or_creation_order_sensitive")) { throw "Unexpected stack oracle verdict: $stackVerdict" }
+        $stackArms = @($receipt.arms)
+        if ($stackArms.Count -ne 2) { throw "Stack oracle must return exactly two creation-order arms." }
+        $orders = @($stackArms | ForEach-Object { [string]$_.creation_order } | Sort-Object -Unique)
+        if ($orders.Count -ne 2 -or $orders -notcontains "master_first" -or $orders -notcontains "page_first") { throw "Stack oracle creation-order arms are incomplete or duplicated." }
+        $winners = @($stackArms | ForEach-Object { [string]$_.overlap.winner })
+        foreach ($winner in $winners) { if ($winner -notin @("master","page_local","ambiguous")) { throw "Unexpected stack arm winner: $winner" } }
+        $uniqueWinners = @($winners | Sort-Object -Unique)
+        $masterVisible = [bool]$receipt.master_visibility_control.master_visible
+        switch ($stackVerdict) {
+            "save_as_picture_master_visibility_not_proven" { if ($masterVisible) { throw "Visibility-not-proven verdict contradicts positive master visibility control." } }
+            "page_local_above_master" { if (-not $masterVisible -or $uniqueWinners.Count -ne 1 -or $uniqueWinners[0] -ne "page_local") { throw "page_local_above_master verdict contradicts arm winners or visibility control." } }
+            "master_above_page_local" { if (-not $masterVisible -or $uniqueWinners.Count -ne 1 -or $uniqueWinners[0] -ne "master") { throw "master_above_page_local verdict contradicts arm winners or visibility control." } }
+            "ambiguous_or_creation_order_sensitive" { if (-not $masterVisible) { throw "Ambiguous/order-sensitive verdict requires positive master visibility." }; if ($uniqueWinners.Count -eq 1 -and $uniqueWinners[0] -in @("master","page_local")) { throw "Ambiguous/order-sensitive verdict contradicts stable two-arm winner." } }
+        }
+        if ([string]$receipt.source.sha256 -ne $StackSha -or -not [bool]$receipt.source.unchanged_after_experiment) { throw "Stack receipt source identity/immutability mismatch." }
+        if ([bool]$receipt.claims.source_original_mutated -or [bool]$receipt.claims.generated_pub_uploaded -or [bool]$receipt.claims.generated_page_picture_uploaded) { throw "Stack receipt violates source/private-artifact boundary." }
+        if (-not [bool]$receipt.claims.save_close_fresh_reopen_per_arm -or -not [bool]$receipt.claims.two_page_master_excluded) { throw "Stack receipt is missing bounded experiment fences." }
+        $summary.tasks += [ordered]@{ id="033-stack"; status="success"; verdict=$stackVerdict }
         Copy-SafeTree $stackOut (Join-Path $ReturnRoot "033-stack")
     } catch {
         $summary.tasks += [ordered]@{ id="033-stack"; status="failed"; error=$_.Exception.Message }
@@ -175,8 +196,16 @@ try {
         $class029 = Join-Path $surfaceOut "analysis\mature-029-reference-surface-classification.json"
         & $python (Join-Path $Root "tools\classify_mature_029_native_page_spread_v1.py") $native029 --out $class029
         if ($LASTEXITCODE -ne 0) { throw "029 classifier failed with exit code $LASTEXITCODE" }
+        $nativeReceipt029 = Get-Content -LiteralPath $native029 -Raw | ConvertFrom-Json
+        if (-not [bool]$nativeReceipt029.source.unchanged_after_probe) { throw "029 oracle did not prove source immutability." }
+        if ($nativeReceipt029.claims.document_mutation_invoked -or $nativeReceipt029.claims.save_invoked -or $nativeReceipt029.claims.print_invoked -or $nativeReceipt029.claims.export_invoked -or $nativeReceipt029.claims.macro_execution_invoked) { throw "029 native receipt violates the read-only contract." }
         $classified = Get-Content -LiteralPath $class029 -Raw | ConvertFrom-Json
-        $summary.tasks += [ordered]@{ id="029-surface"; status="success"; reference_surface_stage=[string]$classified.reference_surface_stage }
+        if ([string]$classified.source_sha256 -ne $Surface029Sha) { throw "029 classification source identity mismatch." }
+        $surfaceStage = [string]$classified.reference_surface_stage
+        if ($surfaceStage -notin @("unknown","production_sheet")) { throw "Unexpected 029 reference surface stage: $surfaceStage" }
+        if (-not [bool]$classified.claims.classification_uses_native_publisher_state -or [bool]$classified.claims.raster_similarity_used -or [bool]$classified.claims.pdf_page_count_used_as_pub_semantics -or -not [bool]$classified.claims.unknown_is_fail_closed) { throw "029 classifier authority contract mismatch." }
+        if ($surfaceStage -eq "production_sheet") { if (-not [bool]$classified.booklet_intent.confirmed) { throw "production_sheet classification lacks native booklet intent." }; if ([int]$classified.logical_page_count -ne 4 -or [int]$classified.reference_page_count -ne 2) { throw "production_sheet classification has unexpected logical/reference page cardinality." } }
+        $summary.tasks += [ordered]@{ id="029-surface"; status="success"; reference_surface_stage=$surfaceStage }
         Copy-SafeTree $surfaceOut (Join-Path $ReturnRoot "029-surface")
     } catch {
         $summary.tasks += [ordered]@{ id="029-surface"; status="failed"; error=$_.Exception.Message }
@@ -210,7 +239,28 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "paragraph structural analysis failed with exit code $LASTEXITCODE" }
         Invoke-PowerShellStep "PARAGRAPH EVIDENCE FINALIZE" (Join-Path $Root "tools\research-runner\finalize_native_run.ps1") @("-PacketPath",$packet,"-OutputRoot",$paragraphOut) $paragraphConsole
 
-        $structural = Get-Content -LiteralPath (Join-Path $paragraphOut "analysis\paragraph-metrics-auth-01-structural.json") -Raw | ConvertFrom-Json
+        $nativePath = Join-Path $paragraphOut "analysis\paragraph-metrics-auth-01.json"
+        $blastPath = Join-Path $paragraphOut "analysis\paragraph-metrics-auth-01-blast-radius.json"
+        $structuralPath = Join-Path $paragraphOut "analysis\paragraph-metrics-auth-01-structural.json"
+        $manifestPath = Join-Path $paragraphOut "evidence-manifest.json"
+        foreach ($required in @($nativePath,$blastPath,$structuralPath,$manifestPath,(Join-Path $paragraphOut "environment.json"),(Join-Path $paragraphOut "logs\paragraph-metrics-auth-01.txt"))) { if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required paragraph evidence missing: $required" } }
+        $nativeParagraph = Get-Content -LiteralPath $nativePath -Raw | ConvertFrom-Json
+        $blast = Get-Content -LiteralPath $blastPath -Raw | ConvertFrom-Json
+        $structural = Get-Content -LiteralPath $structuralPath -Raw | ConvertFrom-Json
+        if ([string]$nativeParagraph.verdict -ne "native-semantic-arms-captured-with-common-seed") { throw "Unexpected paragraph native verdict: $($nativeParagraph.verdict)" }
+        if ($null -eq $nativeParagraph.seed -or [string]::IsNullOrWhiteSpace([string]$nativeParagraph.seed.sha256)) { throw "Paragraph native receipt did not record common seed SHA." }
+        if (@($nativeParagraph.arms).Count -ne 11) { throw "Expected 11 paragraph native arms." }
+        if (@($blast.arms).Count -ne 10) { throw "Expected 10 paragraph mutation blast-radius arms." }
+        foreach ($name in @("common_seed_used","matched_noop_control_used","paragraph_before_mutation_identical_across_arms","frame_before_mutation_identical_across_arms","fresh_reopen_text_length_invariant_across_arms")) { if (-not [bool]$blast.causal_baseline.$name) { throw "Paragraph causal baseline invariant failed: $name" } }
+        if ([string]$blast.remaining_structural_gap.raw_fdpp_property_decode -ne "required" -or [string]$blast.remaining_structural_gap.quill_text_byte_invariance -ne "required") { throw "Unexpected paragraph pre-structural authority boundary." }
+        foreach ($name in @("complete_eleven_arm_matrix","exact_artifact_identity_join","common_pre_mutation_snapshots","quill_text_byte_invariance_all_arms","confirmed_story_partition_invariant","raw_fdpp_framing_known")) { if (-not [bool]$structural.invariants.$name) { throw "Paragraph structural invariant failed: $name" } }
+        if ([bool]$structural.invariants.paragraph_metric_semantics_granted) { throw "Portable structural receipt must not grant paragraph metric semantics." }
+        if ([string]$structural.remaining_authority.native_rule_to_persisted_carrier_law -ne "requires_semantic_review_of_raw_matrix") { throw "Unexpected paragraph structural carrier-law status." }
+        if ([string]$structural.remaining_authority.effective_line_origins_and_heights -ne "not_proven_by_frame_bounds_or_raw_values") { throw "Unexpected paragraph effective-line authority status." }
+        $manifestReceipt = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $manifestPaths = @($manifestReceipt.files | ForEach-Object { [string]$_.path })
+        foreach ($requiredPath in @("analysis/paragraph-metrics-auth-01.json","analysis/paragraph-metrics-auth-01-blast-radius.json","analysis/paragraph-metrics-auth-01-structural.json","environment.json","logs/paragraph-metrics-auth-01.txt")) { if ($manifestPaths -notcontains $requiredPath) { throw "Paragraph evidence manifest does not bind required file: $requiredPath" } }
+        if ((Get-Sha256 $blank) -ne [string]$blankIdentity.sha256) { throw "Portable paragraph seed changed during the run." }
         $summary.tasks += [ordered]@{ id="paragraph-metrics"; status="success"; text_invariance=[bool]$structural.invariants.quill_text_byte_invariance_all_arms; semantics_granted=[bool]$structural.invariants.paragraph_metric_semantics_granted; seed_provenance=[string]$blankIdentity.provenance }
         Copy-SafeTree $paragraphOut (Join-Path $ReturnRoot "paragraph-metrics")
     } catch {
