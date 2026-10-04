@@ -6,7 +6,6 @@ on:
       - "installer/windows/chaptera-reader.iss"
       - "tools/windows/test_authenticode_sign.ps1"
       - ".github/workflows/chaptera-win-sign-preflight.yml"
-      - "tools/ci/check_chaptera_ci_trust.py"
   workflow_dispatch:
 
 permissions:
