@@ -1,3 +1,4 @@
+// CI control: safe imported-paragraph module must not allocate TextBox Restore jobs.
 use crate::{EditorSession, ImportedParagraphProjectionErrorV1};
 use pub_model::{ParagraphId, StoryId, TextRange};
 use pub_reader::{PubParagraphAlignment, PubParagraphAlignmentRun};
