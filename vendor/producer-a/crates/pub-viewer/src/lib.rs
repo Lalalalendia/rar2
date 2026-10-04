@@ -80,16 +80,15 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubParagraphAlignment, PubParagraphLineSpacing, PubResolveDiagnostic,
-    PubResolvedGraph,
-    PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
-    PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
-    analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
-    build_legacy_0x22_noquill_source_graph, build_legacy_0x22_quill_source_graph,
-    build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
-    build_mature_0x2c_wmf_preview_bundle_from_bytes, derive_pub_page_id,
-    materialize_bounded_table_cells, rasterize_wmf_preview, read_legacy_0x22_image_wmfs,
-    resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
+    PubExplicitImageCropSource, PubParagraphAlignment, PubParagraphLineSpacing,
+    PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild, PubResolvedNodePayload,
+    PubScriptFontEntryDisposition, PubSourceGraphBuild, PubSourcePagePaintOrderV1,
+    PubTextFrameVerticalAlignment, WmfPreviewRgba, analyze_legacy_0x22_page_roles,
+    analyze_mature_0x2c_page_roles, build_failure_envelope, build_legacy_0x22_noquill_source_graph,
+    build_legacy_0x22_quill_source_graph, build_mature_0x2c_asset_export_bundle_from_bytes,
+    build_mature_0x2c_source_graph, build_mature_0x2c_wmf_preview_bundle_from_bytes,
+    derive_pub_page_id, materialize_bounded_table_cells, rasterize_wmf_preview,
+    read_legacy_0x22_image_wmfs, resolve_pub_source_graph, scan_legacy_ole_cached_presentations,
     select_unambiguous_legacy_ole_cached_presentation,
 };
 use serde::{Deserialize, Serialize};
@@ -2514,9 +2513,11 @@ fn open_mature_0x2c_bundle(
         .filter_map(|run| {
             let story = pipeline.resolved.graph.stories.get(&run.story_id)?;
             let line_spacing = match run.line_spacing {
-                PubParagraphLineSpacing::Proportional { point_equivalent_emu } => {
-                    ViewerParagraphLineSpacing::Proportional { point_equivalent_emu }
-                }
+                PubParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                } => ViewerParagraphLineSpacing::Proportional {
+                    point_equivalent_emu,
+                },
                 PubParagraphLineSpacing::Absolute { spacing_emu } => {
                     ViewerParagraphLineSpacing::Absolute { spacing_emu }
                 }
