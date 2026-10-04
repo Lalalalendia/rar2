@@ -21,6 +21,7 @@ DESKTOP_PR_ADMISSION_RULES = {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
             "crates/chaptera-desktop-fallback-font-resource/**",
+            "apps/chaptera-desktop/src/font_binding.rs",
             "apps/chaptera-desktop/src/fallback_font.rs",
             "apps/chaptera-desktop/src/source_font.rs",
             "apps/chaptera-desktop/src/render_backend.rs",
