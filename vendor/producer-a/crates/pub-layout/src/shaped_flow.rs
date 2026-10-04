@@ -34,6 +34,11 @@ pub struct BoundedShapedLine {
     /// Logical Story position consumed by this line, including a hard-break delimiter.
     pub consumed_scalar_end: u32,
     pub text: String,
+    /// OpenType units-per-em from the exact shaping result that produced this line.
+    ///
+    /// Fixed-output consumers use this with the already-resolved glyphs and
+    /// must not reshape merely to recover font metrics.
+    pub units_per_em: u32,
     pub measured_width: LengthEmu,
     pub glyphs: Vec<BoundedShapedGlyph>,
     pub break_kind: BoundedBreakKind,
@@ -58,6 +63,19 @@ pub struct BoundedShapedFlowScene {
     pub line_origin_mapping: Vec<ShapedLineOriginMapping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<ResolveDiagnostic>,
+}
+
+impl BoundedShapedFlowScene {
+    /// Losslessly expose the physical geometry already carried by shaped flow.
+    pub fn geometry_scene(&self) -> crate::BoundedResolvedScene {
+        crate::BoundedResolvedScene {
+            environment: self.environment.shaping.layout.clone(),
+            surfaces: self.surfaces.clone(),
+            nodes: self.nodes.clone(),
+            origin_mapping: self.origin_mapping.clone(),
+            diagnostics: self.diagnostics.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +112,7 @@ struct EvaluatedBreak {
     visible_end: usize,
     consumed_end: usize,
     text: String,
+    units_per_em: u32,
     measured_width: LengthEmu,
     glyphs: Vec<BoundedShapedGlyph>,
     kind: BoundedBreakKind,
@@ -238,6 +257,7 @@ pub fn resolve_bounded_shaped_flow(
                     let evaluated = evaluate_candidate(
                         &scalars,
                         &shaped.glyphs,
+                        shaped.units_per_em,
                         cursor,
                         start_safe,
                         candidate,
@@ -284,6 +304,7 @@ pub fn resolve_bounded_shaped_flow(
                     scalar_end,
                     consumed_scalar_end,
                     text: chosen.text,
+                    units_per_em: chosen.units_per_em,
                     measured_width: chosen.measured_width,
                     glyphs: chosen.glyphs,
                     break_kind: chosen.kind,
@@ -357,6 +378,7 @@ fn shape_failure_diagnostic(story_origin: StoryId, error: &BoundedShapeError) ->
 fn evaluate_candidate(
     scalars: &[char],
     full_glyphs: &[BoundedShapedGlyph],
+    full_units_per_em: u32,
     cursor: usize,
     start_safe: bool,
     candidate: &BoundedBreakCandidate,
@@ -369,12 +391,12 @@ fn evaluate_candidate(
     let text: String = scalars[cursor..visible_end].iter().collect();
     let reshaped = !start_safe || candidate.requires_reshaping;
 
-    let (glyphs, measured_width) = if reshaped {
+    let (glyphs, measured_width, units_per_em) = if reshaped {
         let scalar_base =
             u32::try_from(cursor).map_err(|_| BoundedShapedFlowError::MetricOverflow)?;
         let shaped = shape_bounded_ltr_segment(&text, scalar_base, runtime)
             .map_err(BoundedShapedFlowError::Shape)?;
-        (shaped.glyphs, shaped.total_x_advance)
+        (shaped.glyphs, shaped.total_x_advance, shaped.units_per_em)
     } else {
         let glyphs = glyphs_for_scalar_range(full_glyphs, cursor, visible_end)?;
         let measured_width = glyphs.iter().try_fold(LengthEmu::ZERO, |width, glyph| {
@@ -382,13 +404,14 @@ fn evaluate_candidate(
                 .checked_add(glyph.x_advance)
                 .ok_or(BoundedShapedFlowError::MetricOverflow)
         })?;
-        (glyphs, measured_width)
+        (glyphs, measured_width, full_units_per_em)
     };
 
     Ok(EvaluatedBreak {
         visible_end,
         consumed_end,
         text,
+        units_per_em,
         measured_width,
         glyphs,
         kind: candidate.kind,
@@ -592,6 +615,14 @@ mod tests {
         assert_eq!(scene.lines[0].text, "Hfi ");
         assert_eq!(scene.lines[1].frame_origin, node_id(11));
         assert_eq!(scene.lines[1].text, "Hfi ");
+        assert!(scene.lines.iter().all(|line| line.units_per_em > 0));
+
+        let geometry = scene.geometry_scene();
+        assert_eq!(geometry.surfaces, scene.surfaces);
+        assert_eq!(geometry.nodes, scene.nodes);
+        assert_eq!(geometry.origin_mapping, scene.origin_mapping);
+        assert_eq!(geometry.diagnostics, scene.diagnostics);
+        assert_eq!(geometry.environment, scene.environment.shaping.layout);
         assert!(
             scene
                 .diagnostics
@@ -637,6 +668,7 @@ mod tests {
         let evaluated = evaluate_candidate(
             &scalars,
             &full.glyphs,
+            full.units_per_em,
             0,
             true,
             &candidate,
@@ -654,6 +686,7 @@ mod tests {
             evaluated.measured_width,
             independently_shaped.total_x_advance
         );
+        assert_eq!(evaluated.units_per_em, independently_shaped.units_per_em);
     }
 
     #[test]
@@ -672,6 +705,7 @@ mod tests {
         let evaluated = evaluate_candidate(
             &scalars,
             &full.glyphs,
+            full.units_per_em,
             4,
             false,
             &candidate,
@@ -681,6 +715,7 @@ mod tests {
 
         assert!(evaluated.reshaped);
         assert!(evaluated.glyphs.iter().all(|glyph| glyph.cluster >= 4));
+        assert!(evaluated.units_per_em > 0);
     }
 
     #[test]
