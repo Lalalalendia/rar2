@@ -424,7 +424,7 @@ impl ViewerApp {
                                 self.clear_canvas_boolean_format_override_v1(
                                     text_session::DesktopBooleanFormatPropertyV1::Bold,
                                 );
-                                ui.close_menu();
+                                ui.close();
                             }
 
                             let italic_enabled =
@@ -439,7 +439,7 @@ impl ViewerApp {
                                 self.clear_canvas_boolean_format_override_v1(
                                     text_session::DesktopBooleanFormatPropertyV1::Italic,
                                 );
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
 
