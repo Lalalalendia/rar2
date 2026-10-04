@@ -131,10 +131,11 @@ use pub_model::{
 };
 use pub_quill::{
     QuillEffectiveBoolean, QuillGroundedStoryIdentity, QuillMcldReadError,
-    QuillMcldVerticalAlignment, QuillParagraphAlignment, QuillScriptFontEntryDisposition,
-    QuillStoryReadError, QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
-    bounded_mcld_uniform_text_inset, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
-    parse_bounded_typography, parse_confirmed_story_catalog,
+    QuillMcldVerticalAlignment, QuillParagraphAlignment, QuillParagraphLineSpacing,
+    QuillScriptFontEntryDisposition, QuillStoryReadError, QuillTypographyValueSource,
+    bounded_mcld_text_frame_vertical_alignment, bounded_mcld_uniform_text_inset,
+    parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld, parse_bounded_typography,
+    parse_confirmed_story_catalog,
 };
 pub use resolve::{
     PUB_RESOLVER_VERSION_V1, PubResolveDiagnostic, PubResolvedGraph, PubResolvedGraphBuild,
@@ -539,6 +540,8 @@ pub struct PubSourceGraphBuild {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<PubParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paragraph_line_spacings: Vec<PubParagraphLineSpacingRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub script_font_maps: Vec<PubScriptFontMap>,
 }
 
@@ -589,6 +592,26 @@ pub struct PubParagraphAlignmentRun {
     pub story_scalar_end: u32,
     pub alignment: PubParagraphAlignment,
     pub source_value: u16,
+    pub source_ref: SourceRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PubParagraphLineSpacing {
+    Proportional { point_equivalent_emu: u32 },
+    Absolute { spacing_emu: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubParagraphLineSpacingRun {
+    pub story_id: StoryId,
+    pub story_utf16_start: u32,
+    pub story_utf16_end: u32,
+    pub story_scalar_start: u32,
+    pub story_scalar_end: u32,
+    pub line_spacing: PubParagraphLineSpacing,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_value: Option<u32>,
     pub source_ref: SourceRef,
 }
 
@@ -2691,6 +2714,7 @@ pub fn build_mature_0x2c_from_streams(
     let mut typography_runs = Vec::new();
     let mut typography_size_runs = Vec::new();
     let mut paragraph_alignments = Vec::new();
+    let mut paragraph_line_spacings = Vec::new();
     let mut script_font_maps = Vec::new();
     if let Some(catalog) = typography_catalog {
         for map in &catalog.script_font_maps {
@@ -2818,6 +2842,61 @@ pub fn build_mature_0x2c_from_streams(
                     &run.fdpp_style_source,
                     Some(quill_story_object_key(syid)),
                     Some("FDPP/ParagraphAlignment".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            });
+        }
+        for run in &catalog.paragraph_line_spacings {
+            let syid = run.story_syid.0;
+            let Some(story_id) = story_by_syid.get(&syid).copied() else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("paragraph line spacing references missing Story SYID {syid}"),
+                });
+                continue;
+            };
+            let Some(story) = graph.stories.get(&story_id) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!("paragraph line spacing Story {story_id:?} is absent"),
+                });
+                continue;
+            };
+            let Some((story_scalar_start, story_scalar_end)) = utf16_range_to_scalar_range(
+                &story.text,
+                run.story_start_utf16,
+                run.story_end_utf16,
+            ) else {
+                diagnostics.push(PubBridgeDiagnostic::TypographyProjectionUnavailable {
+                    reason: format!(
+                        "paragraph line spacing range {}..{} splits a UTF-16 scalar boundary for Story SYID {syid}",
+                        run.story_start_utf16, run.story_end_utf16
+                    ),
+                });
+                continue;
+            };
+            paragraph_line_spacings.push(PubParagraphLineSpacingRun {
+                story_id,
+                story_utf16_start: run.story_start_utf16,
+                story_utf16_end: run.story_end_utf16,
+                story_scalar_start,
+                story_scalar_end,
+                line_spacing: match run.line_spacing {
+                    QuillParagraphLineSpacing::Proportional {
+                        point_equivalent_emu,
+                    } => PubParagraphLineSpacing::Proportional {
+                        point_equivalent_emu,
+                    },
+                    QuillParagraphLineSpacing::Absolute { spacing_emu } => {
+                        PubParagraphLineSpacing::Absolute { spacing_emu }
+                    }
+                },
+                source_value: run.source_value,
+                source_ref: source_ref(
+                    &graph.source,
+                    &run.fdpp_style_source,
+                    Some(quill_story_object_key(syid)),
+                    Some("FDPP/ParagraphLineSpacing".into()),
                     SourceRole::Semantic,
                     AuthorityClass::Authoritative,
                     ReadConfidence::Exact,
@@ -3462,6 +3541,7 @@ pub fn build_mature_0x2c_from_streams(
         typography_runs,
         typography_size_runs,
         paragraph_alignments,
+        paragraph_line_spacings,
         script_font_maps,
     })
 }
