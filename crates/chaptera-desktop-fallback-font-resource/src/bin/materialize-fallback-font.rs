@@ -23,12 +23,12 @@ fn main() {
     if let Err(error) = resource::validate() {
         fail(error);
     }
-    if let Some(parent) = output.parent() {
-        if let Err(error) = fs::create_dir_all(parent) {
-            fail(format!(
-                "cannot create fallback-font parent directory: {error}"
-            ));
-        }
+    if let Some(parent) = output.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        fail(format!(
+            "cannot create fallback-font parent directory: {error}"
+        ));
     }
     if let Err(error) = fs::write(&output, resource::bytes()) {
         fail(format!("cannot write pinned fallback font: {error}"));
