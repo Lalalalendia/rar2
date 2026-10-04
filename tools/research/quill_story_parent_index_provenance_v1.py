@@ -113,8 +113,9 @@ def likely_html(mime: str, url: str) -> bool:
 def query_variants(parent: str) -> list[str]:
     host, path = parent.split("/", 1)
     return [
-        f"{host}/{path}",
-        f"www.{host}/{path}",
+        f"{scheme}://{candidate_host}/{path}"
+        for scheme in ("http", "https")
+        for candidate_host in (host, f"www.{host}")
     ]
 
 
