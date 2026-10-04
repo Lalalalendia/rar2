@@ -53,6 +53,41 @@ class ResidualCensusTests(unittest.TestCase):
                             },
                         },
                         {
+                            "node_id": "n-incomplete-uniform",
+                            "bounds": {},
+                            "transform": {},
+                            "text": {
+                                "typography": [
+                                    {"scalar_start": 0, "scalar_end": 4, "text_size_emu": 100}
+                                ],
+                                "layout": {
+                                    "disposition": {
+                                        "kind": "backend_fallback",
+                                        "reason": "shared_layout_incomplete",
+                                    },
+                                    "lines": [],
+                                },
+                            },
+                        },
+                        {
+                            "node_id": "n-incomplete-mixed",
+                            "bounds": {},
+                            "transform": {},
+                            "text": {
+                                "typography": [
+                                    {"scalar_start": 0, "scalar_end": 2, "text_size_emu": 100},
+                                    {"scalar_start": 2, "scalar_end": 4, "text_size_emu": 200},
+                                ],
+                                "layout": {
+                                    "disposition": {
+                                        "kind": "backend_fallback",
+                                        "reason": "shared_layout_incomplete",
+                                    },
+                                    "lines": [],
+                                },
+                            },
+                        },
+                        {
                             "node_id": "n-crop-table",
                             "bounds": {},
                             "transform": {},
@@ -99,7 +134,7 @@ class ResidualCensusTests(unittest.TestCase):
         }
         renderer = {
             "renderer_result": {
-                "summary": {"node_unsupported": 4},
+                "summary": {"node_unsupported": 6},
                 "node_reports": [
                     {
                         "origin_node_id": node_id,
@@ -108,6 +143,8 @@ class ResidualCensusTests(unittest.TestCase):
                     }
                     for node_id in (
                         "n-backend",
+                        "n-incomplete-uniform",
+                        "n-incomplete-mixed",
                         "n-crop-table",
                         "n-color",
                         "n-span",
@@ -117,9 +154,21 @@ class ResidualCensusTests(unittest.TestCase):
         }
 
         census = module.build_census(packet, renderer)
-        self.assertEqual(census["resource_missing_node_count"], 4)
+        self.assertEqual(census["resource_missing_node_count"], 6)
         self.assertEqual(
             census["reason_node_counts"]["text_backend_fallback:story_extent_mismatch"],
+            1,
+        )
+        self.assertEqual(
+            census["reason_node_counts"]["text_backend_fallback:shared_layout_incomplete"],
+            2,
+        )
+        self.assertEqual(
+            census["reason_node_counts"]["shared_layout_incomplete:uniform_size"],
+            1,
+        )
+        self.assertEqual(
+            census["reason_node_counts"]["shared_layout_incomplete:mixed_size"],
             1,
         )
         self.assertEqual(census["reason_node_counts"]["cropped_image"], 1)
