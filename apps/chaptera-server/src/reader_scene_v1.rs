@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderTextFragmentV1,
-    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolvers_v1,
-    effective_source_font_family_v1, uniform_text_color_rgb_v1,
+    ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderDecorativeBorderSlotV1,
+    RenderTextFragmentV1, RenderTextLayoutDispositionV1,
+    build_page_render_plan_with_text_layout_resolvers_v1, effective_source_font_family_v1,
+    layout_decorative_border_v1, uniform_text_color_rgb_v1,
 };
 use pub_viewer::{ViewerGeometryDocument, ViewerPagePaintOrderV1};
 use serde::Serialize;
@@ -67,6 +68,8 @@ pub struct ReaderNodeV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paint: Option<ReaderPaintV1>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub decorative_border: Option<ReaderDecorativeBorderV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_source_window: Option<ReaderImageSourceWindowV1>,
@@ -114,6 +117,75 @@ pub struct ReaderPaintV1 {
 pub struct ReaderLineV1 {
     pub rgb: [u8; 3],
     pub width_emu: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderDecorativeBorderV1 {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placements: Vec<ReaderDecorativeBorderPlacementV1>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReaderDecorativeBorderPlacementV1 {
+    pub slot: &'static str,
+    pub resource_id: String,
+    pub bounds: ReaderRectV1,
+}
+
+fn decorative_border_slot_name_v1(slot: RenderDecorativeBorderSlotV1) -> &'static str {
+    match slot {
+        RenderDecorativeBorderSlotV1::TopLeft => "top_left",
+        RenderDecorativeBorderSlotV1::Top => "top",
+        RenderDecorativeBorderSlotV1::TopRight => "top_right",
+        RenderDecorativeBorderSlotV1::Right => "right",
+        RenderDecorativeBorderSlotV1::BottomRight => "bottom_right",
+        RenderDecorativeBorderSlotV1::Bottom => "bottom",
+        RenderDecorativeBorderSlotV1::BottomLeft => "bottom_left",
+        RenderDecorativeBorderSlotV1::Left => "left",
+    }
+}
+
+fn reader_decorative_border_from_render(
+    node: &NodeRenderPlanV1,
+    resource_ids: &HashSet<String>,
+) -> Result<Option<ReaderDecorativeBorderV1>, String> {
+    let Some(border) = node.decorative_border.as_ref() else {
+        return Ok(None);
+    };
+    let Some(line) = node.solid_line.as_ref() else {
+        return Ok(Some(ReaderDecorativeBorderV1 {
+            placements: Vec::new(),
+        }));
+    };
+    let Some(stretch_pictures) = border.stretch_pictures else {
+        return Ok(Some(ReaderDecorativeBorderV1 {
+            placements: Vec::new(),
+        }));
+    };
+    let Some(placements) =
+        layout_decorative_border_v1(border, node.bounds, line.width_emu, stretch_pictures)
+    else {
+        return Ok(Some(ReaderDecorativeBorderV1 {
+            placements: Vec::new(),
+        }));
+    };
+
+    let mut mapped = Vec::with_capacity(placements.len());
+    for placement in placements {
+        let resource_id =
+            serialized_string(&placement.resource_id, "decorative-border resource id")?;
+        if !resource_ids.contains(&resource_id) {
+            return Err(format!(
+                "decorative-border placement references unknown image resource {resource_id}"
+            ));
+        }
+        mapped.push(ReaderDecorativeBorderPlacementV1 {
+            slot: decorative_border_slot_name_v1(placement.slot),
+            resource_id,
+            bounds: rect_from_serialized(&placement.bounds)?,
+        });
+    }
+    Ok(Some(ReaderDecorativeBorderV1 { placements: mapped }))
 }
 
 #[derive(Debug, Serialize)]
@@ -510,7 +582,8 @@ pub fn from_viewer_geometry_with_fonts(
     let mut source_window_by_node = HashMap::new();
     let mut image_content_rotation_by_node = HashMap::new();
     let mut recolor_by_node = HashMap::new();
-    let mut resources = Vec::with_capacity(geometry.images.len());
+    let mut resources =
+        Vec::with_capacity(geometry.images.len() + geometry.decorative_border_resources.len());
     let mut resource_ids = HashSet::new();
     for image in &geometry.images {
         let resource_id = serialized_string(&image.resource_id, "image resource id")?;
@@ -582,6 +655,22 @@ pub fn from_viewer_geometry_with_fonts(
                 _ => {}
             }
         }
+    }
+
+    for resource in &geometry.decorative_border_resources {
+        let resource_id =
+            serialized_string(&resource.resource_id, "decorative-border image resource id")?;
+        if !resource_ids.insert(resource_id.clone()) {
+            return Err(format!(
+                "duplicate Viewer image/decorative-border resource {resource_id}"
+            ));
+        }
+        resources.push(ReaderImageResourceV1 {
+            resource_id,
+            mime: resource.mime.clone(),
+            availability: "descriptor_only",
+            inline_data_url: None,
+        });
     }
 
     let mut table_by_node = HashMap::new();
@@ -690,6 +779,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut render_text_by_node = HashMap::<String, String>::new();
     let mut text_layout_by_node = HashMap::new();
     let mut text_bounds_by_node = HashMap::<String, ReaderRectV1>::new();
+    let mut decorative_border_by_node = HashMap::<String, ReaderDecorativeBorderV1>::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
     let mut projected_instance_ids = HashSet::<String>::new();
     let mut projected_text_layout_count = 0_usize;
@@ -876,6 +966,7 @@ pub fn from_viewer_geometry_with_fonts(
                     (None, None)
                 };
 
+                let decorative_border = reader_decorative_border_from_render(&node, &resource_ids)?;
                 let paint = if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
                     Some(ReaderPaintV1 {
                         preset_shape: None,
@@ -904,6 +995,7 @@ pub fn from_viewer_geometry_with_fonts(
                         text_bounds,
                         transform: transform_from_serialized(&node.transform)?,
                         paint,
+                        decorative_border,
                         resource_id,
                         image_source_window,
                         image_content_rotation_degrees: None,
@@ -916,6 +1008,15 @@ pub fn from_viewer_geometry_with_fonts(
             }
 
             let node_id = serialized_string(&node.node_id, "direct render-plan node id")?;
+            if let Some(mapped_border) = reader_decorative_border_from_render(&node, &resource_ids)?
+                && decorative_border_by_node
+                    .insert(node_id.clone(), mapped_border)
+                    .is_some()
+            {
+                return Err(format!(
+                    "duplicate decorative-border binding for node {node_id}"
+                ));
+            }
             if !node_ids.contains(&node_id) {
                 return Err(format!(
                     "direct render-plan node references unknown Viewer node {node_id}"
@@ -973,6 +1074,7 @@ pub fn from_viewer_geometry_with_fonts(
                 .copied()
                 .ok_or_else(|| format!("node kind missing for {node_id}"))?,
             paint: paint_by_node.remove(&node_id),
+            decorative_border: decorative_border_by_node.remove(&node_id),
             resource_id: resource_by_node.remove(&node_id),
             image_source_window: source_window_by_node.remove(&node_id),
             image_content_rotation_degrees: image_content_rotation_by_node.remove(&node_id),
@@ -1106,6 +1208,13 @@ pub fn from_viewer_geometry_with_fonts(
         .any(|resource| resource.inline_data_url.is_none())
     {
         reasons.push("image_resource_not_inline");
+    }
+    if nodes.iter().any(|node| {
+        node.decorative_border
+            .as_ref()
+            .is_some_and(|border| border.placements.is_empty())
+    }) {
+        reasons.push("decorative_border_unresolved");
     }
     if text_layout_partial {
         reasons.push("text_layout_partial");
@@ -1373,6 +1482,21 @@ fn promote_inline_images_within_scene_cap(
             .is_some()
         {
             return Err(format!("duplicate Viewer image resource {resource_id}"));
+        }
+    }
+    for resource in &geometry.decorative_border_resources {
+        let resource_id =
+            serialized_string(&resource.resource_id, "decorative-border image resource id")?;
+        if image_by_resource
+            .insert(
+                resource_id.clone(),
+                (resource.mime.as_str(), resource.bytes.as_slice()),
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "duplicate Viewer image/decorative-border resource {resource_id}"
+            ));
         }
     }
 
@@ -2377,6 +2501,7 @@ mod tests {
                 ty: 0,
             },
             paint: None,
+            decorative_border: None,
             resource_id: None,
             image_source_window: None,
             image_content_rotation_degrees: None,
