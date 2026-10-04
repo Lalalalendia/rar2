@@ -28,6 +28,7 @@ mod ole_presentation;
 mod resolve;
 mod salvage;
 mod salvage_authority;
+mod story_provenance;
 mod structural_base;
 mod table_bridge;
 mod wmf;
@@ -148,6 +149,7 @@ pub use salvage::{
     probe_reader_salvage_candidate_with_trigger,
 };
 pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
+pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
