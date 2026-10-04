@@ -8746,6 +8746,308 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resize_modifier_mask_maps_ctrl_command_and_shift_semantically() {
+        assert_eq!(
+            resize_modifier_mask_from_egui(egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }),
+            ResizeModifierMaskV1 {
+                centered: true,
+                aspect_lock: false,
+            }
+        );
+        assert_eq!(
+            resize_modifier_mask_from_egui(egui::Modifiers {
+                command: true,
+                shift: true,
+                ..Default::default()
+            }),
+            ResizeModifierMaskV1 {
+                centered: true,
+                aspect_lock: true,
+            }
+        );
+        assert_eq!(
+            resize_modifier_mask_from_egui(egui::Modifiers::SHIFT),
+            ResizeModifierMaskV1 {
+                centered: false,
+                aspect_lock: true,
+            }
+        );
+    }
+
+    #[cfg(not(feature = "reader-only"))]
+    #[test]
+    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
+    fn gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
+            .map(PathBuf::from)
+            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
+        let original = fs::read(&fixture).expect("read pinned SampleNewsletter fixture");
+        let fixture_for_app = fixture.clone();
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1280.0, 820.0))
+            .with_pixels_per_point(1.0)
+            .with_max_steps(32)
+            .build_eframe(move |cc| {
+                fallback_font::install(&cc.egui_ctx)
+                    .expect("pinned Chaptera fallback font resource must validate");
+                ViewerApp::new_with_storage(Some(fixture_for_app), cc.storage)
+            });
+        harness.step();
+        harness.step();
+
+        let (page_id, source_bounds) = {
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual loaded");
+            let page = visual.document.pages.first().expect("first page");
+            let surface = visual
+                .scene
+                .surfaces
+                .iter()
+                .find(|surface| surface.origin == page.id)
+                .expect("first page surface");
+            let width = (surface.size.width.get() / 5).max(254_000);
+            let height = (width / 2).max(127_000);
+            (
+                page.id,
+                pub_editor::RectEmu::new(
+                    pub_editor::LengthEmu::new(surface.size.width.get() / 4),
+                    pub_editor::LengthEmu::new(surface.size.height.get() / 4),
+                    pub_editor::LengthEmu::new(width),
+                    pub_editor::LengthEmu::new(height),
+                ),
+            )
+        };
+
+        let node_id = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+        {
+            let app = harness.state_mut();
+            app.selected_page = 0;
+            app.editor
+                .as_mut()
+                .expect("editor")
+                .create_shape(
+                    node_id,
+                    page_id,
+                    source_bounds,
+                    rectangle_creation::chaptera_rectangle_paint_v1(),
+                )
+                .expect("seed authored Rectangle");
+            app.finish_authoring_change("Seeded resize modifier GUI witness.");
+            let instance = direct_page_local_instance_v1(
+                &node_id.as_canonical().to_string(),
+                &page_id.as_canonical().to_string(),
+            )
+            .expect("canonical authored instance");
+            app.canvas_selection.select_only(instance.instance_id);
+        }
+        harness.step();
+
+        let handle_bounds = harness
+            .get_by_label("Resize bottom-right handle")
+            .raw_bounds()
+            .expect("selected authored Rectangle exposes bottom-right handle");
+        let start = egui::pos2(
+            ((handle_bounds.x0 + handle_bounds.x1) / 2.0) as f32,
+            ((handle_bounds.y0 + handle_bounds.y1) / 2.0) as f32,
+        );
+        let intermediate = start + egui::vec2(10.0, 6.0);
+        let end = start + egui::vec2(24.0, 14.0);
+
+        let (page_rect, scene_scale) = {
+            let canvas = harness
+                .get_by_label("Document canvas")
+                .raw_bounds()
+                .expect("canvas bounds");
+            let app = harness.state();
+            let visual = app.visual.as_ref().expect("visual");
+            let page = visual.document.pages.first().expect("page");
+            let surface = visual
+                .scene
+                .surfaces
+                .iter()
+                .find(|surface| surface.origin == page.id)
+                .expect("surface");
+            let viewport = egui::vec2(
+                (canvas.x1 - canvas.x0) as f32,
+                (canvas.y1 - canvas.y0) as f32,
+            );
+            let scene_scale = fitted_scale(
+                surface.size.width.get(),
+                surface.size.height.get(),
+                viewport,
+            )
+            .expect("fit scale");
+            let page_width = surface.size.width.get() as f32 * scene_scale;
+            let page_height = surface.size.height.get() as f32 * scene_scale;
+            let page_left = ((canvas.x0 + canvas.x1) as f32 - page_width) / 2.0;
+            let page_top = ((canvas.y0 + canvas.y1) as f32 - page_height) / 2.0;
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(page_left, page_top),
+                    egui::vec2(page_width, page_height),
+                ),
+                scene_scale,
+            )
+        };
+        let start_document =
+            canvas_document_point(page_rect, scene_scale, start).expect("start document point");
+        let end_document =
+            canvas_document_point(page_rect, scene_scale, end).expect("end document point");
+        let mut expected_raw = ResizeTransaction::begin(
+            node_id,
+            source_bounds,
+            ResizeHandle::BottomRight,
+            start_document,
+        )
+        .expect("expected raw transaction");
+        let ResizeUpdate::Preview(raw_target) =
+            expected_raw.update(end_document).expect("expected raw target")
+        else {
+            panic!("final GUI pointer must produce a valid raw resize target")
+        };
+        let ctrl_shift_mask = ResizeModifierMaskV1 {
+            centered: true,
+            aspect_lock: true,
+        };
+        let expected = pub_interaction::plan_resize_constraint_v1(
+            source_bounds,
+            ResizeHandle::BottomRight,
+            raw_target,
+            ctrl_shift_mask,
+        )
+        .expect("exact constrained plan")
+        .constrained_rect;
+
+        let operations_before = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+
+        harness.input_mut().modifiers = egui::Modifiers::default();
+        harness.input_mut().events.extend([
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            },
+        ]);
+        harness.step();
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(intermediate));
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            operations_before,
+            "unmodified mid-drag preview remains transient"
+        );
+
+        let ctrl_shift = egui::Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Default::default()
+        };
+        harness.input_mut().modifiers = ctrl_shift;
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(end));
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .canvas_resize
+                .expect("active constrained resize")
+                .preview_bounds(),
+            Some(expected),
+            "mid-drag modifier toggle must recompute exact constrained preview"
+        );
+
+        harness.input_mut().events.push(egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: ctrl_shift,
+        });
+        harness.step();
+        harness.step();
+        harness.input_mut().modifiers = egui::Modifiers::default();
+
+        let after = {
+            let editor = harness.state().editor.as_ref().expect("editor");
+            assert_eq!(
+                editor.operations().len(),
+                operations_before + 1,
+                "modifier resize release emits exactly one ResizeNode"
+            );
+            match editor.operations().last().expect("resize operation") {
+                pub_editor::EditOperation::ResizeNode {
+                    node_id: actual_node_id,
+                    before,
+                    after,
+                } => {
+                    assert_eq!(*actual_node_id, node_id);
+                    assert_eq!(*before, source_bounds);
+                    assert_eq!(*after, expected);
+                    *after
+                }
+                other => panic!("modifier resize emitted unexpected operation: {other:?}"),
+            }
+        };
+
+        harness.get_by_label("Undo").click();
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .authored_shape(node_id)
+                .expect("authored Rectangle")
+                .bounds,
+            source_bounds,
+            "Undo restores exact pre-modifier bounds"
+        );
+        harness.get_by_label("Redo").click();
+        harness.step();
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .authored_shape(node_id)
+                .expect("authored Rectangle")
+                .bounds,
+            after,
+            "Redo restores exact constrained bounds"
+        );
+        assert_eq!(
+            fs::read(&fixture).expect("re-read source PUB"),
+            original,
+            "modifier resize must not mutate source PUB bytes"
+        );
+    }
+
     #[cfg(not(feature = "reader-only"))]
     #[test]
     #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
