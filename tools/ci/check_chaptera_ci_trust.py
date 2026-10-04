@@ -17,6 +17,13 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/editor-duplicate-rectangle-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/duplicate_rectangle.rs",
+            "apps/chaptera-desktop/src/duplicate_rectangle_gui_tests.rs",
+        ),
+    },
     ".github/workflows/chaptera-vtpe-locale.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
