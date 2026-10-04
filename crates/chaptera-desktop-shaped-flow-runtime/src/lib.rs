@@ -172,12 +172,13 @@ fn effective_value_v1(
     start: u32,
     end: u32,
 ) -> Result<FormatValueV1, DesktopShapedFlowRuntimeError> {
-    let segments = effective_property_segments_v1(state, property, start, end).map_err(|error| {
-        DesktopShapedFlowRuntimeError::new(
-            "text_format_overlay_invalid",
-            format!("effective property resolution failed: {error}"),
-        )
-    })?;
+    let segments =
+        effective_property_segments_v1(state, property, start, end).map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_invalid",
+                format!("effective property resolution failed: {error}"),
+            )
+        })?;
     match segments.as_slice() {
         [segment] => Ok(segment.value.clone()),
         _ => Err(DesktopShapedFlowRuntimeError::new(
@@ -191,12 +192,14 @@ pub fn current_story_effective_typography_v1(
     editor: &EditorSession,
     story_id: StoryId,
 ) -> Result<Vec<DesktopEffectiveTypographyRunV1>, DesktopShapedFlowRuntimeError> {
-    let state = editor.current_text_format_overlay_v1(story_id).map_err(|error| {
-        DesktopShapedFlowRuntimeError::new(
-            "text_format_overlay_unavailable",
-            format!("current Story text-format overlay is unavailable: {error}"),
-        )
-    })?;
+    let state = editor
+        .current_text_format_overlay_v1(story_id)
+        .map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_unavailable",
+                format!("current Story text-format overlay is unavailable: {error}"),
+            )
+        })?;
     if state.story_scalar_len == 0 {
         return Ok(Vec::new());
     }
@@ -229,33 +232,41 @@ pub fn current_story_effective_typography_v1(
 
         let bold = match effective_value_v1(&state, FormatPropertyV1::Bold, start, end)? {
             FormatValueV1::Bool(value) => value,
-            _ => return Err(DesktopShapedFlowRuntimeError::new(
-                "text_format_overlay_invalid",
-                "Bold is not boolean",
-            )),
+            _ => {
+                return Err(DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "Bold is not boolean",
+                ));
+            }
         };
         let italic = match effective_value_v1(&state, FormatPropertyV1::Italic, start, end)? {
             FormatValueV1::Bool(value) => value,
-            _ => return Err(DesktopShapedFlowRuntimeError::new(
-                "text_format_overlay_invalid",
-                "Italic is not boolean",
-            )),
+            _ => {
+                return Err(DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "Italic is not boolean",
+                ));
+            }
         };
         let font_size_emu =
             match effective_value_v1(&state, FormatPropertyV1::FontSizeEmu, start, end)? {
                 FormatValueV1::Integer(value) => value,
-                _ => return Err(DesktopShapedFlowRuntimeError::new(
-                    "text_format_overlay_invalid",
-                    "font size is not integer",
-                )),
+                _ => {
+                    return Err(DesktopShapedFlowRuntimeError::new(
+                        "text_format_overlay_invalid",
+                        "font size is not integer",
+                    ));
+                }
             };
         let text_color_rgb =
             match effective_value_v1(&state, FormatPropertyV1::TextColorRgb, start, end)? {
                 FormatValueV1::String(value) => overlay_rgb_v1(&value)?,
-                _ => return Err(DesktopShapedFlowRuntimeError::new(
-                    "text_format_overlay_invalid",
-                    "text color is not string",
-                )),
+                _ => {
+                    return Err(DesktopShapedFlowRuntimeError::new(
+                        "text_format_overlay_invalid",
+                        "text color is not string",
+                    ));
+                }
             };
 
         out.push(DesktopEffectiveTypographyRunV1 {
@@ -479,8 +490,8 @@ mod tests {
         let mut digest_bytes = [0_u8; 32];
         digest_bytes.copy_from_slice(&digest);
         let source_hash = Sha256Digest::from_bytes(digest_bytes);
-        let mut editor =
-            open_mature_0x2c_editor(&bytes, source_hash).expect("open real SampleNewsletter editor");
+        let mut editor = open_mature_0x2c_editor(&bytes, source_hash)
+            .expect("open real SampleNewsletter editor");
 
         let story_id = editor
             .graph()
