@@ -290,8 +290,8 @@ def prepare_alpha_smask_pdf_donor(
         )
 
     text = pdf.read_text(encoding="utf-8")
-    if "pdf.image.alpha_unsupported" in text:
-        raise RuntimeError("Yab #259 alpha rejection survived bounded SMask repair")
+    if "exact image contains non-opaque alpha; bounded PDF v0.1 does not flatten or invent a background" in text:
+        raise RuntimeError("Yab #259 alpha rejection implementation survived bounded SMask repair")
     if "/SMask {object_id} 0 R" not in text:
         raise RuntimeError("Yab #259 alpha SMask binding is missing")
     if "/ColorSpace /DeviceGray" not in text:
