@@ -40,7 +40,7 @@ jobs:
             pub-corpus/corpus/native/unclassified/ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff.pub
 
       - name: Assemble self-contained handoff
-        shell: python
+        shell: "python {0}"
         run: |
           import hashlib, json, shutil, zipfile
           from pathlib import Path
