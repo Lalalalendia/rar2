@@ -17,6 +17,14 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/chaptera-vtpe-locale.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/locale.rs",
+            "apps/chaptera-desktop/src/supporter.rs",
+            "apps/chaptera-desktop/src/supporter_attribution.rs",
+        ),
+    },
     ".github/workflows/scene-authored-stack-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
