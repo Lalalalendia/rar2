@@ -44,10 +44,18 @@ pub struct DesktopFixedOutputFontV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopFixedOutputStoryStateV1 {
+    pub story_id: StoryId,
+    pub story_state_id: String,
+    pub scalar_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesktopFixedOutputPacketV1 {
     pub protocol_version: String,
     pub source_hash: String,
     pub project_state_id: String,
+    pub story_states: Vec<DesktopFixedOutputStoryStateV1>,
     pub shaped_flow: BoundedShapedFlowScene,
     pub node_paints: Vec<EditorFixedNodePaintV1>,
     pub image_resources: Vec<EditorFixedImageResourceV1>,
@@ -147,10 +155,31 @@ pub fn build_current_fixed_output_packet_v1(
         )
     })?;
 
+    let mut story_states = editor
+        .graph()
+        .stories
+        .iter()
+        .map(|(story_id, story)| {
+            let scalar_count = u32::try_from(story.text.chars().count()).map_err(|_| {
+                DesktopShapedFlowRuntimeError::new(
+                    "story_extent_overflow",
+                    "current Story scalar length exceeds the V1 u32 domain",
+                )
+            })?;
+            Ok(DesktopFixedOutputStoryStateV1 {
+                story_id: *story_id,
+                story_state_id: pub_editor::story_state_id_v1(*story_id, &story.text),
+                scalar_count,
+            })
+        })
+        .collect::<Result<Vec<_>, DesktopShapedFlowRuntimeError>>()?;
+    story_states.sort_by_key(|state| state.story_id);
+
     Ok(DesktopFixedOutputPacketV1 {
         protocol_version: DESKTOP_FIXED_OUTPUT_PACKET_V1.to_owned(),
         source_hash: state.source_hash.to_string(),
         project_state_id: state.project_state_id,
+        story_states,
         shaped_flow,
         node_paints: state.node_paints,
         image_resources: state.image_resources,
@@ -336,6 +365,14 @@ mod tests {
             build_current_fixed_output_packet_v1(&editor, &font).expect("current fixed packet");
         assert_eq!(fixed_packet.protocol_version, DESKTOP_FIXED_OUTPUT_PACKET_V1);
         assert_eq!(fixed_packet.source_hash, source_hash.to_string());
+        assert!(fixed_packet.story_states.iter().any(|state| {
+            state.story_id == story_id
+                && state.story_state_id
+                    == pub_editor::story_state_id_v1(
+                        story_id,
+                        &editor.graph().stories[&story_id].text,
+                    )
+        }));
         assert_eq!(fixed_packet.shaped_flow, after_layout.shaped_flow);
         assert!(fixed_packet
             .shaped_flow
