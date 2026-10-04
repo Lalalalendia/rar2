@@ -302,6 +302,57 @@ pub fn enter_explicit_text_mode(
     })
 }
 
+pub fn enter_pointer_text_mode(
+    editor: &EditorSession,
+    story_id: StoryId,
+    frame_id: NodeId,
+    page_id: &str,
+    page_x_emu: i64,
+    page_y_emu: i64,
+) -> Result<DesktopTextMode, String> {
+    editor
+        .can_replace_story_text(story_id)
+        .map_err(|error| error.to_string())?;
+    let revision = revision_id(editor);
+    let domain = derive_domain(editor, story_id)?;
+    let interaction_domain = to_interaction_domain_v1(&domain);
+    let layout = build_layout(editor, story_id, &revision)?;
+    let document_id = document_id(editor)?;
+    let session_id = format!("chaptera.desktop.text-session:{document_id}");
+    let activation = activate_pointer_text_v1(
+        &candidate(story_id, frame_id),
+        &revision,
+        &interaction_domain,
+        &layout.caret_map,
+        &layout.layout_revision_id,
+        &TextPointerTargetV1 {
+            page_id: page_id.to_owned(),
+            page_x_emu,
+            page_y_emu,
+        },
+        None,
+        true,
+        1,
+        &session_id,
+        &document_id,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    let session = activation.active_session.ok_or_else(|| {
+        activation
+            .reason
+            .unwrap_or_else(|| "pointer text activation produced no session".to_owned())
+    })?;
+
+    Ok(DesktopTextMode {
+        story_id,
+        frame_id,
+        domain,
+        layout,
+        session,
+    })
+}
+
 pub fn replace_external_text(
     editor: &mut EditorSession,
     mode: &mut DesktopTextMode,
