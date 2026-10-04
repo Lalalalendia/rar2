@@ -243,7 +243,10 @@ fn font_binding_class(fragment: &RenderTextFragmentV1) -> &'static str {
     }
 }
 
-fn census(visual: &ViewerGeometryDocument, plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
+fn census(
+    visual: &ViewerGeometryDocument,
+    plans: &[PageRenderPlanV1],
+) -> CurrentViewerPlanCensusV1 {
     let mut out = CurrentViewerPlanCensusV1 {
         page_count: plans.len(),
         ..CurrentViewerPlanCensusV1::default()
@@ -536,8 +539,12 @@ fn run(
         packet.census.visible_node_id_sort_reordered_page_count,
         packet.census.visible_node_id_sort_position_mismatch_count,
         packet.census.text_font_binding_counts,
-        packet.census.shared_layout_incomplete_spacing_authority_counts,
-        packet.census.shared_layout_incomplete_family_authority_counts,
+        packet
+            .census
+            .shared_layout_incomplete_spacing_authority_counts,
+        packet
+            .census
+            .shared_layout_incomplete_family_authority_counts,
         packet.census.shared_layout_incomplete_font_binding_counts,
         packet.census.configured_fallback_font_size_emu,
         packet.census.configured_fallback_line_height_emu,
