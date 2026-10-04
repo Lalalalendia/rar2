@@ -63,7 +63,10 @@ fn real_carlton_paragraph_alignment_override_roundtrips_history_and_project() {
     );
 
     let lifecycle_error = session
-        .replace_story_text(paragraph.story_id, "blocked while paragraph override is active")
+        .replace_story_text(
+            paragraph.story_id,
+            "blocked while paragraph override is active",
+        )
         .expect_err("Story text mutation must be fenced while ParagraphId override is active");
     assert_eq!(
         lifecycle_error.code(),
