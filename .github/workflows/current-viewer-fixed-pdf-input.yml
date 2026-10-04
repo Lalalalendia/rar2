@@ -1,0 +1,238 @@
+name: Current Viewer fixed-PDF input
+
+on:
+  pull_request:
+    paths:
+      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - "crates/chaptera-viewer-render-plan/**"
+      - "apps/chaptera-desktop/src/acceptance.rs"
+      - "tools/acquire_carlton_march_pair.py"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - ".github/workflows/current-viewer-fixed-pdf-input.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: current-viewer-fixed-pdf-input-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml -- --check
+      - name: Compile current Viewer packet builder
+        run: cargo check --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --bin current_viewer_fixed_pdf_input
+      - name: Test shaped-flow runtime
+        run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml
+      - name: Fence packet builder from PDF serialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_viewer_fixed_pdf_input.rs"
+          if grep -Eq 'pub_pdf|render_bounded_pdf|build_pdf_artifact|convert_pdf' "$file"; then
+            echo "current Viewer packet builder must remain renderer-free" >&2
+            exit 1
+          fi
+          grep -q 'refresh_text_projection_from_resolved' "$file"
+          grep -q 'geometry_sync_policy_v1' "$file"
+          grep -q 'build_page_render_plan_with_text_layout_v1' "$file"
+
+  carlton-census:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact public Carlton March pair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "carlton-current-viewer-census"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          python tools/acquire_carlton_march_pair.py $root
+          if ($LASTEXITCODE -ne 0) { throw "Carlton acquisition failed" }
+          $pub = Join-Path $root "March-2026.pub"
+          $reference = Join-Path $root "March-2026-reference.pdf"
+          if ((Get-FileHash $pub -Algorithm SHA256).Hash.ToLowerInvariant() -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") {
+            throw "Carlton PUB identity drift"
+          }
+          if ((Get-FileHash $reference -Algorithm SHA256).Hash.ToLowerInvariant() -ne "c1288571ee8da91afa27ca5c49191aacefe82123df294c11f58ca047d0ced769") {
+            throw "Carlton reference PDF identity drift"
+          }
+          "CHAPTERA_CARLTON_CENSUS_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_PUB=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Editor and Viewer packet producer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build -p chaptera-desktop --release --bin chaptera-editor
+          cargo build --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --release --bin current_viewer_fixed_pdf_input --target-dir target
+
+      - name: Reproduce exact customer-visible Story plus Move project
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $project = Join-Path $env:CHAPTERA_CARLTON_CENSUS_ROOT "carlton-march.project.json"
+          $export = Join-Path $env:CHAPTERA_CARLTON_CENSUS_ROOT "carlton-march.edited.odg"
+          $observation = Join-Path $env:CHAPTERA_CARLTON_CENSUS_ROOT "carlton-march-editor-observation.json"
+          $before = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $env:CHAPTERA_DESKTOP_ACCEPTANCE_V1 = "1"
+          $env:CHAPTERA_DESKTOP_ACCEPTANCE_VISIBLE_STORY = "1"
+          $env:CHAPTERA_RAR_COMMIT = "${{ github.sha }}"
+          $env:CHAPTERA_SOURCE_HASH = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          $env:CHAPTERA_CARLTON_OBSERVATION = $observation
+
+          @'
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          command = [
+              "target/release/chaptera-editor.exe",
+              "--desktop-acceptance-v1",
+              os.environ["CHAPTERA_CARLTON_PUB"],
+              os.path.join(os.environ["CHAPTERA_CARLTON_CENSUS_ROOT"], "carlton-march.project.json"),
+              os.path.join(os.environ["CHAPTERA_CARLTON_CENSUS_ROOT"], "carlton-march.edited.odg"),
+          ]
+          completed = subprocess.run(
+              command,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              text=True,
+              encoding="utf-8",
+              errors="replace",
+              check=False,
+          )
+          if completed.stdout:
+              pathlib.Path(os.environ["CHAPTERA_CARLTON_OBSERVATION"]).write_text(
+                  completed.stdout,
+                  encoding="utf-8",
+              )
+          if completed.returncode != 0:
+              sys.stderr.write(completed.stderr or completed.stdout or "Carlton Editor acceptance failed without diagnostic\n")
+              raise SystemExit(completed.returncode)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Carlton two-operation Editor acceptance failed" }
+
+          $after = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($after -ne $before) { throw "Carlton source PUB changed during Editor acceptance" }
+          "CHAPTERA_CARLTON_PROJECT=$project" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Materialize pinned fixed-output font
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $font = Join-Path $env:CHAPTERA_CARLTON_CENSUS_ROOT "chaptera-fixed-output-font.ttf"
+          cargo run --quiet -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$font"
+          if (-not (Test-Path $font)) { throw "pinned fixed-output font was not materialized" }
+          "CHAPTERA_FIXED_OUTPUT_FONT=$font" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build real current Viewer packet and census
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $packet = Join-Path $env:CHAPTERA_CARLTON_CENSUS_ROOT "current-viewer-fixed-pdf-input.private.json"
+          target/release/current_viewer_fixed_pdf_input.exe "$env:CHAPTERA_CARLTON_PUB" "$env:CHAPTERA_CARLTON_PROJECT" "$env:CHAPTERA_FIXED_OUTPUT_FONT" "$packet"
+          if (-not (Test-Path $packet)) { throw "current Viewer packet was not written" }
+          "CHAPTERA_CURRENT_VIEWER_PACKET=$packet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Retain only source-safe packet census
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          expected_source = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          root = Path(os.environ["CHAPTERA_CARLTON_CENSUS_ROOT"])
+          packet_path = Path(os.environ["CHAPTERA_CURRENT_VIEWER_PACKET"])
+          project_path = Path(os.environ["CHAPTERA_CARLTON_PROJECT"])
+          observation_path = root / "carlton-march-editor-observation.json"
+
+          packet_raw = packet_path.read_bytes()
+          packet = json.loads(packet_raw)
+          project_raw = project_path.read_bytes()
+          project = json.loads(project_raw)
+          observation = json.loads(observation_path.read_text(encoding="utf-8-sig"))
+
+          if packet.get("protocol_version") != "chaptera.current-viewer-fixed-pdf-input.v1":
+              raise SystemExit("current Viewer packet protocol mismatch")
+          binding = packet.get("binding")
+          if not isinstance(binding, dict) or binding.get("source_hash") != expected_source:
+              raise SystemExit("current Viewer packet source identity mismatch")
+          if binding.get("story_id") != observation.get("story_edit", {}).get("story_id"):
+              raise SystemExit("current Viewer packet Story target differs from accepted Carlton Story")
+          if binding.get("move_node_id") != observation.get("object_move", {}).get("origin_node_id"):
+              raise SystemExit("current Viewer packet MoveNode differs from accepted Carlton target")
+
+          census = packet.get("census")
+          if not isinstance(census, dict):
+              raise SystemExit("current Viewer packet census missing")
+          if census.get("page_count") != 3:
+              raise SystemExit(f"Carlton current Viewer page count drift: {census.get('page_count')!r}")
+
+          page_ids = binding.get("page_ids")
+          if not isinstance(page_ids, list) or len(page_ids) != 3 or len(set(page_ids)) != 3:
+              raise SystemExit("Carlton current Viewer page identity set is not exactly three unique pages")
+
+          operations = project.get("operations")
+          if not isinstance(operations, list) or [item.get("kind") for item in operations] != ["replace_story_range", "move_node"]:
+              raise SystemExit("Carlton census project is not exact Story+Move")
+
+          receipt = {
+              "schema": "chaptera.carlton-current-viewer-packet-census.v1",
+              "source_pub_sha256": expected_source,
+              "reference_pdf_sha256": "c1288571ee8da91afa27ca5c49191aacefe82123df294c11f58ca047d0ced769",
+              "project_sha256": hashlib.sha256(project_raw).hexdigest(),
+              "packet_sha256": hashlib.sha256(packet_raw).hexdigest(),
+              "project_schema_version": project.get("schema_version"),
+              "story_target_id": binding.get("story_id"),
+              "move_target_id": binding.get("move_node_id"),
+              "page_ids": page_ids,
+              "projected_scene_instance_id_count": len(binding.get("projected_scene_instance_ids") or []),
+              "census": census,
+              "private_packet_retained": False,
+              "raw_customer_text_emitted": False,
+              "raw_source_bytes_emitted": False,
+              "native_pub_write_used": False,
+          }
+          receipt_path = root / "carlton-current-viewer-packet-census.receipt.json"
+          receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(receipt, sort_keys=True))
+          '@ | python -
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carlton-current-viewer-packet-census
+          path: ${{ env.CHAPTERA_CARLTON_CENSUS_ROOT }}/carlton-current-viewer-packet-census.receipt.json
+          if-no-files-found: error
