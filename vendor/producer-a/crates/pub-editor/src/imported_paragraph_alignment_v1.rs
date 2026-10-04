@@ -88,7 +88,8 @@ impl EditorSession {
     pub fn imported_paragraph_base_alignment_v1(
         &self,
         paragraph_id: ParagraphId,
-    ) -> Result<Option<ImportedParagraphBaseAlignmentV1>, ImportedParagraphBaseAlignmentErrorV1> {
+    ) -> Result<Option<ImportedParagraphBaseAlignmentV1>, ImportedParagraphBaseAlignmentErrorV1>
+    {
         Ok(self
             .imported_paragraph_base_alignments_v1()?
             .into_iter()
