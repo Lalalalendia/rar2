@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
-use pub_viewer::{classify_failure_candidate, FailureIntakeClass};
+use pub_viewer::{FailureIntakeClass, classify_failure_candidate};
 
 use super::diagnostic_sweep;
 
