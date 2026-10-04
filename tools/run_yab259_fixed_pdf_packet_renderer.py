@@ -81,6 +81,39 @@ def main() -> int:
                 raise Yab259ClosureError("fixed-PDF packet result protocol mismatch")
             if result.get("binding") != request.get("binding"):
                 raise Yab259ClosureError("fixed-PDF packet binding echo mismatch")
+            node_reports = result.get("node_reports")
+            if not isinstance(node_reports, list):
+                raise Yab259ClosureError("fixed-PDF packet node_reports missing")
+            origins = []
+            for index, report in enumerate(node_reports):
+                if not isinstance(report, dict) or set(report) != {
+                    "origin_node_id",
+                    "disposition",
+                    "code",
+                }:
+                    raise Yab259ClosureError(
+                        f"fixed-PDF packet node_reports[{index}] malformed"
+                    )
+                origin = report["origin_node_id"]
+                disposition = report["disposition"]
+                code = report["code"]
+                if not isinstance(origin, str) or not origin:
+                    raise Yab259ClosureError(
+                        f"fixed-PDF packet node_reports[{index}] origin missing"
+                    )
+                if disposition not in {"painted", "partial", "unsupported"}:
+                    raise Yab259ClosureError(
+                        f"fixed-PDF packet node_reports[{index}] disposition invalid"
+                    )
+                if not isinstance(code, str) or not code:
+                    raise Yab259ClosureError(
+                        f"fixed-PDF packet node_reports[{index}] code missing"
+                    )
+                origins.append(origin)
+            if origins != sorted(set(origins)):
+                raise Yab259ClosureError(
+                    "fixed-PDF packet node_reports must be canonical unique sorted"
+                )
             if not args.pdf_output.is_file() or not args.pdf_output.read_bytes().startswith(b"%PDF-"):
                 raise Yab259ClosureError("fixed-PDF packet renderer did not write a PDF")
             args.result_output.write_text(
