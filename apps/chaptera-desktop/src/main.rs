@@ -6795,6 +6795,50 @@ mod tests {
     }
 
     #[test]
+    fn move_snap_adjusts_preview_origin_without_changing_size() {
+        let node_id: pub_editor::NodeId =
+            serde_json::from_str("\"44444444-4444-4444-4444-444444444444\"")
+                .expect("canonical NodeId");
+        let before = pub_editor::RectEmu::new(
+            pub_editor::LengthEmu::new(10),
+            pub_editor::LengthEmu::new(20),
+            pub_editor::LengthEmu::new(100),
+            pub_editor::LengthEmu::new(80),
+        );
+        let mut drag = MoveTransaction::begin(
+            node_id,
+            before,
+            DocumentPoint::new(pub_editor::LengthEmu::ZERO, pub_editor::LengthEmu::ZERO),
+        )
+        .expect("valid move transaction");
+        let snap_index = SnapIndex::new(
+            pub_editor::LengthEmu::new(1_000),
+            pub_editor::LengthEmu::new(1_000),
+            Vec::new(),
+        )
+        .expect("valid page snap index");
+
+        let feedback = update_drag_preview_with_snap(
+            &mut drag,
+            DocumentPoint::new(
+                pub_editor::LengthEmu::new(-5),
+                pub_editor::LengthEmu::ZERO,
+            ),
+            Some(&snap_index),
+            Some(pub_editor::LengthEmu::new(10)),
+        )
+        .expect("snapped preview");
+
+        let preview = drag.preview_bounds();
+        assert_eq!(preview.x, pub_editor::LengthEmu::ZERO);
+        assert_eq!(preview.y, before.y);
+        assert_eq!(preview.width, before.width);
+        assert_eq!(preview.height, before.height);
+        assert!(feedback.0.is_some());
+        assert!(feedback.1.is_none());
+    }
+
+    #[test]
     fn preview_text_clipping_warning_keeps_scope_fence() {
         assert!(PREVIEW_TEXT_CLIP_WARNING.contains("preview-only"));
         assert!(PREVIEW_TEXT_CLIP_WARNING.contains("not Publisher-native"));
