@@ -1949,6 +1949,9 @@ pub enum EditorProjectError {
     LegacyProjectCarriesTextFormatOperation {
         index: usize,
     },
+    LegacyProjectCarriesParagraphAlignmentOperation {
+        index: usize,
+    },
     LegacyProjectCarriesTableGrids,
     LegacyProjectCarriesIdentity,
     MissingProjectIdentity,
@@ -1997,7 +2000,7 @@ impl fmt::Display for EditorProjectError {
         match self {
             Self::UnsupportedSchema { found } => write!(
                 formatter,
-                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, or {EDITOR_PROJECT_VERSION_V0_14:?}"
+                "editor project schema {found:?} is unsupported; expected {EDITOR_PROJECT_VERSION_V0_1:?}, {EDITOR_PROJECT_VERSION_V0_2:?}, {EDITOR_PROJECT_VERSION_V0_3:?}, {EDITOR_PROJECT_VERSION_V0_4:?}, {EDITOR_PROJECT_VERSION_V0_5:?}, {EDITOR_PROJECT_VERSION_V0_6:?}, {EDITOR_PROJECT_VERSION_V0_7:?}, {EDITOR_PROJECT_VERSION_V0_8:?}, {EDITOR_PROJECT_VERSION_V0_9:?}, {EDITOR_PROJECT_VERSION_V0_10:?}, {EDITOR_PROJECT_VERSION_V0_11:?}, {EDITOR_PROJECT_VERSION_V0_12:?}, {EDITOR_PROJECT_VERSION_V0_13:?}, {EDITOR_PROJECT_VERSION_V0_14:?}, or {EDITOR_PROJECT_VERSION_V0_15:?}"
             ),
             Self::SourceHashMismatch { expected, found } => write!(
                 formatter,
@@ -2053,6 +2056,10 @@ impl fmt::Display for EditorProjectError {
                 formatter,
                 "editor project operation {index} uses text-format overrides but the project schema predates pub-editor-v0.14"
             ),
+            Self::LegacyProjectCarriesParagraphAlignmentOperation { index } => write!(
+                formatter,
+                "editor project operation {index} uses paragraph alignment overrides but the project schema predates pub-editor-v0.15"
+            ),
             Self::LegacyProjectCarriesTableGrids => formatter.write_str(
                 "editor projects before pub-editor-v0.6 cannot carry EffectiveTableGridV1 state",
             ),
@@ -2060,7 +2067,7 @@ impl fmt::Display for EditorProjectError {
                 "editor projects before pub-editor-v0.11 cannot carry durable project identity",
             ),
             Self::MissingProjectIdentity => formatter.write_str(
-                "pub-editor-v0.11 requires durable project identity",
+                "pub-editor-v0.11+ requires durable project identity",
             ),
             Self::TableGridMismatch => formatter.write_str(
                 "editor project EffectiveTableGridV1 state does not match deterministic replay",
@@ -2964,12 +2971,23 @@ impl EditorSession {
                     | EditOperation::ClearTextFormatPropertyOverride { .. }
             )
         });
-        if (carries_reorder || carries_text_format) && self.project_identity.is_none() {
+        let carries_paragraph_alignment = self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetParagraphAlignmentOverride { .. }
+                    | EditOperation::ClearParagraphAlignmentOverride { .. }
+            )
+        });
+        if (carries_reorder || carries_text_format || carries_paragraph_alignment)
+            && self.project_identity.is_none()
+        {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (
-                if carries_text_format {
+                if carries_paragraph_alignment {
+                    EDITOR_PROJECT_VERSION_V0_15
+                } else if carries_text_format {
                     EDITOR_PROJECT_VERSION_V0_14
                 } else if carries_reorder {
                     EDITOR_PROJECT_VERSION_V0_13
@@ -3097,6 +3115,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -3127,6 +3146,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project
                 .operations
@@ -3146,6 +3166,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project
                 .operations
@@ -3164,6 +3185,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -3176,6 +3198,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -3190,6 +3213,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project
                 .operations
@@ -3205,6 +3229,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project
                 .operations
@@ -3219,6 +3244,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project
                 .operations
@@ -3232,6 +3258,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project
                 .operations
@@ -3246,6 +3273,7 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project
                 .operations
@@ -3257,6 +3285,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::ReorderAuthoredStack { .. })
@@ -3266,7 +3295,9 @@ impl EditorSession {
                 );
             }
         }
-        if project.schema_version != EDITOR_PROJECT_VERSION_V0_14 {
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
+        {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(
                     operation,
@@ -3277,10 +3308,24 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesTextFormatOperation { index });
             }
         }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_15 {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(
+                    operation,
+                    EditOperation::SetParagraphAlignmentOverride { .. }
+                        | EditOperation::ClearParagraphAlignmentOverride { .. }
+                )
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesParagraphAlignmentOperation { index },
+                );
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_15
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
@@ -3288,7 +3333,8 @@ impl EditorSession {
         if (project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -3313,6 +3359,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -3379,6 +3426,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_15
         {
             let actual_grids = effective_table_grids(&candidate.graph);
             if actual_grids != project.table_grids {
