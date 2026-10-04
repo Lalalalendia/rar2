@@ -222,7 +222,7 @@ VISUAL_ORACLE = (
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/source_font.rs",
-    "apps/chaptera-desktop/src/main.rs",
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
     "tools/acquire_carlton_march_pair.py",
     "tools/pdf_reference_diff_v1.py",
     "tools/reader_reference_pdf_raster_v1.py",
@@ -278,7 +278,7 @@ TYPOGRAPHY_GOLDEN = (
     "crates/chaptera-viewer-render-plan/**",
     "apps/chaptera-desktop/src/render_backend.rs",
     "apps/chaptera-desktop/src/source_font.rs",
-    "apps/chaptera-desktop/src/main.rs",
+    "apps/chaptera-desktop/src/reader_visual_golden_tests.rs",
     ".github/workflows/reader-typography-golden.yml",
 )
 
