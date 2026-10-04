@@ -129,9 +129,9 @@ use pub_model::{
     StoryId, derive_source_canonical_id,
 };
 use pub_quill::{
-    QuillGroundedStoryIdentity, QuillMcldReadError, QuillMcldVerticalAlignment,
-    QuillParagraphAlignment, QuillScriptFontEntryDisposition, QuillStoryReadError,
-    QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
+    QuillEffectiveBoolean, QuillGroundedStoryIdentity, QuillMcldReadError,
+    QuillMcldVerticalAlignment, QuillParagraphAlignment, QuillScriptFontEntryDisposition,
+    QuillStoryReadError, QuillTypographyValueSource, bounded_mcld_text_frame_vertical_alignment,
     bounded_mcld_uniform_text_inset, parse_bounded_fdpp_exact_story_catalog, parse_bounded_mcld,
     parse_bounded_typography, parse_confirmed_story_catalog,
 };
@@ -590,6 +590,21 @@ pub struct PubParagraphAlignmentRun {
     pub source_ref: SourceRef,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PubTypographyBooleanV1 {
+    pub local_toggle: bool,
+    pub inherited_value: bool,
+    pub effective_value: bool,
+}
+
+fn project_effective_boolean_v1(source: &QuillEffectiveBoolean) -> PubTypographyBooleanV1 {
+    PubTypographyBooleanV1 {
+        local_toggle: source.local_toggle,
+        inherited_value: source.inherited_value,
+        effective_value: source.effective_value,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubTypographyRun {
     pub story_id: StoryId,
@@ -606,6 +621,10 @@ pub struct PubTypographyRun {
     pub color_rgb: Option<[u8; 3]>,
     #[serde(default)]
     pub color_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<PubTypographyBooleanV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<PubTypographyBooleanV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2884,6 +2903,8 @@ pub fn build_mature_0x2c_from_streams(
                         == QuillTypographyValueSource::InheritedStsh1,
                     color_rgb: run.color_rgb,
                     color_inherited: run.color_inherited,
+                    bold: run.bold.as_ref().map(project_effective_boolean_v1),
+                    italic: run.italic.as_ref().map(project_effective_boolean_v1),
                 });
             }
         } else {
@@ -2927,6 +2948,8 @@ pub fn build_mature_0x2c_from_streams(
                     size_inherited: false,
                     color_rgb: run.color_rgb,
                     color_inherited: run.color_inherited,
+                    bold: None,
+                    italic: None,
                 });
             }
         }
@@ -5462,6 +5485,34 @@ mod tests {
             unresolved_entries,
             invalid_entries,
             receipt["times_new_roman_script_slots"],
+        );
+    }
+
+    #[test]
+    fn typography_boolean_projection_preserves_xor_operands_and_effective_value() {
+        let source = QuillEffectiveBoolean {
+            local_toggle: true,
+            local_toggle_source: Some(RawSpan {
+                stream: StreamPath("/Quill/QuillSub/CONTENTS".into()),
+                offset: 100,
+                len: 2,
+            }),
+            inherited_value: true,
+            inherited_style_source: RawSpan {
+                stream: StreamPath("/Quill/QuillSub/CONTENTS".into()),
+                offset: 200,
+                len: 12,
+            },
+            effective_value: false,
+        };
+
+        assert_eq!(
+            project_effective_boolean_v1(&source),
+            PubTypographyBooleanV1 {
+                local_toggle: true,
+                inherited_value: true,
+                effective_value: false,
+            }
         );
     }
 
