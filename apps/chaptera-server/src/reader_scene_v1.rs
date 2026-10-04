@@ -1790,7 +1790,8 @@ mod tests {
 
     use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
-        RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
+        ExplicitRenderTextFontResourceV1, RenderTextLayoutDispositionV1,
+        build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
         uniform_text_color_rgb_v1,
     };
@@ -2423,6 +2424,27 @@ mod tests {
         }
 
         let font = shared_text_font_resource();
+        // Measurement-only discriminator for #1139. A tiny positive line height
+        // removes the vertical-capacity gate while preserving the exact current
+        // shaping font, text, width, break policy and source typography. If a
+        // current fallback becomes exactly one fully-consumed line here, width
+        // was not the reason the normal path rejected it.
+        let first_line_width_probe_font = ExplicitRenderTextFontResourceV1 {
+            resource_id: font.resource_id,
+            expected_sha256: font.expected_sha256,
+            face_index: font.face_index,
+            default_font_size_emu: font.default_font_size_emu,
+            default_line_height_emu: 1,
+            bytes: font.bytes,
+        };
+        // Exact Publisher2019 Arial authority from the retained native font
+        // receipt: natural Single = 2288/2048 em. This is diagnostic only; it
+        // is not promoted as a fallback-font or default paragraph rule.
+        let native_arial_14pt_single_emu = i64::try_from(
+            (i128::from(177_800_i64) * 2_288_i128 + 1_024_i128) / 2_048_i128,
+        )
+        .expect("14pt native Arial Single metric must fit i64");
+        let mut target_14pt_first_line_fit_counts = BTreeMap::<String, usize>::new();
 
         let mut text_nodes = 0_usize;
         let mut shared_frames = 0_usize;
@@ -2450,8 +2472,27 @@ mod tests {
             let plan =
                 build_page_render_plan_with_text_layout_v1(&bundle.geometry, page_index, &font)
                     .expect("exact reference render plan must build");
+            let first_line_probe = build_page_render_plan_with_text_layout_v1(
+                &bundle.geometry,
+                page_index,
+                &first_line_width_probe_font,
+            )
+            .expect("exact reference first-line width probe must build");
+            assert_eq!(
+                plan.nodes.len(),
+                first_line_probe.nodes.len(),
+                "first-line probe must preserve render-plan node cardinality"
+            );
 
-            for node in plan.nodes {
+            for (node, probe_node) in plan
+                .nodes
+                .into_iter()
+                .zip(first_line_probe.nodes.into_iter())
+            {
+                assert_eq!(
+                    &node.node_id, &probe_node.node_id,
+                    "first-line probe must preserve render-plan node order"
+                );
                 let projected = node
                     .projected_scene_instance
                     .as_ref()
@@ -2461,7 +2502,84 @@ mod tests {
                 let Some(text) = node.text else {
                     continue;
                 };
+                let probe_text = probe_node.text.as_ref();
                 text_nodes += 1;
+
+                let mut target_cursor = text.scalar_start;
+                let mut target_complete_typography = !text.typography.is_empty();
+                let mut target_sizes = std::collections::BTreeSet::<u32>::new();
+                for run in &text.typography {
+                    target_complete_typography &= run.scalar_start == target_cursor
+                        && run.scalar_end > run.scalar_start
+                        && run.scalar_end <= text.scalar_end;
+                    target_cursor = run.scalar_end;
+                    target_sizes.insert(run.text_size_emu);
+                }
+                target_complete_typography &= target_cursor == text.scalar_end;
+                let target_source_size = if target_complete_typography && target_sizes.len() == 1 {
+                    target_sizes.iter().next().copied()
+                } else {
+                    None
+                };
+                if target_source_size == Some(177_800) {
+                    let story_text = bundle
+                        .geometry
+                        .document
+                        .stories
+                        .iter()
+                        .find(|story| story.id == text.story_id)
+                        .map(|story| story.text.as_str());
+                    let spacing_absent = !bundle
+                        .geometry
+                        .paragraph_line_spacings
+                        .iter()
+                        .filter(|run| run.story_id == text.story_id)
+                        .filter(|run| {
+                            story_text.is_some_and(|story_text| run.applies_to_story_text(story_text))
+                        })
+                        .any(|run| {
+                            run.scalar_end > text.scalar_start && run.scalar_start < text.scalar_end
+                        });
+                    let backend = if text.backend_font_resource_id.is_some() {
+                        "source"
+                    } else {
+                        "none"
+                    };
+                    let current_layout = match text.layout.as_ref() {
+                        None => "none".to_owned(),
+                        Some(layout) => match &layout.disposition {
+                            RenderTextLayoutDispositionV1::SharedResolved { .. } => {
+                                format!("shared_resolved:{}line", layout.lines.len())
+                            }
+                            RenderTextLayoutDispositionV1::BackendFallback { reason } => {
+                                format!("fallback:{}", reason.code())
+                            }
+                        },
+                    };
+                    let probe_layout = match probe_text.and_then(|text| text.layout.as_ref()) {
+                        None => "none".to_owned(),
+                        Some(layout) => match &layout.disposition {
+                            RenderTextLayoutDispositionV1::SharedResolved { .. } => {
+                                format!("shared_resolved:{}line", layout.lines.len())
+                            }
+                            RenderTextLayoutDispositionV1::BackendFallback { reason } => {
+                                format!("fallback:{}", reason.code())
+                            }
+                        },
+                    };
+                    let available_height_emu = node
+                        .text_bounds
+                        .as_ref()
+                        .unwrap_or(&node.bounds)
+                        .height
+                        .get();
+                    let native_single_fits =
+                        available_height_emu >= native_arial_14pt_single_emu;
+                    let key = format!(
+                        "spacing_absent={spacing_absent}|backend={backend}|current={current_layout}|probe={probe_layout}|native_single_fits={native_single_fits}"
+                    );
+                    *target_14pt_first_line_fit_counts.entry(key).or_default() += 1;
+                }
 
                 if projected {
                     projected_text_nodes += 1;
@@ -2579,9 +2697,17 @@ mod tests {
             .expect("serialize projected line heights");
         let projected_uniform_insets_json = serde_json::to_string(&projected_uniform_insets_emu)
             .expect("serialize projected uniform text insets");
+        let target_14pt_first_line_fit_counts_json =
+            serde_json::to_string(&target_14pt_first_line_fit_counts)
+                .expect("serialize 14pt first-line fit census");
 
         match actual_sha256.as_str() {
             "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3" => {
+                assert_eq!(
+                    target_14pt_first_line_fit_counts.values().sum::<usize>(),
+                    10,
+                    "exact Carlton 14pt witness count drift"
+                );
                 assert_eq!(
                     projected_text_nodes, 4,
                     "exact Carlton projected carrier count drift"
@@ -2620,6 +2746,13 @@ mod tests {
             }
             _ => {}
         }
+
+        println!(
+            "CLOUD_READER_FIRST_LINE_FIT_CENSUS source_sha256={} native_arial_14pt_single_emu={} target_14pt_counts={}",
+            actual_sha256,
+            native_arial_14pt_single_emu,
+            target_14pt_first_line_fit_counts_json,
+        );
 
         println!(
             "CLOUD_READER_TEXT_LAYOUT_FALLBACK_CENSUS source_sha256={} pages={} text_nodes={} shared_frames={} shared_lines={} shared_nonempty_lines={} layout_none={} backend_fallbacks={} projected_text_nodes={} projected_typography_runs={} projected_complete_typography_nodes={} projected_single_family_nodes={} projected_source_family_fingerprints={} projected_blank_source_family_runs={} projected_source_sizes_emu={} projected_backend_resources={} projected_layout_resources={} projected_layout_fingerprints={} projected_line_counts={} projected_line_heights_emu={} projected_text_bounds_nodes={} projected_uniform_insets_emu={} projected_measured_width_total_emu={}",
