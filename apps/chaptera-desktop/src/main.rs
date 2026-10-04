@@ -24,6 +24,8 @@ mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
 mod supporter_ui;
+#[allow(dead_code)]
+mod supporter_routes;
 mod text_session;
 #[cfg(target_os = "windows")]
 mod windows_dll_search;
