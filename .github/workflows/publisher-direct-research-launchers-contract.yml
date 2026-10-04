@@ -70,7 +70,12 @@ jobs:
               "git hash-object",
               "Publisher Build mismatch",
               "MSPUB.EXE",
-              "OutputRoot is not empty"
+              "OutputRoot is not empty",
+              "chaptera.master-projection-stack-auth.v1",
+              "MASTER-PROJECTION-STACK-AUTH-01",
+              "allowedVerdicts",
+              "armWinners",
+              "ambiguous_or_creation_order_sensitive"
             )) {
               if (-not $text.Contains($required)) {
                 throw "Missing bounded direct-launcher marker '$required' in $path"
