@@ -6301,14 +6301,20 @@ fn paint_snap_feedback(
     if let Some(feedback) = x {
         let x = page_rect.left() + feedback.position.get() as f32 * scene_scale;
         painter.line_segment(
-            [egui::pos2(x, page_rect.top()), egui::pos2(x, page_rect.bottom())],
+            [
+                egui::pos2(x, page_rect.top()),
+                egui::pos2(x, page_rect.bottom()),
+            ],
             stroke,
         );
     }
     if let Some(feedback) = y {
         let y = page_rect.top() + feedback.position.get() as f32 * scene_scale;
         painter.line_segment(
-            [egui::pos2(page_rect.left(), y), egui::pos2(page_rect.right(), y)],
+            [
+                egui::pos2(page_rect.left(), y),
+                egui::pos2(page_rect.right(), y),
+            ],
             stroke,
         );
     }
