@@ -8756,30 +8756,32 @@ mod tests {
                             projected.scene_instance.instance_id == instance.instance_id
                         })
                         .expect("render-plan projected instance must come from Viewer adapter");
-                    let target_frame = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .find(|candidate| candidate.origin == viewer_projected.target_frame_node_id)
-                        .expect("projected target frame remains in resolved customer scene");
+                    let target_frame =
+                        viewer_projected.target_frame_node_id.and_then(|target_id| {
+                            visual
+                                .scene
+                                .nodes
+                                .iter()
+                                .find(|candidate| candidate.origin == target_id)
+                        });
                     Some(serde_json::json!({
                         "instance_id": instance.instance_id,
                         "origin_node_id": instance.origin_node_id,
+                        "projection_kind": instance.projection_kind,
                         "target_frame_node_id": viewer_projected
                             .target_frame_node_id
-                            .as_canonical()
-                            .to_string(),
+                            .map(|target_id| target_id.as_canonical().to_string()),
                         "cmo_slot_index": instance.cmo_slot_index,
                         "cmo_scalar_index": instance.cmo_scalar_index,
                         "target_frame_paint_scalar_end": viewer_projected
                             .target_frame_paint_scalar_end,
                         "story_authority_present": instance.story_authority_id.is_some(),
-                        "target_frame_bounds_emu": [
+                        "target_frame_bounds_emu": target_frame.map(|target_frame| [
                             target_frame.bounds.x.get(),
                             target_frame.bounds.y.get(),
                             target_frame.bounds.width.get(),
                             target_frame.bounds.height.get(),
-                        ],
+                        ]),
                         "projected_bounds_emu": [
                             node.bounds.x.get(),
                             node.bounds.y.get(),
