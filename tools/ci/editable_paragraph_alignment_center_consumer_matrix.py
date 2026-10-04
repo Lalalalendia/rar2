@@ -55,6 +55,38 @@ def probe_source(probe: Path, source: Path) -> dict:
     return json.loads(run.stdout)
 
 
+def run_json_command(command: list[str], *, timeout: int) -> dict:
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "returncode": None}
+
+    result = {
+        "status": "success" if completed.returncode == 0 else "failure",
+        "returncode": completed.returncode,
+    }
+    if completed.returncode != 0:
+        result["stdout_tail"] = completed.stdout[-4000:]
+        result["stderr_tail"] = completed.stderr[-4000:]
+        return result
+
+    try:
+        result["payload"] = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        result["status"] = "failure"
+        result["reason_code"] = "invalid_json"
+        result["stdout_tail"] = completed.stdout[-4000:]
+        result["stderr_tail"] = completed.stderr[-4000:]
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus-root", type=Path, required=True)
@@ -117,7 +149,7 @@ def main() -> int:
 
         materialized = case_root / "materialized"
         materialized.mkdir(parents=True, exist_ok=True)
-        route = run_command(
+        route = run_json_command(
             [
                 str(args.route_probe),
                 str(source),
@@ -128,8 +160,24 @@ def main() -> int:
             ],
             timeout=120,
         )
-        row["materialize"] = route
+        row["route_probe"] = {
+            key: value for key, value in route.items() if key != "payload"
+        }
         if route["status"] != "success":
+            row["target_route_eligible"] = False
+            results.append(row)
+            continue
+
+        route_payload = route["payload"]
+        row["route"] = route_payload
+        targets = route_payload.get("targets", {})
+        target_route_eligible = all(
+            targets.get(target, {}).get("state") == "available_with_declared_losses"
+            and targets.get(target, {}).get("materialized") is True
+            for target in ("idml", "odg")
+        )
+        row["target_route_eligible"] = target_route_eligible
+        if not target_route_eligible:
             results.append(row)
             continue
 
@@ -307,34 +355,62 @@ def main() -> int:
         row["libreoffice_alignment_verify"] = lo_verify
         results.append(row)
 
+    available = [row for row in results if row.get("target_route_eligible") is True]
+    excluded = [row for row in results if row.get("target_route_eligible") is False]
+
+    def expected_preview_failed_exclusion(row: dict) -> bool:
+        if row.get("route_probe", {}).get("status") != "success":
+            return False
+        route = row.get("route", {})
+        if route.get("open_state") != "admitted":
+            return False
+        targets = route.get("targets", {})
+        return all(
+            targets.get(target, {}).get("state") == "not_verified"
+            and targets.get(target, {}).get("reason_code") == "preview_failed"
+            and targets.get(target, {}).get("materialized") is False
+            for target in ("idml", "odg")
+        )
+
     summary = {
-        "all_materialized": all(
-            row.get("materialize", {}).get("status") == "success"
-            for row in results
+        "all_center_source_routes_accounted": (
+            len(available) + len(excluded) == len(results)
+            and all(expected_preview_failed_exclusion(row) for row in excluded)
         ),
-        "all_wire_verified": all(
+        "all_materializable_wire_verified": all(
             row.get("wire", {}).get("status") == "success"
-            for row in results
+            for row in available
         ),
-        "all_scribus_save_reopen_verified": all(
+        "all_materializable_scribus_save_reopen_verified": all(
             row.get("scribus_import_save", {}).get("status") == "success"
             and row.get("scribus_fresh_reopen_save", {}).get("status") == "success"
             and row.get("scribus_alignment_verify", {}).get("status") == "success"
-            for row in results
+            for row in available
         ),
-        "all_libreoffice_save_reopen_verified": all(
+        "all_materializable_libreoffice_save_reopen_verified": all(
             row.get("libreoffice_import_save", {}).get("status") == "success"
             and row.get("libreoffice_fresh_reopen_save", {}).get("status") == "success"
             and row.get("libreoffice_second_reopen_export", {}).get("status") == "success"
             and row.get("libreoffice_alignment_verify", {}).get("status") == "success"
-            for row in results
+            for row in available
         ),
     }
-    center_class_proven = all(summary.values())
+    materializable_center_class_proven = all(summary.values())
     receipt = {
         "schema": "chaptera.editable-paragraph-alignment-center-consumer-matrix.v1",
         "source_count": len(results),
         "center_story_count": sum(row["center_story_count"] for row in results),
+        "materializable_source_count": len(available),
+        "materializable_center_story_count": sum(
+            row["center_story_count"] for row in available
+        ),
+        "non_materializable_source_count": len(excluded),
+        "non_materializable_center_story_count": sum(
+            row["center_story_count"] for row in excluded
+        ),
+        "non_materializable_source_sha256": sorted(
+            row["source_sha256"] for row in excluded
+        ),
         "right_story_count_in_selected_sources": sum(
             row["right_story_count"] for row in results
         ),
@@ -342,7 +418,11 @@ def main() -> int:
         "summary": summary,
         "claims": {
             "measurement_only": True,
-            "consumer_survival_proven_for_center_class": center_class_proven,
+            "consumer_survival_proven_for_materializable_center_class": (
+                materializable_center_class_proven
+            ),
+            "consumer_survival_proven_for_full_center_source_class": False,
+            "all_center_sources_materializable": len(excluded) == 0,
             "right_class_fully_proven": False,
             "loss_report_or_manifest_changed": False,
             "story_text_recorded": False,
@@ -353,6 +433,16 @@ def main() -> int:
     print(json.dumps({
         "source_count": receipt["source_count"],
         "center_story_count": receipt["center_story_count"],
+        "materializable_source_count": receipt["materializable_source_count"],
+        "materializable_center_story_count": receipt[
+            "materializable_center_story_count"
+        ],
+        "non_materializable_source_count": receipt[
+            "non_materializable_source_count"
+        ],
+        "non_materializable_center_story_count": receipt[
+            "non_materializable_center_story_count"
+        ],
         "right_story_count_in_selected_sources": receipt[
             "right_story_count_in_selected_sources"
         ],
