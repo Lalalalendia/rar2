@@ -700,6 +700,137 @@ mod tests {
     }
 
     #[test]
+    fn real_sample_newsletter_boolean_format_helper_is_durable_and_reversible() {
+        let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
+            eprintln!(
+                "CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated direct-text gate owns real evidence"
+            );
+            return;
+        };
+
+        let original = fs::read(&path).expect("read pinned SampleNewsletter");
+        let digest = Sha256::digest(&original);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let mut editor =
+            open_mature_0x2c_editor(&original, source_hash).expect("open real SampleNewsletter");
+        let visual = pub_viewer::open_mature_0x2c_geometry(
+            &original,
+            pub_viewer::viewer_geometry_environment_v0_1(),
+        )
+        .expect("open real SampleNewsletter Viewer geometry");
+
+        let (story_id, frame_id) = visual
+            .text_fragments
+            .iter()
+            .find_map(|fragment| {
+                let mut mode =
+                    enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id).ok()?;
+                select_all(&mut mode);
+                boolean_format_selection_state_v1(
+                    &editor,
+                    &mode,
+                    DesktopBooleanFormatPropertyV1::Bold,
+                )
+                .ok()?;
+                Some((fragment.story_id, fragment.frame_id))
+            })
+            .expect("real fixture exposes one Story with bounded effective Bold base");
+
+        let source_text = editor.graph().stories[&story_id].text.clone();
+        let operations_before = editor.operations().len();
+        let mut mode =
+            enter_explicit_text_mode(&editor, story_id, frame_id).expect("enter format Story");
+        select_all(&mut mode);
+        let before = boolean_format_selection_state_v1(
+            &editor,
+            &mode,
+            DesktopBooleanFormatPropertyV1::Bold,
+        )
+        .expect("read source-effective Bold state");
+        let expected = before.next_explicit_value();
+
+        let operation = apply_boolean_format_toggle_v1(
+            &mut editor,
+            &mut mode,
+            DesktopBooleanFormatPropertyV1::Bold,
+        )
+        .expect("commit canonical Bold operation");
+        assert_eq!(editor.operations().len(), operations_before + 1);
+        assert!(matches!(
+            operation,
+            EditOperation::SetTextFormatProperty {
+                story_id: id,
+                property: pub_editor::FormatPropertyV1::Bold,
+                value: pub_editor::FormatValueV1::Bool(value),
+                ..
+            } if id == story_id && value == expected
+        ));
+        assert_eq!(editor.graph().stories[&story_id].text, source_text);
+        assert_eq!(mode.session.revision_id, editor.project().state_id_v1());
+
+        let after = boolean_format_selection_state_v1(
+            &editor,
+            &mode,
+            DesktopBooleanFormatPropertyV1::Bold,
+        )
+        .expect("read edited Bold state");
+        assert_eq!(
+            after.effective,
+            DesktopBooleanEffectiveStateV1::Uniform(expected)
+        );
+
+        editor.undo().expect("Undo Bold formatting");
+        rebind_after_non_text_document_change(&editor, &mut mode)
+            .expect("rebind after format Undo");
+        let undone = boolean_format_selection_state_v1(
+            &editor,
+            &mode,
+            DesktopBooleanFormatPropertyV1::Bold,
+        )
+        .expect("read undone Bold state");
+        assert_eq!(undone, before);
+
+        editor.redo().expect("Redo Bold formatting");
+        rebind_after_non_text_document_change(&editor, &mut mode)
+            .expect("rebind after format Redo");
+        let redone = boolean_format_selection_state_v1(
+            &editor,
+            &mode,
+            DesktopBooleanFormatPropertyV1::Bold,
+        )
+        .expect("read redone Bold state");
+        assert_eq!(redone, after);
+
+        let project = editor.project();
+        let mut reopened =
+            open_mature_0x2c_editor(&original, source_hash).expect("fresh reopen source");
+        reopened
+            .apply_project(&project)
+            .expect("replay saved-format project onto fresh source");
+        let mut reopened_mode =
+            enter_explicit_text_mode(&reopened, story_id, frame_id).expect("reenter reopened Story");
+        select_all(&mut reopened_mode);
+        assert_eq!(
+            boolean_format_selection_state_v1(
+                &reopened,
+                &reopened_mode,
+                DesktopBooleanFormatPropertyV1::Bold,
+            )
+            .expect("read replayed Bold state"),
+            after
+        );
+        assert_eq!(reopened.graph().stories[&story_id].text, source_text);
+        assert_eq!(reopened.source_hash(), source_hash);
+        assert_eq!(
+            fs::read(path).expect("re-read source PUB"),
+            original,
+            "Bold formatting history must not mutate source PUB bytes"
+        );
+    }
+
+    #[test]
     fn real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits() {
         let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
             eprintln!(
