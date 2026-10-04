@@ -1,7 +1,5 @@
 use pub_model::Sha256Digest;
-use pub_reader::{
-    build_mature_0x2c_source_graph, has_exact_mature_quill_story_identity_v1,
-};
+use pub_reader::{build_mature_0x2c_source_graph, has_exact_mature_quill_story_identity_v1};
 use std::io::Cursor;
 
 #[test]
