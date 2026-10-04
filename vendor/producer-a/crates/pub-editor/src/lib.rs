@@ -4061,6 +4061,9 @@ impl EditorSession {
 
     pub fn can_replace_story_text(&self, story_id: StoryId) -> Result<(), EditorError> {
         self.validate_source_identity()?;
+        if self.story_has_authored_paragraph_alignment_override_v1(story_id)? {
+            return Err(EditorError::ParagraphAlignmentLifecycleUnsupported { story_id });
+        }
 
         let story = self
             .graph
@@ -4188,6 +4191,9 @@ impl EditorSession {
         let story_id = table
             .story_id
             .ok_or(EditorError::TableEditUnsupported { node_id })?;
+        if self.story_has_authored_paragraph_alignment_override_v1(story_id)? {
+            return Err(EditorError::ParagraphAlignmentLifecycleUnsupported { story_id });
+        }
         let story = self
             .graph
             .stories
@@ -4946,6 +4952,11 @@ impl EditorSession {
             .first()
             .expect("explicit chain must be non-empty")
             .story_id;
+        if self.story_has_authored_paragraph_alignment_override_v1(source_story_id)? {
+            return Err(EditorError::ParagraphAlignmentLifecycleUnsupported {
+                story_id: source_story_id,
+            });
+        }
         if source_story_id == new_story_id {
             return Err(EditorError::NewStoryIdConflict {
                 story_id: new_story_id,
