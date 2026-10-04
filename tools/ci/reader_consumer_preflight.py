@@ -22,6 +22,13 @@ VENDOR_CRATES = (
 )
 UPSTREAM = {"pub-core", "pub-cfb", "pub-contents", "pub-escher", "pub-model", "pub-quill"}
 
+# The active repository also has a root pub-model@0.1.0. The vendored
+# producer workspace intentionally keeps its donor model at 0.1.0-donor,
+# so plain `-p pub-model` is ambiguous whenever Cargo resolves both graphs.
+VENDOR_PACKAGE_SPECS = {
+    "pub-model": "pub-model@0.1.0-donor",
+}
+
 
 def changed_paths(base: str, head: str) -> list[str]:
     return sorted(
@@ -139,7 +146,11 @@ def build_plan(paths: list[str], base: str, head: str) -> dict:
 
     packages = sorted(affected)
     if packages:
-        flags = [item for package in packages for item in ("-p", package)]
+        flags = [
+            item
+            for package in packages
+            for item in ("-p", VENDOR_PACKAGE_SPECS.get(package, package))
+        ]
         commands.extend(
             [
                 {
