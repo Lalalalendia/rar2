@@ -14,6 +14,11 @@ on:
       - "vendor/producer-a/crates/pub-editor/**"
       - "vendor/producer-a/crates/pub-odg/**"
       - "crates/chaptera-scene-instance/**"
+      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - "crates/chaptera-desktop-fallback-font-resource/**"
+      - "tools/run_editor_fixed_pdf_current_revision_v1.py"
+      - "tools/run_yab259_editor_packet_renderer.py"
+      - "tools/yab259_editor_packet_renderer.rs"
   workflow_dispatch:
 
 permissions:
@@ -122,8 +127,79 @@ jobs:
             throw "retained V2 receipt leaked local replacement path"
           }
 
+      - name: Materialize pinned fixed-output font
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $font = Join-Path $env:RUNNER_TEMP "chaptera-fixed-output-font.ttf"
+          cargo run --quiet -p chaptera-desktop-fallback-font-resource --bin materialize-fallback-font -- "$font"
+          if (-not (Test-Path $font)) { throw "pinned fixed-output font was not materialized" }
+          $bytes = (Get-Item $font).Length
+          if ($bytes -ne 361676) { throw "pinned fixed-output font byte length mismatch: $bytes" }
+          "CHAPTERA_FIXED_OUTPUT_FONT=$font" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Editor source-neutral fixed-output packet
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:RUNNER_TEMP "chaptera-desktop-continuity-v2"
+          $project = Join-Path $out "continuity-v2.project.json"
+          $packet = Join-Path $out "current-fixed-output.packet.json"
+          cargo run --quiet --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --bin current_fixed_output_packet -- --source "$env:CHAPTERA_SAMPLE_NEWSLETTER" --project "$project" --asset "$env:CHAPTERA_CONTINUITY_REPLACEMENT" --font "$env:CHAPTERA_FIXED_OUTPUT_FONT" --output "$packet"
+          if (-not (Test-Path $packet)) { throw "current fixed-output packet was not written" }
+          "CHAPTERA_CURRENT_FIXED_OUTPUT_PACKET=$packet" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Acquire exact public Yab renderer donor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $yab = Join-Path $env:RUNNER_TEMP "yab259-editor-fixed-output"
+          git clone --quiet https://github.com/HeisLuka/yab "$yab"
+          git -C "$yab" cat-file -e "4f5d8a57abc089d1ed8eb1326cf9bed602281f7e^{commit}"
+          "CHAPTERA_YAB259_CHECKOUT=$yab" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Produce real PDF from fresh-reopened V2 current revision
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:RUNNER_TEMP "chaptera-desktop-continuity-v2"
+          $project = Join-Path $out "continuity-v2.project.json"
+          $stage01 = Join-Path $out "editor-desktop-continuity-v2.real.json"
+          $pdf = Join-Path $out "current-revision.pdf"
+          $receipt = Join-Path $out "editor-fixed-pdf-current-revision.real.json"
+          python tools/run_editor_fixed_pdf_current_revision_v1.py --source "$env:CHAPTERA_SAMPLE_NEWSLETTER" --project "$project" --replacement "$env:CHAPTERA_CONTINUITY_REPLACEMENT" --stage01-receipt "$stage01" --packet "$env:CHAPTERA_CURRENT_FIXED_OUTPUT_PACKET" --pdf-output "$pdf" --receipt-output "$receipt" -- python tools/run_yab259_editor_packet_renderer.py --yab-checkout "$env:CHAPTERA_YAB259_CHECKOUT"
+          if (-not (Test-Path $pdf)) { throw "current-revision PDF was not written" }
+          if (-not (Test-Path $receipt)) { throw "current-revision receipt was not written" }
+          $bytes = [System.IO.File]::ReadAllBytes($pdf)
+          $header = [System.Text.Encoding]::ASCII.GetString($bytes[0..7])
+          if (-not $header.StartsWith("%PDF-")) { throw "current-revision artifact is not PDF" }
+          Copy-Item "$pdf" "target/release/editor-fixed-pdf-current-revision.real.pdf"
+          Copy-Item "$receipt" "target/release/editor-fixed-pdf-current-revision.real.json"
+
+      - name: Verify Stage 0.2 retained receipt privacy
+        shell: pwsh
+        run: |
+          $receipt = Get-Content "target/release/editor-fixed-pdf-current-revision.real.json" -Raw
+          $replacementSha = (Get-FileHash $env:CHAPTERA_CONTINUITY_REPLACEMENT -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($receipt.Contains($replacementSha)) {
+            throw "Stage 0.2 receipt leaked replacement asset SHA"
+          }
+          if ($receipt.Contains((Resolve-Path $env:CHAPTERA_SAMPLE_NEWSLETTER).Path)) {
+            throw "Stage 0.2 receipt leaked local source path"
+          }
+          if ($receipt.Contains("replacement_text")) {
+            throw "Stage 0.2 receipt leaked raw replacement text"
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: editor-desktop-continuity-v2-real
-          path: target/release/editor-desktop-continuity-v2.real.json
+          path: |
+            target/release/editor-desktop-continuity-v2.real.json
+            target/release/editor-fixed-pdf-current-revision.real.json
+            target/release/editor-fixed-pdf-current-revision.real.pdf
           if-no-files-found: error
