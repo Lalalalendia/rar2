@@ -379,11 +379,15 @@ fn is_xml_10_scalar(value: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IDML_ADAPTER_VERSION_V0_1, IdmlPackageBuilder};
-    use pub_export::{
-        SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, plan_export,
+    use crate::{
+        IDML_ADAPTER_VERSION_V0_1, IdmlPackageBuilder, IdmlParagraphAlignmentPlacementV1,
+        add_effective_paragraph_alignment_to_idml_v1,
     };
-    use pub_model::CanonicalId;
+    use pub_export::{
+        EffectiveParagraphAlignmentExportV1, ParagraphAlignmentV1, SemanticFeatureRequest,
+        TargetCapabilityManifest, TargetProfile, plan_export,
+    };
+    use pub_model::{CanonicalId, ParagraphId, TextRange};
     use std::collections::BTreeMap;
 
     fn id(byte: u8) -> CanonicalId {
@@ -528,6 +532,67 @@ mod tests {
                 .iter()
                 .all(|part| part.path != "Resources/Fonts.xml")
         );
+    }
+
+    #[test]
+    fn composes_full_story_typography_after_paragraph_split() {
+        let story_id = story(9);
+        let export_plan = plan(story_id);
+        let mut package = package(&export_plan, story_id);
+        let first = ParagraphId::from_canonical(id(10));
+        let second = ParagraphId::from_canonical(id(11));
+
+        add_effective_paragraph_alignment_to_idml_v1(
+            &mut package,
+            &[IdmlParagraphAlignmentPlacementV1 {
+                story_id,
+                story_text: "alpha\rbeta".into(),
+                paragraphs: vec![
+                    EffectiveParagraphAlignmentExportV1 {
+                        paragraph_id: first,
+                        story_id,
+                        range: TextRange::new(0, 6).unwrap(),
+                        alignment: Some(ParagraphAlignmentV1::Center),
+                    },
+                    EffectiveParagraphAlignmentExportV1 {
+                        paragraph_id: second,
+                        story_id,
+                        range: TextRange::new(6, 10).unwrap(),
+                        alignment: Some(ParagraphAlignmentV1::Right),
+                    },
+                ],
+            }],
+        )
+        .expect("paragraph split");
+
+        add_full_story_typography_to_idml(
+            &export_plan,
+            &mut package,
+            &[FullStoryTypographyV1 {
+                story_id,
+                font_family: "Montserrat".into(),
+                font_size_emu: LengthEmu::new(12 * EMU_PER_POINT),
+            }],
+        )
+        .expect("typography over multiple paragraph ranges");
+
+        let xml = package
+            .parts
+            .iter()
+            .find(|part| part.kind == IdmlPartKind::Story)
+            .and_then(|part| part.content.as_text())
+            .expect("story XML");
+        assert_eq!(xml.matches("<ParagraphStyleRange ").count(), 2);
+        assert_eq!(xml.matches("PointSize=\"12\"").count(), 2);
+        assert_eq!(
+            xml.matches("<AppliedFont type=\"string\">Montserrat</AppliedFont>")
+                .count(),
+            2
+        );
+        assert!(xml.contains("Justification=\"CenterAlign\""));
+        assert!(xml.contains("Justification=\"RightAlign\""));
+        assert!(xml.contains("<Content>alpha\r</Content>"));
+        assert!(xml.contains("<Content>beta</Content>"));
     }
 
     #[test]
