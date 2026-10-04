@@ -21,6 +21,8 @@ SAFE_CONTINUITY_V2_MODULES = {
 
 DIRECT_CONTINUITY_V2_OWNERS = (
     ".github/workflows/editor-desktop-continuity-v2-windows.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
     "apps/chaptera-desktop/src/acceptance.rs",
     "apps/chaptera-desktop/src/acceptance_v2.rs",
     "apps/chaptera-desktop/src/acceptance_v2_cli.rs",
