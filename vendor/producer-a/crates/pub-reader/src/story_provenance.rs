@@ -158,13 +158,13 @@ mod tests {
         ]);
         assert!(has_exact_mature_quill_story_identity_v1(
             &source(),
-            &story
+            &proven_story
         ));
     }
 
     #[test]
     fn fdpp_bounded_story_requires_identity_boundary_and_text_on_one_key() {
-        let story = story(vec![
+        let proven_story = story(vec![
             source_ref(
                 CONTENTS_STREAM_PATH,
                 SourceRole::Relation,
