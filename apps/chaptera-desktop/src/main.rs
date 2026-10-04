@@ -4192,11 +4192,9 @@ impl ViewerApp {
             if shape.page_id != page.id || shape.parent_id != page.id {
                 continue;
             }
-            let instance = direct_page_local_instance_v1(
-                &node_id.as_canonical().to_string(),
-                &page_id_text,
-            )
-            .map_err(|error| format!("Duplicate selection identity is invalid: {error}"))?;
+            let instance =
+                direct_page_local_instance_v1(&node_id.as_canonical().to_string(), &page_id_text)
+                    .map_err(|error| format!("Duplicate selection identity is invalid: {error}"))?;
             if instance.instance_id != selected_instance {
                 continue;
             }
@@ -4233,7 +4231,9 @@ impl ViewerApp {
             pub_editor::EditOperation::CreateShape { node_id, .. }
                 if node_id == destination_node_id
         ) {
-            return Err("Duplicate must persist as one canonical CreateShape operation.".to_owned());
+            return Err(
+                "Duplicate must persist as one canonical CreateShape operation.".to_owned(),
+            );
         }
 
         self.finish_authoring_change(
@@ -8496,8 +8496,12 @@ mod tests {
                 panic!("Duplicate must persist as CreateShape")
             };
             assert_ne!(*node_id, source_node_id);
-            let source = editor.authored_shape(source_node_id).expect("source authored shape");
-            let duplicate = editor.authored_shape(*node_id).expect("duplicate authored shape");
+            let source = editor
+                .authored_shape(source_node_id)
+                .expect("source authored shape");
+            let duplicate = editor
+                .authored_shape(*node_id)
+                .expect("duplicate authored shape");
             assert_eq!(duplicate.paint, source.paint);
             assert_eq!(duplicate.bounds.width, source.bounds.width);
             assert_eq!(duplicate.bounds.height, source.bounds.height);
