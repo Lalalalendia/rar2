@@ -175,6 +175,7 @@ READER_DESKTOP = (
     "apps/chaptera-desktop/src/image_decode_adapter.rs",
     "apps/chaptera-desktop/src/product_smoke.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
+    "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/render_backend.rs",
 )
 
@@ -346,7 +347,7 @@ UPDATE_ACCEPT = (
     "crates/chaptera-update-orchestrator/**",
     "crates/chaptera-update-trust/**",
     "crates/chaptera-update-handoff/**",
-    "apps/chaptera-desktop/src/main.rs",
+    "apps/chaptera-desktop/src/reader_update_control.rs",
     "installer/windows/chaptera-reader.iss",
     ".github/workflows/chaptera-win-update-accept.yml",
     ".github/workstream-scopes/chaptera-win-update-accept-01.md",
@@ -359,6 +360,7 @@ SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/image_decode_adapter.rs",
     "apps/chaptera-desktop/src/product_smoke.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
+    "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/fallback_font.rs",
     "apps/chaptera-desktop/src/source_font.rs",
 }
