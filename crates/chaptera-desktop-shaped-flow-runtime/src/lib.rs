@@ -1,14 +1,18 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
-use pub_editor::EditorSession;
+use pub_editor::{EditorCurrentImageResourceV1, EditorSession};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
 };
-use pub_model::{LengthEmu, StoryId};
+use pub_model::{LengthEmu, NodeId, StoryId};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt;
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
+pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
+    "chaptera.current-fixed-pdf-resource-input.v1";
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExplicitDesktopFontResourceV1<'a> {
@@ -28,6 +32,38 @@ pub struct DesktopStoryLayoutV1 {
     pub font_fingerprint_sha256: String,
     pub shaped_flow: BoundedShapedFlowScene,
     pub caret_map: ResolvedTextCaretMapV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrentFixedPdfStrokeV1 {
+    pub rgb: [u8; 3],
+    pub width_emu: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrentFixedPdfNodePaintV1 {
+    pub node_id: NodeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_rgb: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<CurrentFixedPdfStrokeV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrentFixedPdfFontV1 {
+    pub fingerprint_sha256: String,
+    pub face_index: u32,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CurrentFixedPdfResourceInputV1 {
+    pub protocol_version: String,
+    pub binding: Value,
+    pub shaped_flow: BoundedShapedFlowScene,
+    pub node_paints: Vec<CurrentFixedPdfNodePaintV1>,
+    pub image_resources: Vec<EditorCurrentImageResourceV1>,
+    pub font: CurrentFixedPdfFontV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +210,41 @@ pub fn build_current_story_layout_v1(
     })
 }
 
+pub fn build_current_fixed_pdf_resource_input_v1(
+    editor: &EditorSession,
+    primary_story_id: StoryId,
+    binding: Value,
+    font: &ExplicitDesktopFontResourceV1<'_>,
+) -> Result<CurrentFixedPdfResourceInputV1, DesktopShapedFlowRuntimeError> {
+    let layout = build_current_story_layout_v1(
+        editor,
+        primary_story_id,
+        "fixed-pdf:current-editor-state",
+        font,
+    )?;
+    let image_resources = editor.current_image_resources_v1().map_err(|error| {
+        DesktopShapedFlowRuntimeError::new(
+            "current_image_resources_failed",
+            format!("current Editor image resources could not be materialized: {error}"),
+        )
+    })?;
+
+    Ok(CurrentFixedPdfResourceInputV1 {
+        protocol_version: CURRENT_FIXED_PDF_RESOURCE_INPUT_V1.to_owned(),
+        binding,
+        shaped_flow: layout.shaped_flow,
+        // Keep paint admission explicit. The Stage-0.2 real run will tell us
+        // whether the exact Move/Resize targets require a paint resource seam.
+        node_paints: Vec::new(),
+        image_resources,
+        font: CurrentFixedPdfFontV1 {
+            fingerprint_sha256: layout.font_fingerprint_sha256,
+            face_index: font.face_index,
+            bytes: font.bytes.to_vec(),
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +265,55 @@ mod tests {
             line_height_emu: LengthEmu::new(12 * EMU_PER_POINT),
             bytes,
         }
+    }
+
+    #[test]
+    fn current_fixed_pdf_resource_input_is_typed_and_source_neutral() {
+        let binding = serde_json::json!({
+            "protocol_version": "chaptera.editor-fixed-pdf-binding.v1",
+            "project_state_id": "sha256:test",
+        });
+        let encoded = serde_json::to_value(CurrentFixedPdfResourceInputV1 {
+            protocol_version: CURRENT_FIXED_PDF_RESOURCE_INPUT_V1.to_owned(),
+            binding: binding.clone(),
+            shaped_flow: BoundedShapedFlowScene {
+                environment: pub_layout::BoundedShapedFlowDescriptor {
+                    shaping: pub_layout::BoundedShapingDescriptor {
+                        layout: BoundedLayoutEnvironment {
+                            engine_revision: "test".into(),
+                            font_set_fingerprint: "font".into(),
+                            resource_fingerprint: "resource".into(),
+                        },
+                        face_index: 0,
+                        font_size_emu: LengthEmu::new(1),
+                    },
+                    line_height: LengthEmu::new(2),
+                },
+                surfaces: Vec::new(),
+                nodes: Vec::new(),
+                lines: Vec::new(),
+                origin_mapping: Vec::new(),
+                line_origin_mapping: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            node_paints: Vec::new(),
+            image_resources: Vec::new(),
+            font: CurrentFixedPdfFontV1 {
+                fingerprint_sha256: "font".into(),
+                face_index: 0,
+                bytes: vec![1, 2, 3],
+            },
+        })
+        .expect("serialize current fixed-PDF input");
+        assert_eq!(
+            encoded["protocol_version"],
+            CURRENT_FIXED_PDF_RESOURCE_INPUT_V1
+        );
+        assert_eq!(encoded["binding"], binding);
+        let text = serde_json::to_string(&encoded).expect("serialize source-neutral packet");
+        assert!(!text.contains("source_refs"));
+        assert!(!text.contains("Quill"));
+        assert!(!text.contains("Escher"));
     }
 
     #[test]
