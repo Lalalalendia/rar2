@@ -2,8 +2,9 @@ use chaptera_scene_instance::{
     GeometrySyncPolicyV1, direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderTextLayoutDispositionV1,
-    build_page_render_plan_with_text_layout_v1,
+    ExplicitRenderTextFontResourceV1, PageRenderPlanV1, RenderTextFragmentV1,
+    RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_v1,
+    complete_scalar_source_font_family_v1, effective_source_font_family_v1,
 };
 use pub_editor::{
     EditOperation, EditorProject, EditorSession, Sha256Digest, open_mature_0x2c_editor,
@@ -11,7 +12,8 @@ use pub_editor::{
 use pub_layout::font_fingerprint_sha256;
 use pub_model::{EMU_PER_POINT, NodeId, RectEmu, ResourceId, StoryId};
 use pub_viewer::{
-    ViewerGeometryDocument, open_mature_0x2c_geometry, viewer_geometry_environment_v0_1,
+    ViewerGeometryDocument, ViewerParagraphLineSpacing, open_mature_0x2c_geometry,
+    viewer_geometry_environment_v0_1,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -57,6 +59,13 @@ struct CurrentViewerPlanCensusV1 {
     shared_resolved_text_node_count: usize,
     backend_fallback_text_node_count: usize,
     backend_fallback_reason_counts: BTreeMap<String, usize>,
+    text_font_binding_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_spacing_authority_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_family_authority_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_font_binding_counts: BTreeMap<String, usize>,
+    shared_layout_incomplete_spacing_family_binding_counts: BTreeMap<String, usize>,
+    configured_fallback_font_size_emu: i64,
+    configured_fallback_line_height_emu: i64,
     shaped_line_count: usize,
     shaped_span_count: usize,
     missing_shaping_evidence_count: usize,
@@ -175,7 +184,66 @@ fn synchronize_direct_move(
     Ok(())
 }
 
-fn census(plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
+fn paragraph_spacing_authority_class(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+) -> &'static str {
+    let Some(story) = visual
+        .document
+        .stories
+        .iter()
+        .find(|story| story.id == fragment.story_id)
+    else {
+        return "story_missing";
+    };
+
+    let mut intersecting = visual
+        .paragraph_line_spacings
+        .iter()
+        .filter(|run| run.story_id == fragment.story_id)
+        .filter(|run| run.applies_to_story_text(&story.text))
+        .filter(|run| {
+            run.scalar_end > fragment.scalar_start && run.scalar_start < fragment.scalar_end
+        });
+
+    let Some(run) = intersecting.next() else {
+        return "none";
+    };
+    if intersecting.next().is_some()
+        || run.scalar_start > fragment.scalar_start
+        || run.scalar_end < fragment.scalar_end
+    {
+        return "ambiguous_or_incomplete";
+    }
+
+    match run.line_spacing {
+        ViewerParagraphLineSpacing::Absolute { .. } => "absolute_complete",
+        ViewerParagraphLineSpacing::Proportional { .. } => "proportional_complete",
+    }
+}
+
+fn source_family_authority_class(
+    visual: &ViewerGeometryDocument,
+    fragment: &RenderTextFragmentV1,
+) -> &'static str {
+    if complete_scalar_source_font_family_v1(fragment).is_some() {
+        "complete_scalar"
+    } else if effective_source_font_family_v1(visual, fragment).is_some() {
+        "script_font_map"
+    } else {
+        "unavailable"
+    }
+}
+
+fn font_binding_class(fragment: &RenderTextFragmentV1) -> &'static str {
+    if fragment.backend_font_resource_id.is_some() {
+        "source_bound"
+    } else {
+        "fallback_only"
+    }
+}
+
+fn census(visual: &ViewerGeometryDocument, plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
     let mut out = CurrentViewerPlanCensusV1 {
         page_count: plans.len(),
         ..CurrentViewerPlanCensusV1::default()
@@ -260,6 +328,9 @@ fn census(plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
                 continue;
             };
             out.text_node_count += 1;
+            *out.text_font_binding_counts
+                .entry(font_binding_class(text).to_owned())
+                .or_default() += 1;
             let Some(layout) = &text.layout else {
                 out.missing_text_layout_count += 1;
                 continue;
@@ -288,6 +359,24 @@ fn census(plans: &[PageRenderPlanV1]) -> CurrentViewerPlanCensusV1 {
                     *out.backend_fallback_reason_counts
                         .entry(reason.code().to_owned())
                         .or_default() += 1;
+
+                    if reason.code() == "shared_layout_incomplete" {
+                        let spacing = paragraph_spacing_authority_class(visual, text);
+                        let family = source_family_authority_class(visual, text);
+                        let binding = font_binding_class(text);
+                        *out.shared_layout_incomplete_spacing_authority_counts
+                            .entry(spacing.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_family_authority_counts
+                            .entry(family.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_font_binding_counts
+                            .entry(binding.to_owned())
+                            .or_default() += 1;
+                        *out.shared_layout_incomplete_spacing_family_binding_counts
+                            .entry(format!("{spacing}@{family}@{binding}"))
+                            .or_default() += 1;
+                    }
                 }
             }
         }
@@ -385,8 +474,10 @@ fn run(
             bytes: image.bytes.clone(),
         })
         .collect::<Vec<_>>();
-    let mut census = census(&pages);
+    let mut census = census(&visual, &pages);
     census.image_resource_count = visual.images.len();
+    census.configured_fallback_font_size_emu = font.default_font_size_emu;
+    census.configured_fallback_line_height_emu = font.default_line_height_emu;
 
     let packet = CurrentViewerFixedPdfInputV1 {
         protocol_version: PROTOCOL_VERSION,
@@ -423,7 +514,7 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={} text_font_bindings={:?} shared_layout_incomplete_spacing={:?} shared_layout_incomplete_family={:?} shared_layout_incomplete_binding={:?} fallback_font_size_emu={} fallback_line_height_emu={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
@@ -444,6 +535,12 @@ fn run(
         packet.census.node_id_sort_position_mismatch_count,
         packet.census.visible_node_id_sort_reordered_page_count,
         packet.census.visible_node_id_sort_position_mismatch_count,
+        packet.census.text_font_binding_counts,
+        packet.census.shared_layout_incomplete_spacing_authority_counts,
+        packet.census.shared_layout_incomplete_family_authority_counts,
+        packet.census.shared_layout_incomplete_font_binding_counts,
+        packet.census.configured_fallback_font_size_emu,
+        packet.census.configured_fallback_line_height_emu,
     );
     Ok(())
 }
