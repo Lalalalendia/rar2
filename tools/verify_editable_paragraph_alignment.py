@@ -222,6 +222,19 @@ def odg_story_frame_names(root: ET.Element, story_id: str) -> set[str]:
     return names
 
 
+def frame_text_stats(frame: ET.Element) -> dict:
+    paragraphs = [node for node in frame.iter() if local(node.tag) == "p"]
+    text = "".join("".join(node.itertext()) for node in paragraphs)
+    return {
+        "paragraph_count": len(paragraphs),
+        "scalar_count": len(text),
+        "non_whitespace_scalar_count": sum(
+            1 for character in text if not character.isspace()
+        ),
+        "carriage_return_count": text.count("\r"),
+    }
+
+
 def odg_root_from_package(root: Path) -> ET.Element:
     path = root / "output.odg"
     if not path.is_file():
@@ -373,6 +386,18 @@ def verify_libreoffice(path: Path, items: list[dict], wire_root: Path) -> dict:
                             "expected": item["alignment"],
                             "paragraphs": snapshot,
                             "wire_story_frames": sorted(expected_frames),
+                            "wire_story_frame_text_stats": {
+                                name: frame_text_stats(
+                                    next(
+                                        frame
+                                        for frame in source_root.iter()
+                                        if local(frame.tag) == "frame"
+                                        and frame.attrib.get(f"{{{DRAW_NS}}}name") == name
+                                    )
+                                )
+                                for name in sorted(expected_frames)
+                            },
+                            "final_story_frame_text_stats": frame_text_stats(frame),
                             "final_center_frame_names": centered_frames,
                         },
                         sort_keys=True,

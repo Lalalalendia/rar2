@@ -54,9 +54,44 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "right"
                 }
             };
+            let story = session
+                .graph()
+                .stories
+                .get(&item.story_id)
+                .expect("eligible alignment Story must exist");
+            let frame_count = session
+                .graph()
+                .nodes
+                .values()
+                .filter_map(|node| node.payload.story_frame.as_ref())
+                .filter(|frame| frame.story_id == Some(item.story_id))
+                .count();
+            let root_frame_count = session
+                .graph()
+                .nodes
+                .values()
+                .filter_map(|node| node.payload.story_frame.as_ref())
+                .filter(|frame| {
+                    frame.story_id == Some(item.story_id) && frame.previous_frame.is_none()
+                })
+                .count();
             serde_json::json!({
                 "story_id": item.story_id.as_canonical().to_string(),
                 "alignment": alignment,
+                "story_scalar_count": story.text.chars().count(),
+                "story_utf16_count": story.text.encode_utf16().count(),
+                "story_non_whitespace_scalar_count": story
+                    .text
+                    .chars()
+                    .filter(|character| !character.is_whitespace())
+                    .count(),
+                "story_carriage_return_count": story
+                    .text
+                    .chars()
+                    .filter(|character| *character == '\r')
+                    .count(),
+                "frame_count": frame_count,
+                "root_frame_count": root_frame_count,
             })
         })
         .collect::<Vec<_>>();
