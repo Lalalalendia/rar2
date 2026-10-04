@@ -1,0 +1,209 @@
+name: Story Edit Domain Terminal CR Census V1
+
+on:
+  push:
+    branches:
+      - research/story-edit-domain-terminal-cr-census-01
+    paths:
+      - ".github/workflows/story-edit-domain-terminal-cr-census-v1.yml"
+      - "vendor/producer-a/crates/pub-reader/src/bin/story_edit_domain_terminal_cr_probe.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: story-edit-domain-terminal-cr-census-v1
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/story-edit-domain-terminal-cr
+  CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+  EVIDENCE_ROOT: ${{ github.workspace }}/target/story-edit-domain-terminal-cr-evidence
+  PINNED_CORPUS_RUN_ID: "36573574820"
+  PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+  PINNED_CORPUS_COUNT: "1050"
+  PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          print(f"verified {len(paths)} exact PUB files; sha-list digest={digest}")
+          PY
+
+      - name: Build source-safe terminal CR probe
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-reader -- --check
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --release \
+            --bin story_edit_domain_terminal_cr_probe
+
+      - name: Probe full exact corpus
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/files"
+          for pub in "$CORPUS_ROOT"/*.pub; do
+            sha="$(basename "$pub" .pub)"
+            "$CARGO_TARGET_DIR/release/story_edit_domain_terminal_cr_probe" "$pub" \
+              > "$EVIDENCE_ROOT/files/$sha.json"
+          done
+
+      - name: Aggregate source-safe census
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          files = sorted((root / "files").glob("*.json"))
+          assert len(files) == int(os.environ["PINNED_CORPUS_COUNT"]), len(files)
+
+          probes = [json.loads(path.read_text()) for path in files]
+          assert all(item["schema"] == "chaptera.story-edit-domain-terminal-cr-probe.v1" for item in probes)
+          assert all(item["claims"]["measurement_only"] is True for item in probes)
+          assert all(item["claims"]["terminal_cr_provenance_promoted"] is False for item in probes)
+          assert all(item["claims"]["story_text_recorded"] is False for item in probes)
+
+          admitted = [item for item in probes if item["open_state"] == "admitted"]
+          stories = [
+              {**story, "source_sha256": item["source_sha256"]}
+              for item in admitted
+              for story in item["stories"]
+          ]
+
+          origin_counts = Counter()
+          for story in stories:
+              if story["has_fdpp_story_end"]:
+                  origin_counts["fdpp_bounded"] += 1
+              elif story["has_direct_quill_syid"]:
+                  origin_counts["direct_quill"] += 1
+              else:
+                  origin_counts["other"] += 1
+
+          fdpp = [story for story in stories if story["has_fdpp_story_end"]]
+          direct = [
+              story
+              for story in stories
+              if not story["has_fdpp_story_end"] and story["has_direct_quill_syid"]
+          ]
+          candidates = [
+              story for story in stories if story["explicit_fdpp_terminal_cr_candidate"]
+          ]
+          fdpp_nonterminal = [story for story in fdpp if not story["terminal_cr"]]
+          direct_nonterminal = [story for story in direct if not story["terminal_cr"]]
+
+          receipt = {
+              "schema": "chaptera.story-edit-domain-terminal-cr-census.v1",
+              "pinned_corpus_count": len(probes),
+              "admitted_source_count": len(admitted),
+              "not_admitted_source_count": len(probes) - len(admitted),
+              "story_count": len(stories),
+              "origin_counts": dict(sorted(origin_counts.items())),
+              "terminal_cr_story_count": sum(story["terminal_cr"] for story in stories),
+              "cr_only_story_count": sum(story["cr_only"] for story in stories),
+              "empty_story_count": sum(story["empty"] for story in stories),
+              "fdpp_bounded_story_count": len(fdpp),
+              "fdpp_terminal_cr_story_count": sum(story["terminal_cr"] for story in fdpp),
+              "fdpp_nonterminal_story_count": len(fdpp_nonterminal),
+              "fdpp_nonterminal_story_refs": [
+                  {
+                      "source_sha256": story["source_sha256"],
+                      "story_id": story["story_id"],
+                      "scalar_count": story["scalar_count"],
+                  }
+                  for story in fdpp_nonterminal
+              ],
+              "direct_quill_story_count": len(direct),
+              "direct_quill_terminal_cr_story_count": sum(
+                  story["terminal_cr"] for story in direct
+              ),
+              "direct_quill_nonterminal_story_count": len(direct_nonterminal),
+              "explicit_fdpp_terminal_cr_candidate_count": len(candidates),
+              "candidate_cr_only_story_count": sum(
+                  story["cr_only"] for story in candidates
+              ),
+              "candidate_refs": [
+                  {
+                      "source_sha256": story["source_sha256"],
+                      "story_id": story["story_id"],
+                      "scalar_count": story["scalar_count"],
+                      "cr_only": story["cr_only"],
+                  }
+                  for story in candidates
+              ],
+              "claims": {
+                  "measurement_only": True,
+                  "terminal_cr_provenance_promoted": False,
+                  "story_text_recorded": False,
+                  "trailing_cr_alone_is_authority": False,
+              },
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          compact = {
+              key: value
+              for key, value in receipt.items()
+              if key not in {
+                  "candidate_refs",
+                  "fdpp_nonterminal_story_refs",
+              }
+          }
+          print(json.dumps(compact, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe census receipt
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: story-edit-domain-terminal-cr-census-v1-${{ github.run_id }}
+          path: |
+            target/story-edit-domain-terminal-cr-evidence/receipt.json
+            target/story-edit-domain-terminal-cr-evidence/files/*.json
+          if-no-files-found: error
+          retention-days: 90
