@@ -67,7 +67,7 @@ jobs:
       - name: Build existing source and Viewer ownership receipt
         run: |
           set -euo pipefail
-          cargo fmt --manifest-path vendor/producer-a/Cargo.toml --check
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml --all --check
           cargo build --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-viewer --bin page-object-ownership-receipt \
             --features cmo-slot-compose --jobs 2
