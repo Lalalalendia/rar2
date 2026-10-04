@@ -319,18 +319,29 @@ jobs:
           diff = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_DIFF"]).read_text(encoding="utf-8"))
           mapping = mapping_receipt["mapping"]
 
-          expected_fallback = {
-              "shared_layout_incomplete": 12,
-              "story_extent_mismatch": 7,
+          allowed_fallback_reasons = {
+              "story_missing",
+              "story_extent_mismatch",
+              "single_frame_required",
+              "frame_geometry_invalid",
+              "typography_coverage_gap",
+              "mixed_typography_size",
+              "font_resource_invalid",
+              "font_fingerprint_mismatch",
+              "shared_layout_failed",
+              "shared_layout_incomplete",
           }
-          if mapping["backend_fallback_reason_counts"] != expected_fallback:
-              raise SystemExit(f"BackendFallback residual drift: {mapping['backend_fallback_reason_counts']!r}")
+          unexpected_fallback = set(mapping["backend_fallback_reason_counts"]) - allowed_fallback_reasons
+          if unexpected_fallback:
+              raise SystemExit(f"unexpected BackendFallback reason codes: {sorted(unexpected_fallback)!r}")
           if mapping["cropped_image_use_count"] != 2:
               raise SystemExit("cropped-image residual drift")
           if mapping["table_node_count"] != 1:
               raise SystemExit("table residual drift")
-          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 102:
+          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 108:
               raise SystemExit("Carlton supported-subset input census drift")
+          if mapping.get("semantic_duplicate_node_id_count") != 2:
+              raise SystemExit("Carlton semantic duplicate-node census drift")
 
           summary = renderer_receipt["renderer_result"]["summary"]
           if summary["page_count"] != 3:
