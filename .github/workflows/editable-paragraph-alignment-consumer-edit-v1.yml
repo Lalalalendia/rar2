@@ -1,0 +1,272 @@
+name: Editable Paragraph Alignment Consumer Edit V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-paragraph-alignment-consumer-edit-v1.yml"
+      - "tools/ci/paragraph_alignment_edit_target.py"
+      - "tools/ci/scribus_alignment_edit_consumer.py"
+      - "tools/ci/libreoffice_draw_alignment_edit.py"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: editable-paragraph-alignment-consumer-edit-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-consumer-edit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/editable-paragraph-alignment-edit
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/editable-paragraph-alignment-edit-evidence
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+      PINNED_CORPUS_COUNT: "1050"
+      PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+      WITNESS_SHA: "ee5d87a8859da66dc41de2c71f8e35aa671745a3a4f49bed1ab317369602fba8"
+      WITNESS_STORY: "4ebeb978-1fb2-5a96-b6fd-902a8779fffc"
+      EDIT_MARKER: "__CHAPTERA_ALIGN_EDIT_V1__"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check evidence tooling
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -p pub-export -p pub-idml -p pub-odg -- --check
+          python -m py_compile             tools/ci/paragraph_alignment_edit_target.py             tools/ci/scribus_alignment_edit_consumer.py             tools/ci/libreoffice_draw_alignment_edit.py             tools/verify_editable_paragraph_alignment.py
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          assert (root / (os.environ["WITNESS_SHA"] + ".pub")).is_file()
+          print(f"verified exact {len(paths)}-PUB corpus + witness")
+          PY
+
+      - name: Build alignment and editable-route probes
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml             -p pub-editor --release             --bin editable_paragraph_alignment_probe             --bin editable_route_probe
+
+      - name: Reprove exact Center-only witness
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT"
+          witness="$CORPUS_ROOT/$WITNESS_SHA.pub"
+          "$CARGO_TARGET_DIR/release/editable_paragraph_alignment_probe" "$witness"             > "$EVIDENCE_ROOT/alignment-probe.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          data = json.loads((root / "alignment-probe.json").read_text())
+          assert data["source_sha256"] == os.environ["WITNESS_SHA"], data
+          assert data["open_state"] == "admitted", data
+          items = data.get("items", [])
+          center = [item for item in items if item.get("alignment") == "center"]
+          right = [item for item in items if item.get("alignment") == "right"]
+          assert len(center) == 1, center
+          assert not right, right
+          assert center[0]["story_id"] == os.environ["WITNESS_STORY"], center
+          expected = {
+              "schema": "chaptera.editable-paragraph-alignment-edit-expected.v1",
+              "source_sha256": data["source_sha256"],
+              "eligible_count": 1,
+              "items": center,
+              "claims": {
+                  "selection_basis": "one_center_zero_right_consumer_edit_witness",
+                  "story_text_recorded": False,
+              },
+          }
+          (root / "expected.json").write_text(
+              json.dumps(expected, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - name: Materialize exact editable targets and verify wire
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/materialized"
+          witness="$CORPUS_ROOT/$WITNESS_SHA.pub"
+          "$CARGO_TARGET_DIR/release/editable_route_probe"             "$witness"             --label "$WITNESS_SHA.pub"             --materialize-dir "$EVIDENCE_ROOT/materialized"             > "$EVIDENCE_ROOT/route.json"
+          test -s "$EVIDENCE_ROOT/materialized/output.idml"
+          test -s "$EVIDENCE_ROOT/materialized/output.odg"
+          python tools/verify_editable_paragraph_alignment.py             wire             --expected "$EVIDENCE_ROOT/expected.json"             --root "$EVIDENCE_ROOT/materialized"             --receipt "$EVIDENCE_ROOT/wire.json"
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends             scribus libreoffice-draw xvfb python3-uno
+
+      - name: Scribus real text edit and fresh reopen
+        id: scribus
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_ROOT/scribus"
+          CHAPTERA_SCRIBUS_SLA_OUT="$EVIDENCE_ROOT/scribus/baseline.sla"             timeout 180s xvfb-run -a scribus -g -ns             -py tools/ci/scribus_idml_consumer.py --             "$EVIDENCE_ROOT/materialized/output.idml"
+          target="$(python tools/ci/paragraph_alignment_edit_target.py             scribus             --input "$EVIDENCE_ROOT/scribus/baseline.sla"             --receipt "$EVIDENCE_ROOT/scribus-target.json")"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+          CHAPTERA_SCRIBUS_ALIGNMENT_OUT="$EVIDENCE_ROOT/scribus/round1.sla"           CHAPTERA_SCRIBUS_ALIGNMENT_RECEIPT="$EVIDENCE_ROOT/scribus-edit.json"           CHAPTERA_ALIGNMENT_TARGET_FRAME="$target"           CHAPTERA_EDIT_MARKER="$EDIT_MARKER"           CHAPTERA_ALIGNMENT_EDIT_MODE=edit             timeout 180s xvfb-run -a scribus -g -ns             -py tools/ci/scribus_alignment_edit_consumer.py --             "$EVIDENCE_ROOT/scribus/baseline.sla"
+
+          CHAPTERA_SCRIBUS_ALIGNMENT_OUT="$EVIDENCE_ROOT/scribus/round2.sla"           CHAPTERA_SCRIBUS_ALIGNMENT_RECEIPT="$EVIDENCE_ROOT/scribus-reopen.json"           CHAPTERA_ALIGNMENT_TARGET_FRAME="$target"           CHAPTERA_EDIT_MARKER="$EDIT_MARKER"           CHAPTERA_ALIGNMENT_EDIT_MODE=verify             timeout 180s xvfb-run -a scribus -g -ns             -py tools/ci/scribus_alignment_edit_consumer.py --             "$EVIDENCE_ROOT/scribus/round1.sla"
+
+          python tools/ci/paragraph_alignment_edit_target.py             scribus             --input "$EVIDENCE_ROOT/scribus/round2.sla"             --target-frame "$target"             --marker "$EDIT_MARKER"             --receipt "$EVIDENCE_ROOT/scribus-final.json"             > /dev/null
+
+      - name: Resolve exact ODG Story frame
+        id: odg
+        run: |
+          set -euo pipefail
+          target="$(python tools/ci/paragraph_alignment_edit_target.py             odg             --input "$EVIDENCE_ROOT/materialized/output.odg"             --story-id "$WITNESS_STORY"             --receipt "$EVIDENCE_ROOT/libreoffice-target.json")"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+      - name: LibreOffice real UNO text edit and fresh reopen
+        env:
+          TARGET_FRAME: ${{ steps.odg.outputs.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p             "$EVIDENCE_ROOT/libreoffice"             "$EVIDENCE_ROOT/lo-edit-profile"             "$EVIDENCE_ROOT/lo-verify-profile"             "$EVIDENCE_ROOT/lo-final-profile"             "$EVIDENCE_ROOT/final-fodg"
+
+          start_lo() {
+            local port="$1"
+            local profile="$2"
+            libreoffice               --headless               --nologo               --nodefault               --norestore               --nolockcheck               "-env:UserInstallation=file://$profile"               "--accept=socket,host=127.0.0.1,port=$port;urp;StarOffice.ServiceManager"               > "$EVIDENCE_ROOT/libreoffice/lo-$port.log" 2>&1 &
+            LO_PID=$!
+          }
+
+          stop_lo() {
+            if [[ -n "${LO_PID:-}" ]]; then
+              kill "$LO_PID" 2>/dev/null || true
+              wait "$LO_PID" 2>/dev/null || true
+              LO_PID=""
+            fi
+          }
+          trap stop_lo EXIT
+
+          start_lo 20841 "$EVIDENCE_ROOT/lo-edit-profile"
+          timeout 90s /usr/bin/python3 tools/ci/libreoffice_draw_alignment_edit.py             edit             --input "$EVIDENCE_ROOT/materialized/output.odg"             --output "$EVIDENCE_ROOT/libreoffice/round1.odg"             --target-frame "$TARGET_FRAME"             --marker "$EDIT_MARKER"             --receipt "$EVIDENCE_ROOT/libreoffice-edit.json"             --port 20841
+          stop_lo
+
+          start_lo 20842 "$EVIDENCE_ROOT/lo-verify-profile"
+          timeout 90s /usr/bin/python3 tools/ci/libreoffice_draw_alignment_edit.py             verify             --input "$EVIDENCE_ROOT/libreoffice/round1.odg"             --output "$EVIDENCE_ROOT/libreoffice/round2.odg"             --target-frame "$TARGET_FRAME"             --marker "$EDIT_MARKER"             --receipt "$EVIDENCE_ROOT/libreoffice-reopen.json"             --port 20842
+          stop_lo
+
+          timeout 120s libreoffice             --headless             --nologo             --nodefault             --norestore             "-env:UserInstallation=file://$EVIDENCE_ROOT/lo-final-profile"             --convert-to fodg             --outdir "$EVIDENCE_ROOT/final-fodg"             "$EVIDENCE_ROOT/libreoffice/round2.odg"
+
+          python tools/verify_editable_paragraph_alignment.py             libreoffice             --expected "$EVIDENCE_ROOT/expected.json"             --input "$EVIDENCE_ROOT/final-fodg/round2.fodg"             --wire-root "$EVIDENCE_ROOT/materialized"             --receipt "$EVIDENCE_ROOT/libreoffice-final.json"
+
+      - name: Build source-safe consumer-edit receipt
+        env:
+          REPO_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["EVIDENCE_ROOT"])
+          def load(name):
+              return json.loads((root / name).read_text())
+
+          receipt = {
+              "schema": "chaptera.editable-paragraph-alignment-consumer-edit-receipt.v1",
+              "repository_commit_sha": os.environ["REPO_SHA"],
+              "source_sha256": os.environ["WITNESS_SHA"],
+              "story_id": os.environ["WITNESS_STORY"],
+              "alignment": "center",
+              "edit_marker_sha256": hashlib.sha256(
+                  os.environ["EDIT_MARKER"].encode()
+              ).hexdigest(),
+              "checks": {
+                  "wire": load("wire.json"),
+                  "scribus_target": load("scribus-target.json"),
+                  "scribus_edit": load("scribus-edit.json"),
+                  "scribus_reopen": load("scribus-reopen.json"),
+                  "scribus_final": load("scribus-final.json"),
+                  "libreoffice_target": load("libreoffice-target.json"),
+                  "libreoffice_edit": load("libreoffice-edit.json"),
+                  "libreoffice_reopen": load("libreoffice-reopen.json"),
+                  "libreoffice_final": load("libreoffice-final.json"),
+              },
+              "claims": {
+                  "real_scribus_text_edit_used": True,
+                  "real_libreoffice_uno_text_edit_used": True,
+                  "direct_sla_or_odg_xml_patch_used": False,
+                  "edited_text_survived_fresh_reopen": True,
+                  "same_edited_consumer_object_retained_center_alignment": True,
+                  "loss_report_or_manifest_changed": False,
+                  "right_alignment_proven": False,
+                  "story_text_recorded": False,
+              },
+          }
+          (root / "receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+          )
+          print(json.dumps({
+              "source_sha256": receipt["source_sha256"],
+              "story_id": receipt["story_id"],
+              "alignment": receipt["alignment"],
+              "claims": receipt["claims"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe consumer-edit evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editable-paragraph-alignment-consumer-edit-v1-${{ github.run_id }}
+          path: |
+            target/editable-paragraph-alignment-edit-evidence/alignment-probe.json
+            target/editable-paragraph-alignment-edit-evidence/expected.json
+            target/editable-paragraph-alignment-edit-evidence/route.json
+            target/editable-paragraph-alignment-edit-evidence/wire.json
+            target/editable-paragraph-alignment-edit-evidence/scribus-target.json
+            target/editable-paragraph-alignment-edit-evidence/scribus-edit.json
+            target/editable-paragraph-alignment-edit-evidence/scribus-reopen.json
+            target/editable-paragraph-alignment-edit-evidence/scribus-final.json
+            target/editable-paragraph-alignment-edit-evidence/libreoffice-target.json
+            target/editable-paragraph-alignment-edit-evidence/libreoffice-edit.json
+            target/editable-paragraph-alignment-edit-evidence/libreoffice-reopen.json
+            target/editable-paragraph-alignment-edit-evidence/libreoffice-final.json
+            target/editable-paragraph-alignment-edit-evidence/receipt.json
+          if-no-files-found: warn
+          retention-days: 90
