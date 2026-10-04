@@ -52,7 +52,9 @@ jobs:
         run: cargo test -p chaptera-desktop text_box_creation::tests -- --nocapture
 
       - name: Regress canonical CreateTextBox engine
-        run: cargo test -p pub-editor create_text_box -- --nocapture
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml
+          -p pub-editor create_text_box -- --nocapture
 
   gui-real-pub:
     runs-on: windows-latest
