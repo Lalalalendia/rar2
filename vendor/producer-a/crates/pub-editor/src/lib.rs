@@ -10,6 +10,7 @@ mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
 mod duplicate_authored_rectangle_v1;
+mod imported_paragraphs_v1;
 mod writer_assessment;
 
 pub use authored_stack_lifecycle_v1::{
@@ -34,6 +35,7 @@ pub use duplicate_authored_rectangle_v1::{
     DuplicateAuthoredRectanglePlanV1, plan_duplicate_authored_rectangle_v1,
     validate_duplicate_authored_rectangle_source_v1,
 };
+pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
 pub use writer_assessment::{
     EDITOR_PUB_WRITER_ASSESSMENT_SCHEMA_V0_1, EditorPubPersistenceAssessment,
     EditorPubWriterAssessment, EditorPubWriterAssessmentError, EditorStoryWriterProbeResult,
