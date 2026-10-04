@@ -3,9 +3,7 @@
 //! RectangleCreateSessionV1 remains the semantic interaction owner. This
 //! module owns only Desktop toolbar, pointer, preview, Escape and commit wiring.
 
-use super::{
-    ViewerApp, direct_page_local_instance_v1, reader_only_mode, rectangle_creation, render_backend,
-};
+use super::{ViewerApp, direct_page_local_instance_v1, rectangle_creation, render_backend};
 use eframe::egui;
 
 #[derive(Default)]
@@ -100,148 +98,6 @@ impl ViewerApp {
         true
     }
 
-    pub(super) fn process_rectangle_primary_pointer(
-        &mut self,
-        page_id: pub_editor::PageId,
-        page_rect: egui::Rect,
-        press_screen: Option<egui::Pos2>,
-        press_document: Option<pub_interaction::DocumentPoint>,
-        pointer_document: Option<pub_interaction::DocumentPoint>,
-        primary_pressed: bool,
-        primary_down: bool,
-        primary_released: bool,
-        outcome: &mut RectangleFrameOutcome,
-    ) {
-        if reader_only_mode() || self.text_mode.is_some() || !self.rectangle_creation.active() {
-            return;
-        }
-
-        if self.rectangle_creation.gesture_token.is_none()
-            && primary_pressed
-            && let (Some(pointer_start_screen), Some(pointer_start)) =
-                (press_screen, press_document)
-            && page_rect.contains(pointer_start_screen)
-            && let Err(error) = self.rectangle_creation.pointer_down(
-                page_id,
-                pointer_start,
-                "rectangle-draw-v1".to_owned(),
-            )
-        {
-            outcome.error = Some(format!("Rectangle draw could not start: {error}"));
-        }
-
-        if self.rectangle_creation.gesture_token.is_some()
-            && primary_down
-            && let Some(point) = pointer_document
-            && let Err(error) = self.rectangle_creation.pointer_move(point)
-        {
-            let _ = self.rectangle_creation.cancel();
-            outcome.error = Some(format!("Rectangle preview cancelled: {error}"));
-        }
-
-        if self.rectangle_creation.gesture_token.is_some() && primary_released {
-            self.finish_rectangle_pointer(pointer_document, outcome);
-        }
-    }
-
-    pub(super) fn process_rectangle_drag_started(
-        &mut self,
-        page_id: pub_editor::PageId,
-        pointer_start: pub_interaction::DocumentPoint,
-        pointer_current: pub_interaction::DocumentPoint,
-        outcome: &mut RectangleFrameOutcome,
-    ) -> bool {
-        if !self.rectangle_creation.active() {
-            return false;
-        }
-
-        let result = if self.rectangle_creation.gesture_token.is_none() {
-            self.rectangle_creation
-                .pointer_down(page_id, pointer_start, "rectangle-draw-v1".to_owned())
-                .and_then(|()| {
-                    self.rectangle_creation
-                        .pointer_move(pointer_current)
-                        .map(|_| ())
-                })
-        } else {
-            self.rectangle_creation
-                .pointer_move(pointer_current)
-                .map(|_| ())
-        };
-        if let Err(error) = result {
-            let _ = self.rectangle_creation.cancel();
-            outcome.error = Some(format!("Rectangle draw could not start: {error}"));
-        }
-        true
-    }
-
-    pub(super) fn process_rectangle_drag_stopped(
-        &mut self,
-        pointer_document: Option<pub_interaction::DocumentPoint>,
-        outcome: &mut RectangleFrameOutcome,
-    ) -> bool {
-        if !self.rectangle_creation.active() || self.rectangle_creation.gesture_token.is_none() {
-            return false;
-        }
-        self.finish_rectangle_pointer(pointer_document, outcome);
-        true
-    }
-
-    pub(super) fn process_rectangle_dragged(
-        &mut self,
-        point: pub_interaction::DocumentPoint,
-        outcome: &mut RectangleFrameOutcome,
-    ) -> bool {
-        if !self.rectangle_creation.active() || self.rectangle_creation.gesture_token.is_none() {
-            return false;
-        }
-
-        if let Err(error) = self.rectangle_creation.pointer_move(point) {
-            let _ = self.rectangle_creation.cancel();
-            outcome.error = Some(format!("Rectangle preview cancelled: {error}"));
-        }
-        true
-    }
-
-    pub(super) fn paint_rectangle_preview(
-        &self,
-        painter: &egui::Painter,
-        page_id: pub_editor::PageId,
-        page_rect: egui::Rect,
-        scene_scale: f32,
-    ) {
-        if self.rectangle_creation.page_id != Some(page_id) {
-            return;
-        }
-        let Ok(rectangle_creation::RectangleCreatePreviewV1::Bounds(bounds)) =
-            self.rectangle_creation.preview()
-        else {
-            return;
-        };
-        let Some(preview_rect) = render_backend::physical_rect_to_egui(
-            page_rect,
-            scene_scale,
-            bounds.x.get(),
-            bounds.y.get(),
-            bounds.width.get(),
-            bounds.height.get(),
-        ) else {
-            return;
-        };
-
-        painter.rect_filled(
-            preview_rect,
-            0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 48),
-        );
-        painter.rect_stroke(
-            preview_rect,
-            0,
-            egui::Stroke::new(1.5_f32, egui::Color32::BLACK),
-            egui::StrokeKind::Inside,
-        );
-    }
-
     pub(super) fn finish_rectangle_frame(&mut self, outcome: RectangleFrameOutcome) {
         if let Some(error) = outcome.error {
             self.edit_status = Some(error);
@@ -283,24 +139,156 @@ impl ViewerApp {
             }
         }
     }
+}
 
-    fn finish_rectangle_pointer(
-        &mut self,
-        pointer_document: Option<pub_interaction::DocumentPoint>,
-        outcome: &mut RectangleFrameOutcome,
-    ) {
-        if let Some(point) = pointer_document {
-            match self.rectangle_creation.pointer_up(point) {
-                Ok(release) => outcome.release = Some(release),
-                Err(error) => {
-                    let _ = self.rectangle_creation.cancel();
-                    outcome.error = Some(format!("Rectangle draw could not finish: {error}"));
-                }
+pub(super) fn process_rectangle_primary_pointer(
+    session: &mut rectangle_creation::RectangleCreateSessionV1,
+    reader_only: bool,
+    text_mode_active: bool,
+    page_id: pub_editor::PageId,
+    page_rect: egui::Rect,
+    press_screen: Option<egui::Pos2>,
+    press_document: Option<pub_interaction::DocumentPoint>,
+    pointer_document: Option<pub_interaction::DocumentPoint>,
+    primary_pressed: bool,
+    primary_down: bool,
+    primary_released: bool,
+    outcome: &mut RectangleFrameOutcome,
+) {
+    if reader_only || text_mode_active || !session.active() {
+        return;
+    }
+
+    if session.gesture_token.is_none()
+        && primary_pressed
+        && let (Some(pointer_start_screen), Some(pointer_start)) = (press_screen, press_document)
+        && page_rect.contains(pointer_start_screen)
+        && let Err(error) =
+            session.pointer_down(page_id, pointer_start, "rectangle-draw-v1".to_owned())
+    {
+        outcome.error = Some(format!("Rectangle draw could not start: {error}"));
+    }
+
+    if session.gesture_token.is_some()
+        && primary_down
+        && let Some(point) = pointer_document
+        && let Err(error) = session.pointer_move(point)
+    {
+        let _ = session.cancel();
+        outcome.error = Some(format!("Rectangle preview cancelled: {error}"));
+    }
+
+    if session.gesture_token.is_some() && primary_released {
+        finish_rectangle_pointer(session, pointer_document, outcome);
+    }
+}
+
+pub(super) fn process_rectangle_drag_started(
+    session: &mut rectangle_creation::RectangleCreateSessionV1,
+    page_id: pub_editor::PageId,
+    pointer_start: pub_interaction::DocumentPoint,
+    pointer_current: pub_interaction::DocumentPoint,
+    outcome: &mut RectangleFrameOutcome,
+) -> bool {
+    if !session.active() {
+        return false;
+    }
+
+    let result = if session.gesture_token.is_none() {
+        session
+            .pointer_down(page_id, pointer_start, "rectangle-draw-v1".to_owned())
+            .and_then(|()| session.pointer_move(pointer_current).map(|_| ()))
+    } else {
+        session.pointer_move(pointer_current).map(|_| ())
+    };
+    if let Err(error) = result {
+        let _ = session.cancel();
+        outcome.error = Some(format!("Rectangle draw could not start: {error}"));
+    }
+    true
+}
+
+pub(super) fn process_rectangle_drag_stopped(
+    session: &mut rectangle_creation::RectangleCreateSessionV1,
+    pointer_document: Option<pub_interaction::DocumentPoint>,
+    outcome: &mut RectangleFrameOutcome,
+) -> bool {
+    if !session.active() || session.gesture_token.is_none() {
+        return false;
+    }
+    finish_rectangle_pointer(session, pointer_document, outcome);
+    true
+}
+
+pub(super) fn process_rectangle_dragged(
+    session: &mut rectangle_creation::RectangleCreateSessionV1,
+    point: pub_interaction::DocumentPoint,
+    outcome: &mut RectangleFrameOutcome,
+) -> bool {
+    if !session.active() || session.gesture_token.is_none() {
+        return false;
+    }
+
+    if let Err(error) = session.pointer_move(point) {
+        let _ = session.cancel();
+        outcome.error = Some(format!("Rectangle preview cancelled: {error}"));
+    }
+    true
+}
+
+pub(super) fn paint_rectangle_preview(
+    session: &rectangle_creation::RectangleCreateSessionV1,
+    painter: &egui::Painter,
+    page_id: pub_editor::PageId,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+) {
+    if session.page_id != Some(page_id) {
+        return;
+    }
+    let Ok(rectangle_creation::RectangleCreatePreviewV1::Bounds(bounds)) = session.preview() else {
+        return;
+    };
+    let Some(preview_rect) = render_backend::physical_rect_to_egui(
+        page_rect,
+        scene_scale,
+        bounds.x.get(),
+        bounds.y.get(),
+        bounds.width.get(),
+        bounds.height.get(),
+    ) else {
+        return;
+    };
+
+    painter.rect_filled(
+        preview_rect,
+        0,
+        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 48),
+    );
+    painter.rect_stroke(
+        preview_rect,
+        0,
+        egui::Stroke::new(1.5_f32, egui::Color32::BLACK),
+        egui::StrokeKind::Inside,
+    );
+}
+
+fn finish_rectangle_pointer(
+    session: &mut rectangle_creation::RectangleCreateSessionV1,
+    pointer_document: Option<pub_interaction::DocumentPoint>,
+    outcome: &mut RectangleFrameOutcome,
+) {
+    if let Some(point) = pointer_document {
+        match session.pointer_up(point) {
+            Ok(release) => outcome.release = Some(release),
+            Err(error) => {
+                let _ = session.cancel();
+                outcome.error = Some(format!("Rectangle draw could not finish: {error}"));
             }
-        } else {
-            let _ = self.rectangle_creation.cancel();
-            outcome.error =
-                Some("Rectangle draw ended outside the document coordinate boundary.".to_owned());
         }
+    } else {
+        let _ = session.cancel();
+        outcome.error =
+            Some("Rectangle draw ended outside the document coordinate boundary.".to_owned());
     }
 }
