@@ -11,11 +11,11 @@ mod agent;
 mod diagnostic_sweep;
 mod fallback_font;
 mod image_decode_adapter;
+#[allow(dead_code)]
+mod locale;
 mod page_navigation;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod page_navigation_gui_tests;
-#[allow(dead_code)]
-mod locale;
 mod product_smoke;
 mod reader_product_ui;
 mod reader_salvage;
@@ -10343,7 +10343,6 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
-
 
     #[test]
     fn source_path_argument_is_optional() {
