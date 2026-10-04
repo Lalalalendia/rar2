@@ -1,4 +1,5 @@
 use crate::supporter::SupporterAction;
+use crate::supporter_attribution::SupportClickAttribution;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SupporterRouteEffect {
@@ -32,6 +33,17 @@ impl SupporterRoutes {
         Some(Self {
             public_base: Some(origin.to_owned()),
         })
+    }
+
+    pub(crate) fn support_effect(
+        &self,
+        attribution: SupportClickAttribution,
+    ) -> Option<SupporterRouteEffect> {
+        let base = self.public_base.as_deref()?;
+        Some(SupporterRouteEffect::OpenUrl(format!(
+            "{base}/support?{}",
+            attribution.query_string()
+        )))
     }
 
     pub(crate) fn effect(&self, action: SupporterAction) -> Option<SupporterRouteEffect> {
@@ -71,6 +83,31 @@ mod tests {
         ] {
             assert_eq!(routes.effect(action), None);
         }
+    }
+
+    #[test]
+    fn explicit_support_click_can_carry_only_closed_attribution() {
+        let routes =
+            SupporterRoutes::from_https_origin("https://chaptera.example")
+                .expect("valid HTTPS origin");
+        let attribution = SupportClickAttribution::baseline(
+            crate::supporter::MarketProfile::Ru,
+            crate::supporter::ValueReceipt {
+                page_count: 2_048,
+                kind: crate::supporter::ValueReceiptKind::SearchMatches {
+                    match_count: 4_096,
+                },
+            },
+            2,
+        )
+        .expect("bounded attribution");
+
+        assert_eq!(
+            routes.support_effect(attribution),
+            Some(SupporterRouteEffect::OpenUrl(
+                "https://chaptera.example/support?m=ru&v=control-v1&ve=search&i=2".to_owned()
+            ))
+        );
     }
 
     #[test]
