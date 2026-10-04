@@ -1,0 +1,71 @@
+name: Build portable P0 dependencies
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/build-portable-p0-deps.yml"
+      - "tools/research-runner/paragraph-metrics-probe/**"
+      - "vendor/producer-a/crates/pub-cfb/**"
+      - "vendor/producer-a/crates/pub-core/**"
+      - "vendor/producer-a/crates/pub-quill/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Build paragraph metrics probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build --locked --release --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml
+          $exe = "tools/research-runner/paragraph-metrics-probe/target/release/paragraph-metrics-probe.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "probe exe missing" }
+          New-Item -ItemType Directory -Force portable-deps | Out-Null
+          Copy-Item -LiteralPath $exe -Destination portable-deps/paragraph-metrics-probe.exe
+
+      - name: Fetch pinned embedded Python
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-amd64.zip"
+          $out = "portable-deps/python-3.13.16-embed-amd64.zip"
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out
+          $expected = "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297"
+          $actual = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "embedded Python SHA mismatch: $actual" }
+
+      - name: Write dependency manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rows = @()
+          foreach ($p in @(
+            "portable-deps/paragraph-metrics-probe.exe",
+            "portable-deps/python-3.13.16-embed-amd64.zip"
+          )) {
+            $rows += [ordered]@{
+              path = $p
+              bytes = (Get-Item -LiteralPath $p).Length
+              sha256 = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          [ordered]@{
+            schema = "chaptera.pub2019-portable-deps.v1"
+            source_sha = "${{ github.event.pull_request.head.sha }}"
+            files = $rows
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath portable-deps/manifest.json -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub2019-portable-p0-deps
+          path: portable-deps/
+          if-no-files-found: error
+          retention-days: 7
