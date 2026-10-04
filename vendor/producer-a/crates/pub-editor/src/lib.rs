@@ -1733,12 +1733,7 @@ fn apply_text_format_history_operation_v1(
     state: &TextFormatOverlayStateV1,
     operation: &EditOperation,
 ) -> Result<TextFormatOverlayStateV1, EditorError> {
-    let (
-        story_id,
-        before_state_hash,
-        after_state_hash,
-        receipt,
-    ) = match operation {
+    let (story_id, before_state_hash, after_state_hash, receipt) = match operation {
         EditOperation::SetTextFormatProperty {
             story_id,
             start_scalar,
