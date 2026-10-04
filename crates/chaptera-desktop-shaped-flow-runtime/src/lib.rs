@@ -1,6 +1,9 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
-use pub_editor::{EditorCurrentImageResourceV1, EditorSession};
+use pub_editor::{
+    EditorCurrentImageResourceV1, EditorSession, FormatPropertyV1, FormatValueV1,
+    effective_property_segments_v1,
+};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
@@ -8,7 +11,7 @@ use pub_layout::{
 use pub_model::{LengthEmu, NodeId, StoryId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
@@ -30,8 +33,20 @@ pub struct DesktopStoryLayoutV1 {
     pub story_id: StoryId,
     pub story_scalar_len: u32,
     pub font_fingerprint_sha256: String,
+    pub effective_typography: Vec<DesktopEffectiveTypographyRunV1>,
     pub shaped_flow: BoundedShapedFlowScene,
     pub caret_map: ResolvedTextCaretMapV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopEffectiveTypographyRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub font_resource_id: String,
+    pub font_size_emu: u64,
+    pub bold: bool,
+    pub italic: bool,
+    pub text_color_rgb: [u8; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
