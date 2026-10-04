@@ -6,6 +6,7 @@ on:
       - ".github/workflows/quill-story-fdpp-exact.yml"
       - "vendor/producer-a/crates/pub-quill/src/**"
       - "vendor/producer-a/crates/pub-reader/src/**"
+      - "vendor/producer-a/crates/pub-reader/tests/story_provenance.rs"
       - "!vendor/producer-a/crates/pub-reader/src/bin/**"
   workflow_dispatch:
 
@@ -70,6 +71,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo build             --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader             --bin fdpp_exact_story_receipt
+
+      - name: Prove current Reader FDPP replacement provenance
+        run: |
+          set -euo pipefail
+          cargo test \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-reader \
+            --test story_provenance
 
       - name: Run exact-gate positive and superset-negative Reader acceptance
         shell: bash
