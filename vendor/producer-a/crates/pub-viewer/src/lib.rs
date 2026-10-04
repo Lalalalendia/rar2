@@ -992,6 +992,13 @@ impl ViewerParagraphAlignmentRun {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTypographyBooleanV1 {
+    pub local_toggle: bool,
+    pub inherited_value: bool,
+    pub effective_value: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerTypographyRun {
     pub story_id: StoryId,
@@ -1005,6 +1012,10 @@ pub struct ViewerTypographyRun {
     pub color_rgb: Option<[u8; 3]>,
     #[serde(default)]
     pub color_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<ViewerTypographyBooleanV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<ViewerTypographyBooleanV1>,
     pub source_story_text_sha256: Sha256Digest,
 }
 
@@ -2391,6 +2402,16 @@ fn open_mature_0x2c_bundle(
                 size_inherited: run.size_inherited,
                 color_rgb: run.color_rgb,
                 color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| ViewerTypographyBooleanV1 {
+                    local_toggle: value.local_toggle,
+                    inherited_value: value.inherited_value,
+                    effective_value: value.effective_value,
+                }),
+                italic: run.italic.map(|value| ViewerTypographyBooleanV1 {
+                    local_toggle: value.local_toggle,
+                    inherited_value: value.inherited_value,
+                    effective_value: value.effective_value,
+                }),
                 source_story_text_sha256: viewer_story_text_sha256(&story.text),
             })
         })
@@ -2412,6 +2433,8 @@ fn open_mature_0x2c_bundle(
                     size_inherited: run.size_inherited,
                     color_rgb: None,
                     color_inherited: false,
+                    bold: None,
+                    italic: None,
                     source_story_text_sha256: viewer_story_text_sha256(&story.text),
                 })
             }),

@@ -1,6 +1,9 @@
 use chaptera_caret_layout_feed::build_caret_map_from_shaped_flow_v1;
 use chaptera_text_caret_map_adapter::ResolvedTextCaretMapV1;
-use pub_editor::{EditorCurrentImageResourceV1, EditorSession};
+use pub_editor::{
+    EditOperation, EditorCurrentImageResourceV1, EditorError, EditorSession, FormatPropertyV1,
+    FormatValueV1, effective_property_segments_v1,
+};
 use pub_layout::{
     BoundedLayoutEnvironment, BoundedShapedFlowRuntime, BoundedShapedFlowScene,
     BoundedShapingRuntime, font_fingerprint_sha256, project_bounded, resolve_bounded_shaped_flow,
@@ -8,7 +11,7 @@ use pub_layout::{
 use pub_model::{LengthEmu, NodeId, StoryId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
 pub const DESKTOP_SHAPED_FLOW_RUNTIME_V1: &str = "chaptera.desktop-shaped-flow-runtime.v1";
 pub const CURRENT_FIXED_PDF_RESOURCE_INPUT_V1: &str =
@@ -30,8 +33,20 @@ pub struct DesktopStoryLayoutV1 {
     pub story_id: StoryId,
     pub story_scalar_len: u32,
     pub font_fingerprint_sha256: String,
+    pub effective_typography: Vec<DesktopEffectiveTypographyRunV1>,
     pub shaped_flow: BoundedShapedFlowScene,
     pub caret_map: ResolvedTextCaretMapV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DesktopEffectiveTypographyRunV1 {
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub font_resource_id: String,
+    pub font_size_emu: u64,
+    pub bold: bool,
+    pub italic: bool,
+    pub text_color_rgb: [u8; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +145,179 @@ pub fn validate_explicit_font_resource_v1(
     Ok(actual)
 }
 
+fn overlay_rgb_v1(value: &str) -> Result<[u8; 3], DesktopShapedFlowRuntimeError> {
+    let hex = value.strip_prefix('#').ok_or_else(|| {
+        DesktopShapedFlowRuntimeError::new("text_format_overlay_invalid", "color is not #RRGGBB")
+    })?;
+    if hex.len() != 6 {
+        return Err(DesktopShapedFlowRuntimeError::new(
+            "text_format_overlay_invalid",
+            "color is not #RRGGBB",
+        ));
+    }
+    let component = |start: usize| {
+        u8::from_str_radix(&hex[start..start + 2], 16).map_err(|_| {
+            DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_invalid",
+                "color contains non-hex digits",
+            )
+        })
+    };
+    Ok([component(0)?, component(2)?, component(4)?])
+}
+
+fn effective_value_v1(
+    state: &pub_editor::TextFormatOverlayStateV1,
+    property: FormatPropertyV1,
+    start: u32,
+    end: u32,
+) -> Result<FormatValueV1, DesktopShapedFlowRuntimeError> {
+    let segments =
+        effective_property_segments_v1(state, property, start, end).map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_invalid",
+                format!("effective property resolution failed: {error}"),
+            )
+        })?;
+    match segments.as_slice() {
+        [segment] => Ok(segment.value.clone()),
+        _ => Err(DesktopShapedFlowRuntimeError::new(
+            "text_format_overlay_invalid",
+            "effective property is not uniform inside one canonical style segment",
+        )),
+    }
+}
+
+fn has_applied_text_format_history_v1(editor: &EditorSession, story_id: StoryId) -> bool {
+    editor.operations().iter().any(|operation| {
+        matches!(
+            operation,
+            EditOperation::SetTextFormatProperty {
+                story_id: operation_story_id,
+                ..
+            } | EditOperation::ClearTextFormatPropertyOverride {
+                story_id: operation_story_id,
+                ..
+            } if *operation_story_id == story_id
+        )
+    })
+}
+
+pub fn current_story_effective_typography_v1(
+    editor: &EditorSession,
+    story_id: StoryId,
+) -> Result<Vec<DesktopEffectiveTypographyRunV1>, DesktopShapedFlowRuntimeError> {
+    let has_format_history = has_applied_text_format_history_v1(editor, story_id);
+    let state = match editor.current_text_format_overlay_v1(story_id) {
+        Ok(state) => state,
+        Err(EditorError::TextFormatTextMutationConflict {
+            story_id: conflict_story_id,
+        }) if conflict_story_id == story_id && !has_format_history => {
+            // Text-format projection is additive to the established shaped-flow contract.
+            // A plain Story text edit invalidates source-relative typography ranges, so the
+            // current layout must fall back to the established explicit-font path instead of
+            // inventing rebased ranges. Real Set/Clear format history remains fail-closed.
+            return Ok(Vec::new());
+        }
+        Err(EditorError::TextFormatUnsupported {
+            story_id: unsupported_story_id,
+            ..
+        }) if unsupported_story_id == story_id && !has_format_history => {
+            // A source Story can be perfectly valid for the established shaped-flow path
+            // while remaining outside the stricter complete text-format-overlay slice.
+            // Unsupported source formatting therefore stays additive until the Story owns
+            // durable Set/Clear format history; invalid overlay state still fails closed.
+            return Ok(Vec::new());
+        }
+        Err(error) => {
+            return Err(DesktopShapedFlowRuntimeError::new(
+                "text_format_overlay_unavailable",
+                format!("current Story text-format overlay is unavailable: {error}"),
+            ));
+        }
+    };
+    if state.story_scalar_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut boundaries = BTreeSet::from([0, state.story_scalar_len]);
+    for run in &state.base_runs {
+        boundaries.insert(run.start_scalar);
+        boundaries.insert(run.end_scalar);
+    }
+    for run in &state.overrides {
+        boundaries.insert(run.start_scalar);
+        boundaries.insert(run.end_scalar);
+    }
+
+    let points = boundaries.into_iter().collect::<Vec<_>>();
+    let mut out = Vec::with_capacity(points.len().saturating_sub(1));
+    for pair in points.windows(2) {
+        let start = pair[0];
+        let end = pair[1];
+        let base = state
+            .base_runs
+            .iter()
+            .find(|run| run.start_scalar <= start && end <= run.end_scalar)
+            .ok_or_else(|| {
+                DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "canonical style segment has no base format",
+                )
+            })?;
+
+        let bold = match effective_value_v1(&state, FormatPropertyV1::Bold, start, end)? {
+            FormatValueV1::Bool(value) => value,
+            _ => {
+                return Err(DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "Bold is not boolean",
+                ));
+            }
+        };
+        let italic = match effective_value_v1(&state, FormatPropertyV1::Italic, start, end)? {
+            FormatValueV1::Bool(value) => value,
+            _ => {
+                return Err(DesktopShapedFlowRuntimeError::new(
+                    "text_format_overlay_invalid",
+                    "Italic is not boolean",
+                ));
+            }
+        };
+        let font_size_emu =
+            match effective_value_v1(&state, FormatPropertyV1::FontSizeEmu, start, end)? {
+                FormatValueV1::Integer(value) => value,
+                _ => {
+                    return Err(DesktopShapedFlowRuntimeError::new(
+                        "text_format_overlay_invalid",
+                        "font size is not integer",
+                    ));
+                }
+            };
+        let text_color_rgb =
+            match effective_value_v1(&state, FormatPropertyV1::TextColorRgb, start, end)? {
+                FormatValueV1::String(value) => overlay_rgb_v1(&value)?,
+                _ => {
+                    return Err(DesktopShapedFlowRuntimeError::new(
+                        "text_format_overlay_invalid",
+                        "text color is not string",
+                    ));
+                }
+            };
+
+        out.push(DesktopEffectiveTypographyRunV1 {
+            scalar_start: start,
+            scalar_end: end,
+            font_resource_id: base.format.font_resource_id.clone(),
+            font_size_emu,
+            bold,
+            italic,
+            text_color_rgb,
+        });
+    }
+    Ok(out)
+}
+
 pub fn build_current_story_layout_v1(
     editor: &EditorSession,
     story_id: StoryId,
@@ -157,6 +345,7 @@ pub fn build_current_story_layout_v1(
     })?;
 
     let fingerprint = validate_explicit_font_resource_v1(font)?;
+    let effective_typography = current_story_effective_typography_v1(editor, story_id)?;
     let authoring =
         pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
             DesktopShapedFlowRuntimeError::new(
@@ -205,6 +394,7 @@ pub fn build_current_story_layout_v1(
         story_id,
         story_scalar_len,
         font_fingerprint_sha256: fingerprint,
+        effective_typography,
         shaped_flow,
         caret_map,
     })
@@ -323,6 +513,66 @@ mod tests {
         font.expected_sha256 = "00";
         let error = validate_explicit_font_resource_v1(&font).unwrap_err();
         assert_eq!(error.code, "font_fingerprint_mismatch");
+    }
+
+    #[test]
+    fn real_sample_newsletter_format_override_changes_current_typography_input() {
+        let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
+            eprintln!("CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated gate owns this test");
+            return;
+        };
+        let bytes = fs::read(path).expect("read pinned SampleNewsletter");
+        let digest = Sha256::digest(&bytes);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let mut editor = open_mature_0x2c_editor(&bytes, source_hash)
+            .expect("open real SampleNewsletter editor");
+
+        let story_id = editor
+            .graph()
+            .stories
+            .keys()
+            .copied()
+            .find(|id| current_story_effective_typography_v1(&editor, *id).is_ok())
+            .expect("fixture exposes bounded effective typography");
+        let before = current_story_effective_typography_v1(&editor, story_id)
+            .expect("source effective typography");
+        let first = before.first().expect("non-empty typography").clone();
+        let state_hash = editor
+            .current_text_format_state_hash_v1(story_id)
+            .expect("state hash");
+        editor
+            .set_text_format_property_v1(
+                story_id,
+                first.scalar_start,
+                first.scalar_end,
+                FormatPropertyV1::Bold,
+                FormatValueV1::Bool(!first.bold),
+                &state_hash,
+            )
+            .expect("set Bold override");
+
+        let after = current_story_effective_typography_v1(&editor, story_id)
+            .expect("edited effective typography");
+        assert_eq!(after[0].bold, !first.bold);
+        assert_eq!(after[0].italic, first.italic);
+        assert_eq!(after[0].font_resource_id, first.font_resource_id);
+        assert_eq!(after[0].font_size_emu, first.font_size_emu);
+        assert_eq!(after[0].text_color_rgb, first.text_color_rgb);
+
+        editor.undo().expect("undo Bold override");
+        assert_eq!(
+            current_story_effective_typography_v1(&editor, story_id)
+                .expect("typography after undo"),
+            before
+        );
+        editor.redo().expect("redo Bold override");
+        assert_eq!(
+            current_story_effective_typography_v1(&editor, story_id)
+                .expect("typography after redo"),
+            after
+        );
     }
 
     #[test]
