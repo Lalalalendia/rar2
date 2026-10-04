@@ -8,7 +8,6 @@ on:
       - "apps/chaptera-desktop/src/locale.rs"
       - "apps/chaptera-desktop/src/supporter.rs"
       - "apps/chaptera-desktop/src/supporter_attribution.rs"
-      - "apps/chaptera-desktop/src/main.rs"
   workflow_dispatch:
 
 concurrency:
