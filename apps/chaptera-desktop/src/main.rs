@@ -49,8 +49,8 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, PageRenderPlanV1, RenderPlanErrorV1,
-    build_page_render_plan_with_text_layout_resolver_v1, build_page_render_plan_with_text_layout_v1,
-    layout_decorative_border_v1,
+    build_page_render_plan_with_text_layout_resolver_v1,
+    build_page_render_plan_with_text_layout_v1, layout_decorative_border_v1,
 };
 use eframe::egui;
 use pub_interaction::{
