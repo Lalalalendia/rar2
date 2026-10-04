@@ -1,19 +1,19 @@
 use std::{env, fs, io::Cursor, path::PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use pub_contents::{
-    BLOCK_TYPE_U32, Contents0x2cChunk, RawContentsBlockBody, parse_0x2c_header,
-    parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    parse_0x2c_header, parse_confirmed_0x2c_trailer_root, parse_confirmed_chunk_reference,
+    Contents0x2cChunk, RawContentsBlockBody, BLOCK_TYPE_U32,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_escher::{
-    PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS, PUBLISHER_FIELD_YE,
-    PUBLISHER_FIELD_YS, PublisherFieldRecord,
+    PublisherFieldRecord, PUBLISHER_FIELD_SHAPE_ID, PUBLISHER_FIELD_XE, PUBLISHER_FIELD_XS,
+    PUBLISHER_FIELD_YE, PUBLISHER_FIELD_YS,
 };
 use pub_model::{NodeId, PageId, Sha256Digest};
 use pub_reader::{
-    PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseManifest,
-    build_mature_0x2c_structural_base_manifest,
+    build_mature_0x2c_structural_base_manifest, PubStructuralBaseManifest,
+    PUB_STRUCTURAL_BASE_SCHEMA_V1,
 };
 use serde::Serialize;
 
