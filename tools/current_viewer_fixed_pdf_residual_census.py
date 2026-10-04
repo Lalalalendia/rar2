@@ -13,11 +13,11 @@ SCHEMA = "chaptera.current-viewer-fixed-pdf-residual-census.v1"
 PACKET_VERSION = "chaptera.current-viewer-fixed-pdf-input.v1"
 
 
-def uniform_color_for_range(
+def color_resolution_for_range(
     runs: list[dict[str, Any]], scalar_start: int, scalar_end: int
-) -> bool:
+) -> str:
     if scalar_start >= scalar_end:
-        return False
+        return "invalid_range"
     cursor = scalar_start
     resolved: tuple[int, int, int] | None = None
     for run in runs:
@@ -26,17 +26,25 @@ def uniform_color_for_range(
         if start >= end:
             continue
         if start != cursor:
-            return False
+            return "coverage_gap"
         color = run.get("color_rgb")
         if color is None:
-            return False
+            return "missing_rgb"
         current = tuple(int(value) for value in color)
         if resolved is None:
             resolved = current
         elif resolved != current:
-            return False
+            return "mixed_rgb"
         cursor = end
-    return cursor == scalar_end and resolved is not None
+    if cursor != scalar_end:
+        return "coverage_gap"
+    return "uniform_rgb" if resolved is not None else "coverage_gap"
+
+
+def uniform_color_for_range(
+    runs: list[dict[str, Any]], scalar_start: int, scalar_end: int
+) -> bool:
+    return color_resolution_for_range(runs, scalar_start, scalar_end) == "uniform_rgb"
 
 
 def classify_node(node: dict[str, Any]) -> tuple[list[str], dict[str, int]]:
@@ -99,12 +107,17 @@ def classify_node(node: dict[str, Any]) -> tuple[list[str], dict[str, int]]:
                     if line.get("shaping") is None:
                         line_counts["missing_shaping_line"] += 1
                         continue
-                    if not uniform_color_for_range(
+                    color_status = color_resolution_for_range(
                         typography,
                         int(line["scalar_start"]),
                         int(line["scalar_end"]),
-                    ):
+                    )
+                    if color_status != "uniform_rgb":
                         line_counts["unresolved_text_color_line"] += 1
+                        line_counts[f"unresolved_text_color:{color_status}"] += 1
+                        reasons.append(
+                            f"shared_resolved_unresolved_color:{color_status}"
+                        )
                         continue
                     admitted_lines += 1
                 if admitted_lines:
