@@ -107,6 +107,23 @@ jobs:
           Sample_2010.pub 72704 ace1540716820640be5c67d85db6b70f48fbc0d4
           Simple.pub 65536 2397b9d01cfa159de2f73cf5c990d9698eb69567
           EOF
+
+          libmspub_base="https://raw.githubusercontent.com/fosnola/libmspub-test/33d8f78db8b8b319098c3d5ba3ad3e952369b323"
+          while read -r name relative_path; do
+            test -n "${name}"
+            fixture="${root}/${name}"
+            curl --fail --location --silent --show-error \
+              "${libmspub_base}/${relative_path}" \
+              --output "${fixture}"
+            actual_sha="$(sha256sum "${fixture}" | cut -d' ' -f1)"
+            actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
+            echo "pinned libmspub candidate ${name}: sha256=${actual_sha} bytes=${actual_bytes}"
+          done <<'EOF'
+          libmspub-pub2007-rich-text.pub testset/12.0/REG-TXT1-pub97-to-pub2007-with-pub2007.pub
+          libmspub-pub2010-rich-text.pub testset/14.0/REG-TXT1-pub2010.pub
+          libmspub-pub2007-fonts.pub testset/12.0/fonts.pub
+          EOF
+
           echo "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=${root}" >> "${GITHUB_ENV}"
 
       - name: Prove direct text session on real PUB
