@@ -92,6 +92,34 @@ fn resolve_supporter_market() -> supporter::MarketProfile {
     let locale = locale::detect_user_locale();
     supporter::MarketProfile::from_locale(locale.as_ref().map(locale::DetectedLocale::raw))
 }
+
+fn resolve_supporter_routes() -> supporter_routes::SupporterRoutes {
+    std::env::var("CHAPTERA_SITE_ORIGIN")
+        .ok()
+        .as_deref()
+        .and_then(supporter_routes::SupporterRoutes::from_https_origin)
+        .unwrap_or_else(supporter_routes::SupporterRoutes::disabled)
+}
+
+fn support_route_unavailable_copy(profile: supporter::MarketProfile) -> &'static str {
+    match profile {
+        supporter::MarketProfile::Ru => "Ссылка поддержки пока не настроена.",
+        _ => "Support link is not configured yet.",
+    }
+}
+
+fn supporter_action_success_copy(
+    action: supporter::SupporterAction,
+    profile: supporter::MarketProfile,
+) -> Option<&'static str> {
+    match (action, profile) {
+        (supporter::SupporterAction::Share, supporter::MarketProfile::Ru) => {
+            Some("Ссылка скопирована.")
+        }
+        (supporter::SupporterAction::Share, _) => Some("Link copied."),
+        _ => None,
+    }
+}
 const SUPPORTER_STORAGE_KEY: &str = "chaptera.supporter.v1";
 const PAGE_MARGIN: f32 = 24.0;
 const EMU_PER_INCH: f32 = 914_400.0;
@@ -1469,8 +1497,8 @@ struct ViewerApp {
     supporter_seen_receipt: Option<supporter::ValueReceipt>,
     supporter_prompt_visible: bool,
     supporter_market: supporter::MarketProfile,
-    #[allow(dead_code)]
-    supporter_requested_action: Option<supporter::SupporterAction>,
+    supporter_routes: supporter_routes::SupporterRoutes,
+    supporter_action_status: Option<String>,
     exact_file_consent_open: bool,
     exact_file_consent_status: Option<String>,
     show_diagnostics: bool,
@@ -1539,7 +1567,8 @@ impl ViewerApp {
             supporter_seen_receipt: None,
             supporter_prompt_visible: false,
             supporter_market: resolve_supporter_market(),
-            supporter_requested_action: None,
+            supporter_routes: resolve_supporter_routes(),
+            supporter_action_status: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -2058,7 +2087,7 @@ impl ViewerApp {
             .observe(supporter::ValueEvent::WorkflowFailed);
         self.supporter_seen_receipt = None;
         self.supporter_prompt_visible = false;
-        self.supporter_requested_action = None;
+        self.supporter_action_status = None;
         let generation = self.open_state.begin_attempt();
 
         match Self::prepare_document_open(path) {
@@ -2654,23 +2683,78 @@ impl ViewerApp {
         }
     }
 
-    fn handle_supporter_action(&mut self, action: supporter::SupporterAction) {
+    fn handle_supporter_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: supporter::SupporterAction,
+    ) {
         let now = current_unix_seconds();
         match action {
             supporter::SupporterAction::Later => {
                 self.supporter_state.record_later(now);
                 self.supporter_prompt_visible = false;
+                self.supporter_action_status = None;
             }
             supporter::SupporterAction::AlreadySupported => {
                 self.supporter_state.record_already_supported(now);
                 self.supporter_prompt_visible = false;
+                self.supporter_action_status = None;
             }
-            external => {
-                // CHAPTERA-VTPE-ROUTES-01 owns actual browser/clipboard effects.
-                // Until its canonical origin is configured, retain only the
-                // explicit typed click and do not invent navigation here.
-                self.supporter_requested_action = Some(external);
+            supporter::SupporterAction::Support => {
+                let attribution = self
+                    .supporter_value
+                    .receipt()
+                    .zip(self.supporter_state.current_prompt_impression_index(now))
+                    .and_then(|(receipt, impression_index)| {
+                        supporter_attribution::SupportClickAttribution::baseline(
+                            self.supporter_market,
+                            receipt,
+                            impression_index,
+                        )
+                    });
+
+                let effect =
+                    attribution.and_then(|attribution| self.supporter_routes.support_effect(attribution));
+                if self.dispatch_supporter_effect(ctx, effect) {
+                    self.supporter_state.record_support_clicked(now);
+                    self.supporter_prompt_visible = false;
+                    self.supporter_action_status = None;
+                } else {
+                    self.supporter_action_status =
+                        Some(support_route_unavailable_copy(self.supporter_market).to_owned());
+                }
             }
+            supporter::SupporterAction::Share
+            | supporter::SupporterAction::Report
+            | supporter::SupporterAction::ArchiveHelp => {
+                let effect = self.supporter_routes.effect(action);
+                if self.dispatch_supporter_effect(ctx, effect) {
+                    self.supporter_action_status =
+                        supporter_action_success_copy(action, self.supporter_market)
+                            .map(str::to_owned);
+                } else {
+                    self.supporter_action_status =
+                        Some(support_route_unavailable_copy(self.supporter_market).to_owned());
+                }
+            }
+        }
+    }
+
+    fn dispatch_supporter_effect(
+        &self,
+        ctx: &egui::Context,
+        effect: Option<supporter_routes::SupporterRouteEffect>,
+    ) -> bool {
+        match effect {
+            Some(supporter_routes::SupporterRouteEffect::OpenUrl(url)) => {
+                ctx.open_url(egui::OpenUrl { url, new_tab: true });
+                true
+            }
+            Some(supporter_routes::SupporterRouteEffect::CopyText(text)) => {
+                ctx.copy_text(text);
+                true
+            }
+            None => false,
         }
     }
 
@@ -6354,6 +6438,9 @@ impl eframe::App for ViewerApp {
                     .show(ctx, |ui| {
                         action =
                             supporter_ui::show_supporter_panel(ui, self.supporter_market, receipt);
+                        if let Some(status) = self.supporter_action_status.as_deref() {
+                            ui.small(status);
+                        }
                     });
                 action
             })
@@ -6361,7 +6448,7 @@ impl eframe::App for ViewerApp {
             None
         };
         if let Some(action) = supporter_action {
-            self.handle_supporter_action(action);
+            self.handle_supporter_action(ctx, action);
         }
 
         egui::TopBottomPanel::bottom("workspace-status").show(ctx, |ui| {
@@ -7468,7 +7555,8 @@ mod tests {
             supporter_seen_receipt: None,
             supporter_prompt_visible: false,
             supporter_market: supporter::MarketProfile::NeutralEnglish,
-            supporter_requested_action: None,
+            supporter_routes: supporter_routes::SupporterRoutes::disabled(),
+            supporter_action_status: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -7541,7 +7629,8 @@ mod tests {
             supporter_seen_receipt: None,
             supporter_prompt_visible: false,
             supporter_market: supporter::MarketProfile::NeutralEnglish,
-            supporter_requested_action: None,
+            supporter_routes: supporter_routes::SupporterRoutes::disabled(),
+            supporter_action_status: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -7552,15 +7641,17 @@ mod tests {
     }
 
     #[test]
-    fn supporter_panel_is_post_value_nonmodal_and_route_neutral() {
+    fn supporter_panel_is_post_value_nonmodal_and_route_fail_closed() {
         let source = include_str!("main.rs");
         assert!(source.contains("TopBottomPanel::bottom(\"chaptera-supporter\")"));
         assert!(source.contains(".resizable(false)"));
         assert!(source.contains(".min_height(88.0)"));
         assert!(source.contains("sync_supporter_prompt"));
         assert!(source.contains("record_prompt_shown"));
-        assert!(source.contains("supporter_requested_action = Some(external)"));
-        assert!(!source.contains("CHAPTERA_SITE_ORIGIN"));
+        assert!(source.contains("CHAPTERA_SITE_ORIGIN"));
+        assert!(source.contains("SupporterRoutes::from_https_origin"));
+        assert!(source.contains("dispatch_supporter_effect"));
+        assert!(source.contains("record_support_clicked"));
     }
 
     #[test]
@@ -7835,7 +7926,8 @@ mod tests {
             supporter_seen_receipt: None,
             supporter_prompt_visible: false,
             supporter_market: supporter::MarketProfile::NeutralEnglish,
-            supporter_requested_action: None,
+            supporter_routes: supporter_routes::SupporterRoutes::disabled(),
+            supporter_action_status: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
