@@ -6,6 +6,14 @@
 //! testing. It does not own authoring truth and does not mutate PUB source
 //! state directly.
 
+mod resize_constraints_v1;
+
+pub use resize_constraints_v1::{
+    RESIZE_CONSTRAINT_MAX_SAFE_EMU_V1, RESIZE_CONSTRAINT_MIN_SAFE_EMU_V1,
+    RESIZE_CONSTRAINT_PROTOCOL_V1, ResizeAspectControlAxisV1, ResizeConstraintErrorV1,
+    ResizeConstraintPlanV1, ResizeModifierMaskV1, plan_resize_constraint_v1,
+};
+
 use pub_model::{LengthEmu, NodeId, RectEmu};
 use std::collections::BTreeSet;
 
