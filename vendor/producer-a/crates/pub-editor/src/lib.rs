@@ -564,15 +564,9 @@ fn fixed_node_paint_from_effective_v1(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorFixedImageResourceError {
-    MissingSourceAsset {
-        resource_id: ResourceId,
-    },
-    MissingReplacementAsset {
-        sha256: Sha256Digest,
-    },
-    ResourceIdentityConflict {
-        resource_id: ResourceId,
-    },
+    MissingSourceAsset { resource_id: ResourceId },
+    MissingReplacementAsset { sha256: Sha256Digest },
+    ResourceIdentityConflict { resource_id: ResourceId },
 }
 
 impl fmt::Display for EditorFixedImageResourceError {
@@ -626,7 +620,10 @@ impl fmt::Display for EditorFixedOutputStateError {
             Self::Session(error) => write!(formatter, "current editor session is invalid: {error}"),
             Self::Project(error) => write!(formatter, "current EditorProject is invalid: {error}"),
             Self::ImageResources(error) => {
-                write!(formatter, "current fixed-output image resources are invalid: {error}")
+                write!(
+                    formatter,
+                    "current fixed-output image resources are invalid: {error}"
+                )
             }
         }
     }
@@ -2173,9 +2170,7 @@ impl EditorSession {
 
         for (node_id, asset_sha) in &self.image_replacements {
             let asset = self.replacement_assets.get(asset_sha).ok_or(
-                EditorFixedImageResourceError::MissingReplacementAsset {
-                    sha256: *asset_sha,
-                },
+                EditorFixedImageResourceError::MissingReplacementAsset { sha256: *asset_sha },
             )?;
             insert_resource(
                 &mut resources,
@@ -6112,9 +6107,7 @@ mod asset_reachability_tests {
         assert_eq!(resources[0].node_ids, vec![node_a, node_b]);
     }
 
-    fn paint_value<T>(
-        value: T,
-    ) -> pub_reader::PubEffectivePaintValue<T> {
+    fn paint_value<T>(value: T) -> pub_reader::PubEffectivePaintValue<T> {
         pub_reader::PubEffectivePaintValue {
             value,
             authority: pub_reader::PubEffectivePaintAuthority::NormativeDefault,
@@ -6140,8 +6133,7 @@ mod asset_reachability_tests {
             },
         };
 
-        let projected =
-            fixed_node_paint_from_effective_v1(node_id, &paint).expect("visible paint");
+        let projected = fixed_node_paint_from_effective_v1(node_id, &paint).expect("visible paint");
         assert_eq!(projected.node_id, node_id);
         assert_eq!(projected.fill_rgb, Some([0x11, 0x22, 0x33]));
         assert_eq!(
