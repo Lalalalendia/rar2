@@ -136,7 +136,7 @@ impl ViewerApp {
         }
 
         if self.rectangle_creation.gesture_token.is_some() && primary_released {
-            self.finish_rectangle_pointer(point_or_none(pointer_document), outcome);
+            self.finish_rectangle_pointer(pointer_document, outcome);
         }
     }
 
@@ -175,7 +175,7 @@ impl ViewerApp {
         if !self.rectangle_creation.active() || self.rectangle_creation.gesture_token.is_none() {
             return false;
         }
-        self.finish_rectangle_pointer(point_or_none(pointer_document), outcome);
+        self.finish_rectangle_pointer(pointer_document, outcome);
         true
     }
 
@@ -297,8 +297,3 @@ impl ViewerApp {
     }
 }
 
-fn point_or_none(
-    point: Option<pub_interaction::DocumentPoint>,
-) -> Option<pub_interaction::DocumentPoint> {
-    point
-}
