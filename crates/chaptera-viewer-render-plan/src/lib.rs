@@ -8,9 +8,9 @@
 use chaptera_scene_instance::{SceneInstanceV1, SceneProjectionKindV1};
 use pub_layout::{
     BoundedBreakKind, BoundedLayoutEnvironment, BoundedLayoutProjection, BoundedShapedFlowRuntime,
-    BoundedShapingRuntime, ProjectedNodeGeometry, ProjectedPage, ProjectedStory,
-    ProjectedStoryFrame, break_policy_for_shaped_text, font_fingerprint_sha256,
-    resolve_bounded_shaped_flow, shape_bounded_ltr_segment,
+    BoundedShapedGlyph, BoundedShapingDescriptor, BoundedShapingRuntime, ProjectedNodeGeometry,
+    ProjectedPage, ProjectedStory, ProjectedStoryFrame, break_policy_for_shaped_text,
+    font_fingerprint_sha256, resolve_bounded_shaped_flow, shape_bounded_ltr_segment,
 };
 use pub_line_placement::{
     LayoutPlacementContextV1, ParagraphAlignmentV1, ParagraphLinePlacementInputV1,
@@ -764,6 +764,13 @@ impl RenderTextLayoutFallbackReasonV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderResolvedShapingV1 {
+    pub environment: BoundedShapingDescriptor,
+    pub units_per_em: u32,
+    pub glyphs: Vec<BoundedShapedGlyph>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderResolvedTextLineV1 {
     pub line_index: u32,
     pub scalar_start: u32,
@@ -776,6 +783,8 @@ pub struct RenderResolvedTextLineV1 {
     pub x_offset_emu: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spans: Vec<RenderResolvedTextSpanV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaping: Option<RenderResolvedShapingV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -790,6 +799,8 @@ pub struct RenderResolvedTextSpanV1 {
     pub font_resource_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_fingerprint_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaping: Option<RenderResolvedShapingV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1739,6 +1750,7 @@ fn resolve_text_layout_v1(
         &scene.diagnostics,
         story.id,
     );
+    let shaping_environment = scene.environment.shaping.clone();
     let mut source_lines = scene
         .lines
         .into_iter()
@@ -1773,6 +1785,11 @@ fn resolve_text_layout_v1(
                 &fingerprint,
             ),
             spans: Vec::new(),
+            shaping: Some(RenderResolvedShapingV1 {
+                environment: shaping_environment.clone(),
+                units_per_em: line.units_per_em,
+                glyphs: line.glyphs,
+            }),
         })
         .collect();
 
@@ -1807,6 +1824,7 @@ struct AdmittedTypographyRunV1 {
 struct PreparedTypographyRunV1 {
     run: AdmittedTypographyRunV1,
     advance_prefix_emu: Vec<i64>,
+    shaping: RenderResolvedShapingV1,
 }
 
 #[derive(Debug)]
@@ -1880,8 +1898,9 @@ fn scalar_text_range_v1(scalars: &[char], start: u32, end: u32) -> Option<String
 
 fn prepare_typography_run_v1(
     run: AdmittedTypographyRunV1,
-    glyphs: &[pub_layout::BoundedShapedGlyph],
+    shaped: &pub_layout::BoundedShapedText,
 ) -> Result<PreparedTypographyRunV1, RenderTextLayoutFallbackReasonV1> {
+    let glyphs = &shaped.glyphs;
     let scalar_len = usize::try_from(
         run.scalar_end
             .checked_sub(run.scalar_start)
@@ -1910,6 +1929,11 @@ fn prepare_typography_run_v1(
     Ok(PreparedTypographyRunV1 {
         run,
         advance_prefix_emu: advances,
+        shaping: RenderResolvedShapingV1 {
+            environment: shaped.environment.clone(),
+            units_per_em: shaped.units_per_em,
+            glyphs: shaped.glyphs.clone(),
+        },
     })
 }
 
@@ -1964,6 +1988,13 @@ fn reuse_mixed_line_candidate_v1(
             return Err(RenderTextLayoutFallbackReasonV1::FontResourceInvalid);
         };
         let span_width_emu = prepared_run_width_v1(prepared, span_start, span_end)?;
+        let span_glyphs = prepared
+            .shaping
+            .glyphs
+            .iter()
+            .filter(|glyph| glyph.cluster >= span_start && glyph.cluster < span_end)
+            .cloned()
+            .collect::<Vec<_>>();
         spans.push(RenderResolvedTextSpanV1 {
             scalar_start: span_start,
             scalar_end: span_end,
@@ -1973,6 +2004,11 @@ fn reuse_mixed_line_candidate_v1(
             font_size_emu: run.font_size_emu,
             font_resource_id: None,
             font_fingerprint_sha256: None,
+            shaping: Some(RenderResolvedShapingV1 {
+                environment: prepared.shaping.environment.clone(),
+                units_per_em: prepared.shaping.units_per_em,
+                glyphs: span_glyphs,
+            }),
         });
         measured_width_emu = measured_width_emu
             .checked_add(span_width_emu)
@@ -2054,6 +2090,11 @@ fn shape_mixed_line_candidate_v1(
             font_size_emu: run.font_size_emu,
             font_resource_id: None,
             font_fingerprint_sha256: None,
+            shaping: Some(RenderResolvedShapingV1 {
+                environment: shaped.environment,
+                units_per_em: shaped.units_per_em,
+                glyphs: shaped.glyphs,
+            }),
         });
         measured_width_emu = measured_width_emu
             .checked_add(span_width_emu)
@@ -2121,7 +2162,7 @@ fn resolve_mixed_size_text_layout_v1(
             Ok(shaped) => shaped,
             Err(_) => return fallback_layout(RenderTextLayoutFallbackReasonV1::SharedLayoutFailed),
         };
-        let prepared = match prepare_typography_run_v1(*run, &shaped.glyphs) {
+        let prepared = match prepare_typography_run_v1(*run, &shaped) {
             Ok(prepared) => prepared,
             Err(reason) => return fallback_layout(reason),
         };
@@ -2212,6 +2253,7 @@ fn resolve_mixed_size_text_layout_v1(
             line_height_emu: chosen.line_height_emu,
             x_offset_emu,
             spans: chosen.spans,
+            shaping: None,
         });
         cursor = chosen.consumed_scalar_end;
         cursor_safe_without_reshaping = chosen_boundary_safe_without_reshaping;
@@ -2411,6 +2453,11 @@ fn shape_mixed_family_line_candidate_v1(
             font_size_emu: run.font_size_emu,
             font_resource_id: Some(run.font.resource_id.to_owned()),
             font_fingerprint_sha256: Some(run.font_fingerprint_sha256.clone()),
+            shaping: Some(RenderResolvedShapingV1 {
+                environment: shaped.environment,
+                units_per_em: shaped.units_per_em,
+                glyphs: shaped.glyphs,
+            }),
         });
         measured_width_emu = measured_width_emu
             .checked_add(span_width_emu)
@@ -2542,6 +2589,7 @@ where
             line_height_emu: chosen.line_height_emu,
             x_offset_emu,
             spans: chosen.spans,
+            shaping: None,
         });
         cursor = chosen.consumed_scalar_end;
         line_index = line_index.checked_add(1)?;
@@ -2978,7 +3026,7 @@ mod tests {
                 font_bytes,
             };
             let shaped = shape_bounded_ltr_segment(&run_text, run.scalar_start, &runtime).unwrap();
-            prepared.push(prepare_typography_run_v1(*run, &shaped.glyphs).unwrap());
+            prepared.push(prepare_typography_run_v1(*run, &shaped).unwrap());
             policy_glyphs.extend(shaped.glyphs);
         }
 
@@ -3013,6 +3061,11 @@ mod tests {
             assert_eq!(reused.measured_width_emu, reshaped.measured_width_emu);
             assert_eq!(reused.line_height_emu, reshaped.line_height_emu);
             assert_eq!(reused.spans, reshaped.spans);
+            assert!(reused.spans.iter().all(|span| {
+                span.shaping
+                    .as_ref()
+                    .is_some_and(|shaping| shaping.units_per_em > 0 && !shaping.glyphs.is_empty())
+            }));
         }
     }
 
@@ -3446,6 +3499,11 @@ mod tests {
                 .collect::<String>(),
             "ABCD"
         );
+        assert!(spans.iter().all(|span| {
+            span.shaping
+                .as_ref()
+                .is_some_and(|shaping| shaping.units_per_em > 0 && !shaping.glyphs.is_empty())
+        }));
     }
 
     #[test]
