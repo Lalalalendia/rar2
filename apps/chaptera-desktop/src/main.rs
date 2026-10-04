@@ -5543,8 +5543,9 @@ impl ViewerApp {
                 let primary_released = ui
                     .ctx()
                     .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
-                let resize_modifiers =
-                    ui.ctx().input(|input| resize_modifier_mask_from_egui(input.modifiers));
+                let resize_modifiers = ui
+                    .ctx()
+                    .input(|input| resize_modifier_mask_from_egui(input.modifiers));
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
@@ -5657,7 +5658,9 @@ impl ViewerApp {
                                     handle,
                                     pointer_start,
                                 ) {
-                                    Ok(mut resize) => match resize.update_constrained(pointer_current, resize_modifiers) {
+                                    Ok(mut resize) => match resize
+                                        .update_constrained(pointer_current, resize_modifiers)
+                                    {
                                         Ok(ResizeUpdate::Preview(_))
                                         | Ok(ResizeUpdate::Invalid { .. }) => {
                                             next_canvas_resize = Some(resize);
@@ -8906,8 +8909,9 @@ mod tests {
             start_document,
         )
         .expect("expected raw transaction");
-        let ResizeUpdate::Preview(raw_target) =
-            expected_raw.update(end_document).expect("expected raw target")
+        let ResizeUpdate::Preview(raw_target) = expected_raw
+            .update(end_document)
+            .expect("expected raw target")
         else {
             panic!("final GUI pointer must produce a valid raw resize target")
         };
