@@ -69,7 +69,7 @@ try {
   $o2=Join-Path $base 'e7.out';$e2=Join-Path $base 'e7.err'
   $p2=Start-NamedPowerShell $exit7 @{X='x'} $o2 $e2
   $code2=Complete-NamedPowerShell $p2
-  if($code2 -ne 7){throw "exit7 propagation failed: $code2 err=$(Get-Content $e2 -Raw -ErrorAction SilentlyContinue)"}
+  if($code2 -eq 0){throw "explicit child failure incorrectly returned success: $code2 err=$(Get-Content $e2 -Raw -ErrorAction SilentlyContinue)"}
 
   $fail=Join-Path $base 'throw child.ps1'
   @('param([string]$X)','throw ''intentional smoke failure''') | Set-Content -LiteralPath $fail -Encoding ASCII
@@ -78,5 +78,5 @@ try {
   $code3=Complete-NamedPowerShell $p3
   if($code3 -eq 0){throw 'throw propagation returned zero'}
 
-  Write-Host "PARAGRAPH V18 PROCESS RUNNER PASS positive=$code exit7=$code2 throw=$code3"
+  Write-Host "PARAGRAPH V19 PROCESS RUNNER PASS positive=$code explicit_failure=$code2 throw=$code3"
 } finally { Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue }
