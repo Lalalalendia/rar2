@@ -84,7 +84,7 @@ def cdx_rows(parent: str) -> tuple[list[dict[str, str]], list[str]]:
     errors: list[str] = []
     for variant in variants:
         params = [
-            ("url", variant + "*"),
+            ("url", variant),
             ("matchType", "prefix"),
             ("output", "json"),
             ("fl", "timestamp,original,statuscode,mimetype,digest,length"),
