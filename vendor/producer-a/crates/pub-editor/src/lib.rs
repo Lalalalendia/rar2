@@ -60,8 +60,8 @@ use chaptera_text_format_overlay::{
     set_text_format_property_v1 as overlay_set_text_format_property_v1, state_hash_v1,
 };
 use pub_export::{
-    CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
+    CapabilityLevel, EffectiveParagraphAlignmentExportV1, ExportPlan, ExportReport,\n    ExportReportSource, FormatCompatibilityManifest,
+    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,\n    ParagraphAlignmentV1,
     PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
     PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
     STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
@@ -2592,6 +2592,40 @@ impl EditorSession {
         })
     }
 
+    /// Projects current paragraph alignment into the source-neutral editable
+    /// export contract after authored-over-imported precedence has resolved.
+    ///
+    /// Unknown base remains None; InterWord/Distribute remain explicit
+    /// semantic values so target adapters can report loss rather than
+    /// coercing them to Left.
+    pub fn effective_paragraph_alignment_export_v1(
+        &self,
+    ) -> Result<Vec<EffectiveParagraphAlignmentExportV1>, EditorError> {
+        let paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
+        let mut result = Vec::with_capacity(paragraphs.len());
+
+        for paragraph in paragraphs {
+            let effective = self.effective_paragraph_alignment_v1(paragraph.paragraph_id)?;
+            let alignment = effective.effective.map(|value| match value {
+                EffectiveParagraphAlignmentValueV1::Left => ParagraphAlignmentV1::Left,
+                EffectiveParagraphAlignmentValueV1::Center => ParagraphAlignmentV1::Center,
+                EffectiveParagraphAlignmentValueV1::Right => ParagraphAlignmentV1::Right,
+                EffectiveParagraphAlignmentValueV1::InterWord => ParagraphAlignmentV1::InterWord,
+                EffectiveParagraphAlignmentValueV1::Distribute => ParagraphAlignmentV1::Distribute,
+            });
+            result.push(EffectiveParagraphAlignmentExportV1 {
+                paragraph_id: paragraph.paragraph_id,
+                story_id: paragraph.story_id,
+                range: paragraph.range,
+                alignment,
+            });
+        }
+
+        result.sort_by_key(|item| (item.story_id, item.range.start, item.range.end, item.paragraph_id));
+        Ok(result)
+    }
     pub fn set_paragraph_alignment_override_v1(
         &mut self,
         paragraph_ids: Vec<ParagraphId>,
