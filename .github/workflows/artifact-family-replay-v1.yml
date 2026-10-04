@@ -7,6 +7,10 @@ on:
       - 'tools/corpus/artifact_family_coverage_replay.py'
       - 'tools/corpus/test_artifact_family.py'
       - 'tools/corpus/test_artifact_family_coverage_replay.py'
+      - 'tools/corpus/artifact_family_provenance_join.py'
+      - 'tools/corpus/test_artifact_family_provenance_join.py'
+      - 'tools/corpus/artifact_family_label_coverage.py'
+      - 'tools/corpus/test_artifact_family_label_coverage.py'
       - '.github/workflows/artifact-family-replay-v1.yml'
   push:
     branches: [main]
@@ -34,3 +38,5 @@ jobs:
         run: |
           python tools/corpus/test_artifact_family.py
           python tools/corpus/test_artifact_family_coverage_replay.py
+          python tools/corpus/test_artifact_family_provenance_join.py
+          python tools/corpus/test_artifact_family_label_coverage.py
