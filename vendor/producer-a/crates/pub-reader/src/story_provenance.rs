@@ -1,4 +1,4 @@
-use crate::QUILL_STREAM_PATH;
+use crate::{CONTENTS_STREAM_PATH, QUILL_STREAM_PATH};
 use pub_model::{
     AuthorityClass, ReadConfidence, SourceDescriptor, SourceRole, Story,
 };
@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 fn exact_story_keys_v1(
     source: &SourceDescriptor,
     story: &Story,
+    carrier: &str,
     role: SourceRole,
     path: &str,
 ) -> BTreeSet<String> {
@@ -15,7 +16,7 @@ fn exact_story_keys_v1(
         .iter()
         .filter(|reference| {
             reference.validate_primary_source(source).is_ok()
-                && reference.carrier == QUILL_STREAM_PATH
+                && reference.carrier == carrier
                 && reference.path.as_deref() == Some(path)
                 && reference.role == role
                 && reference.authority == AuthorityClass::Authoritative
@@ -50,17 +51,39 @@ pub fn has_exact_mature_quill_story_identity_v1(
         return false;
     }
 
-    let text = exact_story_keys_v1(source, story, SourceRole::Semantic, "TEXT");
+    let text = exact_story_keys_v1(
+        source,
+        story,
+        QUILL_STREAM_PATH,
+        SourceRole::Semantic,
+        "TEXT",
+    );
 
-    let syid = exact_story_keys_v1(source, story, SourceRole::Relation, "SYID");
+    let syid = exact_story_keys_v1(
+        source,
+        story,
+        QUILL_STREAM_PATH,
+        SourceRole::Relation,
+        "SYID",
+    );
     if syid.iter().any(|key| text.contains(key)) {
         return true;
     }
 
-    let contents_text_id =
-        exact_story_keys_v1(source, story, SourceRole::Relation, "Contents/0x65/textId");
-    let fdpp_story_end =
-        exact_story_keys_v1(source, story, SourceRole::Relation, "FDPP/storyEnd");
+    let contents_text_id = exact_story_keys_v1(
+        source,
+        story,
+        CONTENTS_STREAM_PATH,
+        SourceRole::Relation,
+        "Contents/0x65/textId",
+    );
+    let fdpp_story_end = exact_story_keys_v1(
+        source,
+        story,
+        QUILL_STREAM_PATH,
+        SourceRole::Relation,
+        "FDPP/storyEnd",
+    );
 
     contents_text_id
         .iter()
@@ -85,12 +108,17 @@ mod tests {
         }
     }
 
-    fn source_ref(role: SourceRole, path: &str, object_key: &str) -> SourceRef {
+    fn source_ref(
+        carrier: &str,
+        role: SourceRole,
+        path: &str,
+        object_key: &str,
+    ) -> SourceRef {
         SourceRef {
             format: "pub".to_owned(),
             adapter_version: "pub-rs/test".to_owned(),
             source_hash: source_hash(),
-            carrier: QUILL_STREAM_PATH.to_owned(),
+            carrier: carrier.to_owned(),
             object_key: Some(object_key.to_owned()),
             path: Some(path.to_owned()),
             byte_range: None,
@@ -115,8 +143,18 @@ mod tests {
     #[test]
     fn direct_quill_syid_and_text_on_one_key_are_exact_identity() {
         let story = story(vec![
-            source_ref(SourceRole::Relation, "SYID", "quill/syid/7"),
-            source_ref(SourceRole::Semantic, "TEXT", "quill/syid/7"),
+            source_ref(
+                QUILL_STREAM_PATH,
+                SourceRole::Relation,
+                "SYID",
+                "quill/syid/7",
+            ),
+            source_ref(
+                QUILL_STREAM_PATH,
+                SourceRole::Semantic,
+                "TEXT",
+                "quill/syid/7",
+            ),
         ]);
         assert!(has_exact_mature_quill_story_identity_v1(
             &source(),
@@ -128,12 +166,23 @@ mod tests {
     fn fdpp_bounded_story_requires_identity_boundary_and_text_on_one_key() {
         let story = story(vec![
             source_ref(
+                CONTENTS_STREAM_PATH,
                 SourceRole::Relation,
                 "Contents/0x65/textId",
                 "quill/syid/7",
             ),
-            source_ref(SourceRole::Relation, "FDPP/storyEnd", "quill/syid/7"),
-            source_ref(SourceRole::Semantic, "TEXT", "quill/syid/7"),
+            source_ref(
+                QUILL_STREAM_PATH,
+                SourceRole::Relation,
+                "FDPP/storyEnd",
+                "quill/syid/7",
+            ),
+            source_ref(
+                QUILL_STREAM_PATH,
+                SourceRole::Semantic,
+                "TEXT",
+                "quill/syid/7",
+            ),
         ]);
         assert!(has_exact_mature_quill_story_identity_v1(
             &source(),
@@ -142,11 +191,17 @@ mod tests {
 
         let missing_boundary = story(vec![
             source_ref(
+                CONTENTS_STREAM_PATH,
                 SourceRole::Relation,
                 "Contents/0x65/textId",
                 "quill/syid/7",
             ),
-            source_ref(SourceRole::Semantic, "TEXT", "quill/syid/7"),
+            source_ref(
+                QUILL_STREAM_PATH,
+                SourceRole::Semantic,
+                "TEXT",
+                "quill/syid/7",
+            ),
         ]);
         assert!(!has_exact_mature_quill_story_identity_v1(
             &source(),
@@ -158,12 +213,23 @@ mod tests {
     fn mismatched_story_keys_fail_closed() {
         let story = story(vec![
             source_ref(
+                CONTENTS_STREAM_PATH,
                 SourceRole::Relation,
                 "Contents/0x65/textId",
                 "quill/syid/7",
             ),
-            source_ref(SourceRole::Relation, "FDPP/storyEnd", "quill/syid/7"),
-            source_ref(SourceRole::Semantic, "TEXT", "quill/syid/8"),
+            source_ref(
+                QUILL_STREAM_PATH,
+                SourceRole::Relation,
+                "FDPP/storyEnd",
+                "quill/syid/7",
+            ),
+            source_ref(
+                QUILL_STREAM_PATH,
+                SourceRole::Semantic,
+                "TEXT",
+                "quill/syid/8",
+            ),
         ]);
         assert!(!has_exact_mature_quill_story_identity_v1(
             &source(),
