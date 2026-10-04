@@ -27,10 +27,22 @@ TARGETS = [
 MAX_ROWS_PER_QUERY = 200
 
 
-def request_json(url: str, timeout: int = 25):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return json.load(response)
+def request_json(url: str, timeout: int = 25, attempts: int = 3):
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": UA, "Accept": "*/*"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.load(response)
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep((1, 3, 7)[attempt])
+    assert last_error is not None
+    raise last_error
 
 
 def request_json_lines_with_retry(
