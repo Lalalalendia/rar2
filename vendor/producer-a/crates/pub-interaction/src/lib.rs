@@ -7,11 +7,16 @@
 //! state directly.
 
 mod resize_constraints_v1;
+mod snap;
 
 pub use resize_constraints_v1::{
     RESIZE_CONSTRAINT_MAX_SAFE_EMU_V1, RESIZE_CONSTRAINT_MIN_SAFE_EMU_V1,
     RESIZE_CONSTRAINT_PROTOCOL_V1, ResizeAspectControlAxisV1, ResizeConstraintErrorV1,
     ResizeConstraintPlanV1, ResizeModifierMaskV1, plan_resize_constraint_v1,
+};
+pub use snap::{
+    SnapAnchorKind, SnapAxis, SnapError, SnapFeedback, SnapIndex, SnapObject, SnapResult,
+    SnapTargetKind,
 };
 
 use pub_model::{LengthEmu, NodeId, RectEmu};
@@ -345,6 +350,21 @@ impl MoveTransaction {
 
     pub fn has_moved(self) -> bool {
         self.preview != self.before
+    }
+
+    /// Replaces only the transient preview origin while preserving authored size.
+    pub fn set_preview_origin(
+        &mut self,
+        x: LengthEmu,
+        y: LengthEmu,
+    ) -> Result<RectEmu, MoveTransactionError> {
+        let preview = RectEmu::new(x, y, self.before.width, self.before.height);
+        if preview.right().is_none() || preview.bottom().is_none() {
+            return Err(MoveTransactionError::BoundsOverflow);
+        }
+
+        self.preview = preview;
+        Ok(preview)
     }
 
     pub fn update(&mut self, pointer: DocumentPoint) -> Result<RectEmu, MoveTransactionError> {
