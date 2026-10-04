@@ -3914,6 +3914,9 @@ impl EditorSession {
         self.validate_source_identity()
             .map_err(EditorExportError::Session)?;
         let typography = self.full_story_typography_v1();
+        let paragraph_alignments = self
+            .effective_full_story_paragraph_alignment_v1()
+            .map_err(EditorExportError::Session)?;
         let plan = editable_export_plan(
             target,
             &self.graph,
@@ -3924,6 +3927,7 @@ impl EditorSession {
                 source_typography_size_runs: &self.source_typography_size_runs,
                 source_paragraph_alignments: &self.source_paragraph_alignments,
                 full_story_typography: &typography,
+                effective_full_story_paragraph_alignments: &paragraph_alignments,
             },
         )
         .map_err(|error| EditorExportError::Report(error.to_string()))?;
@@ -5998,6 +6002,7 @@ struct EditableExportTypographyInputs<'a> {
     source_typography_size_runs: &'a [PubTypographySizeRun],
     source_paragraph_alignments: &'a [PubParagraphAlignmentRun],
     full_story_typography: &'a [FullStoryTypographyV1],
+    effective_full_story_paragraph_alignments: &'a [FullStoryParagraphAlignmentV1],
 }
 
 fn editable_export_plan(
@@ -6114,6 +6119,12 @@ fn editable_export_plan(
                 .contains_key(&run.story_id)
                 .then_some(run.story_id)
         })
+        .chain(
+            typography
+                .effective_full_story_paragraph_alignments
+                .iter()
+                .map(|item| item.story_id),
+        )
         .collect::<BTreeSet<_>>();
 
     for story_id in font_family_stories {
