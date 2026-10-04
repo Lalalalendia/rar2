@@ -1,0 +1,28 @@
+name: Pub Editor selective fanout contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pub-editor-selective-fanout-contract.yml"
+      - "tools/ci/pub_editor_pr_fanout.py"
+      - "tools/ci/test_pub_editor_pr_fanout.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pub-editor-selective-fanout-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compile classifier
+        run: python -m py_compile tools/ci/pub_editor_pr_fanout.py tools/ci/test_pub_editor_pr_fanout.py
+
+      - name: Test conservative pub-editor scope classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
