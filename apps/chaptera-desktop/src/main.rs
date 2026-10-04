@@ -7925,6 +7925,14 @@ mod tests {
             })
             .expect("fixture should expose one canvas-movable scene node");
 
+        let surface = visual
+            .scene
+            .surfaces
+            .first()
+            .expect("fixture should expose a page surface");
+        let snap_index = SnapIndex::new(surface.size.width, surface.size.height, Vec::new())
+            .expect("valid page snap index");
+
         let mut app = ViewerApp::new(None);
         app.visual = Some(visual);
         app.editor = Some(editor);
@@ -7943,14 +7951,24 @@ mod tests {
             pub_editor::LengthEmu::ZERO,
             pub_editor::LengthEmu::ZERO,
         );
-        let pointer_current = pub_interaction::DocumentPoint::new(
-            pub_editor::LengthEmu::new(127_000),
-            pub_editor::LengthEmu::new(254_000),
-        );
+        let raw_x = pub_editor::LengthEmu::new(5);
+        let dx = raw_x
+            .checked_sub(before.x)
+            .expect("bounded pointer delta to page edge");
+        let pointer_current =
+            pub_interaction::DocumentPoint::new(dx, pub_editor::LengthEmu::ZERO);
         let mut drag =
             MoveTransaction::begin(node_id, before, pointer_start).expect("valid drag start");
-        drag.update(pointer_current).expect("valid drag preview");
+        let feedback = update_drag_preview_with_snap(
+            &mut drag,
+            pointer_current,
+            Some(&snap_index),
+            Some(pub_editor::LengthEmu::new(10)),
+        )
+        .expect("valid snapped drag preview");
+        assert!(feedback.0.is_some(), "page-edge snap feedback should be present");
         let expected = drag.preview_bounds();
+        assert_eq!(expected.x, pub_editor::LengthEmu::ZERO);
 
         app.canvas_drag = Some(drag);
         assert_eq!(
