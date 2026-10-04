@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn direct_quill_syid_and_text_on_one_key_are_exact_identity() {
-        let story = story(vec![
+        let proven_story = story(vec![
             source_ref(
                 QUILL_STREAM_PATH,
                 SourceRole::Relation,
@@ -186,7 +186,7 @@ mod tests {
         ]);
         assert!(has_exact_mature_quill_story_identity_v1(
             &source(),
-            &story
+            &proven_story
         ));
 
         let missing_boundary = story(vec![
