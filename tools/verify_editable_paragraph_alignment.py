@@ -271,6 +271,58 @@ def resolve_paragraph_alignment(
     return None
 
 
+def paragraph_alignment_trace(
+    styles: dict[str, tuple[str | None, str | None]],
+    style_name: str | None,
+) -> list[dict]:
+    trace: list[dict] = []
+    seen: set[str] = set()
+    current = style_name
+    while current and current not in seen:
+        seen.add(current)
+        item = styles.get(current)
+        if item is None:
+            trace.append({"style": current, "present": False})
+            break
+        align, parent = item
+        trace.append(
+            {
+                "style": current,
+                "present": True,
+                "alignment": align,
+                "parent": parent,
+            }
+        )
+        if align:
+            break
+        current = parent
+    return trace
+
+
+def frame_alignment_snapshot(
+    frame: ET.Element,
+    styles: dict[str, tuple[str | None, str | None]],
+) -> list[dict]:
+    result: list[dict] = []
+    for paragraph in (node for node in frame.iter() if local(node.tag) == "p"):
+        direct = paragraph.attrib.get(f"{{{FO_NS}}}text-align")
+        style_name = paragraph.attrib.get(f"{{{TEXT_NS}}}style-name")
+        effective = (
+            direct.casefold()
+            if direct
+            else resolve_paragraph_alignment(styles, style_name)
+        )
+        result.append(
+            {
+                "style_name": style_name,
+                "direct_alignment": direct.casefold() if direct else None,
+                "effective_alignment": effective,
+                "style_trace": paragraph_alignment_trace(styles, style_name),
+            }
+        )
+    return result
+
+
 def verify_libreoffice(path: Path, items: list[dict], wire_root: Path) -> dict:
     source_root = odg_root_from_package(wire_root)
     root = ET.parse(path).getroot()
@@ -301,21 +353,30 @@ def verify_libreoffice(path: Path, items: list[dict], wire_root: Path) -> dict:
                 raise AssertionError(
                     f"LibreOffice Story frame {frame_name} has no paragraph carriers"
                 )
-            observed: list[str | None] = []
-            for paragraph in paragraphs:
-                direct = paragraph.attrib.get(f"{{{FO_NS}}}text-align")
-                if direct:
-                    alignment = direct.casefold()
-                else:
-                    alignment = resolve_paragraph_alignment(
-                        styles,
-                        paragraph.attrib.get(f"{{{TEXT_NS}}}style-name"),
-                    )
-                observed.append(alignment)
+            snapshot = frame_alignment_snapshot(frame, styles)
+            observed = [entry["effective_alignment"] for entry in snapshot]
             if any(value != item["alignment"] for value in observed):
+                centered_frames = sorted(
+                    name
+                    for name, candidate in frames.items()
+                    if any(
+                        entry["effective_alignment"] == "center"
+                        for entry in frame_alignment_snapshot(candidate, styles)
+                    )
+                )
                 raise AssertionError(
-                    f"LibreOffice Story frame {frame_name} alignment mismatch: "
-                    f"expected={item['alignment']!r} observed={observed!r}"
+                    "LibreOffice Story frame alignment mismatch: "
+                    + json.dumps(
+                        {
+                            "story_id": item["story_id"],
+                            "frame_name": frame_name,
+                            "expected": item["alignment"],
+                            "paragraphs": snapshot,
+                            "wire_story_frames": sorted(expected_frames),
+                            "final_center_frame_names": centered_frames,
+                        },
+                        sort_keys=True,
+                    )
                 )
             verified_frames += 1
         verified_stories += 1
