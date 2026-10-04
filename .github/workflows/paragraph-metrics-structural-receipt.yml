@@ -7,6 +7,7 @@ on:
       - "tools/research-runner/paragraph-metrics-probe/**"
       - "tools/research-runner/analysis/paragraph_metrics_auth_01_structural.py"
       - "tools/research-runner/tests/test_paragraph_metrics_structural.py"
+      - "tools/research-runner/manual/paragraph-metrics-structural-receipt-01.md"
       - "vendor/producer-a/crates/pub-quill/src/**"
       - "vendor/producer-a/crates/pub-quill/Cargo.toml"
   workflow_dispatch:
@@ -27,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -45,5 +47,5 @@ jobs:
         run: cargo test --locked --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml
       - name: Check existing Quill semantics with research feature enabled
         run: cargo test --manifest-path vendor/producer-a/crates/pub-quill/Cargo.toml --features research-inspection --lib
-      - name: Build offline snapshot tool
+      - name: Build snapshot tool for offline use
         run: cargo build --locked --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml --release
