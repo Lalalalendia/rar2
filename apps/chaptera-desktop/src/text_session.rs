@@ -2,7 +2,9 @@ use chaptera_desktop_fallback_font_resource as fallback_resource;
 use chaptera_desktop_shaped_flow_runtime::{
     DesktopStoryLayoutV1, ExplicitDesktopFontResourceV1, build_current_story_layout_v1,
 };
-use chaptera_text_caret_map_adapter::{CaretStopV1, resolve_story_position_v1};
+use chaptera_text_caret_map_adapter::{
+    CaretStopV1, hit_test_story_position_v1, resolve_story_position_v1,
+};
 use chaptera_text_input_adapter::{
     TextInputCommitV1, apply_keyboard_command_and_lower_v1,
     domain::{
@@ -14,9 +16,11 @@ use chaptera_text_input_adapter::{
 use chaptera_text_interaction_adapter::{
     SELECTION_VERSION_V1, TextEditSessionV1, TextEntryCandidateV1, TextPointerTargetV1,
     TextSelectionStateV1, activate_explicit_edit_text_v1, activate_pointer_text_v1,
-    exit_desktop_text_mode_v1, rebind_text_edit_session_authority_v1,
+    exit_desktop_text_mode_v1, handoff_same_story_frame_v1,
+    rebind_text_edit_session_authority_v1,
 };
 use pub_editor::{EditorSession, NodeId, StoryId};
+use pub_model::CanonicalId;
 
 #[derive(Debug, Clone)]
 pub struct DesktopTextMode {
@@ -58,6 +62,53 @@ fn candidate(story_id: StoryId, frame_id: NodeId) -> TextEntryCandidateV1 {
         capability: "editable".to_owned(),
         reason: None,
     }
+}
+
+fn node_id_from_caret_frame(frame_id: &str) -> Result<NodeId, String> {
+    let canonical = frame_id.parse::<CanonicalId>().map_err(|error| {
+        format!("caret stop carries invalid canonical TextFrame id {frame_id:?}: {error}")
+    })?;
+    Ok(NodeId::from_canonical(canonical))
+}
+
+fn handoff_mode_to_frame(mode: &mut DesktopTextMode, frame_id: NodeId) -> Result<(), String> {
+    let frame_text = frame_id.as_canonical().to_string();
+    if mode.frame_id == frame_id
+        && mode.session.current_frame_id.as_deref() == Some(frame_text.as_str())
+    {
+        return Ok(());
+    }
+
+    let interaction_domain = to_interaction_domain_v1(&mode.domain);
+    let handoff = handoff_same_story_frame_v1(
+        &mode.session,
+        &candidate(mode.story_id, frame_id),
+        &interaction_domain,
+        &mode.layout.caret_map,
+        &mode.layout.layout_revision_id,
+        None,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+
+    mode.frame_id = frame_id;
+    mode.session = handoff.session;
+    Ok(())
+}
+
+fn sync_mode_frame_to_projected_focus(mode: &mut DesktopTextMode) -> Result<(), String> {
+    let Some(stop_id) = mode.session.selection.focus_visual_stop_id.as_deref() else {
+        return Ok(());
+    };
+    let stop = mode
+        .layout
+        .caret_map
+        .caret_stops
+        .iter()
+        .find(|stop| stop.stop_id == stop_id)
+        .ok_or_else(|| "projected focus stop is absent from the current caret map".to_owned())?;
+    let frame_id = node_id_from_caret_frame(&stop.frame_id)?;
+    handoff_mode_to_frame(mode, frame_id)
 }
 
 fn build_layout(
@@ -130,12 +181,7 @@ fn rebind_after_commit(
         commit.post_edit_selection.focus_scalar,
         mode.frame_id,
     )?;
-    if stop.frame_id != mode.frame_id.as_canonical().to_string() {
-        return Err(
-            "post-edit caret moved outside the current bounded TextFrame; linked-flow handoff is not admitted in Desktop V0"
-                .to_owned(),
-        );
-    }
+    let rebound_frame_id = node_id_from_caret_frame(&stop.frame_id)?;
 
     let selection = TextSelectionStateV1 {
         protocol_version: SELECTION_VERSION_V1.to_owned(),
@@ -163,7 +209,7 @@ fn rebind_after_commit(
     mode.domain = domain;
     mode.layout = layout;
     mode.session = rebound.session;
-    Ok(())
+    handoff_mode_to_frame(mode, rebound_frame_id)
 }
 
 fn scalar_selection_for_current_authority(
@@ -243,7 +289,7 @@ pub fn rebind_after_non_text_document_change(
     mode.domain = domain;
     mode.layout = layout;
     mode.session = rebound.session;
-    Ok(())
+    sync_mode_frame_to_projected_focus(mode)
 }
 
 /// Select the complete active Story through the existing selection authority.
@@ -390,6 +436,7 @@ pub fn apply_keyboard_command(
         rebind_after_commit(editor, mode, &commit)?;
     } else if let Some(selection) = result.decision.selection {
         mode.session.selection = selection;
+        sync_mode_frame_to_projected_focus(mode)?;
     }
     Ok(())
 }
@@ -401,17 +448,27 @@ pub fn reposition_pointer(
     page_y_emu: i64,
 ) -> Result<(), String> {
     let interaction_domain = to_interaction_domain_v1(&mode.domain);
+    let pointer = TextPointerTargetV1 {
+        page_id: page_id.to_owned(),
+        page_x_emu,
+        page_y_emu,
+    };
+    let pointer_stop = hit_test_story_position_v1(
+        &mode.layout.caret_map,
+        page_id,
+        page_x_emu,
+        page_y_emu,
+        Some(&mode.layout.layout_revision_id),
+    )
+    .map_err(|error| error.to_string())?;
+    let target_frame_id = node_id_from_caret_frame(&pointer_stop.frame_id)?;
     let activation = activate_pointer_text_v1(
-        &candidate(mode.story_id, mode.frame_id),
+        &candidate(mode.story_id, target_frame_id),
         &mode.session.revision_id,
         &interaction_domain,
         &mode.layout.caret_map,
         &mode.layout.layout_revision_id,
-        &TextPointerTargetV1 {
-            page_id: page_id.to_owned(),
-            page_x_emu,
-            page_y_emu,
-        },
+        &pointer,
         Some(&mode.session),
         true,
         1,
@@ -422,6 +479,7 @@ pub fn reposition_pointer(
     .map_err(|error| error.to_string())?;
     if let Some(session) = activation.active_session {
         mode.session = session;
+        mode.frame_id = target_frame_id;
         Ok(())
     } else {
         Err(activation
@@ -461,6 +519,27 @@ mod tests {
     };
     use sha2::{Digest, Sha256};
     use std::{env, fs};
+
+    #[test]
+    fn authoritative_caret_frame_accepts_same_story_handoff_to_another_frame() {
+        let frame_a: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical frame A");
+        let frame_b: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+                .expect("canonical frame B");
+
+        assert_ne!(frame_a, frame_b);
+        assert_eq!(
+            node_id_from_caret_frame(&frame_b.as_canonical().to_string())
+                .expect("authoritative caret frame must admit linked-frame handoff"),
+            frame_b
+        );
+        assert!(
+            node_id_from_caret_frame("frame:B").is_err(),
+            "non-canonical frame identities remain fail-closed"
+        );
+    }
 
     #[test]
     fn real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits() {
