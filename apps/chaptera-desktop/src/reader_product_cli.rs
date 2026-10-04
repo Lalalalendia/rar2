@@ -11,10 +11,7 @@ use std::iter::Peekable;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub(super) fn try_handle_product_smoke<I>(
-    first_arg: Option<&OsStr>,
-    args: &mut Peekable<I>,
-) -> bool
+pub(super) fn try_handle_product_smoke<I>(first_arg: Option<&OsStr>, args: &mut Peekable<I>) -> bool
 where
     I: Iterator<Item = OsString>,
 {
