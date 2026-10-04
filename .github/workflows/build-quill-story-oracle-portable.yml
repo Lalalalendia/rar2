@@ -1,0 +1,120 @@
+name: Build portable Quill Story oracle bundle
+
+on:
+  push:
+    branches:
+      - delivery/quill-story-oracle-portable-20261004
+    paths:
+      - ".github/workflows/build-quill-story-oracle-portable.yml"
+      - "tools/delivery/build_quill_story_oracle_portable.ps1"
+      - "tools/research-runner/experiments/quill-story-readonly-oracle-02.packet.json"
+      - "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"
+      - "tools/research-runner/prepare_native_run.ps1"
+      - "tools/research-runner/finalize_native_run.ps1"
+      - "tools/windows/pub-runtime/PubRuntime.psm1"
+      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quill-story-portable-bundle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout exact four public witnesses
+        uses: actions/checkout@v5
+        with:
+          repository: Lalalalendia/lalamu
+          ref: f78cc6f455f4dc222868f9cc035511a6ca7a91ea
+          path: _witness/lalamu
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            pub-corpus/corpus/native/unclassified/211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157.pub
+            pub-corpus/corpus/native/unclassified/6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a.pub
+            pub-corpus/corpus/native/unclassified/9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569.pub
+            pub-corpus/corpus/native/unclassified/ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff.pub
+
+      - name: Verify exact witness identities
+        shell: pwsh
+        run: |
+          $root = "_witness/lalamu/pub-corpus/corpus/native/unclassified"
+          $expected = @(
+            "211c2c6b4bf432fcc85fafa41b6219d328541f1a6e1fa2aaa8cb2134949e3157",
+            "6b5d5b269be7ca74b03d47423aec985676c45be7033e007792fcc3eb35ad929a",
+            "9c03c6e897be6abb4538bbb12cee3041fe4eab3af9109ce1df5d64b46e4c0569",
+            "ccfcbadc8951acece4d10cc27d71f28f318685845b94ae07fd46331c3571f3ff"
+          )
+          foreach ($sha in $expected) {
+            $path = Join-Path $root "$sha.pub"
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing $sha.pub" }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $sha) { throw "SHA mismatch for $sha" }
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Build Windows resolver EXE
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin quill-story-readonly-oracle-resolver
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+          $exe = Join-Path $env:GITHUB_WORKSPACE "target/release/quill-story-readonly-oracle-resolver.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            $exe = Join-Path $env:GITHUB_WORKSPACE "vendor/producer-a/target/release/quill-story-readonly-oracle-resolver.exe"
+          }
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "resolver EXE not found" }
+          "RESOLVER_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build portable ZIP
+        shell: powershell
+        run: |
+          $witnessRoot = Join-Path $env:GITHUB_WORKSPACE "_witness/lalamu/pub-corpus/corpus/native/unclassified"
+          $out = Join-Path $env:GITHUB_WORKSPACE "out/quill-portable"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/delivery/build_quill_story_oracle_portable.ps1 -WitnessRoot $witnessRoot -ResolverExe $env:RESOLVER_EXE -OutputRoot $out
+          if ($LASTEXITCODE -ne 0) { throw "bundle builder failed" }
+
+      - name: Verify bundle is self-contained
+        shell: pwsh
+        run: |
+          $zip = "out/quill-portable/QUILL-STORY-READONLY-ORACLE-PORTABLE.zip"
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "bundle ZIP missing" }
+          $extract = "out/quill-portable/verify"
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          $required = @(
+            "RUN_NATIVE.cmd",
+            "RUN_NATIVE.ps1",
+            "README.txt",
+            "BUNDLE-MANIFEST.json",
+            "bin/quill-story-readonly-oracle-resolver.exe",
+            "tools/research-runner/experiments/quill-story-readonly-oracle-02.packet.json",
+            "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1",
+            "tools/research-runner/prepare_native_run.ps1",
+            "tools/research-runner/finalize_native_run.ps1",
+            "tools/windows/pub-runtime/PubRuntime.psm1"
+          )
+          foreach ($relative in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $extract $relative) -PathType Leaf)) {
+              throw "bundle missing $relative"
+            }
+          }
+          $pubs = @(Get-ChildItem -LiteralPath (Join-Path $extract "witnesses") -Filter "*.pub" -File)
+          if ($pubs.Count -ne 4) { throw "bundle witness count mismatch: $($pubs.Count)" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QUILL-STORY-READONLY-ORACLE-PORTABLE-${{ github.run_id }}
+          path: |
+            out/quill-portable/QUILL-STORY-READONLY-ORACLE-PORTABLE.zip
+            out/quill-portable/bundle-summary.json
+          if-no-files-found: error
+          retention-days: 30
