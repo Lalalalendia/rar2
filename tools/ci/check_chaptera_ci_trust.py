@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+# CI sign-preflight routing negative control: trust-checker-only edit.
 
 import argparse
 import pathlib
