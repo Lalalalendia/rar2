@@ -42,7 +42,8 @@ pub use writer_assessment::{
 
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
-    FormatRepresentability, FullStoryTypographyV1, LossItem, LossKind, LossSeverity,
+    FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
+    LossKind, LossSeverity, ParagraphAlignmentV1,
     PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
     PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
     STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
@@ -54,7 +55,8 @@ use pub_export::{
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
     IMAGE_CONTENT_TRANSFORM_FEATURE, IMAGE_FRAME_GEOMETRY_FEATURE, IdmlEmbeddedImagePlacement,
-    IdmlWireProfile, add_embedded_images_to_idml, add_full_story_typography_to_idml,
+    IdmlWireProfile, add_embedded_images_to_idml, add_full_story_paragraph_alignment_to_idml,
+    add_full_story_typography_to_idml,
     project_resolved_graph_to_idml, write_idml_ucf,
 };
 use pub_model::{
@@ -65,11 +67,14 @@ use pub_model::{
 pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
-    OdgFullStoryTypographyPlacement, add_embedded_images_to_odg, add_full_story_typography_to_odg,
+    OdgFullStoryParagraphAlignmentPlacement, OdgFullStoryTypographyPlacement,
+    add_embedded_images_to_odg, add_full_story_paragraph_alignment_to_odg,
+    add_full_story_typography_to_odg,
     project_resolved_graph_to_odg, write_odg,
 };
 use pub_reader::{
-    PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
+    PubAssetExportBundle, PubParagraphAlignment, PubParagraphAlignmentRun, PubResolvedGraph,
+    PubResolvedNodePayload,
     PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, resolve_pub_source_graph,
