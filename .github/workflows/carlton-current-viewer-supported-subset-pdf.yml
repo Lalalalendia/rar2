@@ -356,6 +356,7 @@ jobs:
           )
           print(json.dumps(receipt, sort_keys=True))
           '@ | python -
+          "CHAPTERA_SUPPORTED_RECEIPT=$receipt" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           $receiptText = Get-Content "$receipt" -Raw
           if ($receiptText.Contains((Resolve-Path $env:CHAPTERA_CARLTON_PUB).Path)) {
