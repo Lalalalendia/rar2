@@ -81,7 +81,50 @@ function Assert-Publisher2019([string]$Root) {
 
 function Assert-NoPublisherProcess {
     $p = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
-    if ($p.Count -gt 0) { throw "MSPUB.EXE is already running. Close Publisher normally and run again." }
+    if ($p.Count -gt 0) { throw "MSPUB.EXE is still running after a completed task; refusing to mix Publisher sessions." }
+}
+
+function Ensure-PublisherPreflightIdle {
+    $p = @(Get-Process -Name MSPUB -ErrorAction SilentlyContinue)
+    if ($p.Count -eq 0) { return }
+
+    $app = $null
+    try {
+        $app = [Runtime.InteropServices.Marshal]::GetActiveObject("Publisher.Application")
+    } catch {
+        $app = $null
+    }
+
+    if ($null -eq $app) {
+        $details = @($p | ForEach-Object {
+            [ordered]@{
+                id = [int]$_.Id
+                main_window = ([int64]$_.MainWindowHandle -ne 0)
+                started = $(try { $_.StartTime.ToUniversalTime().ToString("o") } catch { "unknown" })
+            }
+        })
+        $summary = ($details | ConvertTo-Json -Compress -Depth 4)
+        throw "MSPUB.EXE is already running, but no safely controllable active Publisher COM session was found. No process was killed. Close Publisher/its background MSPUB process manually and rerun. Processes: $summary"
+    }
+
+    try {
+        $documentCount = [int]$app.Documents.Count
+        if ($documentCount -gt 0) {
+            throw "Publisher is already running with $documentCount open document(s). No document was closed automatically. Save/close them and rerun."
+        }
+
+        Write-Host "Publisher preflight: empty existing session detected; closing it safely before the authority run."
+        $app.Quit()
+    } finally {
+        Release-Com $app
+    }
+
+    for ($i = 0; $i -lt 40; $i++) {
+        Start-Sleep -Milliseconds 250
+        if (@(Get-Process -Name MSPUB -ErrorAction SilentlyContinue).Count -eq 0) { return }
+    }
+
+    throw "Publisher preflight asked an empty COM session to quit, but MSPUB.EXE is still running. No process was killed; close it manually and rerun."
 }
 
 function New-NativeBlank {
@@ -148,6 +191,7 @@ try { Start-Transcript -LiteralPath $TopLog -Force | Out-Null } catch {}
 
 try {
     Assert-NotElevated
+    Ensure-PublisherPreflightIdle
     Assert-NoPublisherProcess
     $manifest = Assert-BundleManifest $Root
     $summary.bundle = [ordered]@{ source_main_sha = [string]$manifest.source_main_sha; corpus_artifact_id = [int64]$manifest.corpus_artifact_id }
