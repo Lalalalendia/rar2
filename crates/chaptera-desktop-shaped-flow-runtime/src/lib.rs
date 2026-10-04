@@ -130,7 +130,36 @@ fn resolve_current_shaped_flow_v1(
     editor: &EditorSession,
     font: &ExplicitDesktopFontResourceV1<'_>,
 ) -> Result<(String, BoundedShapedFlowScene), DesktopShapedFlowRuntimeError> {
-    let (fingerprint, shaped_flow) = resolve_current_shaped_flow_v1(editor, font)?;
+    let fingerprint = validate_explicit_font_resource_v1(font)?;
+    let authoring =
+        pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
+            DesktopShapedFlowRuntimeError::new(
+                "authoring_projection_failed",
+                format!("resolved graph could not enter bounded layout projection: {error}"),
+            )
+        })?;
+    let projection = project_bounded(authoring);
+
+    let runtime = BoundedShapedFlowRuntime {
+        shaping: BoundedShapingRuntime {
+            layout: BoundedLayoutEnvironment {
+                engine_revision: DESKTOP_SHAPED_FLOW_RUNTIME_V1.to_owned(),
+                font_set_fingerprint: fingerprint.clone(),
+                resource_fingerprint: font.resource_id.to_owned(),
+            },
+            face_index: font.face_index,
+            font_size_emu: font.font_size_emu,
+            font_bytes: font.bytes,
+        },
+        line_height: font.line_height_emu,
+    };
+
+    let shaped_flow = resolve_bounded_shaped_flow(&projection, &runtime).map_err(|error| {
+        DesktopShapedFlowRuntimeError::new(
+            "shaped_flow_failed",
+            format!("authoritative bounded shaped flow failed: {error}"),
+        )
+    })?;
     Ok((fingerprint, shaped_flow))
 }
 
@@ -196,36 +225,7 @@ pub fn build_current_story_layout_v1(
         )
     })?;
 
-    let fingerprint = validate_explicit_font_resource_v1(font)?;
-    let authoring =
-        pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
-            DesktopShapedFlowRuntimeError::new(
-                "authoring_projection_failed",
-                format!("resolved graph could not enter bounded layout projection: {error}"),
-            )
-        })?;
-    let projection = project_bounded(authoring);
-
-    let runtime = BoundedShapedFlowRuntime {
-        shaping: BoundedShapingRuntime {
-            layout: BoundedLayoutEnvironment {
-                engine_revision: DESKTOP_SHAPED_FLOW_RUNTIME_V1.to_owned(),
-                font_set_fingerprint: fingerprint.clone(),
-                resource_fingerprint: font.resource_id.to_owned(),
-            },
-            face_index: font.face_index,
-            font_size_emu: font.font_size_emu,
-            font_bytes: font.bytes,
-        },
-        line_height: font.line_height_emu,
-    };
-
-    let shaped_flow = resolve_bounded_shaped_flow(&projection, &runtime).map_err(|error| {
-        DesktopShapedFlowRuntimeError::new(
-            "shaped_flow_failed",
-            format!("authoritative bounded shaped flow failed: {error}"),
-        )
-    })?;
+    let (fingerprint, shaped_flow) = resolve_current_shaped_flow_v1(editor, font)?;
 
     let caret_map = build_caret_map_from_shaped_flow_v1(
         &shaped_flow,
