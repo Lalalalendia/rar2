@@ -1,0 +1,51 @@
+name: Editor fixed-PDF Yab259 packet renderer
+
+on:
+  pull_request:
+    paths:
+      - "tools/yab259_editor_packet_renderer.rs"
+      - "tools/run_yab259_editor_packet_renderer.py"
+      - "tools/test_run_yab259_editor_packet_renderer.py"
+      - "tools/run_yab259_fixed_pdf_closure.py"
+      - ".github/workflows/editor-fixed-pdf-yab259-packet-renderer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Test local adapter orchestration
+        run: python tools/test_run_yab259_editor_packet_renderer.py -v
+
+      - name: Check Rar-owned thin Rust adapter formatting
+        run: rustfmt --edition 2024 --check tools/yab259_editor_packet_renderer.rs
+
+      - name: Acquire public Yab donor repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/HeisLuka/yab "$RUNNER_TEMP/yab"
+          git -C "$RUNNER_TEMP/yab" cat-file -e 4f5d8a57abc089d1ed8eb1326cf9bed602281f7e^{commit}
+
+      - name: Compile thin source-neutral renderer in repaired exact Yab 259
+        run: |
+          python tools/run_yab259_editor_packet_renderer.py \
+            --yab-checkout "$RUNNER_TEMP/yab" \
+            --check-only
