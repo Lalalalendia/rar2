@@ -156,8 +156,8 @@ def prepare_alpha_image_pdf_donor(
         let image_id = next_image_object_id;
         next_image_object_id += 1;
         let soft_mask_id = matches!(
-            prepared_images[resource_id],
-            PreparedImage::Rgba { .. }
+            prepared_images.get(resource_id),
+            Some(PreparedImage::Rgba { .. })
         )
         .then(|| {
             let value = next_image_object_id;
