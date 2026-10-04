@@ -3166,10 +3166,9 @@ mod tests {
             Some(absolute)
         );
 
-        visual.paragraph_line_spacings[0].line_spacing =
-            ViewerParagraphLineSpacing::Proportional {
-                point_equivalent_emu: 18 * 12_700,
-            };
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Proportional {
+            point_equivalent_emu: 18 * 12_700,
+        };
         assert_eq!(
             resolved_uniform_line_height_emu_v1(
                 &visual,
@@ -3181,10 +3180,9 @@ mod tests {
             Some(fallback)
         );
 
-        visual.paragraph_line_spacings[0].line_spacing =
-            ViewerParagraphLineSpacing::Absolute {
-                spacing_emu: u32::try_from(absolute).expect("absolute spacing"),
-            };
+        visual.paragraph_line_spacings[0].line_spacing = ViewerParagraphLineSpacing::Absolute {
+            spacing_emu: u32::try_from(absolute).expect("absolute spacing"),
+        };
         visual.paragraph_line_spacings[0].scalar_end = fragment.scalar_end - 1;
         assert_eq!(
             resolved_uniform_line_height_emu_v1(
