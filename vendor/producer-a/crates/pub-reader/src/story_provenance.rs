@@ -1,7 +1,5 @@
 use crate::{CONTENTS_STREAM_PATH, QUILL_STREAM_PATH};
-use pub_model::{
-    AuthorityClass, ReadConfidence, SourceDescriptor, SourceRole, Story,
-};
+use pub_model::{AuthorityClass, ReadConfidence, SourceDescriptor, SourceRole, Story};
 use std::collections::BTreeSet;
 
 fn exact_story_keys_v1(
@@ -40,10 +38,7 @@ fn exact_story_keys_v1(
 /// The FDPP form deliberately requires the exact terminal Story boundary in
 /// addition to the Contents identity key. This predicate never infers identity
 /// from Story text content or a trailing U+000D.
-pub fn has_exact_mature_quill_story_identity_v1(
-    source: &SourceDescriptor,
-    story: &Story,
-) -> bool {
+pub fn has_exact_mature_quill_story_identity_v1(source: &SourceDescriptor, story: &Story) -> bool {
     if source.format != "pub"
         || source.format_version.as_deref() != Some("0x2c")
         || !source.adapter_version.starts_with("pub-rs/")
@@ -108,12 +103,7 @@ mod tests {
         }
     }
 
-    fn source_ref(
-        carrier: &str,
-        role: SourceRole,
-        path: &str,
-        object_key: &str,
-    ) -> SourceRef {
+    fn source_ref(carrier: &str, role: SourceRole, path: &str, object_key: &str) -> SourceRef {
         SourceRef {
             format: "pub".to_owned(),
             adapter_version: "pub-rs/test".to_owned(),
@@ -231,9 +221,6 @@ mod tests {
                 "quill/syid/8",
             ),
         ]);
-        assert!(!has_exact_mature_quill_story_identity_v1(
-            &source(),
-            &story
-        ));
+        assert!(!has_exact_mature_quill_story_identity_v1(&source(), &story));
     }
 }
