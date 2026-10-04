@@ -3,9 +3,7 @@
 //! Owns canvas shortcuts and the Story Alt+Arrow escape route. The existing
 //! keyboard law and canonical editor/text-session authorities are reused.
 
-use super::{
-    ViewerApp, direct_scene_instance, reader_only_mode, selection_keyboard, text_session,
-};
+use super::{ViewerApp, direct_scene_instance, reader_only_mode, selection_keyboard, text_session};
 use chaptera_scene_instance::{ObjectMutationKindV1, admit_object_mutation_v1};
 use eframe::egui;
 

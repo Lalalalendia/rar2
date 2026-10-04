@@ -22,7 +22,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  format-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - name: Format Desktop keyboard slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
   contract:
+    needs: format-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,9 +47,6 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
-
-      - name: Format Desktop keyboard slice
-        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
 
       - name: Check Desktop keyboard integration
         run: cargo check -p chaptera-desktop --all-targets
@@ -53,6 +65,7 @@ jobs:
         run: cargo test -p chaptera-desktop selection_keyboard::tests -- --nocapture
 
   real-gui:
+    needs: format-preflight
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -87,4 +100,3 @@ jobs:
 
       - name: Prove Story focus and Alt Arrow on real PUB
         run: cargo test -p chaptera-desktop gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub -- --ignored --nocapture
-

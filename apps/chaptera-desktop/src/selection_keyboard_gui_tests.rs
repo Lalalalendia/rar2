@@ -41,8 +41,7 @@ fn gui_canvas_keyboard_nudge_select_all_escape_and_delete_fail_closed_on_real_pu
                     .iter()
                     .filter(|node| node.parent_origin == page_origin)
                     .find_map(|node| {
-                        let instance =
-                            direct_scene_instance(editor, &page_id_text, node.origin)?;
+                        let instance = direct_scene_instance(editor, &page_id_text, node.origin)?;
                         let admission =
                             admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
                         if !admission.admitted
@@ -250,8 +249,7 @@ fn gui_escape_cancels_active_object_gesture_before_clearing_selection_on_real_pu
                     .iter()
                     .filter(|node| node.parent_origin == page_origin)
                     .find_map(|node| {
-                        let instance =
-                            direct_scene_instance(editor, &page_id_text, node.origin)?;
+                        let instance = direct_scene_instance(editor, &page_id_text, node.origin)?;
                         let admission =
                             admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
                         if !admission.admitted {
@@ -393,8 +391,7 @@ fn gui_story_keyboard_keeps_arrows_text_owned_and_alt_nudges_owner_on_real_pub()
                     .find(|(_, page)| node.parent_origin == page.id.into_canonical())?;
                 let page_id_text = page.id.as_canonical().to_string();
                 let instance = direct_scene_instance(editor, &page_id_text, fragment.frame_id)?;
-                let admission =
-                    admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
+                let admission = admit_object_mutation_v1(&instance, ObjectMutationKindV1::MoveNode);
                 if !admission.admitted
                     || admission.origin_node_id.as_deref()
                         != Some(fragment.frame_id.as_canonical().to_string().as_str())
