@@ -344,6 +344,8 @@ jobs:
               "page_significant_fractions": [page["diff"]["significant_fraction"] for page in diff["pages"]],
               "page_order_preserved": True,
               "node_order_preserved": True,
+              "reference_is_pre_edit_published_pdf": True,
+              "reference_diff_includes_intentional_story_move_delta": True,
               "private_packet_retained": False,
               "private_render_request_retained": False,
               "native_pub_write_used": False,
