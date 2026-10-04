@@ -49,6 +49,11 @@ jobs:
           test "$actual_len" = "291840"
           echo "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" >> "$GITHUB_ENV"
 
+      - name: Preflight exact Stage 0.1 fixed-output targets
+        run: |
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_sample_newsletter_stage01_targets_have_fixed_output_materializers -- --nocapture
+
       - name: Real current-Story shaped-flow edit rebuild
         run: |
           cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
