@@ -72,8 +72,22 @@ jobs:
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
 
-      - name: Prove canonical Bold toggle from seeded Chaptera override
-        run: cargo test -p chaptera-desktop real_sample_newsletter_seeded_boolean_override_is_durable_and_reversible -- --nocapture
+      - name: Acquire pinned OBS-006A text-style.pub
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="${RUNNER_TEMP}/text-style.pub"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/fosnola/libmspub-test/33d8f78db8b8b319098c3d5ba3ad3e952369b323/testset/9.0/text-style.pub" \
+            --output "${fixture}"
+          actual_sha="$(sha256sum "${fixture}" | cut -d' ' -f1)"
+          actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
+          test "${actual_sha}" = "525ee897523e09b2fb8e6d435e307c3cd4ce4c12d2060fc81854bcf619263967"
+          test "${actual_bytes}" = "20480"
+          echo "CHAPTERA_TEXT_STYLE_FIXTURE=${fixture}" >> "${GITHUB_ENV}"
+
+      - name: Prove canonical Bold history on OBS-006A text-style.pub
+        run: cargo test -p chaptera-desktop real_text_style_boolean_format_helper_is_durable_and_reversible -- --nocapture
 
   gui-direct-text:
     needs: format-preflight
