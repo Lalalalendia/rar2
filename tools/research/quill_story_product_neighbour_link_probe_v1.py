@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "corpus"))
 from harvest_pub import common_crawl_fetch  # type: ignore
 
-COLLINFO = "https://index.commoncrawl.org/collinfo.json"
+CC_MAIN_2012_INDEX = "https://index.commoncrawl.org/CC-MAIN-2012-index"
 UA = "Chaptera-PUB-research/1.0 (+product-neighbour-link-probe)"
 CFB_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
 
@@ -29,25 +29,32 @@ RECORDS = [
 ]
 
 
-def request_json(url: str, timeout: int = 30):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return json.load(response)
-
-
-def request_json_lines(url: str, timeout: int = 30) -> list[dict]:
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        raw = response.read().decode("utf-8", errors="replace")
-    rows = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        row = json.loads(line)
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+def request_json_lines(url: str, timeout: int = 20, attempts: int = 3) -> list[dict]:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": UA, "Accept": "*/*"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+            rows = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    rows.append(row)
+            return rows
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                import time
+                time.sleep((1, 3, 7)[attempt])
+    assert last_error is not None
+    raise last_error
 
 
 def ascii_strings(payload: bytes, min_len: int = 4) -> list[str]:
@@ -84,13 +91,7 @@ def main() -> int:
     out = Path("out")
     out.mkdir(exist_ok=True)
 
-    collections = request_json(COLLINFO)
-    crawl = next(
-        row
-        for row in collections
-        if isinstance(row, dict) and row.get("id") == "CC-MAIN-2012"
-    )
-    endpoint = str(crawl["cdx-api"])
+    endpoint = CC_MAIN_2012_INDEX
 
     rows_out = []
     for record in RECORDS:
