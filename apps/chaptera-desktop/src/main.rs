@@ -1996,7 +1996,7 @@ impl ViewerApp {
             }
 
             let duplicate_enabled =
-                self.rectangle_tool_inactive() && self.selected_authored_rectangle_target().is_ok();
+                rectangle_creation_shell::rectangle_tool_inactive(&self.rectangle_creation) && self.selected_authored_rectangle_target().is_ok();
             let duplicate_response =
                 ui.add_enabled(duplicate_enabled, egui::Button::new("Duplicate"));
             if duplicate_response.clicked()
@@ -4919,7 +4919,7 @@ impl ViewerApp {
                 }
 
                 if !reader_only_mode()
-                    && self.rectangle_tool_inactive()
+                    && rectangle_creation_shell::rectangle_tool_inactive(&self.rectangle_creation)
                     && !self.text_box_creation.active()
                     && !text_box_pointer_owned
                     && response.clicked_by(egui::PointerButton::Primary)
