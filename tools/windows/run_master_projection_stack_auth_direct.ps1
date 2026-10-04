@@ -92,6 +92,12 @@ try {
     } elseif (-not [System.IO.Path]::IsPathRooted($OutputRoot)) {
         $OutputRoot = Join-Path $RepoRoot $OutputRoot
     }
+    if (Test-Path -LiteralPath $OutputRoot) {
+        $existing = @(Get-ChildItem -LiteralPath $OutputRoot -Force -ErrorAction Stop)
+        if ($existing.Count -ne 0) {
+            throw "OutputRoot is not empty; use a fresh directory to avoid mixing evidence: $OutputRoot"
+        }
+    }
     New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
     Write-Host "MASTER-PROJECTION-STACK direct oracle: exact source and Publisher2019 identity verified."
