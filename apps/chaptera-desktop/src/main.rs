@@ -14,6 +14,7 @@ mod duplicate_rectangle;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod duplicate_rectangle_gui_tests;
 mod fallback_font;
+mod font_binding;
 mod history;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod history_gui_tests;
@@ -52,11 +53,12 @@ use chaptera_scene_instance::{
     direct_page_local_instance_v1, geometry_sync_policy_v1,
 };
 use chaptera_viewer_render_plan::{
-    ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, PageRenderPlanV1, RenderPlanErrorV1,
-    build_page_render_plan_with_text_layout_resolver_v1,
-    build_page_render_plan_with_text_layout_v1, layout_decorative_border_v1,
+    NodeRenderPlanV1, PageRenderPlanV1, layout_decorative_border_v1,
 };
 use eframe::egui;
+use font_binding::{
+    build_desktop_page_render_plan, build_desktop_page_render_plan_with_source_fonts,
+};
 use pub_interaction::{
     MoveTransaction, ResizeCommit, ResizeHandle, ResizePointerDown, ResizeTransaction,
     ResizeUpdate, ScreenPoint, ScreenRect, ViewTransform, classify_resize_pointer_down,
@@ -118,35 +120,6 @@ const PAGE_THUMBNAIL_MAX_WIDTH: f32 = 116.0;
 const PAGE_THUMBNAIL_MAX_HEIGHT: f32 = 148.0;
 const SOURCE_REVALIDATE_INTERVAL: Duration = Duration::from_secs(2);
 const SOURCE_EXACT_REVALIDATE_INTERVAL: Duration = Duration::from_secs(30);
-
-fn desktop_text_font_resource() -> ExplicitRenderTextFontResourceV1<'static> {
-    ExplicitRenderTextFontResourceV1 {
-        resource_id: chaptera_desktop_fallback_font_resource::RESOURCE_ID,
-        expected_sha256: chaptera_desktop_fallback_font_resource::EXPECTED_SHA256,
-        face_index: 0,
-        default_font_size_emu: chaptera_desktop_fallback_font_resource::FONT_SIZE_EMU,
-        default_line_height_emu: chaptera_desktop_fallback_font_resource::LINE_HEIGHT_EMU,
-        bytes: chaptera_desktop_fallback_font_resource::bytes(),
-    }
-}
-
-fn build_desktop_page_render_plan(
-    visual: &ViewerGeometryDocument,
-    page_index: usize,
-) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
-    build_page_render_plan_with_text_layout_v1(visual, page_index, &desktop_text_font_resource())
-}
-
-fn build_desktop_page_render_plan_with_source_fonts(
-    visual: &ViewerGeometryDocument,
-    page_index: usize,
-    source_fonts: &source_font::DesktopSourceFontRegistry,
-) -> Result<PageRenderPlanV1, RenderPlanErrorV1> {
-    let fallback = desktop_text_font_resource();
-    build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
-        source_fonts.resource_for_fragment(fragment)
-    })
-}
 
 fn paint_document_node_decorative_border(
     painter: &egui::Painter,
@@ -750,8 +723,7 @@ fn main() -> eframe::Result<()> {
         APP_TITLE,
         options,
         Box::new(move |cc| {
-            fallback_font::install(&cc.egui_ctx)
-                .expect("pinned Chaptera fallback font resource must validate");
+            font_binding::install_startup_font(&cc.egui_ctx);
             Ok(Box::new(ViewerApp::new_with_storage(
                 initial_path,
                 cc.storage,
@@ -4103,24 +4075,7 @@ impl ViewerApp {
     }
 
     fn show_canvas(&mut self, ui: &mut egui::Ui) {
-        if !self.source_fonts_install_attempted {
-            self.source_fonts_install_attempted = true;
-            let additional = self.source_fonts.egui_fonts();
-            match fallback_font::install_with_additional(ui.ctx(), &additional) {
-                Ok(()) => {
-                    self.source_fonts_active = true;
-                }
-                Err(_) => {
-                    self.source_fonts_active = false;
-                    let _ = fallback_font::install(ui.ctx());
-                }
-            }
-            self.page_frame_cache.clear();
-
-            // egui applies FontDefinitions at the next pass boundary. Do not
-            // build or paint a render plan that names a newly registered
-            // source-font family in the same pass that calls set_fonts.
-            ui.ctx().request_repaint();
+        if self.prepare_canvas_fonts(ui) {
             return;
         }
 
