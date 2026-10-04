@@ -1,0 +1,45 @@
+name: Current Viewer fixed-PDF input
+
+on:
+  pull_request:
+    paths:
+      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - "crates/chaptera-viewer-render-plan/**"
+      - ".github/workflows/current-viewer-fixed-pdf-input.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: current-viewer-fixed-pdf-input-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml -- --check
+      - name: Compile current Viewer packet builder
+        run: cargo check --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --bin current_viewer_fixed_pdf_input
+      - name: Test shaped-flow runtime
+        run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml
+      - name: Fence packet builder from PDF serialization
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="crates/chaptera-desktop-shaped-flow-runtime/src/bin/current_viewer_fixed_pdf_input.rs"
+          if grep -Eq 'pub_pdf|render_bounded_pdf|build_pdf_artifact|convert_pdf' "$file"; then
+            echo "current Viewer packet builder must remain renderer-free" >&2
+            exit 1
+          fi
+          grep -q 'refresh_text_projection_from_resolved' "$file"
+          grep -q 'geometry_sync_policy_v1' "$file"
+          grep -q 'build_page_render_plan_with_text_layout_v1' "$file"
