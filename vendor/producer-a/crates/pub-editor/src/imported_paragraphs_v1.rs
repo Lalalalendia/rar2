@@ -1,7 +1,7 @@
 use crate::{EditorSession, story_state_id_v1};
 use pub_model::{
     AuthorityClass, ParagraphId, ReadConfidence, Sha256Digest, SourceDerivedIdInput,
-    SourceDescriptor, SourceRef, SourceRole, Story, StoryId, TextRange, derive_source_canonical_id,
+    SourceDescriptor, SourceRole, Story, StoryId, TextRange, derive_source_canonical_id,
 };
 use std::collections::BTreeSet;
 use std::fmt;
@@ -235,7 +235,7 @@ fn canonical_paragraph_ranges_v1(text: &str, protected_terminal_cr: bool) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pub_model::CanonicalId;
+    use pub_model::{CanonicalId, SourceRef};
 
     fn story_id() -> StoryId {
         StoryId::from_canonical(CanonicalId::from_bytes([0x42; 16]))
