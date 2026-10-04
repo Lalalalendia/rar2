@@ -1,7 +1,8 @@
 use pub_editor::{
-    AuthoredParagraphAlignmentValueV1, EditorEditableTarget, ParagraphAlignmentV1, Sha256Digest,
+    AuthoredParagraphAlignmentValueV1, EditorEditableTarget, Sha256Digest,
     open_mature_0x2c_editor,
 };
+use pub_export::ParagraphAlignmentV1;
 
 fn marker_counts(bytes: &[u8], target: EditorEditableTarget) -> (usize, usize) {
     let text = String::from_utf8_lossy(bytes);
