@@ -62,14 +62,13 @@ use chaptera_text_format_overlay::{
 use pub_export::{
     CapabilityLevel, ExportPlan, ExportReport, ExportReportSource, FormatCompatibilityManifest,
     FormatRepresentability, FullStoryParagraphAlignmentV1, FullStoryTypographyV1, LossItem,
-    LossKind, LossSeverity, ParagraphAlignmentV1,
-    PersistenceCompatibilityAssessment, PersistenceCompatibilityError, PersistenceRequirement,
-    PersistenceRequirements, PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE,
-    STORY_FONT_SIZE_FEATURE, STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE,
-    ScopedCapabilityError, ScopedCapabilityOverride, SemanticFeatureRequest,
-    TargetCapabilityManifest, TargetProfile, WriterCapabilityManifest,
-    assess_persistence_compatibility, build_export_report, plan_export_with_scoped_capabilities,
-    render_human_summary,
+    LossKind, LossSeverity, ParagraphAlignmentV1, PersistenceCompatibilityAssessment,
+    PersistenceCompatibilityError, PersistenceRequirement, PersistenceRequirements,
+    PersistenceTargetProfile, STORY_FONT_FAMILY_FEATURE, STORY_FONT_SIZE_FEATURE,
+    STORY_PARAGRAPH_ALIGNMENT_FEATURE, STORY_TEXT_COLOR_FEATURE, ScopedCapabilityError,
+    ScopedCapabilityOverride, SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile,
+    WriterCapabilityManifest, assess_persistence_compatibility, build_export_report,
+    plan_export_with_scoped_capabilities, render_human_summary,
 };
 use pub_idml::{
     IDML_ADAPTER_VERSION_V0_1, IDML_SCHEMA_FENCE_LEGACY_DOM_7, IMAGE_BYTES_FEATURE,
@@ -3473,18 +3472,18 @@ impl EditorSession {
                             message: error.to_string(),
                         },
                     )?;
-                let paragraph_alignments = self
-                    .effective_full_story_paragraph_alignment_v1()
-                    .map_err(EditorExportError::Session)?;
-                add_full_story_paragraph_alignment_to_idml(
-                    &plan,
-                    &mut package,
-                    &paragraph_alignments,
-                )
-                .map_err(|error| EditorExportError::Projection {
-                    target,
-                    message: error.to_string(),
-                })?;
+                    let paragraph_alignments = self
+                        .effective_full_story_paragraph_alignment_v1()
+                        .map_err(EditorExportError::Session)?;
+                    add_full_story_paragraph_alignment_to_idml(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignments,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 }
                 EditorEditableTarget::Odg => {
                     let mut package =
@@ -3508,20 +3507,20 @@ impl EditorSession {
                         target,
                         message: error.to_string(),
                     })?;
-                let paragraph_alignments = self
-                    .effective_full_story_paragraph_alignment_v1()
-                    .map_err(EditorExportError::Session)?;
-                let paragraph_alignment_placements =
-                    self.odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
-                add_full_story_paragraph_alignment_to_odg(
-                    &plan,
-                    &mut package,
-                    &paragraph_alignment_placements,
-                )
-                .map_err(|error| EditorExportError::Projection {
-                    target,
-                    message: error.to_string(),
-                })?;
+                    let paragraph_alignments = self
+                        .effective_full_story_paragraph_alignment_v1()
+                        .map_err(EditorExportError::Session)?;
+                    let paragraph_alignment_placements = self
+                        .odg_full_story_paragraph_alignment_placements_v1(&paragraph_alignments);
+                    add_full_story_paragraph_alignment_to_odg(
+                        &plan,
+                        &mut package,
+                        &paragraph_alignment_placements,
+                    )
+                    .map_err(|error| EditorExportError::Projection {
+                        target,
+                        message: error.to_string(),
+                    })?;
                 }
             }
         }
@@ -3853,9 +3852,7 @@ impl EditorSession {
                     Some(EffectiveParagraphAlignmentValueV1::Center) => {
                         ParagraphAlignmentV1::Center
                     }
-                    Some(EffectiveParagraphAlignmentValueV1::Right) => {
-                        ParagraphAlignmentV1::Right
-                    }
+                    Some(EffectiveParagraphAlignmentValueV1::Right) => ParagraphAlignmentV1::Right,
                     _ => {
                         valid = false;
                         break;
