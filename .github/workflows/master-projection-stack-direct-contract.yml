@@ -1,0 +1,78 @@
+name: Master projection stack direct launcher contract
+
+on:
+  pull_request:
+    paths:
+      - "tools/windows/run_master_projection_stack_auth_direct.ps1"
+      - ".github/workflows/master-projection-stack-direct-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: master-projection-stack-direct-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parse-and-bound:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Parse direct launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_master_projection_stack_auth_direct.ps1"
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path $path).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+            throw "PowerShell parser rejected $path"
+          }
+
+      - name: Enforce bounded offline contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "tools/windows/run_master_projection_stack_auth_direct.ps1"
+          $text = Get-Content -LiteralPath $path -Raw
+          foreach ($required in @(
+            "git merge-base --is-ancestor",
+            "git hash-object",
+            "72704",
+            "Publisher Build mismatch",
+            "MSPUB.EXE file version mismatch",
+            "MSPUB.EXE SHA mismatch",
+            "OutputRoot is not empty",
+            "master-projection-stack-auth-01.json",
+            "source_original_mutated",
+            "generated_pub_uploaded",
+            "generated_page_picture_uploaded",
+            "save_close_fresh_reopen_per_arm",
+            "two_page_master_excluded"
+          )) {
+            if (-not $text.Contains($required)) {
+              throw "Missing bounded stack-direct marker: $required"
+            }
+          }
+          foreach ($forbidden in @(
+            "Invoke-WebRequest",
+            "Start-BitsTransfer",
+            "curl.exe",
+            "config.cmd",
+            "registration token",
+            "actions/runner-registration"
+          )) {
+            if ($text.Contains($forbidden)) {
+              throw "Forbidden stack-direct capability: $forbidden"
+            }
+          }
