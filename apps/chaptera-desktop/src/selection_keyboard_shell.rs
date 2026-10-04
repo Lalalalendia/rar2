@@ -175,30 +175,10 @@ impl ViewerApp {
             };
 
             if key == egui::Key::Escape {
-                if self.text_box_creation.active() {
-                    if self.text_box_creation.gesture_token.is_some() {
-                        match self.text_box_creation.cancel() {
-                            Ok(()) => {
-                                self.edit_status =
-                                    Some("Cancelled the Text Box draw gesture.".to_owned());
-                            }
-                            Err(error) => {
-                                self.edit_status =
-                                    Some(format!("Text Box gesture cancel failed: {error}"));
-                            }
-                        }
-                    } else {
-                        match self.text_box_creation.deactivate_to_select() {
-                            Ok(()) => {
-                                self.edit_status = Some("Text Box tool deactivated.".to_owned());
-                            }
-                            Err(error) => {
-                                self.edit_status =
-                                    Some(format!("Text Box tool could not deactivate: {error}"));
-                            }
-                        }
-                    }
-                } else if self.process_rectangle_escape() {
+                if self.process_text_box_escape() {
+                    continue;
+                }
+                if self.process_rectangle_escape() {
                 } else if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
                     self.edit_status = Some("Cancelled the active canvas gesture.".to_owned());
                 } else if self.canvas_selection.len() > 0 {

@@ -17,6 +17,17 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/editor-desktop-textbox-restore-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/text_box_creation.rs",
+            "apps/chaptera-desktop/src/text_box_creation_shell.rs",
+            "apps/chaptera-desktop/src/text_box_creation_gui_tests.rs",
+            "apps/chaptera-desktop/src/text_session.rs",
+            "apps/chaptera-desktop/src/text_session_shell.rs",
+            "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
+        ),
+    },
     ".github/workflows/editor-insert-shape-ui-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
