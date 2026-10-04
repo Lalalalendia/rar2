@@ -76,7 +76,8 @@ function Invoke-Step([string]$Label,[string]$Script,[string[]]$ChildArgs,[int]$T
         foreach($lp in @($stdout,$stderr)){if(Test-Path -LiteralPath $lp){$tail=Get-Content -LiteralPath $lp -Tail 3 -ErrorAction SilentlyContinue;foreach($t in $tail){if(-not [string]::IsNullOrWhiteSpace($t)){Write-Host ('  > '+$t)}}}}
         if($elapsed -ge $TimeoutSeconds){try{Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}catch{};foreach($id in @(Get-MspubPids)){try{Stop-Process -Id $id -Force -ErrorAction SilentlyContinue}catch{}};throw "$Label timed out after $TimeoutSeconds s"}
     }
-    if([int]$p.ExitCode -ne 0){throw "$Label failed with exit code $($p.ExitCode)"}
+    $p.WaitForExit();$p.Refresh();$exitCode=[int]$p.ExitCode
+    if($exitCode -ne 0){throw "$Label failed with exit code $exitCode"}
 }
 function Copy-SafeTree([string]$SourceRoot,[string]$DestRoot){New-Item -ItemType Directory -Force -Path $DestRoot|Out-Null;foreach($name in @('analysis','logs')){$src=Join-Path $SourceRoot $name;if(Test-Path -LiteralPath $src){Copy-Item -LiteralPath $src -Destination $DestRoot -Recurse -Force}};foreach($name in @('environment.json','evidence-manifest.json')){$src=Join-Path $SourceRoot $name;if(Test-Path -LiteralPath $src -PathType Leaf){Copy-Item -LiteralPath $src -Destination (Join-Path $DestRoot $name) -Force}}}
 function Invoke-SelfTest{
@@ -90,8 +91,8 @@ function Invoke-SelfTest{
         )|Set-Content -LiteralPath $fake -Encoding ASCII
         $o=Join-Path $base 'o.txt';$e=Join-Path $base 'e.txt'
         $p=Start-EncodedPowerShell $fake @('path with spaces','second value') $o $e
-        $p.WaitForExit()
-        if($p.ExitCode -ne 0){throw 'encoded child invocation self-test failed'}
+        $p.WaitForExit();$p.Refresh();$exitCode=[int]$p.ExitCode
+        if($exitCode -ne 0){throw 'encoded child invocation self-test failed'}
         Write-Host 'SELFTEST PASS'
     }finally{Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue}
 }
