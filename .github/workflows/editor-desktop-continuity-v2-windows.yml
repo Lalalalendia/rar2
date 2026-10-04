@@ -24,7 +24,67 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Classify pub-editor Continuity V2 scope
+    runs-on: ubuntu-latest
+    outputs:
+      continuity_v2_windows: ${{ steps.scope.outputs.continuity_v2_windows }}
+      reason: ${{ steps.scope.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Selective-CI authority comes from the base branch. PR-head source is
+          # fetched only as diff input, so a classifier edit cannot self-skip.
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve current base authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for diff classification
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify Continuity V2 Windows admission
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-editor-pr-fanout
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","continuity_v2_windows":true,"reason":"workflow_dispatch"}' > target/pub-editor-pr-fanout/continuity-v2.json
+            echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
+            echo "reason=workflow_dispatch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/pub-editor-pr-fanout/continuity-v2.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pub-editor-continuity-v2-fanout-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/pub-editor-pr-fanout/continuity-v2.json
+          if-no-files-found: error
+
   real-continuity-v2:
+    needs: classify
+    if: ${{ needs.classify.outputs.continuity_v2_windows == 'true' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
