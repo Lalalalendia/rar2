@@ -57,6 +57,7 @@ struct CurrentViewerPlanCensusV1 {
     shared_resolved_text_node_count: usize,
     backend_fallback_text_node_count: usize,
     backend_fallback_reason_counts: BTreeMap<String, usize>,
+    paragraph_line_spacing_run_count: usize,
     shaped_line_count: usize,
     shaped_span_count: usize,
     missing_shaping_evidence_count: usize,
@@ -387,6 +388,7 @@ fn run(
         .collect::<Vec<_>>();
     let mut census = census(&pages);
     census.image_resource_count = visual.images.len();
+    census.paragraph_line_spacing_run_count = visual.paragraph_line_spacings.len();
 
     let packet = CurrentViewerFixedPdfInputV1 {
         protocol_version: PROTOCOL_VERSION,
@@ -423,12 +425,13 @@ fn run(
     .map_err(|error| format!("write {}: {error}", output_path.display()))?;
 
     eprintln!(
-        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={}",
+        "current_viewer_fixed_pdf_input pages={} nodes={} projected={} shared_resolved={} fallback={} paragraph_line_spacing_runs={} missing_shaping={} duplicate_node_ids={} tables={} images={} image_nodes={} cropped_images={} solid_paint={} decorative_border={} non_identity_transform={} text_nodes={} missing_text_layout={} reordered_pages={} reordered_positions={} visible_reordered_pages={} visible_reordered_positions={}",
         packet.census.page_count,
         packet.census.node_count,
         packet.census.projected_instance_count,
         packet.census.shared_resolved_text_node_count,
         packet.census.backend_fallback_text_node_count,
+        packet.census.paragraph_line_spacing_run_count,
         packet.census.missing_shaping_evidence_count,
         packet.census.duplicate_node_id_count,
         packet.census.table_node_count,
