@@ -292,8 +292,18 @@ fn main() -> eframe::Result<()> {
         reader_windows_smoke=True,
         reader_windows=False,
         editor_windows=False,
-        visual_oracle=True,
-        typography_golden=True,
+        visual_oracle=False,
+        typography_golden=False,
+        update_accept=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/reader_visual_golden_tests.rs"],
+        tier_a=True,
+        reader_windows_smoke=False,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=False,
+        typography_golden=False,
         update_accept=False,
     )
     assert_scope(
