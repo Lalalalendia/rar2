@@ -5954,9 +5954,8 @@ mod asset_reachability_tests {
 
     #[test]
     fn current_image_resources_fail_closed_when_replacement_bytes_are_missing() {
-        let node_id: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId");
+        let node_id: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
         let replacement_sha = digest(0x77);
         let error = current_image_resources_v1(
             &BTreeMap::new(),
