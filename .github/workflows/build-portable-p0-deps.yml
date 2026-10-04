@@ -4,22 +4,49 @@ on:
   pull_request:
     paths:
       - ".github/workflows/build-portable-p0-deps.yml"
+      - "tools/portable/pub2019-p0/**"
+      - "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
+      - "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
+      - "tools/research-runner/operations/paragraph_metrics_auth_01.ps1"
+      - "tools/research-runner/experiments/paragraph-metrics-auth-01.packet.json"
+      - "tools/research-runner/analysis/paragraph_metrics_auth_01_blast_radius.py"
+      - "tools/research-runner/analysis/paragraph_metrics_auth_01_structural.py"
+      - "tools/operation_blast_radius_v1.py"
+      - "tools/corpus/cfb_physical_diff.py"
+      - "tools/classify_mature_029_native_page_spread_v1.py"
+      - "tools/research-runner/finalize_native_run.ps1"
       - "tools/research-runner/paragraph-metrics-probe/**"
+      - "tools/windows/pub-runtime/PubRuntime.psm1"
       - "vendor/producer-a/crates/pub-cfb/**"
       - "vendor/producer-a/crates/pub-core/**"
       - "vendor/producer-a/crates/pub-quill/**"
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      CORPUS_ARTIFACT_ID: '11038217075'
+      CORPUS_ARTIFACT_SHA256: '687f1a5a5225e41344814a671cccd3ed9073203e5244c13a768baff566ea288e'
+      PYTHON_EMBED_SHA256: '97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297'
+      STACK_SHA: '0ca858ed4806e81da2964d75d54d25a2ac0c6126074e9f82ea33b87701de4ade'
+      SURFACE_SHA: 'c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e'
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+
+      - name: Parse portable runner
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tokens = $null; $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "tools/portable/pub2019-p0/run-native.ps1").Path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_.Message }; throw "portable runner parse failed" }
 
       - name: Build paragraph metrics probe
         shell: pwsh
@@ -28,44 +55,109 @@ jobs:
           cargo build --locked --release --manifest-path tools/research-runner/paragraph-metrics-probe/Cargo.toml
           $exe = "tools/research-runner/paragraph-metrics-probe/target/release/paragraph-metrics-probe.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "probe exe missing" }
-          New-Item -ItemType Directory -Force portable-deps | Out-Null
-          Copy-Item -LiteralPath $exe -Destination portable-deps/paragraph-metrics-probe.exe
 
       - name: Fetch pinned embedded Python
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $url = "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-amd64.zip"
-          $out = "portable-deps/python-3.13.16-embed-amd64.zip"
-          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out
-          $expected = "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297"
-          $actual = (Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw "embedded Python SHA mismatch: $actual" }
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile python-embed.zip
+          $actual = (Get-FileHash -LiteralPath python-embed.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:PYTHON_EMBED_SHA256) { throw "embedded Python SHA mismatch: $actual" }
 
-      - name: Write dependency manifest
+      - name: Download retained 1050 corpus artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$env:CORPUS_ARTIFACT_ID/zip"
+          & curl.exe -fL -H "Authorization: Bearer $env:GH_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" -H "Accept: application/vnd.github+json" -o corpus.zip $url
+          if ($LASTEXITCODE -ne 0) { throw "corpus artifact download failed" }
+          $actual = (Get-FileHash -LiteralPath corpus.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:CORPUS_ARTIFACT_SHA256) { throw "corpus artifact SHA mismatch: $actual" }
+          Expand-Archive -LiteralPath corpus.zip -DestinationPath corpus -Force
+
+      - name: Assemble true portable bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $rows = @()
-          foreach ($p in @(
-            "portable-deps/paragraph-metrics-probe.exe",
-            "portable-deps/python-3.13.16-embed-amd64.zip"
-          )) {
-            $rows += [ordered]@{
-              path = $p
-              bytes = (Get-Item -LiteralPath $p).Length
-              sha256 = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bundle = Join-Path $PWD "portable/PUB2019-PORTABLE-P0-V1"
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+
+          function Copy-Rel([string]$rel) {
+            $src = Join-Path $PWD $rel
+            if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { throw "missing source payload: $rel" }
+            $dst = Join-Path $bundle ($rel.Replace("/", "\"))
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+            Copy-Item -LiteralPath $src -Destination $dst -Force
+          }
+
+          foreach ($rel in @(
+            "tools/research-runner/operations/master_projection_stack_auth_01.ps1",
+            "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1",
+            "tools/research-runner/operations/paragraph_metrics_auth_01.ps1",
+            "tools/research-runner/experiments/paragraph-metrics-auth-01.packet.json",
+            "tools/research-runner/analysis/paragraph_metrics_auth_01_blast_radius.py",
+            "tools/research-runner/analysis/paragraph_metrics_auth_01_structural.py",
+            "tools/operation_blast_radius_v1.py",
+            "tools/corpus/cfb_physical_diff.py",
+            "tools/classify_mature_029_native_page_spread_v1.py",
+            "tools/research-runner/finalize_native_run.ps1",
+            "tools/windows/pub-runtime/PubRuntime.psm1"
+          )) { Copy-Rel $rel }
+
+          Copy-Item -LiteralPath "tools/portable/pub2019-p0/RUN_NATIVE.cmd" -Destination (Join-Path $bundle "RUN_NATIVE.cmd") -Force
+          Copy-Item -LiteralPath "tools/portable/pub2019-p0/run-native.ps1" -Destination (Join-Path $bundle "run-native.ps1") -Force
+          Copy-Item -LiteralPath "tools/portable/pub2019-p0/README.txt" -Destination (Join-Path $bundle "README.txt") -Force
+
+          $runtime = Join-Path $bundle "runtime"
+          $fixtures = Join-Path $bundle "fixtures"
+          New-Item -ItemType Directory -Force -Path $runtime,$fixtures | Out-Null
+          Copy-Item -LiteralPath python-embed.zip -Destination (Join-Path $runtime "python-3.13.16-embed-amd64.zip") -Force
+          Copy-Item -LiteralPath "tools/research-runner/paragraph-metrics-probe/target/release/paragraph-metrics-probe.exe" -Destination (Join-Path $runtime "paragraph-metrics-probe.exe") -Force
+
+          $stack = Join-Path $PWD ("corpus/materialized/native/" + $env:STACK_SHA + ".pub")
+          $surface = Join-Path $PWD ("corpus/materialized/native/" + $env:SURFACE_SHA + ".pub")
+          foreach ($pair in @(@($stack,$env:STACK_SHA,72704),@($surface,$env:SURFACE_SHA,496640))) {
+            $path=[string]$pair[0]; $sha=[string]$pair[1]; $bytes=[int64]$pair[2]
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "fixture missing from retained corpus: $sha" }
+            if ((Get-Item -LiteralPath $path).Length -ne $bytes) { throw "fixture size mismatch: $sha" }
+            $actual=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $sha) { throw "fixture SHA mismatch: $sha" }
+            Copy-Item -LiteralPath $path -Destination (Join-Path $fixtures ($sha + ".pub")) -Force
+          }
+
+          $records = @()
+          foreach ($file in Get-ChildItem -LiteralPath $bundle -File -Recurse | Sort-Object FullName) {
+            if ($file.Name -eq "bundle-manifest.json") { continue }
+            $rel = [IO.Path]::GetRelativePath($bundle,$file.FullName).Replace('\','/')
+            $records += [ordered]@{
+              path = $rel
+              bytes = [int64]$file.Length
+              sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             }
           }
           [ordered]@{
-            schema = "chaptera.pub2019-portable-deps.v1"
-            source_sha = "${{ github.event.pull_request.head.sha }}"
-            files = $rows
-          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath portable-deps/manifest.json -Encoding UTF8
+            schema = "chaptera.pub2019-portable-p0.v1"
+            source_main_sha = "${{ github.event.pull_request.base.sha }}"
+            builder_head_sha = "${{ github.event.pull_request.head.sha }}"
+            corpus_artifact_id = [int64]$env:CORPUS_ARTIFACT_ID
+            corpus_artifact_sha256 = $env:CORPUS_ARTIFACT_SHA256
+            paragraph_seed_mode = "publisher-native-new-document"
+            files = $records
+          } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle "bundle-manifest.json") -Encoding UTF8
+
+          Compress-Archive -Path (Join-Path $bundle "*") -DestinationPath "PUB2019-PORTABLE-P0-V1.zip" -CompressionLevel Optimal -Force
+          $zipSha = (Get-FileHash -LiteralPath "PUB2019-PORTABLE-P0-V1.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $zipBytes = (Get-Item -LiteralPath "PUB2019-PORTABLE-P0-V1.zip").Length
+          [ordered]@{ schema="chaptera.pub2019-portable-p0-zip.v1"; sha256=$zipSha; bytes=[int64]$zipBytes } | ConvertTo-Json | Set-Content -LiteralPath "PUB2019-PORTABLE-P0-V1.sha256.json" -Encoding UTF8
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pub2019-portable-p0-deps
-          path: portable-deps/
+          name: pub2019-portable-p0-v1
+          path: |
+            PUB2019-PORTABLE-P0-V1.zip
+            PUB2019-PORTABLE-P0-V1.sha256.json
           if-no-files-found: error
           retention-days: 7
