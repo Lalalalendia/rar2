@@ -32,7 +32,7 @@ where
             let encoded = serde_json::to_string(&receipt)
                 .expect("product smoke receipt is JSON-serializable");
             if let Some(output) = output {
-                if let Err(error) = fs::write(&output, format!("{encoded}\\n")) {
+                if let Err(error) = fs::write(&output, format!("{encoded}\n")) {
                     eprintln!("write product smoke receipt {}: {error}", output.display());
                     std::process::exit(2);
                 }
@@ -139,7 +139,7 @@ fn reader_activation_probe(path: &Path, receipt: &Path, hold_ms: u64) -> Result<
         fs::write(
             receipt,
             format!(
-                "{}\\n",
+                "{}\n",
                 serde_json::to_string(&value)
                     .map_err(|error| format!("serialize activation receipt: {error}"))?
             ),
