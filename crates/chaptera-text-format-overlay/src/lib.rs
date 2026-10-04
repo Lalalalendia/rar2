@@ -38,7 +38,7 @@ impl fmt::Display for TextFormatOverlayError {
 
 impl std::error::Error for TextFormatOverlayError {}
 
-type Result<T> = std::result::Result<T, TextFormatOverlayError>;
+pub type Result<T> = std::result::Result<T, TextFormatOverlayError>;
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
