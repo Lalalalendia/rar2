@@ -1,7 +1,7 @@
 //! Canonical Desktop document-history bindings.
 //!
 //! This module owns the global Undo/Redo shell only. The EditorSession remains
-//! the semantic history authority.
+//! the semantic history authority. Admission-control note: this owner must trigger History CI.
 
 use crate::*;
 
