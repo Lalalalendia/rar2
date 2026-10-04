@@ -24,7 +24,68 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Classify pub-editor Continuity V2 scope
+    runs-on: ubuntu-latest
+    outputs:
+      continuity_v2_windows: ${{ steps.scope.outputs.continuity_v2_windows }}
+      reason: ${{ steps.scope.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Trust only the base-branch classifier. The PR head is fetched as
+          # diff input and cannot teach this job to skip its own Windows proof.
+          ref: ${{ github.event.pull_request.base.ref || github.sha }}
+          fetch-depth: 0
+
+      - id: base-authority
+        name: Resolve base-branch classifier authority
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head for classification
+        if: ${{ github.event.pull_request.head.sha != '' }}
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags origin "$HEAD_SHA"
+
+      - name: Test base-authority pub-editor classifier
+        run: python tools/ci/test_pub_editor_pr_fanout.py
+
+      - id: scope
+        name: Classify Continuity V2 Windows ownership
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ steps.base-authority.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/pub-editor-pr-fanout
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "continuity_v2_windows=true" >> "$GITHUB_OUTPUT"
+            echo "reason=workflow_dispatch_fail_closed" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","continuity_v2_windows":true,"reason":"workflow_dispatch_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
+            exit 0
+          fi
+          python tools/ci/pub_editor_pr_fanout.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --receipt target/pub-editor-pr-fanout/receipt.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: pub-editor-continuity-v2-scope-${{ github.event.pull_request.head.sha || github.sha }}
+          path: target/pub-editor-pr-fanout/receipt.json
+          if-no-files-found: warn
+
   real-continuity-v2:
+    needs: classify
+    # Classifier failure is fail-closed: preserve the expensive Windows proof.
+    if: ${{ !cancelled() && always() && (needs.classify.result != 'success' || needs.classify.outputs.continuity_v2_windows == 'true') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
