@@ -1455,6 +1455,123 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_character_style_projection_splits_exactly_at_story_boundaries() {
+        let source_hash: Sha256Digest =
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap();
+        let source = SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("0x22-noquill".into()),
+            adapter_version: "test".into(),
+            source_hash,
+        };
+        let story_a = derive_legacy_story_id(&source_hash, 10).unwrap();
+        let story_b = derive_legacy_story_id(&source_hash, 11).unwrap();
+        let stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let span = |offset: u64, len: u64| RawSpan {
+            stream: stream.clone(),
+            offset,
+            len,
+        };
+        let style = pub_contents::decode_legacy_0x22_character_style(&[
+            0x0c, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x02, 0x31, 0x00,
+        ])
+        .unwrap();
+        let run = Legacy0x22CharacterRun {
+            fc_first: 102,
+            fc_lim: 106,
+            fc_first_source: span(0x210, 4),
+            fc_lim_source: span(0x214, 4),
+            property_pointer: 0xfc,
+            property_pointer_source: span(0x218, 1),
+            property_source: Some(span(0x3f0, 11)),
+            style: Some(style.clone()),
+        };
+
+        let projected = project_legacy_character_style_runs(
+            &source,
+            &[
+                LegacyAdmittedStoryRange {
+                    story_id: story_a,
+                    absolute_start: 100,
+                    absolute_end: 104,
+                },
+                LegacyAdmittedStoryRange {
+                    story_id: story_b,
+                    absolute_start: 104,
+                    absolute_end: 108,
+                },
+            ],
+            &[run],
+        );
+
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0].story_id, story_a);
+        assert_eq!((projected[0].story_scalar_start, projected[0].story_scalar_end), (2, 4));
+        assert_eq!(projected[1].story_id, story_b);
+        assert_eq!((projected[1].story_scalar_start, projected[1].story_scalar_end), (0, 2));
+        for item in &projected {
+            assert!(item.small_caps);
+            assert!(item.all_caps);
+            assert_eq!(item.source_font_index, Some(3));
+            assert_eq!(item.text_size_half_points, Some(24));
+            assert_eq!(item.legacy_color_index, None);
+            assert_eq!(item.underline, Some(PubLegacyUnderlineStyle::Single));
+            assert_eq!(item.letter_spacing_eighth_points, Some(12));
+            assert_eq!(item.raw_payload, style.raw_payload);
+            assert_eq!(item.source_refs.len(), 3);
+        }
+    }
+
+    #[test]
+    fn legacy_character_style_projection_preserves_signed_baseline_shift() {
+        let source_hash: Sha256Digest =
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap();
+        let source = SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("0x22-noquill".into()),
+            adapter_version: "test".into(),
+            source_hash,
+        };
+        let story_id = derive_legacy_story_id(&source_hash, 12).unwrap();
+        let stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let span = |offset: u64, len: u64| RawSpan {
+            stream: stream.clone(),
+            offset,
+            len,
+        };
+        let style = pub_contents::decode_legacy_0x22_character_style(&[
+            0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0xfa,
+        ])
+        .unwrap();
+        let projected = project_legacy_character_style_runs(
+            &source,
+            &[LegacyAdmittedStoryRange {
+                story_id,
+                absolute_start: 80,
+                absolute_end: 88,
+            }],
+            &[Legacy0x22CharacterRun {
+                fc_first: 80,
+                fc_lim: 88,
+                fc_first_source: span(0x200, 4),
+                fc_lim_source: span(0x204, 4),
+                property_pointer: 0xfc,
+                property_pointer_source: span(0x208, 1),
+                property_source: Some(span(0x3f8, 8)),
+                style: Some(style),
+            }],
+        );
+
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].baseline_shift_half_points, Some(-6));
+        assert_eq!(projected[0].text_size_half_points, None);
+    }
+
+    #[test]
     fn ascii_decoder_fails_closed_on_unproven_codepage() {
         assert_eq!(
             decode_bounded_legacy_ascii(b"OPEN HOUSE").unwrap(),
