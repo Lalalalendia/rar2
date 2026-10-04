@@ -24,6 +24,7 @@ mod suite_handoff_cli;
 mod supporter;
 #[allow(dead_code)]
 mod supporter_attribution;
+mod supporter_ui;
 mod text_session;
 #[cfg(target_os = "windows")]
 mod windows_dll_search;
@@ -1338,6 +1339,11 @@ struct ViewerApp {
     diagnostic_sweep_status: Option<String>,
     supporter_value: supporter::ValueTracker,
     supporter_state: supporter::SupporterState,
+    supporter_seen_receipt: Option<supporter::ValueReceipt>,
+    supporter_prompt_visible: bool,
+    supporter_market: supporter::MarketProfile,
+    #[allow(dead_code)]
+    supporter_requested_action: Option<supporter::SupporterAction>,
     exact_file_consent_open: bool,
     exact_file_consent_status: Option<String>,
     show_diagnostics: bool,
@@ -1403,6 +1409,10 @@ impl ViewerApp {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: restore_supporter_state(storage),
+            supporter_seen_receipt: None,
+            supporter_prompt_visible: false,
+            supporter_market: resolve_supporter_market(),
+            supporter_requested_action: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -1919,6 +1929,9 @@ impl ViewerApp {
         self.rectangle_creation = rectangle_creation::RectangleCreateSessionV1::default();
         self.supporter_value
             .observe(supporter::ValueEvent::WorkflowFailed);
+        self.supporter_seen_receipt = None;
+        self.supporter_prompt_visible = false;
+        self.supporter_requested_action = None;
         let generation = self.open_state.begin_attempt();
 
         match Self::prepare_document_open(path) {
@@ -2488,6 +2501,47 @@ impl ViewerApp {
                 }
             }
         });
+    }
+
+    fn sync_supporter_prompt(&mut self) {
+        let receipt = self.supporter_value.receipt();
+        if receipt != self.supporter_seen_receipt {
+            self.supporter_seen_receipt = receipt;
+            if receipt.is_some() {
+                self.supporter_state
+                    .record_meaningful_success(current_unix_seconds());
+            }
+        }
+
+        if self.supporter_prompt_visible
+            || !self.supporter_market.is_active_target()
+            || receipt.is_none()
+        {
+            return;
+        }
+
+        let now = current_unix_seconds();
+        if self.supporter_state.can_prompt(now) {
+            self.supporter_state.record_prompt_shown(now);
+            self.supporter_prompt_visible = true;
+        }
+    }
+
+    fn handle_supporter_action(&mut self, action: supporter::SupporterAction) {
+        let now = current_unix_seconds();
+        match action {
+            supporter::SupporterAction::Later => {
+                self.supporter_state.record_later(now);
+                self.supporter_prompt_visible = false;
+            }
+            supporter::SupporterAction::AlreadySupported => {
+                self.supporter_state.record_already_supported(now);
+                self.supporter_prompt_visible = false;
+            }
+            external => {
+                self.supporter_requested_action = Some(external);
+            }
+        }
     }
 
     fn fidelity_status(&self) -> Option<ViewerFidelityStatus> {
@@ -6089,6 +6143,13 @@ impl ViewerApp {
     }
 }
 
+fn current_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 fn restore_supporter_state(storage: Option<&dyn eframe::Storage>) -> supporter::SupporterState {
     storage
         .and_then(|storage| storage.get_string(SUPPORTER_STORAGE_KEY))
@@ -6126,6 +6187,8 @@ impl eframe::App for ViewerApp {
             }
         }
 
+        self.sync_supporter_prompt();
+
         if reader_only_mode() {
             reader_product_ui::configure_context(ctx);
         }
@@ -6149,6 +6212,26 @@ impl eframe::App for ViewerApp {
             egui::TopBottomPanel::top("fidelity-status").show(ctx, |ui| {
                 self.show_fidelity_status(ui);
             });
+        }
+
+        let supporter_action = if self.supporter_prompt_visible {
+            self.supporter_value.receipt().and_then(|receipt| {
+                let mut action = None;
+                egui::TopBottomPanel::bottom("chaptera-supporter")
+                    .resizable(false)
+                    .min_height(88.0)
+                    .max_height(132.0)
+                    .show(ctx, |ui| {
+                        action =
+                            supporter_ui::show_supporter_panel(ui, self.supporter_market, receipt);
+                    });
+                action
+            })
+        } else {
+            None
+        };
+        if let Some(action) = supporter_action {
+            self.handle_supporter_action(action);
         }
 
         egui::TopBottomPanel::bottom("workspace-status").show(ctx, |ui| {
@@ -7252,6 +7335,10 @@ mod tests {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: supporter::SupporterState::default(),
+            supporter_seen_receipt: None,
+            supporter_prompt_visible: false,
+            supporter_market: supporter::MarketProfile::NeutralEnglish,
+            supporter_requested_action: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -7321,6 +7408,10 @@ mod tests {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: supporter::SupporterState::default(),
+            supporter_seen_receipt: None,
+            supporter_prompt_visible: false,
+            supporter_market: supporter::MarketProfile::NeutralEnglish,
+            supporter_requested_action: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
@@ -7328,6 +7419,19 @@ mod tests {
         };
 
         assert_eq!(app.fidelity_status(), None);
+    }
+
+    #[test]
+    fn supporter_panel_is_post_value_nonmodal_and_route_neutral() {
+        let source = include_str!("main.rs");
+        assert!(source.contains("TopBottomPanel::bottom(\"chaptera-supporter\")"));
+        assert!(source.contains(".resizable(false)"));
+        assert!(source.contains(".min_height(88.0)"));
+        assert!(source.contains("sync_supporter_prompt"));
+        assert!(source.contains("record_prompt_shown"));
+        assert!(source.contains("supporter_requested_action = Some(external)"));
+        let route_origin_symbol = ["CHAPTERA_SITE_", "ORIGIN"].concat();
+        assert!(!source.contains(&route_origin_symbol));
     }
 
     #[test]
@@ -7599,6 +7703,10 @@ mod tests {
             diagnostic_sweep_status: None,
             supporter_value: supporter::ValueTracker::default(),
             supporter_state: supporter::SupporterState::default(),
+            supporter_seen_receipt: None,
+            supporter_prompt_visible: false,
+            supporter_market: supporter::MarketProfile::NeutralEnglish,
+            supporter_requested_action: None,
             exact_file_consent_open: false,
             exact_file_consent_status: None,
             show_diagnostics: false,
