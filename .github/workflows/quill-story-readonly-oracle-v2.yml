@@ -8,14 +8,6 @@ on:
       - "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"
       - "tools/windows/run_quill_story_readonly_oracle_direct.ps1"
       - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/quill-story-readonly-oracle-v2.yml"
-      - "tools/research-runner/experiments/quill-story-readonly-oracle-02.packet.json"
-      - "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"
-      - "tools/windows/run_quill_story_readonly_oracle_direct.ps1"
-      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
   workflow_dispatch:
 
 permissions:
@@ -97,7 +89,7 @@ jobs:
 
   native-oracle:
     needs: static-and-resolver
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     environment: pub-native-lab
     runs-on:
       - self-hosted
@@ -160,7 +152,7 @@ jobs:
 
   resolve:
     needs: native-oracle
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

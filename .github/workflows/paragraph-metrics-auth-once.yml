@@ -1,6 +1,7 @@
 name: Paragraph metrics authority one-shot
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - ".github/workflows/paragraph-metrics-auth-once.yml"
@@ -9,12 +10,6 @@ on:
       - "tools/research-runner/operations/paragraph_metrics_auth_01.ps1"
       - "tools/research-runner/analysis/paragraph_metrics_auth_01_blast_radius.py"
       - "tools/research-runner/analysis/paragraph_metrics_auth_01_structural.py"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/paragraph-metrics-auth-once.yml"
-      - "tools/windows/run_paragraph_metrics_auth_direct.ps1"
 
 permissions:
   contents: read
@@ -35,11 +30,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          if ("${{ github.event_name }}" -eq "push") {
-            if ("${{ github.ref }}" -ne "refs/heads/main") { throw "Native one-shot push must be refs/heads/main." }
-            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
-          } else {
+          if ("${{ github.event_name }}" -eq "pull_request") {
             "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
           }
 
       - uses: actions/checkout@v5
@@ -78,7 +72,7 @@ jobs:
 
   native:
     needs: contract
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     environment: pub-native-lab
     runs-on:
       - self-hosted

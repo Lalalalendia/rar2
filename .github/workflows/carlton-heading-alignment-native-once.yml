@@ -1,14 +1,8 @@
 name: Carlton heading alignment native one-shot
 
 on:
+  workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/workflows/carlton-heading-alignment-native-once.yml"
-      - "tools/research-runner/experiments/carlton-heading-alignment-readonly-01.packet.json"
-      - "tools/research-runner/operations/carlton_heading_alignment_readonly_01.ps1"
-  push:
-    branches:
-      - main
     paths:
       - ".github/workflows/carlton-heading-alignment-native-once.yml"
       - "tools/research-runner/experiments/carlton-heading-alignment-readonly-01.packet.json"
@@ -34,13 +28,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          if ("${{ github.event_name }}" -eq "push") {
-            if ("${{ github.ref }}" -ne "refs/heads/main") {
-              throw "Native Carlton one-shot push must be refs/heads/main."
-            }
-            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
-          } else {
+          if ("${{ github.event_name }}" -eq "pull_request") {
             "trusted_sha=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_OUTPUT
+          } else {
+            "trusted_sha=${{ github.sha }}" >> $env:GITHUB_OUTPUT
           }
 
       - uses: actions/checkout@v5
@@ -102,7 +93,7 @@ jobs:
 
   native:
     needs: contract
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch'
     environment: pub-native-lab
     runs-on:
       - self-hosted

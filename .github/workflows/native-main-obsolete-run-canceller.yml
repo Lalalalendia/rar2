@@ -1,4 +1,4 @@
-name: Cancel stale native main runs
+name: Cancel obsolete automatic Publisher native runs
 
 on:
   workflow_dispatch:
@@ -8,16 +8,11 @@ on:
     paths:
       - ".github/workflows/native-main-obsolete-run-canceller.yml"
       - ".github/workflows/mature-029-native-page-spread-once.yml"
-      - "tools/research-runner/operations/mature_029_native_page_spread_oracle_01.ps1"
-      - "tools/windows/run_mature_029_native_page_spread_direct.ps1"
       - ".github/workflows/master-projection-stack-auth-once.yml"
-      - "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
-      - "tools/windows/run_master_projection_stack_auth_direct.ps1"
       - ".github/workflows/quill-story-readonly-oracle-v2.yml"
-      - "tools/research-runner/experiments/quill-story-readonly-oracle-02.packet.json"
-      - "tools/research-runner/operations/quill_story_readonly_oracle_02.ps1"
-      - "tools/windows/run_quill_story_readonly_oracle_direct.ps1"
-      - "vendor/producer-a/crates/pub-reader/src/bin/quill-story-readonly-oracle-resolver.rs"
+      - ".github/workflows/carlton-heading-alignment-native-once.yml"
+      - ".github/workflows/borderart-native-once.yml"
+      - ".github/workflows/paragraph-metrics-auth-once.yml"
 
 permissions:
   actions: write
@@ -28,10 +23,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cancel-stale:
+  cancel-obsolete:
     runs-on: ubuntu-latest
     steps:
-      - name: Keep newest active native push run per workflow
+      - name: Cancel automatic Publisher native backlog
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -40,16 +35,38 @@ jobs:
             .github/workflows/mature-029-native-page-spread-once.yml
             .github/workflows/master-projection-stack-auth-once.yml
             .github/workflows/quill-story-readonly-oracle-v2.yml
+            .github/workflows/carlton-heading-alignment-native-once.yml
+            .github/workflows/borderart-native-once.yml
+            .github/workflows/paragraph-metrics-auth-once.yml
+          STALE_PROVIDER_RUN_IDS: |
+            36715683731
+            36715220690
+            36714192669
         run: |
           set -euo pipefail
 
-          total_cancelled=0
-          total_forced=0
-          total_preserved=0
+          cancelled=0
+          forced=0
+          deleted=0
+          unresolved=0
+
+          cancel_run() {
+            local id="$1"
+            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
+              echo "CANCEL id=$id"
+              cancelled=$((cancelled + 1))
+              return 0
+            fi
+            if gh api --method POST "repos/$GH_REPO/actions/runs/$id/force-cancel" >/dev/null 2>&1; then
+              echo "FORCE id=$id"
+              forced=$((forced + 1))
+              return 0
+            fi
+            return 1
+          }
 
           while IFS= read -r workflow_path; do
             [[ -n "$workflow_path" ]] || continue
-
             runs_file="$(mktemp)"
             gh api --paginate --method GET "repos/$GH_REPO/actions/runs" \
               -f event=push \
@@ -65,45 +82,46 @@ jobs:
                       or .status == "waiting"
                       or .status == "requested"
                     )
-                  | [.run_number, .id, .status, .head_sha, .created_at]
+                  | [.id, .run_number, .status, .head_sha]
                   | @tsv
                 ' >"$runs_file"
 
-            if [[ ! -s "$runs_file" ]]; then
-              echo "NONE workflow=$workflow_path"
-              rm -f "$runs_file"
-              continue
-            fi
-
-            newest_run_number="$(cut -f1 "$runs_file" | sort -nr | head -n1)"
-            echo "WORKFLOW $workflow_path newest_active_run=$newest_run_number"
-
-            while IFS=$'\t' read -r run_number id status head_sha created_at; do
+            while IFS=$'\t' read -r id run_number status head_sha; do
               [[ -n "$id" ]] || continue
-
-              if [[ "$run_number" == "$newest_run_number" ]]; then
-                echo "KEEP   workflow=$workflow_path run=$run_number id=$id status=$status sha=${head_sha:0:12}"
-                total_preserved=$((total_preserved + 1))
-                continue
-              fi
-
-              echo "CANCEL workflow=$workflow_path run=$run_number id=$id status=$status sha=${head_sha:0:12}"
-              if gh api --method POST "repos/$GH_REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
-                total_cancelled=$((total_cancelled + 1))
-                continue
-              fi
-
-              echo "FORCE  workflow=$workflow_path run=$run_number id=$id status=$status sha=${head_sha:0:12}"
-              if gh api --method POST "repos/$GH_REPO/actions/runs/$id/force-cancel" >/dev/null 2>&1; then
-                total_forced=$((total_forced + 1))
-              else
-                echo "::warning::Could not cancel or force-cancel run $id; it may have completed concurrently."
+              echo "OBSOLETE workflow=$workflow_path run=$run_number id=$id status=$status sha=${head_sha:0:12}"
+              if ! cancel_run "$id"; then
+                echo "::warning::Could not cancel active automatic native run $id"
+                unresolved=$((unresolved + 1))
               fi
             done <"$runs_file"
-
             rm -f "$runs_file"
           done <<<"$TARGET_WORKFLOW_PATHS"
 
-          echo "Preserved newest active native runs: $total_preserved"
-          echo "Cancelled stale native runs: $total_cancelled"
-          echo "Force-cancelled stale native runs: $total_forced"
+          while IFS= read -r id; do
+            [[ -n "$id" ]] || continue
+            state="$(gh api --method GET "repos/$GH_REPO/actions/runs/$id" --jq '.status' 2>/dev/null || true)"
+            [[ -n "$state" ]] || continue
+            if [[ "$state" == "completed" ]]; then
+              continue
+            fi
+            echo "STALE_PROVIDER id=$id status=$state"
+            if cancel_run "$id"; then
+              continue
+            fi
+            if gh api --method DELETE "repos/$GH_REPO/actions/runs/$id" >/dev/null 2>&1; then
+              echo "DELETE id=$id"
+              deleted=$((deleted + 1))
+            else
+              echo "::warning::Provider-orphan run $id could not be cancelled, force-cancelled, or deleted"
+              unresolved=$((unresolved + 1))
+            fi
+          done <<<"$STALE_PROVIDER_RUN_IDS"
+
+          {
+            echo "### Publisher native queue cleanup"
+            echo "- cancelled: $cancelled"
+            echo "- force-cancelled: $forced"
+            echo "- deleted stale records: $deleted"
+            echo "- unresolved provider records: $unresolved"
+            echo "- automatic main-push Publisher native execution: disabled; native workflows are manual-dispatch only"
+          } >>"$GITHUB_STEP_SUMMARY"
