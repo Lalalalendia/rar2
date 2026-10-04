@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-// The cadence API is intentionally staged one PR before its UI consumer (#227).
+// CI negative control: unrelated main.rs-only edit; specialized owner workflows must stay selective.\n// The cadence API is intentionally staged one PR before its UI consumer (#227).
 mod acceptance;
 mod acceptance_v2;
 mod acceptance_v2_cli;
