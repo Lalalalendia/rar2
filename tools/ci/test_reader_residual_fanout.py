@@ -121,6 +121,42 @@ def main() -> int:
             )
 
     reader_ci = Path('.github/workflows/reader-pr-ci.yml').read_text(encoding='utf-8')
+
+    reader_smoke_section = reader_ci.split('\n  reader-windows-smoke:\n', 1)[1].split(
+        '\n  reader-windows:\n', 1
+    )[0]
+    if "reader_windows_smoke == 'true'" not in reader_smoke_section:
+        violations.append(
+            'reader-pr-ci.yml: Reader Windows shared-core smoke lost classifier ownership'
+        )
+    if 'visual_oracle' in reader_smoke_section:
+        violations.append(
+            'reader-pr-ci.yml: shared-core smoke must stay parallel to visual oracle'
+        )
+
+    visual_section = reader_ci.split('\n  visual-oracle:\n', 1)[1].split(
+        '\n  cloud-reference:\n', 1
+    )[0]
+    if 'run_windows_shared_core_smoke: false' not in visual_section:
+        violations.append(
+            'reader-pr-ci.yml: visual oracle must not serialize Reader shared-core smoke'
+        )
+
+    smoke_workflow = Path(
+        '.github/workflows/chaptera-reader-windows-smoke.yml'
+    ).read_text(encoding='utf-8')
+    for invariant in (
+        'CARGO_TARGET_DIR: target/reader-fidelity-win',
+        'reader-fidelity-win-v1-',
+        'mature_officeart_wmf_exact_product_tests',
+        'Run bounded Reader product and real-PUB smoke',
+    ):
+        if invariant not in smoke_workflow:
+            violations.append(
+                'chaptera-reader-windows-smoke.yml: missing parallel evidence invariant '
+                f'{invariant}'
+            )
+
     reusable = sorted(set(REUSABLE_USE.findall(reader_ci)))
     for raw in reusable:
         text = Path(raw).read_text(encoding='utf-8')

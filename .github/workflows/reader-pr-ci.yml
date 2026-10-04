@@ -253,7 +253,7 @@ jobs:
   reader-windows-smoke:
     name: Reader Windows shared-core smoke
     needs: [classify, tier-a]
-    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && needs.classify.outputs.visual_oracle != 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
+    if: ${{ !cancelled() && always() && needs.classify.outputs.reader_windows_smoke == 'true' && (needs.tier-a.result == 'success' || needs.tier-a.result == 'skipped') }}
     uses: ./.github/workflows/chaptera-reader-windows-smoke.yml
 
   reader-windows:
@@ -275,7 +275,7 @@ jobs:
     uses: ./.github/workflows/carlton-reader-visual-oracle.yml
     with:
       run_typography_golden: ${{ needs.classify.outputs.typography_golden == 'true' }}
-      run_windows_shared_core_smoke: ${{ needs.classify.outputs.reader_windows_smoke == 'true' }}
+      run_windows_shared_core_smoke: false
 
   cloud-reference:
     name: Cloud exact PUB-PDF reference
