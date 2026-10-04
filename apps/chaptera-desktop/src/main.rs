@@ -39,9 +39,9 @@ use chaptera_viewer_render_plan::{
 };
 use eframe::egui;
 use pub_interaction::{
-    MoveTransaction, ResizeCommit, ResizeHandle, ResizePointerDown, ResizeTransaction,
-    ResizeUpdate, ScreenPoint, ScreenRect, ViewTransform, classify_resize_pointer_down,
-    resize_handle_center,
+    MoveTransaction, ResizeCommit, ResizeHandle, ResizeModifierMaskV1, ResizePointerDown,
+    ResizeTransaction, ResizeUpdate, ScreenPoint, ScreenRect, ViewTransform,
+    classify_resize_pointer_down, resize_handle_center,
 };
 use pub_viewer::{
     CHAPTERA_EXACT_FILE_CONSENT_V1, CHAPTERA_INTAKE_RETENTION_POLICY_V1, FailureIntakeClass,
@@ -5536,6 +5536,10 @@ impl ViewerApp {
                 let primary_released = ui
                     .ctx()
                     .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
+                let resize_modifiers = ui.ctx().input(|input| ResizeModifierMaskV1 {
+                    centered: input.modifiers.ctrl || input.modifiers.command,
+                    aspect_lock: input.modifiers.shift,
+                });
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
@@ -5648,7 +5652,7 @@ impl ViewerApp {
                                     handle,
                                     pointer_start,
                                 ) {
-                                    Ok(mut resize) => match resize.update(pointer_current) {
+                                    Ok(mut resize) => match resize.update_constrained(pointer_current, resize_modifiers) {
                                         Ok(ResizeUpdate::Preview(_))
                                         | Ok(ResizeUpdate::Invalid { .. }) => {
                                             next_canvas_resize = Some(resize);
@@ -5715,7 +5719,7 @@ impl ViewerApp {
                     } else if let (Some(mut resize), Some(point)) =
                         (next_canvas_resize.take(), pointer_document)
                     {
-                        match resize.update(point) {
+                        match resize.update_constrained(point, resize_modifiers) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
                                 match resize.commit() {
                                     Ok(commit) => resize_commit = Some(commit),
@@ -5758,7 +5762,7 @@ impl ViewerApp {
                             rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
                         }
                     } else if let Some(mut resize) = next_canvas_resize {
-                        match resize.update(point) {
+                        match resize.update_constrained(point, resize_modifiers) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
                                 next_canvas_resize = Some(resize);
                             }
