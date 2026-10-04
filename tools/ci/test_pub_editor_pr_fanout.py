@@ -20,7 +20,34 @@ def classify(paths, base=None, head=None):
     )
 
 
+
+def assert_continuity_consumer_wiring() -> None:
+    workflow_path = Path(".github/workflows/editor-desktop-continuity-v2-windows.yml")
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    required = (
+        "Classify pub-editor Continuity V2 scope",
+        "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
+        "python tools/ci/pub_editor_pr_fanout.py",
+        "needs: classify",
+        "needs.classify.outputs.continuity_v2_windows == 'true'",
+    )
+    missing = [marker for marker in required if marker not in workflow]
+    assert not missing, (
+        "Continuity V2 selective consumer lost required base-authority wiring: "
+        + ", ".join(missing)
+    )
+
+    contract = Path(
+        ".github/workflows/pub-editor-selective-fanout-contract.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        ".github/workflows/editor-desktop-continuity-v2-windows.yml" in contract
+    ), "cheap contract must run when the Continuity V2 consumer wiring changes"
+
 def main() -> None:
+    assert_continuity_consumer_wiring()
+
     base = """mod duplicate_authored_rectangle_v1;
 mod imported_paragraphs_v1;
 
