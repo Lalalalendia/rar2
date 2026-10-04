@@ -43,3 +43,21 @@ jobs:
       - run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
       - working-directory: vendor/producer-a
         run: cargo check -p pub-reader --bin structural_base_manifest
+
+
+  format-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt
+      - name: Format structural helper for workspace edition
+        run: rustfmt --edition 2021 vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t351-rustfmt-2021
+          path: vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+          if-no-files-found: error
