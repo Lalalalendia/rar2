@@ -1,0 +1,150 @@
+{
+  "authority": {
+    "baseline_repository_commit_sha": "ca9eb26cd0286a55a3c504cb41d613f35e68b0ad",
+    "baseline_visual_run_id": 37077469150,
+    "exact_1050_sha_list_digest": "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43",
+    "field07_census_artifact_id": 11285743095,
+    "field07_census_head_sha": "2c74bb7f67aa2acf2bbf774c28256392752dc4e3",
+    "field07_census_pr": 1076,
+    "field07_census_run_id": 37156682525,
+    "publisher_pair_manifest": "tools/corpus/receipts/publisher-visual-golden-batch-01-pairs.csv"
+  },
+  "borderart_pair_count": 6,
+  "claims": {
+    "baseline_metrics_are_observational_not_acceptance_thresholds": true,
+    "borderart_static_semantics_come_from_exact_1050_census": true,
+    "publisher_pdf_is_visual_authority_only": true,
+    "raw_pdf_bytes_emitted": false,
+    "raw_pub_bytes_emitted": false
+  },
+  "pairs": [
+    {
+      "baseline": {
+        "candidate_pages": null,
+        "max_changed_cell_fraction": null,
+        "mean_changed_cell_fraction": null,
+        "page_count_match": null,
+        "reference_pages": 10,
+        "reference_state": "external_dependency_warning",
+        "rendered": false
+      },
+      "default_stretch_use_count": 4,
+      "fbid_use_count": 4,
+      "fbid_values": [0, 0, 0, 0],
+      "fixture": "025_aeac4c0318158200",
+      "nonstretch_marker_count": 0,
+      "oracle_id": "batch01-025",
+      "pdf_pages": 10,
+      "pdf_sha256": "0dbf5a01f07f7dc8bb995634c107487df436e63188625a83b6e3cf41a44f454f",
+      "pub_sha256": "aeac4c03181582008c18655ad77b90a957b00eeddcc0b1c45f6d40ca88c765eb",
+      "stretch_modes_present": ["stretch_default"]
+    },
+    {
+      "baseline": {
+        "candidate_pages": null,
+        "max_changed_cell_fraction": null,
+        "mean_changed_cell_fraction": null,
+        "page_count_match": null,
+        "reference_pages": 2,
+        "reference_state": "warning_membership_unknown",
+        "rendered": false
+      },
+      "default_stretch_use_count": 2,
+      "fbid_use_count": 2,
+      "fbid_values": [3, 2],
+      "fixture": "029_c0688f73b9bf8fc7",
+      "nonstretch_marker_count": 0,
+      "oracle_id": "batch01-029",
+      "pdf_pages": 2,
+      "pdf_sha256": "e76c5a28c483e32eed7a5635ecf205a94c61aeddc77254f832beb19a84967c46",
+      "pub_sha256": "c0688f73b9bf8fc7677a1eecaadd30fa00fc1813f6b12dc39b8aa5eac973f81e",
+      "stretch_modes_present": ["stretch_default"]
+    },
+    {
+      "baseline": {
+        "candidate_pages": 7,
+        "max_changed_cell_fraction": 0.463623046875,
+        "mean_changed_cell_fraction": 0.3953857421875,
+        "page_count_match": false,
+        "reference_pages": 2,
+        "reference_state": "warning_membership_unknown",
+        "rendered": true
+      },
+      "default_stretch_use_count": 0,
+      "fbid_use_count": 1,
+      "fbid_values": [0],
+      "fixture": "037_427fb797a07fd1a5",
+      "nonstretch_marker_count": 1,
+      "oracle_id": "batch01-037",
+      "pdf_pages": 2,
+      "pdf_sha256": "c2e39165c4298523feeec7f43e12f3220e6a484de13d497b8be438f85dc0a367",
+      "pub_sha256": "427fb797a07fd1a598ce1eadae72d021446eb3ddeea9fc68ec1200dff786ab8c",
+      "stretch_modes_present": ["repeat_nonstretch"]
+    },
+    {
+      "baseline": {
+        "candidate_pages": 7,
+        "max_changed_cell_fraction": 0.51806640625,
+        "mean_changed_cell_fraction": 0.464599609375,
+        "page_count_match": false,
+        "reference_pages": 2,
+        "reference_state": "warning_membership_unknown",
+        "rendered": true
+      },
+      "default_stretch_use_count": 1,
+      "fbid_use_count": 2,
+      "fbid_values": [2, 0],
+      "fixture": "050_4247a4776b7ce1eb",
+      "nonstretch_marker_count": 1,
+      "oracle_id": "batch01-050",
+      "pdf_pages": 2,
+      "pdf_sha256": "aa8d5eb76ecbd1b9b6f6eae5e1bdbad63d26b1208b14cf7e895a60968fdfd547",
+      "pub_sha256": "4247a4776b7ce1ebe1799ab19e05e16019507980e354222f24e813849cbe94f6",
+      "stretch_modes_present": ["repeat_nonstretch", "stretch_default"]
+    },
+    {
+      "baseline": {
+        "candidate_pages": 7,
+        "max_changed_cell_fraction": 0.53955078125,
+        "mean_changed_cell_fraction": 0.419677734375,
+        "page_count_match": false,
+        "reference_pages": 2,
+        "reference_state": "warning_membership_unknown",
+        "rendered": true
+      },
+      "default_stretch_use_count": 1,
+      "fbid_use_count": 1,
+      "fbid_values": [0],
+      "fixture": "051_69a42c98d92d6811",
+      "nonstretch_marker_count": 0,
+      "oracle_id": "batch01-051",
+      "pdf_pages": 2,
+      "pdf_sha256": "f54b43b18f9d2ee0fe67b9579e6ef4ef1eeed4ea2c265381d0bb12d5ec683ed6",
+      "pub_sha256": "69a42c98d92d6811b53a7d1114d4f7d8edc649ff388e1b5873537b523e9c48ba",
+      "stretch_modes_present": ["stretch_default"]
+    },
+    {
+      "baseline": {
+        "candidate_pages": 6,
+        "max_changed_cell_fraction": 0.44873046875,
+        "mean_changed_cell_fraction": 0.3492431640625,
+        "page_count_match": false,
+        "reference_pages": 2,
+        "reference_state": "warning_membership_unknown",
+        "rendered": true
+      },
+      "default_stretch_use_count": 2,
+      "fbid_use_count": 2,
+      "fbid_values": [0, 0],
+      "fixture": "053_70f21e6856945d09",
+      "nonstretch_marker_count": 0,
+      "oracle_id": "batch01-053",
+      "pdf_pages": 2,
+      "pdf_sha256": "379acf701a720a05011cf8b4ecbeb596e9d6e9376e567882d47f3028017f017a",
+      "pub_sha256": "70f21e6856945d091469fd79f815674128e1cbf7e160e352aa0e80968ae924f8",
+      "stretch_modes_present": ["stretch_default"]
+    }
+  ],
+  "schema": "chaptera.publisher-visual-golden-borderart-overlap.v1",
+  "scope": "source-free exact identity overlap between persisted BorderArt evidence and Publisher PDF visual golden Batch 01"
+}
