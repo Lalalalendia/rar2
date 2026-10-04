@@ -57,9 +57,9 @@ impl fmt::Display for OdgParagraphAlignmentError {
             ),
             Self::MissingContent => formatter.write_str("ODG package is missing content.xml"),
             Self::InvalidContentUtf8 => formatter.write_str("ODG content.xml is not UTF-8"),
-            Self::InvalidAutomaticStyles => formatter.write_str(
-                "ODG content.xml has an unsupported automatic-styles shape",
-            ),
+            Self::InvalidAutomaticStyles => {
+                formatter.write_str("ODG content.xml has an unsupported automatic-styles shape")
+            }
             Self::MissingFrame { node_id } => write!(
                 formatter,
                 "ODG content.xml is missing text frame {}",
@@ -242,9 +242,7 @@ fn stable_name(prefix: &str, id: CanonicalId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgPart, OdgPartKind,
-    };
+    use crate::{ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgPart, OdgPartKind};
     use pub_export::{
         SemanticFeatureRequest, TargetCapabilityManifest, TargetProfile, plan_export,
     };
