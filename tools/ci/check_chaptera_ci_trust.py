@@ -31,6 +31,14 @@ DESKTOP_PR_ADMISSION_RULES = {
             "apps/chaptera-desktop/src/authored_stack.rs",
         ),
     },
+    ".github/workflows/editor-duplicate-rectangle-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/duplicate_rectangle.rs",
+            "apps/chaptera-desktop/src/duplicate_rectangle_gui_tests.rs",
+            "vendor/producer-a/crates/pub-editor/src/duplicate_authored_rectangle_v1.rs",
+        ),
+    },
     ".github/workflows/editor-desktop-history-shortcuts-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
