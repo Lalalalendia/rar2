@@ -70,31 +70,15 @@ impl EditorSession {
         let mut result = Vec::new();
 
         for (story_id, story) in &self.graph.stories {
-            let current_state = story_state_id_v1(*story_id, &story.text);
-            if self.source_story_state_ids.get(story_id) != Some(&current_state) {
+            let Some(source_state_id) = self.source_story_state_ids.get(story_id) else {
                 continue;
-            }
-
-            for (ordinal, (start, end)) in canonical_paragraph_ranges_v1(&story.text)
-                .into_iter()
-                .enumerate()
-            {
-                let paragraph_id =
-                    derive_imported_paragraph_id_v1(self.source_hash, *story_id, ordinal)?;
-                let range = TextRange::new(start, end).map_err(|_| {
-                    ImportedParagraphProjectionErrorV1::Range {
-                        story_id: *story_id,
-                        ordinal,
-                        start,
-                        end,
-                    }
-                })?;
-                result.push(ImportedParagraphV1 {
-                    paragraph_id,
-                    story_id: *story_id,
-                    range,
-                });
-            }
+            };
+            result.extend(project_imported_story_paragraphs_v1(
+                self.source_hash,
+                *story_id,
+                source_state_id,
+                &story.text,
+            )?);
         }
 
         result.sort_by_key(|item| (item.story_id, item.range.start, item.paragraph_id));
@@ -110,6 +94,38 @@ impl EditorSession {
             .into_iter()
             .find(|item| item.paragraph_id == paragraph_id))
     }
+}
+
+fn project_imported_story_paragraphs_v1(
+    source_hash: Sha256Digest,
+    story_id: StoryId,
+    source_state_id: &str,
+    current_text: &str,
+) -> Result<Vec<ImportedParagraphV1>, ImportedParagraphProjectionErrorV1> {
+    if story_state_id_v1(story_id, current_text) != source_state_id {
+        return Ok(Vec::new());
+    }
+
+    canonical_paragraph_ranges_v1(current_text)
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, (start, end))| {
+            let paragraph_id = derive_imported_paragraph_id_v1(source_hash, story_id, ordinal)?;
+            let range = TextRange::new(start, end).map_err(|_| {
+                ImportedParagraphProjectionErrorV1::Range {
+                    story_id,
+                    ordinal,
+                    start,
+                    end,
+                }
+            })?;
+            Ok(ImportedParagraphV1 {
+                paragraph_id,
+                story_id,
+                range,
+            })
+        })
+        .collect()
 }
 
 fn derive_imported_paragraph_id_v1(
@@ -182,6 +198,38 @@ mod tests {
     #[test]
     fn paragraph_ranges_use_unicode_scalar_coordinates() {
         assert_eq!(canonical_paragraph_ranges_v1("😀\rx"), vec![(0, 2), (2, 3)]);
+    }
+
+    #[test]
+    fn source_story_edit_invalidates_projection_and_exact_restore_recovers_ids() {
+        let source = "alpha\rbeta";
+        let source_state = story_state_id_v1(story_id(), source);
+        let before = project_imported_story_paragraphs_v1(
+            source_hash(),
+            story_id(),
+            &source_state,
+            source,
+        )
+        .expect("source projection");
+        assert_eq!(before.len(), 2);
+
+        let edited = project_imported_story_paragraphs_v1(
+            source_hash(),
+            story_id(),
+            &source_state,
+            "alphx\rbeta",
+        )
+        .expect("edited projection");
+        assert!(edited.is_empty());
+
+        let restored = project_imported_story_paragraphs_v1(
+            source_hash(),
+            story_id(),
+            &source_state,
+            source,
+        )
+        .expect("restored projection");
+        assert_eq!(restored, before);
     }
 
     #[test]
