@@ -154,7 +154,8 @@ impl ViewerApp {
                 property.label()
             )),
             Err(error) => {
-                self.edit_status = Some(format!("{} formatting rejected: {error}", property.label()));
+                self.edit_status =
+                    Some(format!("{} formatting rejected: {error}", property.label()));
             }
         }
     }
@@ -338,8 +339,7 @@ impl ViewerApp {
             .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Italic)
             .ok();
 
-        let label = |letter: &str,
-                     state: Option<text_session::DesktopBooleanSelectionStateV1>| {
+        let label = |letter: &str, state: Option<text_session::DesktopBooleanSelectionStateV1>| {
             let Some(state) = state else {
                 return letter.to_owned();
             };
@@ -415,10 +415,7 @@ impl ViewerApp {
                             let bold_enabled =
                                 bold.is_some_and(|state| state.has_chaptera_override());
                             if ui
-                                .add_enabled(
-                                    bold_enabled,
-                                    egui::Button::new("Bold to source/base"),
-                                )
+                                .add_enabled(bold_enabled, egui::Button::new("Bold to source/base"))
                                 .clicked()
                             {
                                 self.clear_canvas_boolean_format_override_v1(
