@@ -23,7 +23,7 @@ permissions:
 
 concurrency:
   group: quill-story-readonly-oracle-v2-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
