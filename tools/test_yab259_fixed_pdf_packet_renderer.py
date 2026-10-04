@@ -6,6 +6,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / "tools" / "yab259_fixed_pdf_packet_renderer.rs"
+RUNNER = ROOT / "tools" / "run_yab259_fixed_pdf_packet_renderer.py"
 
 
 class Yab259PacketRendererSourceTests(unittest.TestCase):
@@ -32,6 +33,12 @@ class Yab259PacketRendererSourceTests(unittest.TestCase):
         self.assertIn('"partial"', text)
         self.assertIn('"unsupported"', text)
         self.assertIn("node_reports.sort_by", text)
+
+
+    def test_python_runner_uses_input_without_explicit_stdin_pipe(self) -> None:
+        text = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("input=json.dumps(", text)
+        self.assertNotIn("stdin=subprocess.PIPE", text)
 
 
 if __name__ == "__main__":
