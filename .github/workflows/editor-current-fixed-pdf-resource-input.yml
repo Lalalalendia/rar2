@@ -1,0 +1,33 @@
+name: Editor current fixed-PDF resource input
+
+on:
+  pull_request:
+    paths:
+      - "crates/chaptera-desktop-shaped-flow-runtime/**"
+      - ".github/workflows/editor-current-fixed-pdf-resource-input.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-current-fixed-pdf-resource-input-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Check formatting
+        run: |
+          cargo fmt --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml -- --check
+      - name: Check fresh-reopen input binary
+        run: cargo check --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml --bin current_fixed_pdf_input
+      - name: Test current shaped-flow resource builder
+        run: cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml
