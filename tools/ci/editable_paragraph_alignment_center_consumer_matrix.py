@@ -122,12 +122,26 @@ def main() -> int:
         case_root.mkdir(parents=True, exist_ok=True)
 
         all_items = alignment_probe.get("items", [])
-        items = [item for item in all_items if item.get("alignment") == "center"]
+        all_center_items = [
+            item for item in all_items if item.get("alignment") == "center"
+        ]
+        empty_center_items = [
+            item
+            for item in all_center_items
+            if int(item.get("story_non_whitespace_scalar_count", 0)) == 0
+        ]
+        items = [
+            item
+            for item in all_center_items
+            if int(item.get("story_non_whitespace_scalar_count", 0)) > 0
+        ]
         expected = {
             "schema": "chaptera.editable-paragraph-alignment-center-expected.v1",
             "source_sha256": alignment_probe["source_sha256"],
             "eligible_count": len(items),
             "center_story_count": len(items),
+            "all_center_story_count": len(all_center_items),
+            "empty_center_story_count": len(empty_center_items),
             "right_story_count": sum(
                 1 for item in all_items if item.get("alignment") == "right"
             ),
@@ -144,6 +158,8 @@ def main() -> int:
             "source_sha256": sha,
             "eligible_story_count": len(items),
             "center_story_count": expected["center_story_count"],
+            "all_center_story_count": expected["all_center_story_count"],
+            "empty_center_story_count": expected["empty_center_story_count"],
             "right_story_count": expected["right_story_count"],
         }
 
@@ -401,14 +417,26 @@ def main() -> int:
     receipt = {
         "schema": "chaptera.editable-paragraph-alignment-center-consumer-matrix.v1",
         "source_count": len(results),
-        "center_story_count": sum(row["center_story_count"] for row in results),
+        "center_story_count": sum(row["all_center_story_count"] for row in results),
+        "content_bearing_center_story_count": sum(
+            row["center_story_count"] for row in results
+        ),
+        "empty_center_story_count": sum(
+            row["empty_center_story_count"] for row in results
+        ),
         "materializable_source_count": len(available),
         "materializable_center_story_count": sum(
             row["center_story_count"] for row in available
         ),
+        "materializable_empty_center_story_count": sum(
+            row["empty_center_story_count"] for row in available
+        ),
         "non_materializable_source_count": len(excluded),
         "non_materializable_center_story_count": sum(
             row["center_story_count"] for row in excluded
+        ),
+        "non_materializable_empty_center_story_count": sum(
+            row["empty_center_story_count"] for row in excluded
         ),
         "non_materializable_source_sha256": sorted(
             row["source_sha256"] for row in excluded
@@ -420,9 +448,10 @@ def main() -> int:
         "summary": summary,
         "claims": {
             "measurement_only": True,
-            "consumer_survival_proven_for_materializable_center_class": (
+            "consumer_survival_proven_for_materializable_content_bearing_center_class": (
                 materializable_center_class_proven
             ),
+            "consumer_survival_proven_for_empty_center_class": False,
             "consumer_survival_proven_for_full_center_source_class": False,
             "all_center_sources_materializable": len(excluded) == 0,
             "right_class_fully_proven": False,
@@ -435,6 +464,10 @@ def main() -> int:
     print(json.dumps({
         "source_count": receipt["source_count"],
         "center_story_count": receipt["center_story_count"],
+        "content_bearing_center_story_count": receipt[
+            "content_bearing_center_story_count"
+        ],
+        "empty_center_story_count": receipt["empty_center_story_count"],
         "materializable_source_count": receipt["materializable_source_count"],
         "materializable_center_story_count": receipt[
             "materializable_center_story_count"
