@@ -62,7 +62,6 @@ def main() -> int:
                     "fixed-pdf-packet",
                 ],
                 cwd=donor,
-                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 input=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
