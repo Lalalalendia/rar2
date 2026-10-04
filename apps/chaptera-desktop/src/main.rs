@@ -8060,7 +8060,6 @@ mod tests {
                 .find_map(|page| {
                     let page_origin = page.id.into_canonical();
                     let page_id_text = page.id.as_canonical().to_string();
-                    let frame_id_text = fragment.frame_id.as_canonical().to_string();
                     let page_nodes = visual
                         .scene
                         .nodes
@@ -9824,6 +9823,7 @@ mod tests {
                         .iter()
                         .find(|page| node.parent_origin == page.id.into_canonical())?;
                     let page_id_text = page.id.as_canonical().to_string();
+                    let frame_id_text = fragment.frame_id.as_canonical().to_string();
                     let page_nodes = visual
                         .scene
                         .nodes
