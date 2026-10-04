@@ -2896,6 +2896,8 @@ mod tests {
                 size_inherited: true,
                 color_rgb: None,
                 color_inherited: false,
+                bold: None,
+                italic: None,
                 source_story_text_sha256: viewer_story_text_sha256("hello"),
             }],
             paragraph_alignments: Vec::new(),
