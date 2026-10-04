@@ -70,6 +70,10 @@ impl MarketProfile {
             Self::NeutralEnglish => "NeutralEnglish",
         }
     }
+
+    pub(crate) fn is_active_target(self) -> bool {
+        !matches!(self, Self::NeutralEnglish)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +84,100 @@ pub(crate) enum SupporterAction {
     Share,
     Report,
     ArchiveHelp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SupporterCopy {
+    pub(crate) body: &'static str,
+    pub(crate) primary: &'static str,
+    pub(crate) later: &'static str,
+    pub(crate) already_supported: &'static str,
+    pub(crate) share: &'static str,
+    pub(crate) report: &'static str,
+    pub(crate) archive_help: &'static str,
+}
+
+pub(crate) fn control_copy(profile: MarketProfile) -> SupporterCopy {
+    match profile {
+        MarketProfile::Us => SupporterCopy {
+            body: "Chaptera stays free. If it saved you work, you can support continued development.",
+            primary: "Support development",
+            later: "Later",
+            already_supported: "Already supported",
+            share: "Share Chaptera",
+            report: "Report a problem",
+            archive_help: "Large archive?",
+        },
+        MarketProfile::Uk => SupporterCopy {
+            body: "Chaptera stays free. If it helped, you can support continued development.",
+            primary: "Support development",
+            later: "Later",
+            already_supported: "Already supported",
+            share: "Share Chaptera",
+            report: "Report a problem",
+            archive_help: "Large archive?",
+        },
+        MarketProfile::Ru => SupporterCopy {
+            body: "Chaptera остаётся бесплатной. Если программа выручила — можно поддержать разработку.",
+            primary: "Поддержать разработку",
+            later: "Позже",
+            already_supported: "Уже поддержал",
+            share: "Поделиться",
+            report: "Сообщить о проблеме",
+            archive_help: "Большой архив?",
+        },
+        MarketProfile::NeutralEnglish => SupporterCopy {
+            body: "Chaptera stays free. You can support continued development after it has helped you.",
+            primary: "Support development",
+            later: "Later",
+            already_supported: "Already supported",
+            share: "Share Chaptera",
+            report: "Report a problem",
+            archive_help: "Large archive?",
+        },
+    }
+}
+
+pub(crate) fn format_receipt(receipt: ValueReceipt, profile: MarketProfile) -> String {
+    match (profile, receipt.kind) {
+        (
+            MarketProfile::Ru,
+            ValueReceiptKind::Reading {
+                text_searchable: true,
+            },
+        ) => format!("Страниц: {} · поиск по тексту", receipt.page_count),
+        (
+            MarketProfile::Ru,
+            ValueReceiptKind::Reading {
+                text_searchable: false,
+            },
+        ) => format!("Страниц открыто: {}", receipt.page_count),
+        (MarketProfile::Ru, ValueReceiptKind::SearchMatches { match_count }) => {
+            format!(
+                "Страниц: {} · совпадений: {match_count}",
+                receipt.page_count
+            )
+        }
+        (MarketProfile::Ru, ValueReceiptKind::TextCopied) => {
+            "Текст восстановлен и скопирован".to_owned()
+        }
+        (
+            _,
+            ValueReceiptKind::Reading {
+                text_searchable: true,
+            },
+        ) => format!("{} pages · text searchable", receipt.page_count),
+        (
+            _,
+            ValueReceiptKind::Reading {
+                text_searchable: false,
+            },
+        ) => format!("{} pages opened", receipt.page_count),
+        (_, ValueReceiptKind::SearchMatches { match_count }) => {
+            format!("{} pages · {match_count} matches found", receipt.page_count)
+        }
+        (_, ValueReceiptKind::TextCopied) => "Text recovered and copied".to_owned(),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -370,6 +468,75 @@ mod tests {
             text_searchable: true,
             initial_page: 0,
         }
+    }
+
+    #[test]
+    fn locale_routing_is_exact_and_fail_closed() {
+        assert_eq!(MarketProfile::from_locale(Some("en-US")), MarketProfile::Us);
+        assert_eq!(MarketProfile::from_locale(Some("en_GB")), MarketProfile::Uk);
+        assert_eq!(MarketProfile::from_locale(Some("ru-RU")), MarketProfile::Ru);
+        assert_eq!(
+            MarketProfile::from_locale(Some("en_US.UTF-8")),
+            MarketProfile::Us
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("en_GB.UTF-8@euro")),
+            MarketProfile::Uk
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("ru_RU.UTF-8")),
+            MarketProfile::Ru
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("en-CA")),
+            MarketProfile::NeutralEnglish
+        );
+        assert_eq!(
+            MarketProfile::from_locale(Some("ru-KZ")),
+            MarketProfile::NeutralEnglish
+        );
+    }
+
+    #[test]
+    fn neutral_locale_is_not_an_active_country_experiment() {
+        assert!(MarketProfile::Us.is_active_target());
+        assert!(MarketProfile::Uk.is_active_target());
+        assert!(MarketProfile::Ru.is_active_target());
+        assert!(!MarketProfile::NeutralEnglish.is_active_target());
+    }
+
+    #[test]
+    fn launch_controls_keep_market_specific_baseline_language() {
+        assert_eq!(
+            control_copy(MarketProfile::Us).primary,
+            "Support development"
+        );
+        assert_eq!(
+            control_copy(MarketProfile::Uk).primary,
+            "Support development"
+        );
+        assert_eq!(
+            control_copy(MarketProfile::Ru).primary,
+            "Поддержать разработку"
+        );
+        assert!(!control_copy(MarketProfile::Ru).body.contains("пожертв"));
+        assert!(!control_copy(MarketProfile::Ru).body.contains("донат"));
+    }
+
+    #[test]
+    fn value_receipt_uses_only_bounded_result_facts() {
+        let receipt = ValueReceipt {
+            page_count: 14,
+            kind: ValueReceiptKind::SearchMatches { match_count: 7 },
+        };
+        assert_eq!(
+            format_receipt(receipt, MarketProfile::Us),
+            "14 pages · 7 matches found"
+        );
+        assert_eq!(
+            format_receipt(receipt, MarketProfile::Ru),
+            "Страниц: 14 · совпадений: 7"
+        );
     }
 
     #[test]
