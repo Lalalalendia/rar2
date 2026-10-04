@@ -1,3 +1,4 @@
+// Measurement-only control: Continuity V2 owner admission; never merge this comment.
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
