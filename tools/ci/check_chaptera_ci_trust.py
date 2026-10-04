@@ -17,6 +17,12 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/scene-authored-stack-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/authored_stack.rs",
+        ),
+    },
     ".github/workflows/editor-desktop-history-shortcuts-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
