@@ -17,6 +17,14 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/editor-desktop-text-session-restore-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/text_session.rs",
+            "apps/chaptera-desktop/src/text_session_shell.rs",
+            "apps/chaptera-desktop/src/text_session_gui_tests.rs",
+        ),
+    },
     ".github/workflows/editor-desktop-selection-keyboard-restore-v1.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (

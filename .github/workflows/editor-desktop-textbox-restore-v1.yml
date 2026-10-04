@@ -6,6 +6,7 @@ on:
       - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/text_box_creation.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
+      - "apps/chaptera-desktop/src/text_session_shell.rs"
       - "apps/chaptera-desktop/Cargo.toml"
       - "crates/chaptera-canvas-creation-interaction/**"
       - "crates/chaptera-desktop-fallback-font-resource/**"
@@ -17,8 +18,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   contract:

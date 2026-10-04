@@ -3,7 +3,8 @@ name: Editor Desktop Text Session Restore V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/text_session_shell.rs"
+      - "apps/chaptera-desktop/src/text_session_gui_tests.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/Cargo.toml"
       - ".github/workflows/editor-desktop-text-session-restore-v1.yml"
@@ -16,11 +17,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  format-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - name: Format Desktop direct-text slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
   direct-text:
+    needs: format-preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,9 +43,6 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
-
-      - name: Format Desktop direct-text slice
-        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
 
       - name: Check Desktop direct-text integration
         run: cargo check -p chaptera-desktop --all-targets
@@ -61,9 +72,11 @@ jobs:
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
 
-
   gui-direct-text:
+    needs: format-preflight
     runs-on: windows-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - uses: actions/checkout@v4
 
@@ -71,6 +84,18 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
+
+      - name: Restore validated Windows Cargo dependencies
+        id: desktop-cargo-cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: chaptera-windows-desktop-deps-v1
+          add-job-id-key: "false"
+          workspaces: ". -> target"
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+          save-if: "false"
 
       - name: Acquire pinned Apache POI SampleNewsletter
         shell: pwsh
