@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+chaptera-text-format-overlay = { path = "../../../../crates/chaptera-text-format-overlay" }
 pub-export = { path = "../pub-export" }
 pub-idml = { path = "../pub-idml" }
 pub-model = { path = "../pub-model" }
