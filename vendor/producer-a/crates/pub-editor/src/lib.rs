@@ -5436,6 +5436,14 @@ fn replay_canonical_operation(
                 before_state_hash,
             )
             .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids, value, ..
+        } => session
+            .set_paragraph_alignment_override_v1(paragraph_ids.clone(), *value)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ClearParagraphAlignmentOverride { paragraph_ids, .. } => session
+            .clear_paragraph_alignment_override_v1(paragraph_ids.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
     }
 }
 
@@ -6490,6 +6498,10 @@ fn apply_forward(
         | EditOperation::ClearTextFormatPropertyOverride { .. } => {
             unreachable!("text-format operations are derived from editor history")
         }
+        EditOperation::SetParagraphAlignmentOverride { .. }
+        | EditOperation::ClearParagraphAlignmentOverride { .. } => {
+            unreachable!("paragraph-alignment operations are derived from editor history")
+        }
     }
     Ok(())
 }
@@ -6735,6 +6747,10 @@ fn apply_inverse(
         EditOperation::SetTextFormatProperty { .. }
         | EditOperation::ClearTextFormatPropertyOverride { .. } => {
             unreachable!("text-format operations are derived from editor history")
+        }
+        EditOperation::SetParagraphAlignmentOverride { .. }
+        | EditOperation::ClearParagraphAlignmentOverride { .. } => {
+            unreachable!("paragraph-alignment operations are derived from editor history")
         }
     }
     Ok(())
