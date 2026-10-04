@@ -1,16 +1,19 @@
 use super::{
     CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
-    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyOleSource,
-    PubNodePayload, PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource,
+    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyCharacterStyleRun,
+    PubLegacyOleSource, PubLegacyUnderlineStyle, PubNodePayload, PubSourceGraph,
+    PubSourceGraphBuild, PubStoryFrameSource,
     PubTableCellCoordinates, PubTableCellSource, PubTableSource, PubTableStoryOwnershipSource,
     ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, bounded_wmf_metafile, derive_pub_id,
     source_ref,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
-    LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22Directory, Legacy0x22DirectoryEntry,
-    Legacy0x22ResolvedTable, parse_legacy_0x22_directory, parse_legacy_0x22_formatting_descriptor,
-    parse_legacy_0x22_resolved_tables, parse_legacy_0x22_text_info_map,
+    LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22CharacterRun, Legacy0x22Directory,
+    Legacy0x22DirectoryEntry, Legacy0x22ResolvedTable, Legacy0x22Underline,
+    parse_legacy_0x22_directory, parse_legacy_0x22_formatting_descriptor,
+    parse_legacy_0x22_formatting_runs, parse_legacy_0x22_resolved_tables,
+    parse_legacy_0x22_text_info_map,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
@@ -52,6 +55,13 @@ struct LegacyIdList {
 struct LegacyImageWmfProfile {
     source: RawSpan,
     normalized_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyAdmittedStoryRange {
+    story_id: StoryId,
+    absolute_start: u32,
+    absolute_end: u32,
 }
 
 pub fn read_legacy_0x22_image_wmfs<R: Read + Seek>(
@@ -245,6 +255,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
         .get(text_start..text_end)
         .context("legacy no-Quill text range exceeds Contents")?;
     let mut story_by_owner = BTreeMap::<u16, StoryId>::new();
+    let mut story_source_ranges = Vec::<LegacyAdmittedStoryRange>::new();
     let mut diagnostics = Vec::new();
     let resolved_tables = if directory
         .entries
@@ -324,6 +335,16 @@ pub fn build_legacy_0x22_noquill_from_contents(
                             ],
                         },
                     );
+                    let absolute_end = text_start
+                        .checked_add(end)
+                        .context("legacy owner absolute text end overflow")?;
+                    story_source_ranges.push(LegacyAdmittedStoryRange {
+                        story_id,
+                        absolute_start: u32::try_from(absolute_start)
+                            .context("legacy owner absolute text start does not fit u32")?,
+                        absolute_end: u32::try_from(absolute_end)
+                            .context("legacy owner absolute text end does not fit u32")?,
+                    });
                     story_by_owner.insert(owner.owner_id, story_id);
                 }
                 Err(_) => diagnostics.push(PubBridgeDiagnostic::LegacyTextEncodingUnresolved {
@@ -361,6 +382,37 @@ pub fn build_legacy_0x22_noquill_from_contents(
             &mut diagnostics,
         )?;
     }
+
+    let legacy_character_style_runs = if descriptor
+        .character_fkp_page_range()
+        .chain(descriptor.paragraph_fkp_page_range())
+        .chain(descriptor.cell_style_fkp_page_range())
+        .all(|page_index| {
+            usize::from(page_index)
+                .checked_mul(pub_contents::FKP_PAGE_SIZE)
+                .and_then(|offset| offset.checked_add(pub_contents::FKP_PAGE_SIZE))
+                .is_some_and(|end| end <= contents.len())
+        })
+    {
+        match parse_legacy_0x22_formatting_runs(contents_stream.clone(), contents) {
+            Ok(formatting) => project_legacy_character_style_runs(
+                &graph.source,
+                &story_source_ranges,
+                &formatting.character_runs,
+            ),
+            Err(error) => {
+                diagnostics.push(PubBridgeDiagnostic::LegacyTextFormattingUnresolved {
+                    reason: error.to_string(),
+                });
+                Vec::new()
+            }
+        }
+    } else {
+        diagnostics.push(PubBridgeDiagnostic::LegacyTextFormattingUnresolved {
+            reason: "formatting_fkp_page_out_of_bounds".to_owned(),
+        });
+        Vec::new()
+    };
 
     for (page_object_id, page_id) in &page_object_to_id {
         let page_entry = directory
@@ -407,6 +459,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
         source_page_paint_orders: Vec::new(),
         diagnostics,
         typography_runs: Vec::new(),
+        legacy_character_style_runs,
         typography_size_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
         script_font_maps: Vec::new(),
@@ -1012,6 +1065,85 @@ fn materialize_unowned_text_story(
         },
     );
     Ok(())
+}
+
+fn project_legacy_character_style_runs(
+    source: &SourceDescriptor,
+    story_ranges: &[LegacyAdmittedStoryRange],
+    character_runs: &[Legacy0x22CharacterRun],
+) -> Vec<PubLegacyCharacterStyleRun> {
+    let mut projected = Vec::new();
+
+    for run in character_runs {
+        let Some(style) = run.style.as_ref() else {
+            continue;
+        };
+        for story in story_ranges {
+            let start = run.fc_first.max(story.absolute_start);
+            let end = run.fc_lim.min(story.absolute_end);
+            if start >= end {
+                continue;
+            }
+
+            let mut source_refs = vec![
+                source_ref(
+                    source,
+                    &run.fc_first_source,
+                    Some("contents/0x22/chpx-range".into()),
+                    Some("fc_first".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    source,
+                    &run.fc_lim_source,
+                    Some("contents/0x22/chpx-range".into()),
+                    Some("fc_lim".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ];
+            if let Some(property_source) = run.property_source.as_ref() {
+                source_refs.push(source_ref(
+                    source,
+                    property_source,
+                    Some("contents/0x22/chpx-property".into()),
+                    Some("character_style".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+
+            projected.push(PubLegacyCharacterStyleRun {
+                story_id: story.story_id,
+                story_scalar_start: start - story.absolute_start,
+                story_scalar_end: end - story.absolute_start,
+                bold: style.bold,
+                italic: style.italic,
+                small_caps: style.small_caps,
+                all_caps: style.caps,
+                source_font_index: style.font_index,
+                text_size_half_points: style.size_half_points(),
+                baseline_shift_half_points: style.baseline_shift_half_points,
+                legacy_color_index: style.legacy_color_index,
+                underline: style.underline.map(|value| match value {
+                    Legacy0x22Underline::None => PubLegacyUnderlineStyle::None,
+                    Legacy0x22Underline::Single => PubLegacyUnderlineStyle::Single,
+                    Legacy0x22Underline::WordsOnly => PubLegacyUnderlineStyle::WordsOnly,
+                    Legacy0x22Underline::Double => PubLegacyUnderlineStyle::Double,
+                }),
+                letter_spacing_eighth_points: style.letter_spacing_eighth_points,
+                raw_payload: style.raw_payload.clone(),
+                source_refs,
+            });
+        }
+    }
+
+    projected.sort_by_key(|run| (run.story_id, run.story_scalar_start, run.story_scalar_end));
+    projected
 }
 
 fn decode_bounded_legacy_ascii(bytes: &[u8]) -> Result<String> {
