@@ -56,6 +56,10 @@ pub struct DesktopFixedOutputPacketV1 {
     pub source_hash: String,
     pub project_state_id: String,
     pub story_states: Vec<DesktopFixedOutputStoryStateV1>,
+    pub story_mutation_ids: Vec<StoryId>,
+    pub move_node_ids: Vec<pub_model::NodeId>,
+    pub resize_node_ids: Vec<pub_model::NodeId>,
+    pub replacement_node_ids: Vec<pub_model::NodeId>,
     pub shaped_flow: BoundedShapedFlowScene,
     pub node_paints: Vec<EditorFixedNodePaintV1>,
     pub image_resources: Vec<EditorFixedImageResourceV1>,
@@ -180,6 +184,10 @@ pub fn build_current_fixed_output_packet_v1(
         source_hash: state.source_hash.to_string(),
         project_state_id: state.project_state_id,
         story_states,
+        story_mutation_ids: state.story_mutation_ids,
+        move_node_ids: state.move_node_ids,
+        resize_node_ids: state.resize_node_ids,
+        replacement_node_ids: state.replacement_node_ids,
         shaped_flow,
         node_paints: state.node_paints,
         image_resources: state.image_resources,
@@ -373,6 +381,10 @@ mod tests {
                         &editor.graph().stories[&story_id].text,
                     )
         }));
+        assert_eq!(fixed_packet.story_mutation_ids, vec![story_id]);
+        assert!(fixed_packet.move_node_ids.is_empty());
+        assert!(fixed_packet.resize_node_ids.is_empty());
+        assert!(fixed_packet.replacement_node_ids.is_empty());
         assert_eq!(fixed_packet.shaped_flow, after_layout.shaped_flow);
         assert!(fixed_packet
             .shaped_flow
