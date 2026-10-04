@@ -158,14 +158,15 @@ def verify_scribus(path: Path, items: list[dict]) -> dict:
     expected = expected_counts(items)
     observed = scribus_story_alignment_counts(path)
     for alignment, count in expected.items():
-        if observed[alignment] < count:
+        if observed[alignment] != count:
             raise AssertionError(
-                f"Scribus save/reopen lost {alignment} Story carriers: "
-                f"expected at least {count}, observed {observed[alignment]}"
+                f"Scribus save/reopen {alignment} Story carrier count mismatch: "
+                f"expected exactly {count}, observed {observed[alignment]}"
             )
     return {
         "expected_story_counts": dict(sorted(expected.items())),
         "scribus_storytext_alignment_counts": dict(sorted(observed.items())),
+        "scribus_expected_alignment_counts_match_exactly": True,
         "accepted_sla_carriers": ["DefaultStyle", "para", "trail"],
     }
 
@@ -206,16 +207,52 @@ def libreoffice_paragraph_alignment_counts(path: Path) -> Counter:
 
 
 def verify_libreoffice(path: Path, items: list[dict]) -> dict:
-    expected = expected_counts(items)
-    observed = libreoffice_paragraph_alignment_counts(path)
-    for alignment, count in expected.items():
-        if observed[alignment] < count:
+    root = ET.parse(path).getroot()
+    styles: dict[str, str] = {}
+    for node in root.iter():
+        if local(node.tag) != "style":
+            continue
+        name = node.attrib.get(f"{{{STYLE_NS}}}name")
+        family = node.attrib.get(f"{{{STYLE_NS}}}family")
+        if not name or family != "paragraph":
+            continue
+        props = next(
+            (child for child in node.iter() if local(child.tag) == "paragraph-properties"),
+            None,
+        )
+        if props is None:
+            continue
+        align = props.attrib.get(f"{{{FO_NS}}}text-align")
+        if align:
+            styles[name] = align.casefold()
+
+    paragraph_style_refs = {
+        node.attrib.get(f"{{{TEXT_NS}}}style-name")
+        for node in root.iter()
+        if local(node.tag) == "p"
+        and node.attrib.get(f"{{{TEXT_NS}}}style-name")
+    }
+
+    verified = 0
+    for item in items:
+        style_name = odg_style_name(item["story_id"])
+        actual = styles.get(style_name)
+        if actual != item["alignment"]:
             raise AssertionError(
-                f"LibreOffice save/reopen lost {alignment} paragraph carriers: "
-                f"expected at least {count}, observed {observed[alignment]}"
+                f"LibreOffice fresh reopen lost exact Story style {style_name}: "
+                f"expected={item['alignment']!r} actual={actual!r}"
             )
+        if style_name not in paragraph_style_refs:
+            raise AssertionError(
+                f"LibreOffice Story style {style_name} is no longer referenced"
+            )
+        verified += 1
+
+    observed = libreoffice_paragraph_alignment_counts(path)
     return {
-        "expected_story_counts": dict(sorted(expected.items())),
+        "expected_story_counts": dict(sorted(expected_counts(items).items())),
+        "libreoffice_exact_story_style_count": verified,
+        "libreoffice_exact_story_styles_match": verified == len(items),
         "libreoffice_paragraph_alignment_counts": dict(sorted(observed.items())),
     }
 
