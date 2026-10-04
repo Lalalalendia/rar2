@@ -213,10 +213,7 @@ fn imported_mature_quill_terminal_cr_is_proven_v1(
     syid.iter().any(|key| text.contains(key))
 }
 
-fn canonical_paragraph_ranges_v1(
-    text: &str,
-    protected_terminal_cr: bool,
-) -> Vec<(u64, u64)> {
+fn canonical_paragraph_ranges_v1(text: &str, protected_terminal_cr: bool) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
     let mut start = 0_u64;
     let mut scalar_index = 0_u64;
@@ -267,14 +264,8 @@ mod tests {
 
     #[test]
     fn proven_imported_terminal_cr_does_not_create_empty_final_paragraph() {
-        assert_eq!(
-            canonical_paragraph_ranges_v1("alpha\r", true),
-            vec![(0, 6)]
-        );
-        assert_eq!(
-            canonical_paragraph_ranges_v1("\r", true),
-            vec![(0, 1)]
-        );
+        assert_eq!(canonical_paragraph_ranges_v1("alpha\r", true), vec![(0, 6)]);
+        assert_eq!(canonical_paragraph_ranges_v1("\r", true), vec![(0, 1)]);
         assert_eq!(
             canonical_paragraph_ranges_v1("a\r\rb\r", true),
             vec![(0, 2), (2, 3), (3, 5)]
@@ -283,7 +274,10 @@ mod tests {
 
     #[test]
     fn paragraph_ranges_use_unicode_scalar_coordinates() {
-        assert_eq!(canonical_paragraph_ranges_v1("😀\rx", false), vec![(0, 2), (2, 3)]);
+        assert_eq!(
+            canonical_paragraph_ranges_v1("😀\rx", false),
+            vec![(0, 2), (2, 3)]
+        );
     }
 
     #[test]
