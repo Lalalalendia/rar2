@@ -179,7 +179,6 @@ impl ViewerApp {
                     continue;
                 }
                 if self.process_rectangle_escape() {
-
                 } else if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
                     self.edit_status = Some("Cancelled the active canvas gesture.".to_owned());
                 } else if self.canvas_selection.len() > 0 {
