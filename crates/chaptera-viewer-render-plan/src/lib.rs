@@ -490,6 +490,10 @@ pub struct RenderTypographyRunV1 {
     pub color_rgb: Option<[u8; 3]>,
     #[serde(default)]
     pub color_inherited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1001,6 +1005,8 @@ fn projected_text(
                 size_inherited: run.size_inherited,
                 color_rgb: run.color_rgb,
                 color_inherited: run.color_inherited,
+                bold: run.bold.map(|value| value.effective_value),
+                italic: run.italic.map(|value| value.effective_value),
             })
         })
         .collect();
@@ -1168,6 +1174,8 @@ pub fn build_page_render_plan_v1(
                                 size_inherited: run.size_inherited,
                                 color_rgb: run.color_rgb,
                                 color_inherited: run.color_inherited,
+                                bold: run.bold.map(|value| value.effective_value),
+                                italic: run.italic.map(|value| value.effective_value),
                             })
                         })
                         .collect(),
