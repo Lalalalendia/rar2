@@ -4819,10 +4819,7 @@ impl ViewerApp {
                     && self.text_mode.is_none()
                     && response.drag_stopped_by(egui::PointerButton::Primary)
                 {
-                    if self.process_rectangle_drag_stopped(
-                        pointer_document,
-                        &mut rectangle_frame,
-                    ) {
+                    if self.process_rectangle_drag_stopped(pointer_document, &mut rectangle_frame) {
                     } else if self.text_box_creation.active()
                         && self.text_box_creation.gesture_token.is_some()
                     {
