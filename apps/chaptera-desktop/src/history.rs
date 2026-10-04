@@ -55,5 +55,4 @@ impl ViewerApp {
             self.apply_redo();
         }
     }
-
 }
