@@ -137,18 +137,18 @@ def sanitize(payload: dict) -> dict:
 
 def self_test() -> None:
     secret_markers = [
-        r"C:\private\runner\svc.exe",
-        r"D:\secret\packet.json",
-        "actions.runner.secret-service",
-        "private-agent-name",
-        "https://github.com/Lalalalendia/rar2",
-        "ghs_example_secret",
-        "Publisher path secret",
+        "SENTINEL_LOCAL_EXECUTABLE",
+        "SENTINEL_PRIVATE_PACKET_PATH",
+        "SENTINEL_SERVICE_NAME",
+        "SENTINEL_AGENT_NAME",
+        "SENTINEL_GITHUB_URL",
+        "SENTINEL_CREDENTIAL",
+        "SENTINEL_PRIVATE_ERROR",
     ]
     payload = {
         "schema": INPUT_SCHEMA,
         "captured_at_utc": "2026-10-04T10:00:00Z",
-        "repository_root": r"C:\private\rar2",
+        "repository_root": "SENTINEL_REPOSITORY_ROOT",
         "expected_environment": EXPECTED_ENVIRONMENT,
         "packet": {
             "path": secret_markers[1],
@@ -162,8 +162,8 @@ def self_test() -> None:
             "service_start_mode": "Automatic",
             "recovery_action": "start",
             "executable": secret_markers[0],
-            "root": r"C:\private\runner",
-            "runner_file": r"C:\private\runner\.runner",
+            "root": "SENTINEL_RUNNER_ROOT",
+            "runner_file": "SENTINEL_RUNNER_FILE",
             "agent_name": secret_markers[3],
             "github_url": secret_markers[4],
             "listener_present": True,
@@ -175,7 +175,7 @@ def self_test() -> None:
         },
         "environment_validation": {
             "status": "success",
-            "output_root": r"C:\private\prepare",
+            "output_root": "SENTINEL_PREPARE_ROOT",
             "error": secret_markers[6],
         },
         "verdict": "runner-and-publisher-environment-ready",
