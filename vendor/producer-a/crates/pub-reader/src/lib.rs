@@ -974,6 +974,9 @@ pub enum PubBridgeDiagnostic {
         source: RawSpan,
         high_byte_count: usize,
     },
+    LegacyTextFormattingUnresolved {
+        reason: String,
+    },
     McldRecordCountMismatch {
         record_count: u32,
         record_id_count: u32,
