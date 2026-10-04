@@ -137,36 +137,36 @@ def verify_wire(root: Path, items: list[dict]) -> dict:
     }
 
 
-def scribus_default_alignment_counts(path: Path) -> Counter:
+def scribus_story_alignment_counts(path: Path) -> Counter:
     root = ET.parse(path).getroot()
     counts = Counter()
     for story in (node for node in root.iter() if local(node.tag) == "StoryText"):
-        default = next(
-            (node for node in list(story) if local(node.tag) == "DefaultStyle"),
-            None,
-        )
-        if default is None:
-            continue
-        value = default.attrib.get("ALIGN")
-        if value == "1":
+        values = {
+            child.attrib.get("ALIGN")
+            for child in list(story)
+            if local(child.tag) in {"DefaultStyle", "para", "trail"}
+            and child.attrib.get("ALIGN") is not None
+        }
+        if "1" in values:
             counts["center"] += 1
-        elif value == "2":
+        if "2" in values:
             counts["right"] += 1
     return counts
 
 
 def verify_scribus(path: Path, items: list[dict]) -> dict:
     expected = expected_counts(items)
-    observed = scribus_default_alignment_counts(path)
+    observed = scribus_story_alignment_counts(path)
     for alignment, count in expected.items():
         if observed[alignment] < count:
             raise AssertionError(
-                f"Scribus save/reopen lost {alignment} carriers: "
+                f"Scribus save/reopen lost {alignment} Story carriers: "
                 f"expected at least {count}, observed {observed[alignment]}"
             )
     return {
         "expected_story_counts": dict(sorted(expected.items())),
-        "scribus_storytext_default_alignment_counts": dict(sorted(observed.items())),
+        "scribus_storytext_alignment_counts": dict(sorted(observed.items())),
+        "accepted_sla_carriers": ["DefaultStyle", "para", "trail"],
     }
 
 
