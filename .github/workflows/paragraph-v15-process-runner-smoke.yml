@@ -1,0 +1,26 @@
+name: paragraph-v15-process-runner-smoke
+on:
+  push:
+    branches:
+      - delivery/paragraph-v15-launcher-smoke
+    paths:
+      - delivery/paragraph-v15-process-runner-smoke.ps1
+      - .github/workflows/paragraph-v15-process-runner-smoke.yml
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $path = Join-Path $PWD 'delivery\paragraph-v15-process-runner-smoke.ps1'
+          $tokens=$null; $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if($errors.Count -ne 0){$errors | Format-List | Out-String | Write-Error; exit 1}
+      - name: Run positive and negative process cases
+        shell: powershell
+        run: |
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File delivery\paragraph-v15-process-runner-smoke.ps1
+          if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}
