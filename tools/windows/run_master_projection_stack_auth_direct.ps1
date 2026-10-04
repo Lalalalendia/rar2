@@ -12,6 +12,7 @@ $ExpectedPublisherVersion = "16.0"
 $ExpectedPublisherBuild = "12527"
 $ExpectedPublisherFileVersion = "16.0.12527.22145"
 $ExpectedPublisherExeSha256 = "e1ef8811b85b82045f37c4173b92726101be3a25e550b0dcb9f178df834ab20b"
+$ExpectedOracleMerge = "2f4d95f5bfdf42315d5b3f3882a2fb5e92fb9877"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $Operation = Join-Path $RepoRoot "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
@@ -62,6 +63,11 @@ function Assert-Publisher2019 {
 
 Push-Location $RepoRoot
 try {
+    & git merge-base --is-ancestor $ExpectedOracleMerge HEAD
+    if ($LASTEXITCODE -ne 0) {
+        throw "Checkout does not contain required stack-oracle merge $ExpectedOracleMerge"
+    }
+
     Assert-GitBlob -Path $Operation -Expected $ExpectedOperationBlob
     Assert-GitBlob -Path $Runtime -Expected $ExpectedRuntimeBlob
 
