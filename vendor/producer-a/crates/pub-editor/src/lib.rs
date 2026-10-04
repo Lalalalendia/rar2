@@ -1812,6 +1812,20 @@ fn text_format_base_error_to_editor_v1(error: EditorTextFormatBaseErrorV1) -> Ed
     }
 }
 
+fn paragraph_alignment_transition_error_to_editor_v1(
+    error: ParagraphAlignmentTransitionErrorV1,
+) -> EditorError {
+    match error {
+        ParagraphAlignmentTransitionErrorV1::Stale { paragraph_id, .. } => {
+            EditorError::StaleParagraphAlignmentOverride { paragraph_id }
+        }
+        ParagraphAlignmentTransitionErrorV1::NonCanonicalTargets
+        | ParagraphAlignmentTransitionErrorV1::SnapshotShapeMismatch => {
+            EditorError::ParagraphAlignmentTransitionInvalid
+        }
+    }
+}
+
 fn text_format_operation_story_id_v1(operation: &EditOperation) -> Option<StoryId> {
     match operation {
         EditOperation::SetTextFormatProperty { story_id, .. }
@@ -2480,6 +2494,200 @@ impl EditorSession {
         self.redo.clear();
         self.validate_source_identity()?;
         Ok(operation)
+    }
+
+    fn current_paragraph_alignment_overrides_v1(
+        &self,
+    ) -> Result<BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>, EditorError> {
+        authored_paragraph_alignment_v1::paragraph_alignment_override_state_from_history_v1(
+            &self.undo,
+        )
+        .map_err(paragraph_alignment_transition_error_to_editor_v1)
+    }
+
+    fn canonical_paragraph_alignment_target_ids_v1(
+        &self,
+        mut paragraph_ids: Vec<ParagraphId>,
+    ) -> Result<Vec<ParagraphId>, EditorError> {
+        self.validate_source_identity()?;
+        if paragraph_ids.is_empty() {
+            return Err(EditorError::ParagraphAlignmentTargetsEmpty);
+        }
+        paragraph_ids.sort_unstable();
+        paragraph_ids.dedup();
+
+        let available = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .map(|paragraph| paragraph.paragraph_id)
+            .collect::<BTreeSet<_>>();
+        for paragraph_id in &paragraph_ids {
+            if !available.contains(paragraph_id) {
+                return Err(EditorError::ParagraphAlignmentParagraphUnavailable {
+                    paragraph_id: *paragraph_id,
+                });
+            }
+        }
+        Ok(paragraph_ids)
+    }
+
+    pub fn authored_paragraph_alignment_override_v1(
+        &self,
+        paragraph_id: ParagraphId,
+    ) -> Result<Option<AuthoredParagraphAlignmentValueV1>, EditorError> {
+        Ok(self
+            .current_paragraph_alignment_overrides_v1()?
+            .get(&paragraph_id)
+            .copied())
+    }
+
+    pub fn effective_paragraph_alignment_v1(
+        &self,
+        paragraph_id: ParagraphId,
+    ) -> Result<EffectiveParagraphAlignmentV1, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .find(|paragraph| paragraph.paragraph_id == paragraph_id)
+            .ok_or(EditorError::ParagraphAlignmentParagraphUnavailable { paragraph_id })?;
+        let imported_base = self
+            .imported_paragraph_base_alignment_v1(paragraph_id)
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .map(|item| item.alignment);
+        let authored_override = self
+            .current_paragraph_alignment_overrides_v1()?
+            .get(&paragraph_id)
+            .copied();
+
+        let (effective, authority) = if let Some(value) = authored_override {
+            (
+                Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                Some(ParagraphAlignmentAuthorityV1::ChapteraOverride),
+            )
+        } else if let Some(value) = imported_base {
+            (
+                Some(EffectiveParagraphAlignmentValueV1::from(value)),
+                Some(ParagraphAlignmentAuthorityV1::ImportedBase),
+            )
+        } else {
+            (None, None)
+        };
+
+        Ok(EffectiveParagraphAlignmentV1 {
+            paragraph_id,
+            story_id: paragraph.story_id,
+            range: paragraph.range,
+            imported_base,
+            authored_override,
+            effective,
+            authority,
+        })
+    }
+
+    pub fn set_paragraph_alignment_override_v1(
+        &mut self,
+        paragraph_ids: Vec<ParagraphId>,
+        value: AuthoredParagraphAlignmentValueV1,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph_ids = self.canonical_paragraph_alignment_target_ids_v1(paragraph_ids)?;
+        let overrides = self.current_paragraph_alignment_overrides_v1()?;
+        let before = authored_paragraph_alignment_v1::paragraph_alignment_override_snapshots_v1(
+            &overrides,
+            &paragraph_ids,
+        );
+        let base_by_id = self
+            .imported_paragraph_base_alignments_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+            .into_iter()
+            .map(|item| (item.paragraph_id, item.alignment))
+            .collect::<BTreeMap<_, _>>();
+        let after = paragraph_ids
+            .iter()
+            .map(|paragraph_id| ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: *paragraph_id,
+                value: authored_paragraph_alignment_v1::normalized_paragraph_alignment_override_v1(
+                    base_by_id.get(paragraph_id).copied(),
+                    value,
+                ),
+            })
+            .collect::<Vec<_>>();
+        if before == after {
+            return Err(EditorError::ParagraphAlignmentNoChange);
+        }
+
+        let operation = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids,
+            value,
+            before,
+            after,
+        };
+        authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+            &self.undo,
+            &operation,
+        )
+        .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    pub fn clear_paragraph_alignment_override_v1(
+        &mut self,
+        paragraph_ids: Vec<ParagraphId>,
+    ) -> Result<EditOperation, EditorError> {
+        self.validate_source_identity()?;
+        let paragraph_ids = self.canonical_paragraph_alignment_target_ids_v1(paragraph_ids)?;
+        let overrides = self.current_paragraph_alignment_overrides_v1()?;
+        let before = authored_paragraph_alignment_v1::paragraph_alignment_override_snapshots_v1(
+            &overrides,
+            &paragraph_ids,
+        );
+        let after = paragraph_ids
+            .iter()
+            .map(|paragraph_id| ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id: *paragraph_id,
+                value: None,
+            })
+            .collect::<Vec<_>>();
+        if before == after {
+            return Err(EditorError::ParagraphAlignmentNoChange);
+        }
+
+        let operation = EditOperation::ClearParagraphAlignmentOverride {
+            paragraph_ids,
+            before,
+            after,
+        };
+        authored_paragraph_alignment_v1::validate_paragraph_alignment_operation_against_history_v1(
+            &self.undo,
+            &operation,
+        )
+        .map_err(paragraph_alignment_transition_error_to_editor_v1)?;
+        self.undo.push(operation.clone());
+        self.redo.clear();
+        self.validate_source_identity()?;
+        Ok(operation)
+    }
+
+    fn story_has_authored_paragraph_alignment_override_v1(
+        &self,
+        story_id: StoryId,
+    ) -> Result<bool, EditorError> {
+        let overrides = self.current_paragraph_alignment_overrides_v1()?;
+        if overrides.is_empty() {
+            return Ok(false);
+        }
+        let paragraphs = self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?;
+        Ok(paragraphs.iter().any(|paragraph| {
+            paragraph.story_id == story_id && overrides.contains_key(&paragraph.paragraph_id)
+        }))
     }
 
     pub fn prove_author_created_story_v1(
