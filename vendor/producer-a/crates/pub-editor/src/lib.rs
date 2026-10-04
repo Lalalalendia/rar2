@@ -2391,12 +2391,21 @@ impl EditorSession {
             .undo
             .iter()
             .any(|operation| matches!(operation, EditOperation::ReorderAuthoredStack { .. }));
-        if carries_reorder && self.project_identity.is_none() {
+        let carries_paragraph_alignment = self.undo.iter().any(|operation| {
+            matches!(
+                operation,
+                EditOperation::SetParagraphAlignmentOverride { .. }
+                    | EditOperation::ClearParagraphAlignmentOverride { .. }
+            )
+        });
+        if (carries_reorder || carries_paragraph_alignment) && self.project_identity.is_none() {
             return Err(EditorProjectError::MissingProjectIdentity);
         }
         let (schema_version, identity) = if let Some(identity) = &self.project_identity {
             (
-                if carries_reorder {
+                if carries_paragraph_alignment {
+                    EDITOR_PROJECT_VERSION_V0_14
+                } else if carries_reorder {
                     EDITOR_PROJECT_VERSION_V0_13
                 } else {
                     EDITOR_PROJECT_VERSION_V0_12
@@ -2521,6 +2530,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             return Err(EditorProjectError::UnsupportedSchema {
                 found: project.schema_version.clone(),
@@ -2550,6 +2560,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project
                 .operations
@@ -2568,6 +2579,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project
                 .operations
@@ -2585,6 +2597,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && !project.table_grids.is_empty()
         {
             return Err(EditorProjectError::LegacyProjectCarriesTableGrids);
@@ -2596,6 +2609,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project.operations.iter().position(|operation| {
                 matches!(operation, EditOperation::BreakTextFrameForwardLink { .. })
@@ -2609,6 +2623,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project
                 .operations
@@ -2623,6 +2638,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project
                 .operations
@@ -2636,6 +2652,7 @@ impl EditorSession {
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project
                 .operations
@@ -2645,9 +2662,23 @@ impl EditorSession {
                 return Err(EditorProjectError::LegacyProjectCarriesCreateShapeOperation { index });
             }
         }
+        if project.schema_version != EDITOR_PROJECT_VERSION_V0_14 {
+            if let Some(index) = project.operations.iter().position(|operation| {
+                matches!(
+                    operation,
+                    EditOperation::SetParagraphAlignmentOverride { .. }
+                        | EditOperation::ClearParagraphAlignmentOverride { .. }
+                )
+            }) {
+                return Err(
+                    EditorProjectError::LegacyProjectCarriesParagraphAlignmentOperation { index },
+                );
+            }
+        }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project
                 .operations
@@ -2661,6 +2692,7 @@ impl EditorSession {
         }
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
         {
             if let Some(index) = project
                 .operations
@@ -2682,13 +2714,15 @@ impl EditorSession {
         if project.schema_version != EDITOR_PROJECT_VERSION_V0_11
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_12
             && project.schema_version != EDITOR_PROJECT_VERSION_V0_13
+            && project.schema_version != EDITOR_PROJECT_VERSION_V0_14
             && project.identity.is_some()
         {
             return Err(EditorProjectError::LegacyProjectCarriesIdentity);
         }
         if (project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
-            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13)
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14)
             && project.identity.is_none()
         {
             return Err(EditorProjectError::MissingProjectIdentity);
@@ -2705,6 +2739,7 @@ impl EditorSession {
             || !self.image_replacements.is_empty()
             || !self.authored_shapes.is_empty()
             || !self.authored_stacks.is_empty()
+            || !self.paragraph_alignment_overrides.is_empty()
         {
             return Err(EditorProjectError::SessionNotEmpty);
         }
@@ -2712,6 +2747,7 @@ impl EditorSession {
         if project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
         {
             let expected = required_editor_asset_refs_v1(&project.operations)
                 .into_iter()
@@ -2777,6 +2813,7 @@ impl EditorSession {
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_11
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_12
             || project.schema_version == EDITOR_PROJECT_VERSION_V0_13
+            || project.schema_version == EDITOR_PROJECT_VERSION_V0_14
         {
             let actual_grids = effective_table_grids(&candidate.graph);
             if actual_grids != project.table_grids {
@@ -4508,6 +4545,11 @@ impl EditorSession {
                 }
                 self.authored_shapes = candidate_shapes;
                 self.authored_stacks = before_stacks;
+            } else if is_paragraph_alignment_operation_v1(&operation) {
+                apply_paragraph_alignment_operation_inverse_v1(
+                    &mut self.paragraph_alignment_overrides,
+                    &operation,
+                )?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_inverse(&mut self.image_replacements, &operation)?;
             } else {
@@ -4555,6 +4597,11 @@ impl EditorSession {
 
                 self.authored_shapes = candidate_shapes;
                 self.authored_stacks = after_stacks;
+            } else if is_paragraph_alignment_operation_v1(&operation) {
+                apply_paragraph_alignment_operation_forward_v1(
+                    &mut self.paragraph_alignment_overrides,
+                    &operation,
+                )?;
             } else if matches!(operation, EditOperation::ReplaceImage { .. }) {
                 apply_image_forward(&mut self.image_replacements, &operation)?;
             } else {
@@ -4752,6 +4799,16 @@ fn replay_canonical_operation(
             .map_err(|error| EditorProjectError::Operation { index, error }),
         EditOperation::ReorderAuthoredStack { .. } => session
             .consume_canonical_reorder_authored_stack(expected.clone())
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids,
+            value,
+            ..
+        } => session
+            .set_paragraph_alignment_override_v1(paragraph_ids.clone(), *value)
+            .map_err(|error| EditorProjectError::Operation { index, error }),
+        EditOperation::ClearParagraphAlignmentOverride { paragraph_ids, .. } => session
+            .clear_paragraph_alignment_override_v1(paragraph_ids.clone())
             .map_err(|error| EditorProjectError::Operation { index, error }),
     }
 }
@@ -5592,6 +5649,59 @@ fn validate_resize_nodes_transition(
     Ok(())
 }
 
+fn is_paragraph_alignment_operation_v1(operation: &EditOperation) -> bool {
+    matches!(
+        operation,
+        EditOperation::SetParagraphAlignmentOverride { .. }
+            | EditOperation::ClearParagraphAlignmentOverride { .. }
+    )
+}
+
+fn paragraph_alignment_transition_error_v1(
+    error: authored_paragraph_alignment_v1::ParagraphAlignmentTransitionErrorV1,
+) -> EditorError {
+    match error {
+        authored_paragraph_alignment_v1::ParagraphAlignmentTransitionErrorV1::Stale {
+            paragraph_id,
+            ..
+        } => EditorError::StaleParagraphAlignmentOverride { paragraph_id },
+        authored_paragraph_alignment_v1::ParagraphAlignmentTransitionErrorV1::NonCanonicalTargets
+        | authored_paragraph_alignment_v1::ParagraphAlignmentTransitionErrorV1::SnapshotShapeMismatch => {
+            EditorError::ParagraphAlignmentTransitionInvalid
+        }
+    }
+}
+
+fn apply_paragraph_alignment_operation_forward_v1(
+    overrides: &mut BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let (before, after) = match operation {
+        EditOperation::SetParagraphAlignmentOverride { before, after, .. }
+        | EditOperation::ClearParagraphAlignmentOverride { before, after, .. } => (before, after),
+        _ => return Err(EditorError::ParagraphAlignmentTransitionInvalid),
+    };
+    authored_paragraph_alignment_v1::apply_paragraph_alignment_override_transition_v1(
+        overrides, before, after,
+    )
+    .map_err(paragraph_alignment_transition_error_v1)
+}
+
+fn apply_paragraph_alignment_operation_inverse_v1(
+    overrides: &mut BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>,
+    operation: &EditOperation,
+) -> Result<(), EditorError> {
+    let (before, after) = match operation {
+        EditOperation::SetParagraphAlignmentOverride { before, after, .. }
+        | EditOperation::ClearParagraphAlignmentOverride { before, after, .. } => (before, after),
+        _ => return Err(EditorError::ParagraphAlignmentTransitionInvalid),
+    };
+    authored_paragraph_alignment_v1::apply_paragraph_alignment_override_transition_v1(
+        overrides, after, before,
+    )
+    .map_err(paragraph_alignment_transition_error_v1)
+}
+
 fn apply_forward(
     graph: &mut PubResolvedGraph,
     operation: &EditOperation,
@@ -5802,6 +5912,10 @@ fn apply_forward(
         }
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is applied to the authored lane overlay state")
+        }
+        EditOperation::SetParagraphAlignmentOverride { .. }
+        | EditOperation::ClearParagraphAlignmentOverride { .. } => {
+            unreachable!("paragraph alignment is applied to the authoring overlay state")
         }
     }
     Ok(())
@@ -6044,6 +6158,10 @@ fn apply_inverse(
         }
         EditOperation::ReorderAuthoredStack { .. } => {
             unreachable!("ReorderAuthoredStack is reverted in the authored lane overlay state")
+        }
+        EditOperation::SetParagraphAlignmentOverride { .. }
+        | EditOperation::ClearParagraphAlignmentOverride { .. } => {
+            unreachable!("paragraph alignment is reverted in the authoring overlay state")
         }
     }
     Ok(())
