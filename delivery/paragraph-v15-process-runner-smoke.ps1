@@ -1,23 +1,18 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 
-function Start-EncodedPowerShell([string]$Script,[string[]]$ChildArgs,[string]$Stdout,[string]$Stderr){
+function Start-NamedPowerShell([string]$Script,[hashtable]$NamedArgs,[string]$Stdout,[string]$Stderr){
     $scriptB64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script))
-    $argsJson=ConvertTo-Json -InputObject @($ChildArgs) -Compress
-    $argsB64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($argsJson))
+    $json=ConvertTo-Json -InputObject $NamedArgs -Compress
+    $argsB64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
     $command = @"
 `$ErrorActionPreference='Stop'
 try {
   `$script=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$scriptB64'))
   `$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$argsB64'))
-  [object[]]`$tokens=@(ConvertFrom-Json -InputObject `$json)
-  if((`$tokens.Count % 2) -ne 0){ throw 'child argument vector must be name/value pairs' }
+  `$obj=ConvertFrom-Json -InputObject `$json
   `$named=@{}
-  for(`$i=0; `$i -lt `$tokens.Count; `$i+=2){
-    `$name=[string]`$tokens[`$i]
-    if(`$name -notmatch '^-([A-Za-z][A-Za-z0-9_-]*)$'){ throw ('invalid named parameter token: '+`$name) }
-    `$named[`$Matches[1]]=`$tokens[`$i+1]
-  }
+  foreach(`$p in `$obj.PSObject.Properties){ `$named[[string]`$p.Name]=`$p.Value }
   & `$script @named
   if(-not `$?) { exit 1 }
   exit 0
@@ -29,7 +24,7 @@ try {
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $psi=New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName=(Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
-    $psi.Arguments='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
+    $psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '+$encoded
     $psi.UseShellExecute=$false
     $psi.CreateNoWindow=$true
     $psi.RedirectStandardOutput=$true
@@ -46,7 +41,7 @@ try {
     return $p
 }
 
-function Complete-EncodedPowerShell($Process){
+function Complete-NamedPowerShell($Process){
     $Process.WaitForExit()
     $Process.ChapteraStdoutTask.Wait()
     $Process.ChapteraStderrTask.Wait()
@@ -55,7 +50,7 @@ function Complete-EncodedPowerShell($Process){
     return [int]$Process.ExitCode
 }
 
-$base=Join-Path $env:TEMP ('paragraph-v17-'+[guid]::NewGuid().ToString('N'))
+$base=Join-Path $env:TEMP ('paragraph-v18-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $base | Out-Null
 try {
   $ok=Join-Path $base 'ok child.ps1'
@@ -65,23 +60,23 @@ try {
     'exit 0'
   ) | Set-Content -LiteralPath $ok -Encoding ASCII
   $o=Join-Path $base 'ok.out';$e=Join-Path $base 'ok.err'
-  $p=Start-EncodedPowerShell $ok @('-PacketPath','path with spaces','-OutputRoot','second value') $o $e
-  $code=Complete-EncodedPowerShell $p
+  $p=Start-NamedPowerShell $ok @{PacketPath='path with spaces';OutputRoot='second value'} $o $e
+  $code=Complete-NamedPowerShell $p
   if($code -ne 0){throw "positive failed exit=$code err=$(Get-Content $e -Raw -ErrorAction SilentlyContinue)"}
 
   $exit7=Join-Path $base 'exit7 child.ps1'
   @('param([string]$X)','exit 7') | Set-Content -LiteralPath $exit7 -Encoding ASCII
   $o2=Join-Path $base 'e7.out';$e2=Join-Path $base 'e7.err'
-  $p2=Start-EncodedPowerShell $exit7 @('-X','x') $o2 $e2
-  $code2=Complete-EncodedPowerShell $p2
+  $p2=Start-NamedPowerShell $exit7 @{X='x'} $o2 $e2
+  $code2=Complete-NamedPowerShell $p2
   if($code2 -ne 7){throw "exit7 propagation failed: $code2 err=$(Get-Content $e2 -Raw -ErrorAction SilentlyContinue)"}
 
   $fail=Join-Path $base 'throw child.ps1'
   @('param([string]$X)','throw ''intentional smoke failure''') | Set-Content -LiteralPath $fail -Encoding ASCII
   $o3=Join-Path $base 'f.out';$e3=Join-Path $base 'f.err'
-  $p3=Start-EncodedPowerShell $fail @('-X','x') $o3 $e3
-  $code3=Complete-EncodedPowerShell $p3
+  $p3=Start-NamedPowerShell $fail @{X='x'} $o3 $e3
+  $code3=Complete-NamedPowerShell $p3
   if($code3 -eq 0){throw 'throw propagation returned zero'}
 
-  Write-Host "PARAGRAPH V17 PROCESS RUNNER PASS positive=$code exit7=$code2 throw=$code3"
+  Write-Host "PARAGRAPH V18 PROCESS RUNNER PASS positive=$code exit7=$code2 throw=$code3"
 } finally { Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue }
