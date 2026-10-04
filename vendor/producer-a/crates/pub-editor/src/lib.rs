@@ -3743,6 +3743,133 @@ impl EditorSession {
         result
     }
 
+    pub fn effective_full_story_paragraph_alignment_v1(
+        &self,
+    ) -> Result<Vec<FullStoryParagraphAlignmentV1>, EditorError> {
+        self.validate_source_identity()?;
+
+        let table_story_ids = self
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| {
+                [
+                    node.payload
+                        .table_story
+                        .as_ref()
+                        .and_then(|owner| owner.story_id),
+                    node.payload.table.as_ref().and_then(|table| table.story_id),
+                ]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let ordinary_story_ids = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
+            .map(|frame| frame.story_id)
+            .filter(|story_id| !table_story_ids.contains(story_id))
+            .collect::<BTreeSet<_>>();
+
+        let mut paragraphs_by_story = BTreeMap::<StoryId, Vec<ParagraphId>>::new();
+        for paragraph in self
+            .imported_paragraphs_v1()
+            .map_err(|_| EditorError::ParagraphAlignmentProjectionUnavailable)?
+        {
+            if ordinary_story_ids.contains(&paragraph.story_id) {
+                paragraphs_by_story
+                    .entry(paragraph.story_id)
+                    .or_default()
+                    .push(paragraph.paragraph_id);
+            }
+        }
+
+        let mut result = Vec::new();
+        for (story_id, mut paragraph_ids) in paragraphs_by_story {
+            paragraph_ids.sort_unstable();
+            paragraph_ids.dedup();
+            if paragraph_ids.is_empty() {
+                continue;
+            }
+
+            let mut uniform: Option<ParagraphAlignmentV1> = None;
+            let mut valid = true;
+            for paragraph_id in paragraph_ids {
+                let effective = self.effective_paragraph_alignment_v1(paragraph_id)?;
+                let current = match effective.effective {
+                    Some(EffectiveParagraphAlignmentValueV1::Center) => {
+                        ParagraphAlignmentV1::Center
+                    }
+                    Some(EffectiveParagraphAlignmentValueV1::Right) => {
+                        ParagraphAlignmentV1::Right
+                    }
+                    _ => {
+                        valid = false;
+                        break;
+                    }
+                };
+
+                match uniform {
+                    None => uniform = Some(current),
+                    Some(existing) if existing == current => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+
+            if valid {
+                if let Some(alignment) = uniform {
+                    result.push(FullStoryParagraphAlignmentV1 {
+                        story_id,
+                        alignment,
+                    });
+                }
+            }
+        }
+
+        result.sort_by_key(|item| item.story_id);
+        Ok(result)
+    }
+
+    fn odg_full_story_paragraph_alignment_placements_v1(
+        &self,
+        alignments: &[FullStoryParagraphAlignmentV1],
+    ) -> Vec<OdgFullStoryParagraphAlignmentPlacement> {
+        let eligible = alignments
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
+
+        for (node_id, node) in &self.graph.nodes {
+            let Some(frame) = frame_from_payload(*node_id, &node.payload) else {
+                continue;
+            };
+            if frame.previous.is_none() && eligible.contains(&frame.story_id) {
+                roots
+                    .entry(frame.story_id)
+                    .or_default()
+                    .push(frame.frame_id);
+            }
+        }
+
+        alignments
+            .iter()
+            .filter_map(|item| {
+                let mut frame_ids = roots.get(&item.story_id)?.clone();
+                frame_ids.sort_unstable();
+                frame_ids.dedup();
+                (!frame_ids.is_empty()).then(|| OdgFullStoryParagraphAlignmentPlacement {
+                    alignment: item.clone(),
+                    frame_ids,
+                })
+            })
+            .collect()
+    }
+
     fn odg_full_story_typography_placements_v1(
         &self,
         typography: &[FullStoryTypographyV1],
