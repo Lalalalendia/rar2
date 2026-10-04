@@ -128,6 +128,8 @@ jobs:
             $ErrorActionPreference = "Stop"
             Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue
           }
+          Write-Host "Direct route rejected wrong source before Publisher; no native output created."
+          exit 0
 
   native:
     needs: contract
