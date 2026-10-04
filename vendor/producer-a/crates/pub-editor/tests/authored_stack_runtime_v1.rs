@@ -112,8 +112,8 @@ fn create_two(session: &mut EditorSession) {
 }
 
 #[test]
-fn create_delete_history_remains_v0_12_while_current_schema_advances_to_v0_13() {
-    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_13);
+fn create_delete_history_remains_v0_12_while_current_schema_advances_to_v0_14() {
+    assert_eq!(EDITOR_PROJECT_VERSION_CURRENT, EDITOR_PROJECT_VERSION_V0_14);
 
     let mut session = EditorSession::new(graph()).expect("session");
     create_two(&mut session);
