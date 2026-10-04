@@ -298,6 +298,7 @@ pub fn build_current_story_layout_v1(
     })?;
 
     let fingerprint = validate_explicit_font_resource_v1(font)?;
+    let effective_typography = current_story_effective_typography_v1(editor, story_id)?;
     let authoring =
         pub_viewer::bounded_authoring_slice_from_resolved(editor.graph()).map_err(|error| {
             DesktopShapedFlowRuntimeError::new(
@@ -346,6 +347,7 @@ pub fn build_current_story_layout_v1(
         story_id,
         story_scalar_len,
         font_fingerprint_sha256: fingerprint,
+        effective_typography,
         shaped_flow,
         caret_map,
     })
