@@ -809,6 +809,10 @@ pub enum RenderPlanErrorV1 {
     ProjectedKindUnsupported {
         instance_id: String,
     },
+    #[cfg(feature = "projected-scene-instances")]
+    ProjectedTargetFrameMissing {
+        instance_id: String,
+    },
     AuthoredLanePageMismatch {
         plan_page_id: PageId,
         lane_page_id: PageId,
@@ -842,6 +846,13 @@ impl fmt::Display for RenderPlanErrorV1 {
                 write!(
                     formatter,
                     "projected instance {instance_id} has unsupported projection kind"
+                )
+            }
+            #[cfg(feature = "projected-scene-instances")]
+            Self::ProjectedTargetFrameMissing { instance_id } => {
+                write!(
+                    formatter,
+                    "Cmo projected instance {instance_id} has no target frame"
                 )
             }
             Self::AuthoredLanePageMismatch {
@@ -1182,7 +1193,7 @@ pub fn build_page_render_plan_v1(
             {
                 let projected_for_frame = visual.projected_instances.iter().filter(|projected| {
                     projected.scene_instance.target_page_id == page.id.as_canonical().to_string()
-                        && projected.target_frame_node_id == node.origin
+                        && projected.target_frame_node_id == Some(node.origin)
                 });
                 let mut has_projection = false;
                 let mut paint_scalar_end = None::<u32>;
@@ -1286,6 +1297,11 @@ pub fn build_page_render_plan_v1(
                 instance_id: projected.scene_instance.instance_id.clone(),
             });
         }
+        let target_frame_node_id = projected.target_frame_node_id.ok_or_else(|| {
+            RenderPlanErrorV1::ProjectedTargetFrameMissing {
+                instance_id: projected.scene_instance.instance_id.clone(),
+            }
+        })?;
         let origin_node_id =
             parse_node_id(&projected.scene_instance.origin_node_id, "origin_node_id")?;
         let paint = visual
@@ -1337,7 +1353,7 @@ pub fn build_page_render_plan_v1(
             .iter()
             .position(|candidate| {
                 candidate.projected_scene_instance.is_none()
-                    && candidate.node_id == projected.target_frame_node_id
+                    && candidate.node_id == target_frame_node_id
             })
             .map(|index| index + 1)
             .unwrap_or(nodes.len());
@@ -1421,7 +1437,7 @@ where
                         .find(|projected| {
                             projected.scene_instance.instance_id == instance.instance_id
                         })
-                        .map(|projected| projected.target_frame_node_id)
+                        .and_then(|projected| projected.target_frame_node_id)
                 })
             }
             #[cfg(not(feature = "projected-scene-instances"))]
@@ -3764,7 +3780,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance.clone(),
-                target_frame_node_id: origin_node_id,
+                target_frame_node_id: Some(origin_node_id),
                 target_frame_paint_scalar_end: None,
                 text_content_bounds: None,
                 bounds: RectEmu::new(
@@ -3794,6 +3810,42 @@ mod tests {
 
     #[cfg(feature = "projected-scene-instances")]
     #[test]
+    fn cmo_projected_instance_without_target_frame_fails_closed() {
+        let mut visual = fixture();
+        let page_id = visual.document.pages[0].id;
+        let origin_node_id = visual.scene.nodes[0].origin;
+        let story_id = visual.document.stories[0].id;
+        let instance = SceneInstanceV1 {
+            schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+            instance_id: "sha256:cmo-missing-target-frame-fixture".to_owned(),
+            projection_kind: SceneProjectionKindV1::CmoStorySlot,
+            origin_node_id: origin_node_id.as_canonical().to_string(),
+            target_page_id: page_id.as_canonical().to_string(),
+            source_parent_origin: None,
+            story_authority_id: Some(story_id.as_canonical().to_string()),
+            cmo_slot_index: Some(0),
+            cmo_scalar_index: Some(0),
+        };
+        visual
+            .projected_instances
+            .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+                scene_instance: instance,
+                target_frame_node_id: None,
+                target_frame_paint_scalar_end: None,
+                text_content_bounds: None,
+                bounds: visual.scene.nodes[0].bounds,
+                transform: Affine2D::identity(),
+            });
+
+        let error = build_page_render_plan_v1(&visual, 0).expect_err("missing Cmo frame must fail");
+        assert!(matches!(
+            error,
+            RenderPlanErrorV1::ProjectedTargetFrameMissing { .. }
+        ));
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
     fn projected_slot_suppresses_only_marker_glyphs_and_keeps_scalar_count() {
         let mut visual = fixture();
         let page_id = visual.document.pages[0].id;
@@ -3818,7 +3870,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance,
-                target_frame_node_id: frame_id,
+                target_frame_node_id: Some(frame_id),
                 target_frame_paint_scalar_end: None,
                 text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,
@@ -3864,7 +3916,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance,
-                target_frame_node_id: frame_id,
+                target_frame_node_id: Some(frame_id),
                 target_frame_paint_scalar_end: Some(3),
                 text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,
