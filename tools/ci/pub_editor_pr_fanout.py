@@ -26,6 +26,10 @@ SAFE_TEXTBOX_RESTORE_MODULES = SAFE_CONTINUITY_V2_MODULES
 SAFE_FIXED_PDF_CURRENT_REVISION_MODULES = {
     "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
 }
+# Stage 5 starts from the same measured safe paragraph slice.
+SAFE_DUPLICATE_RECTANGLE_MODULES = {
+    "imported_paragraph_alignment_v1": PUB_EDITOR_PREFIX + "src/imported_paragraph_alignment_v1.rs",
+}
 
 DIRECT_CONTINUITY_V2_OWNERS = (
     ".github/workflows/editor-desktop-continuity-v2-windows.yml",
@@ -74,6 +78,16 @@ DIRECT_FIXED_PDF_CURRENT_REVISION_OWNERS = (
     "crates/chaptera-desktop-shaped-flow-runtime/src/lib.rs",
     "crates/chaptera-desktop-fallback-font-resource/**",
     "vendor/producer-a/crates/pub-layout/src/shaped_flow.rs",
+)
+
+DIRECT_DUPLICATE_RECTANGLE_OWNERS = (
+    ".github/workflows/editor-duplicate-rectangle-v1.yml",
+    "tools/ci/pub_editor_pr_fanout.py",
+    "tools/ci/test_pub_editor_pr_fanout.py",
+    "vendor/producer-a/crates/pub-editor/src/duplicate_authored_rectangle_v1.rs",
+    "vendor/producer-a/crates/pub-editor/tests/duplicate_authored_rectangle_v1.rs",
+    "apps/chaptera-desktop/src/duplicate_rectangle.rs",
+    "apps/chaptera-desktop/src/duplicate_rectangle_gui_tests.rs",
 )
 
 
@@ -254,6 +268,41 @@ def classify_fixed_pdf_current_revision(
     return False, "proven_non_fixed_pdf_pub_editor_slice"
 
 
+def classify_duplicate_rectangle(
+    paths: list[str],
+    *,
+    base_lib_source: str | None = None,
+    head_lib_source: str | None = None,
+) -> tuple[bool, str]:
+    if any(matches(path, DIRECT_DUPLICATE_RECTANGLE_OWNERS) for path in paths):
+        return True, "direct_duplicate_owner_changed"
+
+    pub_editor_paths = [
+        path for path in paths if path.startswith(PUB_EDITOR_PREFIX)
+    ]
+    if not pub_editor_paths:
+        return False, "no_duplicate_owner_changed"
+
+    allowed_paths = set(SAFE_DUPLICATE_RECTANGLE_MODULES.values()) | {
+        PUB_EDITOR_LIB
+    }
+    unknown = sorted(set(pub_editor_paths) - allowed_paths)
+    if unknown:
+        return True, "unknown_or_core_pub_editor_path"
+
+    if PUB_EDITOR_LIB in pub_editor_paths:
+        if base_lib_source is None or head_lib_source is None:
+            return True, "lib_changed_without_source_proof"
+        if not facade_change_is_safe(
+            base_lib_source,
+            head_lib_source,
+            safe_modules=SAFE_DUPLICATE_RECTANGLE_MODULES,
+        ):
+            return True, "pub_editor_lib_core_change"
+
+    return False, "proven_non_duplicate_pub_editor_slice"
+
+
 def git_show(revision: str, path: str) -> str | None:
     try:
         return subprocess.check_output(
@@ -290,6 +339,11 @@ def main() -> int:
         base_lib_source=base_lib,
         head_lib_source=head_lib,
     )
+    run_duplicate, duplicate_reason = classify_duplicate_rectangle(
+        paths,
+        base_lib_source=base_lib,
+        head_lib_source=head_lib,
+    )
 
     receipt = {
         "schema": "chaptera.pub-editor-pr-fanout.v1",
@@ -306,6 +360,11 @@ def main() -> int:
         "fixed_pdf_reason": fixed_pdf_reason,
         "safe_fixed_pdf_current_revision_modules": sorted(
             SAFE_FIXED_PDF_CURRENT_REVISION_MODULES.values()
+        ),
+        "duplicate_rectangle": run_duplicate,
+        "duplicate_reason": duplicate_reason,
+        "safe_duplicate_rectangle_modules": sorted(
+            SAFE_DUPLICATE_RECTANGLE_MODULES.values()
         ),
     }
 
@@ -326,6 +385,10 @@ def main() -> int:
                 f"fixed_pdf_current_revision={'true' if run_fixed_pdf else 'false'}\n"
             )
             handle.write(f"fixed_pdf_reason={fixed_pdf_reason}\n")
+            handle.write(
+                f"duplicate_rectangle={'true' if run_duplicate else 'false'}\n"
+            )
+            handle.write(f"duplicate_reason={duplicate_reason}\n")
 
     return 0
 
