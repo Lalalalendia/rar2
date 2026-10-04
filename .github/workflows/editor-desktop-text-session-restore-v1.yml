@@ -72,6 +72,9 @@ jobs:
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
 
+      - name: Prove canonical Bold toggle from seeded Chaptera override
+        run: cargo test -p chaptera-desktop real_sample_newsletter_seeded_boolean_override_is_durable_and_reversible -- --nocapture
+
   gui-direct-text:
     needs: format-preflight
     runs-on: windows-latest
