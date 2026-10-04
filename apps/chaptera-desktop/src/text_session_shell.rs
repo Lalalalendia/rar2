@@ -326,7 +326,133 @@ impl ViewerApp {
         true
     }
 
+    fn show_canvas_text_format_controls_v1(&mut self, ctx: &egui::Context) {
+        if self.text_mode.is_none() {
+            return;
+        }
+
+        let bold = self
+            .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Bold)
+            .ok();
+        let italic = self
+            .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Italic)
+            .ok();
+
+        let label = |letter: &str,
+                     state: Option<text_session::DesktopBooleanSelectionStateV1>| {
+            let Some(state) = state else {
+                return letter.to_owned();
+            };
+            if matches!(
+                state.effective,
+                text_session::DesktopBooleanEffectiveStateV1::Mixed
+            ) || matches!(
+                state.provenance,
+                text_session::DesktopBooleanProvenanceStateV1::Mixed
+            ) {
+                format!("{letter}±")
+            } else if matches!(
+                state.provenance,
+                text_session::DesktopBooleanProvenanceStateV1::Base
+            ) {
+                format!("{letter}·")
+            } else {
+                letter.to_owned()
+            }
+        };
+        let active = |state: Option<text_session::DesktopBooleanSelectionStateV1>| {
+            state.is_some_and(|state| {
+                matches!(
+                    state.effective,
+                    text_session::DesktopBooleanEffectiveStateV1::Uniform(true)
+                )
+            })
+        };
+
+        egui::Area::new(egui::Id::new("canvas-text-format-toolbar-v1"))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 56.0))
+            .movable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong("Text");
+
+                        let bold_response = ui
+                            .add_enabled_ui(bold.is_some(), |ui| {
+                                ui.selectable_label(
+                                    active(bold),
+                                    egui::RichText::new(label("B", bold)).strong(),
+                                )
+                            })
+                            .inner;
+                        bold_response.clone().on_hover_text(
+                            "Bold. · = source/base; ± = mixed. Ctrl+B uses this same operation.",
+                        );
+                        if bold_response.clicked() {
+                            self.apply_canvas_boolean_format_toggle_v1(
+                                text_session::DesktopBooleanFormatPropertyV1::Bold,
+                            );
+                        }
+
+                        let italic_response = ui
+                            .add_enabled_ui(italic.is_some(), |ui| {
+                                ui.selectable_label(
+                                    active(italic),
+                                    egui::RichText::new(label("I", italic)).italics(),
+                                )
+                            })
+                            .inner;
+                        italic_response.clone().on_hover_text(
+                            "Italic. · = source/base; ± = mixed. Ctrl+I uses this same operation.",
+                        );
+                        if italic_response.clicked() {
+                            self.apply_canvas_boolean_format_toggle_v1(
+                                text_session::DesktopBooleanFormatPropertyV1::Italic,
+                            );
+                        }
+
+                        ui.menu_button("Revert", |ui| {
+                            let bold_enabled =
+                                bold.is_some_and(|state| state.has_chaptera_override());
+                            if ui
+                                .add_enabled(
+                                    bold_enabled,
+                                    egui::Button::new("Bold to source/base"),
+                                )
+                                .clicked()
+                            {
+                                self.clear_canvas_boolean_format_override_v1(
+                                    text_session::DesktopBooleanFormatPropertyV1::Bold,
+                                );
+                                ui.close_menu();
+                            }
+
+                            let italic_enabled =
+                                italic.is_some_and(|state| state.has_chaptera_override());
+                            if ui
+                                .add_enabled(
+                                    italic_enabled,
+                                    egui::Button::new("Italic to source/base"),
+                                )
+                                .clicked()
+                            {
+                                self.clear_canvas_boolean_format_override_v1(
+                                    text_session::DesktopBooleanFormatPropertyV1::Italic,
+                                );
+                                ui.close_menu();
+                            }
+                        });
+
+                        if bold.is_none() && italic.is_none() {
+                            ui.weak("Select a non-empty Story range.");
+                        }
+                    });
+                });
+            });
+    }
+
     pub(super) fn finish_canvas_text_frame(&mut self, ctx: &egui::Context) {
+        self.show_canvas_text_format_controls_v1(ctx);
         if self.text_mode.is_some() && ctx.wants_keyboard_input() {
             self.exit_canvas_text_mode("explicit_exit");
         }
