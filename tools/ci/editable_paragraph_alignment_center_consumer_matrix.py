@@ -345,6 +345,8 @@ def main() -> int:
                     str(expected_path),
                     "--input",
                     str(final_fodg),
+                    "--wire-root",
+                    str(materialized),
                     "--receipt",
                     str(case_root / "libreoffice.json"),
                 ],
