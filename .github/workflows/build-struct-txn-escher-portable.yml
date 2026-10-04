@@ -1,0 +1,92 @@
+name: build-struct-txn-escher-portable
+
+on:
+  push:
+    branches:
+      - research/struct-txn-escher-01-current
+    paths:
+      - delivery/struct-txn-escher-portable/**
+      - tools/windows/pub-runtime/PubRuntime.psm1
+      - vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+      - vendor/producer-a/crates/pub-reader/src/structural_base.rs
+      - vendor/producer-a/crates/pub-reader/tests/fixtures/Sample.pub.b64
+      - .github/workflows/build-struct-txn-escher-portable.yml
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Build structural helper
+        shell: powershell
+        run: |
+          cargo build --manifest-path vendor/producer-a/Cargo.toml -p pub-reader --bin structural_base_manifest --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble self-contained native bundle
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Join-Path $env:RUNNER_TEMP 'PUB2019-STRUCT-TXN-ESCHER-01-PORTABLE'
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'PUB2019-STRUCT-TXN-ESCHER-01-PORTABLE.zip'
+          Remove-Item -LiteralPath $bundle -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $bundle,(Join-Path $bundle 'runtime'),(Join-Path $bundle 'fixtures') | Out-Null
+
+          Copy-Item delivery/struct-txn-escher-portable/README.txt $bundle
+          Copy-Item delivery/struct-txn-escher-portable/RUN_NATIVE.cmd $bundle
+          Copy-Item delivery/struct-txn-escher-portable/RUN_NATIVE.ps1 $bundle
+          Copy-Item tools/windows/pub-runtime/PubRuntime.psm1 (Join-Path $bundle 'runtime/PubRuntime.psm1')
+          Copy-Item vendor/producer-a/target/release/structural_base_manifest.exe (Join-Path $bundle 'runtime/structural_base_manifest.exe')
+
+          $b64 = Get-Content vendor/producer-a/crates/pub-reader/tests/fixtures/Sample.pub.b64 -Raw
+          $clean = [regex]::Replace($b64, '\s+', '')
+          [IO.File]::WriteAllBytes((Join-Path $bundle 'fixtures/Sample.pub'), [Convert]::FromBase64String($clean))
+          $seedSha = (Get-FileHash (Join-Path $bundle 'fixtures/Sample.pub') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($seedSha -ne '6fefdef46b87c767150878dc384549cb2d2ec2ac54de25f8ddb3a5628301107e') {
+            throw "Sample.pub SHA mismatch: $seedSha"
+          }
+
+          $relativeFiles = @(
+            'README.txt',
+            'RUN_NATIVE.cmd',
+            'RUN_NATIVE.ps1',
+            'runtime/PubRuntime.psm1',
+            'runtime/structural_base_manifest.exe',
+            'fixtures/Sample.pub'
+          )
+          $records = foreach ($relative in $relativeFiles) {
+            $path = Join-Path $bundle $relative
+            $item = Get-Item -LiteralPath $path
+            [ordered]@{
+              path = $relative.Replace('\\','/')
+              size = [long]$item.Length
+              sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          [ordered]@{
+            schema = 'chaptera.portable-bundle-manifest.v1'
+            experiment_id = 'STRUCT-TXN-ESCHER-01'
+            git_sha = $env:GITHUB_SHA
+            files = @($records)
+          } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundle 'bundle-manifest.json') -Encoding UTF8
+
+          Compress-Archive -Path (Join-Path $bundle '*') -DestinationPath $zip -CompressionLevel Optimal
+          $zipSha = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "bundle=$zip"
+          Write-Host "sha256=$zipSha"
+          Write-Host "bytes=$((Get-Item -LiteralPath $zip).Length)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PUB2019-STRUCT-TXN-ESCHER-01-PORTABLE
+          path: PUB2019-STRUCT-TXN-ESCHER-01-PORTABLE.zip
+          compression-level: 0
+          if-no-files-found: error
