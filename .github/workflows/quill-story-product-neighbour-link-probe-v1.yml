@@ -1,0 +1,41 @@
+name: Quill product-neighbour Office link probe
+
+on:
+  push:
+    branches:
+      - research/quill-story-wayback-donors-v2
+    paths:
+      - ".github/workflows/quill-story-product-neighbour-link-probe-v1.yml"
+      - "tools/research/quill_story_product_neighbour_link_probe_v1.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quill-story-product-neighbour-link-probe-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pinned-two:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check bounded link probe
+        run: python -m py_compile tools/research/quill_story_product_neighbour_link_probe_v1.py
+
+      - name: Scan pinned Office neighbours for link-like strings
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          python tools/research/quill_story_product_neighbour_link_probe_v1.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quill-story-product-neighbour-link-probe-v1-${{ github.run_id }}
+          path: out/quill-story-product-neighbour-link-probe.json
+          if-no-files-found: error
+          retention-days: 30
