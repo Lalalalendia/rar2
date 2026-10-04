@@ -1,0 +1,213 @@
+name: Carlton March Editor sample smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/carlton-march-editor-sample-smoke.yml"
+      - "tools/acquire_carlton_march_pair.py"
+      - "apps/chaptera-desktop/src/acceptance.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - "vendor/producer-a/crates/pub-editor/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carlton-march-editor-sample-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact acquisition dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir "requests==2.32.5"
+
+      - name: Acquire exact public Carlton March pair
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:RUNNER_TEMP "carlton-editor-sample"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          python tools/acquire_carlton_march_pair.py $root
+          if ($LASTEXITCODE -ne 0) { throw "Carlton acquisition failed" }
+          $pub = Join-Path $root "March-2026.pub"
+          $reference = Join-Path $root "March-2026-reference.pdf"
+          if ((Get-FileHash $pub -Algorithm SHA256).Hash.ToLowerInvariant() -ne "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3") {
+            throw "Carlton PUB identity drift"
+          }
+          if ((Get-FileHash $reference -Algorithm SHA256).Hash.ToLowerInvariant() -ne "c1288571ee8da91afa27ca5c49191aacefe82123df294c11f58ca047d0ced769") {
+            throw "Carlton reference PDF identity drift"
+          }
+          "CHAPTERA_CARLTON_SAMPLE_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_PUB=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_REFERENCE_PDF=$reference" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build current Editor acceptance binary
+        run: cargo build -p chaptera-desktop --release --bin chaptera-editor
+
+      - name: Run exact two-operation Carlton continuity witness
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $project = Join-Path $env:CHAPTERA_CARLTON_SAMPLE_ROOT "carlton-march.project.json"
+          $export = Join-Path $env:CHAPTERA_CARLTON_SAMPLE_ROOT "carlton-march.edited.odg"
+          $observation = Join-Path $env:CHAPTERA_CARLTON_SAMPLE_ROOT "carlton-march-editor-observation.json"
+          $before = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          $env:CHAPTERA_DESKTOP_ACCEPTANCE_V1 = "1"
+          $env:CHAPTERA_RAR_COMMIT = "${{ github.sha }}"
+          $env:CHAPTERA_SOURCE_HASH = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+
+          $env:CHAPTERA_CARLTON_PROJECT = $project
+          $env:CHAPTERA_CARLTON_EXPORT = $export
+          $env:CHAPTERA_CARLTON_OBSERVATION = $observation
+          @'
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          command = [
+              "target/release/chaptera-editor.exe",
+              "--desktop-acceptance-v1",
+              os.environ["CHAPTERA_CARLTON_PUB"],
+              os.environ["CHAPTERA_CARLTON_PROJECT"],
+              os.environ["CHAPTERA_CARLTON_EXPORT"],
+          ]
+          completed = subprocess.run(
+              command,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.PIPE,
+              text=True,
+              encoding="utf-8",
+              errors="replace",
+              check=False,
+          )
+          if completed.stdout:
+              pathlib.Path(os.environ["CHAPTERA_CARLTON_OBSERVATION"]).write_text(
+                  completed.stdout,
+                  encoding="utf-8",
+              )
+          if completed.returncode != 0:
+              sys.stderr.write(completed.stderr or completed.stdout or "Carlton Editor acceptance failed without diagnostic\n")
+              raise SystemExit(completed.returncode)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw "Carlton two-operation Editor acceptance failed" }
+
+          $after = (Get-FileHash $env:CHAPTERA_CARLTON_PUB -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($after -ne $before) { throw "Carlton source PUB changed during Editor acceptance" }
+
+          "CHAPTERA_CARLTON_PROJECT=$project" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_EXPORT=$export" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CHAPTERA_CARLTON_OBSERVATION=$observation" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Validate exact visible targets and emit source-safe receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          @'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          expected_source = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+          expected_story = "044edbfd-34e2-5663-9317-652b506c1dcf"
+          expected_move = "07fdd634-c898-58b9-b2f6-45e06fce189f"
+
+          observation_path = Path(os.environ["CHAPTERA_CARLTON_OBSERVATION"])
+          project_path = Path(os.environ["CHAPTERA_CARLTON_PROJECT"])
+          export_path = Path(os.environ["CHAPTERA_CARLTON_EXPORT"])
+          root = Path(os.environ["CHAPTERA_CARLTON_SAMPLE_ROOT"])
+
+          observation = json.loads(observation_path.read_text(encoding="utf-8-sig"))
+          project_raw = project_path.read_bytes()
+          project = json.loads(project_raw)
+          export_raw = export_path.read_bytes()
+
+          if observation.get("protocol_version") != "chaptera.editor-desktop-vertical-observation.v1":
+              raise SystemExit("Carlton Editor observation protocol mismatch")
+          if observation.get("source_hash") != expected_source:
+              raise SystemExit("Carlton observation source identity mismatch")
+          if observation.get("story_edit", {}).get("story_id") != expected_story:
+              raise SystemExit("Carlton selected Story is not the pinned visible ordinary Story")
+          move = observation.get("object_move", {})
+          if move.get("origin_node_id") != expected_move:
+              raise SystemExit("Carlton selected MoveNode is not the pinned visible page-local node")
+          if move.get("projection_kind") != "direct_page_local":
+              raise SystemExit("Carlton MoveNode is not direct page-local")
+          if move.get("capability_admitted") is not True:
+              raise SystemExit("Carlton MoveNode lost capability admission")
+
+          operations = project.get("operations")
+          if not isinstance(operations, list) or len(operations) != 2:
+              raise SystemExit("Carlton project must contain exactly Story + Move")
+          kinds = [item.get("kind") for item in operations if isinstance(item, dict)]
+          if kinds != ["replace_story_range", "move_node"]:
+              raise SystemExit(f"Carlton project operation sequence drift: {kinds!r}")
+          if project.get("source_hash") != expected_source:
+              raise SystemExit("Carlton project source identity mismatch")
+
+          history = observation.get("history", {})
+          if history.get("redo_state_id") != history.get("after_move_state_id"):
+              raise SystemExit("Carlton MoveNode redo did not restore the accepted edited state")
+          if history.get("undo_state_id") == history.get("after_move_state_id"):
+              raise SystemExit("Carlton MoveNode undo did not change effective state")
+          if history.get("story_state_reopened") != observation.get("story_edit", {}).get("after_state_id"):
+              raise SystemExit("Carlton Story state did not survive fresh reopen")
+
+          exported = observation.get("export", {})
+          if exported.get("edited_story_present") is not True or exported.get("moved_geometry_present") is not True:
+              raise SystemExit("Carlton editable export does not contain the accepted current state")
+
+          invariants = observation.get("invariants", {})
+          if invariants.get("native_pub_write_used") is not False:
+              raise SystemExit("Carlton acceptance unexpectedly used native PUB write")
+          if invariants.get("reopen_used_fresh_session") is not True:
+              raise SystemExit("Carlton acceptance did not use a fresh reopen")
+
+          receipt = {
+              "schema": "chaptera.carlton-march-editor-sample-smoke.v1",
+              "source_pub_sha256": expected_source,
+              "reference_pdf_sha256": "c1288571ee8da91afa27ca5c49191aacefe82123df294c11f58ca047d0ced769",
+              "project_schema_version": project.get("schema_version"),
+              "project_sha256": hashlib.sha256(project_raw).hexdigest(),
+              "operation_count": 2,
+              "story_target_id": expected_story,
+              "move_target_id": expected_move,
+              "move_projection_kind": "direct_page_local",
+              "undo_redo_exact": True,
+              "fresh_reopen_exact": True,
+              "edited_story_exported": True,
+              "moved_geometry_exported": True,
+              "editable_export_sha256": hashlib.sha256(export_raw).hexdigest(),
+              "editable_export_byte_len": len(export_raw),
+              "source_pub_immutable": True,
+              "raw_customer_text_emitted": False,
+              "native_pub_write_used": False,
+          }
+          (root / "carlton-march-editor-sample-smoke.receipt.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          '@ | python -
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carlton-march-editor-sample-smoke
+          path: ${{ env.CHAPTERA_CARLTON_SAMPLE_ROOT }}/carlton-march-editor-sample-smoke.receipt.json
+          if-no-files-found: error
