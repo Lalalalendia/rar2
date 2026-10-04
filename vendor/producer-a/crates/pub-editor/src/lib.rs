@@ -2726,6 +2726,158 @@ impl EditorSession {
         result
     }
 
+    pub fn full_story_paragraph_alignment_v1(&self) -> Vec<FullStoryParagraphAlignmentV1> {
+        let table_story_ids = self
+            .graph
+            .nodes
+            .values()
+            .flat_map(|node| {
+                [
+                    node.payload
+                        .table_story
+                        .as_ref()
+                        .and_then(|owner| owner.story_id),
+                    node.payload.table.as_ref().and_then(|table| table.story_id),
+                ]
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        let ordinary_story_ids = self
+            .graph
+            .nodes
+            .iter()
+            .filter_map(|(node_id, node)| frame_from_payload(*node_id, &node.payload))
+            .map(|frame| frame.story_id)
+            .filter(|story_id| !table_story_ids.contains(story_id))
+            .collect::<BTreeSet<_>>();
+
+        let mut runs_by_story = BTreeMap::<StoryId, Vec<&PubParagraphAlignmentRun>>::new();
+        for run in &self.source_paragraph_alignments {
+            if ordinary_story_ids.contains(&run.story_id)
+                && self.graph.stories.contains_key(&run.story_id)
+            {
+                runs_by_story.entry(run.story_id).or_default().push(run);
+            }
+        }
+
+        let mut result = Vec::new();
+        for (story_id, mut runs) in runs_by_story {
+            let Some(story) = self.graph.stories.get(&story_id) else {
+                continue;
+            };
+            let current_story_state_id = story_state_id_v1(story_id, &story.text);
+            if self.source_story_state_ids.get(&story_id) != Some(&current_story_state_id) {
+                continue;
+            }
+            let Ok(story_scalar_len) = u32::try_from(story.text.chars().count()) else {
+                continue;
+            };
+            let Ok(story_utf16_len) = u32::try_from(story.text.encode_utf16().count()) else {
+                continue;
+            };
+            if story_scalar_len == 0 || story_utf16_len == 0 {
+                continue;
+            }
+
+            runs.sort_by_key(|run| {
+                (
+                    run.story_scalar_start,
+                    run.story_scalar_end,
+                    run.story_utf16_start,
+                    run.story_utf16_end,
+                )
+            });
+
+            let mut scalar_cursor = 0_u32;
+            let mut utf16_cursor = 0_u32;
+            let mut alignment: Option<ParagraphAlignmentV1> = None;
+            let mut valid = true;
+
+            for run in runs {
+                if run.story_scalar_start != scalar_cursor
+                    || run.story_utf16_start != utf16_cursor
+                    || run.story_scalar_end <= run.story_scalar_start
+                    || run.story_utf16_end <= run.story_utf16_start
+                    || run.story_scalar_end > story_scalar_len
+                    || run.story_utf16_end > story_utf16_len
+                {
+                    valid = false;
+                    break;
+                }
+
+                let current = match run.alignment {
+                    PubParagraphAlignment::Center => ParagraphAlignmentV1::Center,
+                    PubParagraphAlignment::Right => ParagraphAlignmentV1::Right,
+                    PubParagraphAlignment::InterWord | PubParagraphAlignment::Distribute => {
+                        valid = false;
+                        break;
+                    }
+                };
+                match alignment {
+                    None => alignment = Some(current),
+                    Some(existing) if existing == current => {}
+                    Some(_) => {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                scalar_cursor = run.story_scalar_end;
+                utf16_cursor = run.story_utf16_end;
+            }
+
+            if !valid || scalar_cursor != story_scalar_len || utf16_cursor != story_utf16_len {
+                continue;
+            }
+            let Some(alignment) = alignment else {
+                continue;
+            };
+            result.push(FullStoryParagraphAlignmentV1 {
+                story_id,
+                alignment,
+            });
+        }
+
+        result.sort_by_key(|item| item.story_id);
+        result
+    }
+
+    fn odg_full_story_paragraph_alignment_placements_v1(
+        &self,
+        alignments: &[FullStoryParagraphAlignmentV1],
+    ) -> Vec<OdgFullStoryParagraphAlignmentPlacement> {
+        let eligible = alignments
+            .iter()
+            .map(|item| item.story_id)
+            .collect::<BTreeSet<_>>();
+        let mut roots = BTreeMap::<StoryId, Vec<NodeId>>::new();
+
+        for (node_id, node) in &self.graph.nodes {
+            let Some(frame) = frame_from_payload(*node_id, &node.payload) else {
+                continue;
+            };
+            if frame.previous.is_none() && eligible.contains(&frame.story_id) {
+                roots
+                    .entry(frame.story_id)
+                    .or_default()
+                    .push(frame.frame_id);
+            }
+        }
+
+        alignments
+            .iter()
+            .filter_map(|item| {
+                let mut frame_ids = roots.get(&item.story_id)?.clone();
+                frame_ids.sort_unstable();
+                frame_ids.dedup();
+                (!frame_ids.is_empty()).then(|| OdgFullStoryParagraphAlignmentPlacement {
+                    alignment: item.clone(),
+                    frame_ids,
+                })
+            })
+            .collect()
+    }
+
     fn odg_full_story_typography_placements_v1(
         &self,
         typography: &[FullStoryTypographyV1],
