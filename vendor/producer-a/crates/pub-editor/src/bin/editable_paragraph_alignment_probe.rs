@@ -54,9 +54,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "right"
                 }
             };
+            let story = session
+                .graph()
+                .stories
+                .get(&item.story_id)
+                .expect("eligible paragraph-alignment Story must exist");
+            let non_whitespace = story
+                .text
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>();
+            let non_whitespace_sha256 = Sha256::digest(non_whitespace.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
             serde_json::json!({
                 "story_id": item.story_id.as_canonical().to_string(),
                 "alignment": alignment,
+                "story_scalar_count": story.text.chars().count(),
+                "story_non_whitespace_scalar_count": non_whitespace.chars().count(),
+                "story_non_whitespace_sha256": non_whitespace_sha256,
             })
         })
         .collect::<Vec<_>>();
