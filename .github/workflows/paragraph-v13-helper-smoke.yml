@@ -1,0 +1,32 @@
+name: paragraph-v13-helper-smoke
+
+on:
+  push:
+    branches:
+      - delivery/paragraph-v13-helper-smoke
+    paths:
+      - delivery/paragraph-v13-helper-smoke.ps1
+      - .github/workflows/paragraph-v13-helper-smoke.yml
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse helper under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $path = Join-Path $PWD 'delivery\paragraph-v13-helper-smoke.ps1'
+          $tokens=$null
+          $errors=$null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if($errors.Count -ne 0){
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+      - name: Run named-parameter smoke
+        shell: powershell
+        run: |
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File delivery\paragraph-v13-helper-smoke.ps1
+          if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
