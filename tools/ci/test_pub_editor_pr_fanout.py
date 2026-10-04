@@ -65,6 +65,7 @@ def assert_textbox_consumer_wiring() -> None:
         "needs: classify",
         "needs.classify.result != 'success'",
         "needs.classify.outputs.textbox_restore == 'true'",
+        "base_classifier_missing_textbox_output",
     )
     missing = [marker for marker in required if marker not in workflow]
     assert not missing, (
