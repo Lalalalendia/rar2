@@ -136,7 +136,7 @@ def prepare_alpha_smask_pdf_donor(
 """,
         """    let image_object_count = image_object_ids
         .values()
-        .map(|(_, alpha_object_id)| 1 + usize::from(alpha_object_id.is_some()))
+        .map(|(_, alpha_object_id)| if alpha_object_id.is_some() { 2 } else { 1 })
         .sum::<usize>();
     let mut objects = Vec::<Vec<u8>>::with_capacity(
         2 + surfaces.len() * 2 + image_object_count + font_ids.len() * 5,
@@ -154,6 +154,67 @@ def prepare_alpha_smask_pdf_donor(
                     image_object_ids[resource_id].0
 """,
         label="Yab #259 RGB XObject reference",
+    )
+
+    replace_once(
+        pdf,
+        """    #[test]
+    fn unsupported_transform_is_reported_not_silently_rendered() {
+""",
+        """    #[test]
+    fn exact_rgba_png_uses_soft_mask_and_remains_painted() {
+        use std::io::Cursor;
+
+        let mut rgba = image::RgbaImage::new(1, 1);
+        rgba.put_pixel(0, 0, image::Rgba([10, 20, 30, 128]));
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut encoded, ImageFormat::Png)
+            .unwrap();
+
+        let resources = FixedPdfResources {
+            node_paints: Vec::new(),
+            images: vec![FixedImageResource {
+                resource_id: resource_id(43),
+                mime: "image/png".into(),
+                node_ids: vec![node_id(10)],
+                bytes: encoded.into_inner(),
+            }],
+            ..FixedPdfResources::default()
+        };
+
+        let output = render_bounded_pdf(
+            &scene(),
+            &resources,
+            &PdfTargetProfile::basic_geometry_v0_1(),
+        )
+        .unwrap();
+
+        let text = String::from_utf8_lossy(&output.bytes);
+        assert!(text.contains("/SMask "));
+        assert!(text.contains("/ColorSpace /DeviceGray"));
+        assert_eq!(
+            output
+                .report
+                .nodes
+                .iter()
+                .filter(|node| node.code == "pdf.node.painted_exact_image")
+                .count(),
+            1
+        );
+        assert!(
+            output
+                .report
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != "pdf.image.alpha_unsupported")
+        );
+    }
+
+    #[test]
+    fn unsupported_transform_is_reported_not_silently_rendered() {
+""",
+        label="Yab #259 exact alpha soft-mask regression",
     )
 
     replace_once(
