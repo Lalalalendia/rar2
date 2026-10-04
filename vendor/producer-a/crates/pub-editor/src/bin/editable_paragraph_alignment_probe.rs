@@ -64,7 +64,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .chars()
                 .filter(|character| !character.is_whitespace())
                 .collect::<String>();
-            let non_whitespace_sha256 = format!("{:x}", Sha256::digest(non_whitespace.as_bytes()));
+            let non_whitespace_sha256 = Sha256::digest(non_whitespace.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
             serde_json::json!({
                 "story_id": item.story_id.as_canonical().to_string(),
                 "alignment": alignment,
