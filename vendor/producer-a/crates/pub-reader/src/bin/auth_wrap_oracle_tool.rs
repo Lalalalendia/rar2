@@ -64,7 +64,10 @@ struct InspectReceipt {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn fopt_for(candidate: &PubStructuralBaseCandidate) -> Vec<FoptScalar> {
@@ -291,7 +294,7 @@ fn patch_ref(
     let target = contents
         .get_mut(offset..offset + 4)
         .context("reference value lies outside /Contents")?;
-    let actual = u32::from_le_bytes(target.try_into().expect("four-byte slice"));
+    let actual = u32::from_le_bytes([target[0], target[1], target[2], target[3]]);
     if actual != reference.target_seq_num {
         bail!(
             "reference value drift at offset {offset}: expected {}, got {actual}",
