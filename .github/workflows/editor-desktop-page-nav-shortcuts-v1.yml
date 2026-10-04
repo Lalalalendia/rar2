@@ -3,7 +3,8 @@ name: Editor Desktop Page Nav Shortcuts V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/page_navigation.rs"
+      - "apps/chaptera-desktop/src/page_navigation_gui_tests.rs"
       - ".github/workflows/editor-desktop-page-nav-shortcuts-v1.yml"
   workflow_dispatch:
 
