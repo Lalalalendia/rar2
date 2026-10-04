@@ -1,4 +1,4 @@
-//! Desktop canvas text entry, input, focus, caret and widget integration.
+//! Desktop canvas text entry, input, focus, caret and widget integration. Admission positive-control note.
 //! The existing text_session module remains the Story/session semantic authority.
 
 use super::{SceneHitEntry, ViewerApp, text_session};
