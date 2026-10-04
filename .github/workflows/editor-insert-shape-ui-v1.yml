@@ -5,8 +5,9 @@ on:
     paths:
       - "Cargo.toml"
       - "apps/chaptera-desktop/Cargo.toml"
-      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/rectangle_creation.rs"
+      - "apps/chaptera-desktop/src/rectangle_creation_shell.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_shell.rs"
       - ".github/workflows/editor-insert-shape-ui-v1.yml"
   workflow_dispatch:
 

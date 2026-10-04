@@ -17,6 +17,14 @@ PROTECTED_WORKFLOWS = (
 )
 
 DESKTOP_PR_ADMISSION_RULES = {
+    ".github/workflows/editor-insert-shape-ui-v1.yml": {
+        "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
+        "required_paths": (
+            "apps/chaptera-desktop/src/rectangle_creation.rs",
+            "apps/chaptera-desktop/src/rectangle_creation_shell.rs",
+            "apps/chaptera-desktop/src/selection_keyboard_shell.rs",
+        ),
+    },
     ".github/workflows/chaptera-win-dll-search-harden.yml": {
         "forbidden_paths": ("apps/chaptera-desktop/src/main.rs",),
         "required_paths": (
