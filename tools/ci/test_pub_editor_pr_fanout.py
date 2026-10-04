@@ -20,6 +20,13 @@ def classify(paths, base=None, head=None):
     )
 
 
+def classify_textbox(paths, base=None, head=None):
+    return mod.classify_textbox_restore(
+        paths,
+        base_lib_source=base,
+        head_lib_source=head,
+    )
+
 
 def assert_continuity_consumer_wiring() -> None:
     workflow_path = Path(".github/workflows/editor-desktop-continuity-v2-windows.yml")
@@ -46,8 +53,36 @@ def assert_continuity_consumer_wiring() -> None:
         ".github/workflows/editor-desktop-continuity-v2-windows.yml" in contract
     ), "cheap contract must run when the Continuity V2 consumer wiring changes"
 
+
+def assert_textbox_consumer_wiring() -> None:
+    workflow_path = Path(".github/workflows/editor-desktop-textbox-restore-v1.yml")
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    required = (
+        "Classify pub-editor TextBox Restore scope",
+        "ref: ${{ github.event.pull_request.base.ref || github.sha }}",
+        "python tools/ci/pub_editor_pr_fanout.py",
+        "needs: classify",
+        "needs.classify.result != 'success'",
+        "needs.classify.outputs.textbox_restore == 'true'",
+    )
+    missing = [marker for marker in required if marker not in workflow]
+    assert not missing, (
+        "TextBox Restore selective consumer lost required base-authority/fail-closed wiring: "
+        + ", ".join(missing)
+    )
+
+    contract = Path(
+        ".github/workflows/pub-editor-selective-fanout-contract.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        ".github/workflows/editor-desktop-textbox-restore-v1.yml" in contract
+    ), "cheap contract must run when TextBox Restore consumer wiring changes"
+
+
 def main() -> None:
     assert_continuity_consumer_wiring()
+    assert_textbox_consumer_wiring()
 
     base = """mod duplicate_authored_rectangle_v1;
 mod imported_paragraphs_v1;
@@ -117,6 +152,46 @@ pub fn shared_core() {}
 
     run, reason = classify(["README.md"])
     assert run is False and reason == "no_continuity_owner_changed"
+
+    run, reason = classify_textbox(
+        [
+            mod.PUB_EDITOR_LIB,
+            mod.SAFE_TEXTBOX_RESTORE_MODULES["imported_paragraph_alignment_v1"],
+        ],
+        base,
+        head_facade,
+    )
+    assert run is False and reason == "proven_non_textbox_pub_editor_slice"
+
+    run, reason = classify_textbox(
+        [mod.SAFE_TEXTBOX_RESTORE_MODULES["duplicate_authored_rectangle_v1"]]
+    )
+    assert run is False and reason == "proven_non_textbox_pub_editor_slice"
+
+    run, reason = classify_textbox([mod.PUB_EDITOR_LIB], base, core_head)
+    assert run is True and reason == "pub_editor_lib_core_change"
+
+    run, reason = classify_textbox(
+        ["vendor/producer-a/crates/pub-editor/src/create_shape_runtime_v1.rs"]
+    )
+    assert run is True and reason == "unknown_or_core_pub_editor_path"
+
+    for path in (
+        "apps/chaptera-desktop/src/text_box_creation.rs",
+        "apps/chaptera-desktop/src/text_box_creation_shell.rs",
+        "apps/chaptera-desktop/src/text_session.rs",
+        "apps/chaptera-desktop/Cargo.toml",
+        "crates/chaptera-canvas-creation-interaction/src/lib.rs",
+        "crates/chaptera-desktop-fallback-font-resource/src/lib.rs",
+        ".github/workflows/editor-desktop-textbox-restore-v1.yml",
+        "tools/ci/pub_editor_pr_fanout.py",
+        "tools/ci/test_pub_editor_pr_fanout.py",
+    ):
+        run, reason = classify_textbox([path])
+        assert run is True and reason == "direct_textbox_owner_changed", (path, reason)
+
+    run, reason = classify_textbox(["README.md"])
+    assert run is False and reason == "no_textbox_owner_changed"
 
     print("pub-editor PR fanout classifier self-test: ok")
 
