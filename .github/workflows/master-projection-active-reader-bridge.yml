@@ -75,7 +75,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --manifest-path vendor/producer-a/crates/pub-reader/Cargo.toml -- --check
+          rustfmt --edition 2021 --check vendor/producer-a/crates/pub-reader/src/bin/master_projection_bridge_receipt.rs
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/master_bridge.rs
           cargo build --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader --bin master_projection_bridge_receipt             --features master-authority-bridge --jobs 2
 
       - name: Prove root/vendor PAGE identity parity
