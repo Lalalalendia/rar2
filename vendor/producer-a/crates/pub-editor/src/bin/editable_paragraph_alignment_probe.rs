@@ -31,6 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "open_state": "not_admitted",
                     "eligible_count": 0,
                     "alignment_counts": {},
+                    "items": [],
                 }))?
             );
             return Ok(());
@@ -40,12 +41,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     let alignments = session.full_story_paragraph_alignment_v1();
     let mut center = 0_u64;
     let mut right = 0_u64;
-    for item in &alignments {
-        match item.alignment {
-            pub_export::ParagraphAlignmentV1::Center => center += 1,
-            pub_export::ParagraphAlignmentV1::Right => right += 1,
-        }
-    }
+    let items = alignments
+        .iter()
+        .map(|item| {
+            let alignment = match item.alignment {
+                pub_export::ParagraphAlignmentV1::Center => {
+                    center += 1;
+                    "center"
+                }
+                pub_export::ParagraphAlignmentV1::Right => {
+                    right += 1;
+                    "right"
+                }
+            };
+            serde_json::json!({
+                "story_id": item.story_id.as_canonical().to_string(),
+                "alignment": alignment,
+            })
+        })
+        .collect::<Vec<_>>();
 
     let mut same_length_edit_invalidation_proven = None;
     if let Some(item) = alignments.first() {
@@ -113,6 +127,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "center": center,
                 "right": right,
             },
+            "items": items,
             "same_length_edit_invalidation_proven": same_length_edit_invalidation_proven,
         }))?
     );
