@@ -180,21 +180,26 @@ function Find-ShapeById {
     return $null
 }
 
+function Get-SafeValue {
+    param([Parameter(Mandatory=$true)][scriptblock]$Getter)
+    try { return & $Getter } catch { return $null }
+}
+
 function Shape-Snapshot {
     param([Parameter(Mandatory=$true)]$Shape)
     return [ordered]@{
         id = [long]$Shape.ID
         name = [string]$Shape.Name
         type = [int]$Shape.Type
-        auto_shape_type = try { [int]$Shape.AutoShapeType } catch { $null }
+        auto_shape_type = Get-SafeValue { [int]$Shape.AutoShapeType }
         left_pt = [double]$Shape.Left
         top_pt = [double]$Shape.Top
         width_pt = [double]$Shape.Width
         height_pt = [double]$Shape.Height
-        fill_rgb = try { [int]$Shape.Fill.ForeColor.RGB } catch { $null }
-        line_visible = try { [int]$Shape.Line.Visible } catch { $null }
-        line_weight_pt = try { [double]$Shape.Line.Weight } catch { $null }
-        z_order_position = try { [int]$Shape.ZOrderPosition } catch { $null }
+        fill_rgb = Get-SafeValue { [int]$Shape.Fill.ForeColor.RGB }
+        line_visible = Get-SafeValue { [int]$Shape.Line.Visible }
+        line_weight_pt = Get-SafeValue { [double]$Shape.Line.Weight }
+        z_order_position = Get-SafeValue { [int]$Shape.ZOrderPosition }
     }
 }
 
