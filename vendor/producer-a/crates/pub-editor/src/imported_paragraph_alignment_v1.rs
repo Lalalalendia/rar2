@@ -180,6 +180,47 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the pinned public Carlton March PUB path"]
+    fn real_carlton_imported_paragraph_base_alignment_uses_current_paragraph_ids() {
+        let path = std::env::var_os("CHAPTERA_CARLTON_PUB")
+            .map(std::path::PathBuf::from)
+            .expect("CHAPTERA_CARLTON_PUB");
+        let bytes = std::fs::read(path).expect("read pinned Carlton March PUB");
+        let source_hash = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
+            .parse::<Sha256Digest>()
+            .expect("pinned Carlton source hash");
+        let session =
+            crate::open_mature_0x2c_editor(&bytes, source_hash).expect("open Carlton EditorSession");
+
+        let paragraphs = session
+            .imported_paragraphs_v1()
+            .expect("project Carlton imported ParagraphIds");
+        let paragraph_ids = paragraphs
+            .iter()
+            .map(|paragraph| paragraph.paragraph_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let base = session
+            .imported_paragraph_base_alignments_v1()
+            .expect("bind Carlton imported paragraph base alignment");
+
+        assert!(!paragraph_ids.is_empty(), "Carlton must expose imported ParagraphIds");
+        assert!(
+            !base.is_empty(),
+            "Carlton's grounded FDPP alignment runs must bind to at least one current imported ParagraphId"
+        );
+        assert!(
+            base.iter()
+                .all(|item| paragraph_ids.contains(&item.paragraph_id)),
+            "every imported base alignment must be keyed by a current imported ParagraphId"
+        );
+        assert!(
+            base.iter()
+                .any(|item| item.alignment == ImportedParagraphAlignmentValueV1::Right),
+            "Carlton Reception authority must retain at least one grounded Right paragraph base"
+        );
+    }
+
+    #[test]
     fn exact_uniform_coverage_produces_base_alignment() {
         let center = run(2, 8, PubParagraphAlignment::Center);
         assert_eq!(
