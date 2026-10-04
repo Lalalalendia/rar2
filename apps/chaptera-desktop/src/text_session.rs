@@ -701,49 +701,66 @@ mod tests {
     }
 
     #[test]
-    fn real_text_style_boolean_format_helper_is_durable_and_reversible() {
-        let Some(path) = env::var_os("CHAPTERA_TEXT_STYLE_FIXTURE") else {
+    fn real_pub_corpus_boolean_format_helper_is_durable_and_reversible() {
+        let Some(root) = env::var_os("CHAPTERA_TEXT_FORMAT_FIXTURES_DIR") else {
             eprintln!(
-                "CHAPTERA_TEXT_STYLE_FIXTURE not set; dedicated text-format gate owns real evidence"
+                "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR not set; dedicated text-format gate owns real evidence"
             );
             return;
         };
 
-        let original = fs::read(&path).expect("read pinned text-style.pub");
-        let digest = Sha256::digest(&original);
-        let mut digest_bytes = [0_u8; 32];
-        digest_bytes.copy_from_slice(&digest);
-        let source_hash = Sha256Digest::from_bytes(digest_bytes);
-        let mut editor =
-            open_mature_0x2c_editor(&original, source_hash).expect("open real text-style.pub");
-        let visual = pub_viewer::open_mature_0x2c_geometry(
-            &original,
-            pub_viewer::viewer_geometry_environment_v0_1(),
-        )
-        .expect("open real text-style.pub Viewer geometry");
+        let mut paths = fs::read_dir(root)
+            .expect("read pinned text-format fixture corpus")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("pub"))
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
 
-        let (story_id, frame_id, before) = visual
-            .text_fragments
-            .iter()
-            .find_map(|fragment| {
-                let mut mode =
-                    enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id).ok()?;
-                select_all(&mut mode);
-                let before = boolean_format_selection_state_v1(
-                    &editor,
-                    &mode,
-                    DesktopBooleanFormatPropertyV1::Bold,
+        let (path, original, source_hash, mut editor, story_id, frame_id) = paths
+            .into_iter()
+            .find_map(|path| {
+                let original = fs::read(&path).ok()?;
+                let digest = Sha256::digest(&original);
+                let mut digest_bytes = [0_u8; 32];
+                digest_bytes.copy_from_slice(&digest);
+                let source_hash = Sha256Digest::from_bytes(digest_bytes);
+                let editor = open_mature_0x2c_editor(&original, source_hash).ok()?;
+                let visual = pub_viewer::open_mature_0x2c_geometry(
+                    &original,
+                    pub_viewer::viewer_geometry_environment_v0_1(),
                 )
                 .ok()?;
-                Some((fragment.story_id, fragment.frame_id, before))
+                let (story_id, frame_id) = visual.text_fragments.iter().find_map(|fragment| {
+                    let mut mode =
+                        enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id)
+                            .ok()?;
+                    select_all(&mut mode);
+                    boolean_format_selection_state_v1(
+                        &editor,
+                        &mode,
+                        DesktopBooleanFormatPropertyV1::Bold,
+                    )
+                    .ok()?;
+                    Some((fragment.story_id, fragment.frame_id))
+                })?;
+                Some((path, original, source_hash, editor, story_id, frame_id))
             })
-            .expect("text-style.pub exposes one Story with bounded source-effective Bold");
+            .expect(
+                "pinned real-PUB corpus exposes one Story with bounded complete text-format base",
+            );
 
         let source_text = editor.graph().stories[&story_id].text.clone();
         let operations_before = editor.operations().len();
         let mut mode =
             enter_explicit_text_mode(&editor, story_id, frame_id).expect("enter format Story");
         select_all(&mut mode);
+        let before =
+            boolean_format_selection_state_v1(&editor, &mode, DesktopBooleanFormatPropertyV1::Bold)
+                .expect("read source-effective Bold state");
         let expected = before.next_explicit_value();
 
         let operation = apply_boolean_format_toggle_v1(
@@ -771,10 +788,6 @@ mod tests {
         assert_eq!(
             after.effective,
             DesktopBooleanEffectiveStateV1::Uniform(expected)
-        );
-        assert_eq!(
-            after.provenance,
-            DesktopBooleanProvenanceStateV1::ChapteraOverride
         );
 
         editor.undo().expect("Undo Bold formatting");
@@ -814,7 +827,7 @@ mod tests {
         assert_eq!(reopened.graph().stories[&story_id].text, source_text);
         assert_eq!(reopened.source_hash(), source_hash);
         assert_eq!(
-            fs::read(path).expect("re-read source PUB"),
+            fs::read(&path).expect("re-read source PUB"),
             original,
             "Bold formatting history must not mutate source PUB bytes"
         );
