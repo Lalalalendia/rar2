@@ -10,6 +10,9 @@ mod acceptance_v2_cli;
 mod agent;
 mod diagnostic_sweep;
 mod fallback_font;
+mod history;
+#[cfg(all(test, not(feature = "reader-only")))]
+mod history_gui_tests;
 mod image_decode_adapter;
 #[allow(dead_code)]
 mod locale;
@@ -3532,34 +3535,6 @@ impl ViewerApp {
         });
     }
 
-    fn apply_undo(&mut self) {
-        let outcome = self
-            .editor
-            .as_mut()
-            .expect("editor presence checked above")
-            .undo();
-        match outcome {
-            Ok(_) => self.finish_authoring_change("Undo restored the previous authoring state."),
-            Err(error) => {
-                self.edit_status = Some(format!("Undo unavailable: {} ({})", error, error.code()));
-            }
-        }
-    }
-
-    fn apply_redo(&mut self) {
-        let outcome = self
-            .editor
-            .as_mut()
-            .expect("editor presence checked above")
-            .redo();
-        match outcome {
-            Ok(_) => self.finish_authoring_change("Redo restored the edited authoring state."),
-            Err(error) => {
-                self.edit_status = Some(format!("Redo unavailable: {} ({})", error, error.code()));
-            }
-        }
-    }
-
     fn saved_project_operation_count(&self) -> Result<Option<usize>, String> {
         let Some(source_path) = self.source_path.as_ref() else {
             return Ok(None);
@@ -4173,27 +4148,6 @@ impl ViewerApp {
             .map(|editor| editor.operations().len())
             .unwrap_or(0);
         self.save_project_with_status(operation_count);
-    }
-
-    fn process_global_history_shortcuts(&mut self, ctx: &egui::Context) {
-        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
-            return;
-        }
-
-        let (undo_pressed, redo_pressed) = ctx.input(|input| {
-            let command = input.modifiers.ctrl || input.modifiers.command;
-            let unmodified_command = command && !input.modifiers.alt && !input.modifiers.shift;
-            (
-                unmodified_command && input.key_pressed(egui::Key::Z),
-                unmodified_command && input.key_pressed(egui::Key::Y),
-            )
-        });
-
-        if undo_pressed {
-            self.apply_undo();
-        } else if redo_pressed {
-            self.apply_redo();
-        }
     }
 
     fn ensure_image_textures(&mut self, ctx: &egui::Context) {
