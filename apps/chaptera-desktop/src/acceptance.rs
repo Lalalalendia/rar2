@@ -102,7 +102,8 @@ fn select_visible_story_edit(
             let Some(story) = editor.graph().stories.get(&story_id) else {
                 continue;
             };
-            let Some((index, ch)) = story.text.chars().enumerate().find(|(_, ch)| *ch != '\r') else {
+            let Some((index, ch)) = story.text.chars().enumerate().find(|(_, ch)| *ch != '\r')
+            else {
                 continue;
             };
             let Ok(start) = u32::try_from(index) else {
