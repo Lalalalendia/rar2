@@ -611,7 +611,16 @@ fn rename_path(src: &Path, dst: &Path) -> Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::rename(src, dst)?;
+    fs::rename(src, dst).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "rename {} -> {} failed: {error}",
+                src.display(),
+                dst.display()
+            ),
+        )
+    })?;
     if let Some(parent) = dst.parent() {
         sync_directory_if_supported(parent)?;
     }
