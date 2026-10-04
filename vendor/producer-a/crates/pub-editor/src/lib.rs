@@ -503,10 +503,124 @@ pub struct EditorReplacementAsset {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorCurrentImageResourceV1 {
+    pub resource_id: ResourceId,
+    pub mime: String,
+    pub node_ids: Vec<NodeId>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorCurrentImageResourceError {
+    MissingSourceAsset { resource_id: ResourceId },
+    MissingReplacementAsset { sha256: Sha256Digest },
+    ResourceIdentityCollision { resource_id: ResourceId },
+}
+
+impl fmt::Display for EditorCurrentImageResourceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSourceAsset { resource_id } => write!(
+                formatter,
+                "current image source resource {} has no exact byte backing",
+                resource_id.as_canonical()
+            ),
+            Self::MissingReplacementAsset { sha256 } => write!(
+                formatter,
+                "current image replacement asset {sha256} has no exact byte backing"
+            ),
+            Self::ResourceIdentityCollision { resource_id } => write!(
+                formatter,
+                "current image resource {} resolved to conflicting byte payloads",
+                resource_id.as_canonical()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EditorCurrentImageResourceError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditorSourceImageAsset {
     mime: String,
     bytes: Vec<u8>,
+}
+
+fn current_image_resources_v1(
+    source_image_assets: &BTreeMap<ResourceId, EditorSourceImageAsset>,
+    source_image_nodes: &BTreeMap<NodeId, ResourceId>,
+    replacement_assets: &BTreeMap<Sha256Digest, EditorReplacementAsset>,
+    image_replacements: &BTreeMap<NodeId, Sha256Digest>,
+) -> Result<Vec<EditorCurrentImageResourceV1>, EditorCurrentImageResourceError> {
+    let mut resources =
+        BTreeMap::<ResourceId, (String, Vec<u8>, BTreeSet<NodeId>)>::new();
+
+    for (node_id, resource_id) in source_image_nodes {
+        if image_replacements.contains_key(node_id) {
+            continue;
+        }
+        let asset = source_image_assets.get(resource_id).ok_or(
+            EditorCurrentImageResourceError::MissingSourceAsset {
+                resource_id: *resource_id,
+            },
+        )?;
+        match resources.entry(*resource_id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((
+                    asset.mime.clone(),
+                    asset.bytes.clone(),
+                    BTreeSet::from([*node_id]),
+                ));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (mime, bytes, node_ids) = entry.get_mut();
+                if mime != &asset.mime || bytes != &asset.bytes {
+                    return Err(EditorCurrentImageResourceError::ResourceIdentityCollision {
+                        resource_id: *resource_id,
+                    });
+                }
+                node_ids.insert(*node_id);
+            }
+        }
+    }
+
+    for (node_id, asset_sha) in image_replacements {
+        let asset = replacement_assets.get(asset_sha).ok_or(
+            EditorCurrentImageResourceError::MissingReplacementAsset {
+                sha256: *asset_sha,
+            },
+        )?;
+        let resource_id = replacement_asset_resource_id(*asset_sha);
+        match resources.entry(resource_id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((
+                    asset.mime.clone(),
+                    asset.bytes.clone(),
+                    BTreeSet::from([*node_id]),
+                ));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (mime, bytes, node_ids) = entry.get_mut();
+                if mime != &asset.mime || bytes != &asset.bytes {
+                    return Err(EditorCurrentImageResourceError::ResourceIdentityCollision {
+                        resource_id,
+                    });
+                }
+                node_ids.insert(*node_id);
+            }
+        }
+    }
+
+    Ok(resources
+        .into_iter()
+        .map(|(resource_id, (mime, bytes, node_ids))| EditorCurrentImageResourceV1 {
+            resource_id,
+            mime,
+            node_ids: node_ids.into_iter().collect(),
+            bytes,
+        })
+        .collect())
 }
 
 fn source_image_context_from_bundle(
@@ -1949,6 +2063,17 @@ impl EditorSession {
             .keys()
             .filter(|node_id| !self.image_replacements.contains_key(node_id))
             .count()
+    }
+
+    pub fn current_image_resources_v1(
+        &self,
+    ) -> Result<Vec<EditorCurrentImageResourceV1>, EditorCurrentImageResourceError> {
+        current_image_resources_v1(
+            &self.source_image_assets,
+            &self.source_image_nodes,
+            &self.replacement_assets,
+            &self.image_replacements,
+        )
     }
 
     fn externally_projected_image_nodes(&self) -> BTreeSet<NodeId> {
@@ -5737,6 +5862,122 @@ mod asset_reachability_tests {
         .into_iter()
         .collect::<Vec<_>>();
         assert_eq!(refs, vec![a, b]);
+    }
+
+    #[test]
+    fn current_image_resources_replace_source_bytes_without_fallback() {
+        let node_id: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId");
+        let source_resource: ResourceId =
+            serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
+                .expect("canonical ResourceId");
+        let replacement_sha = digest(0x55);
+        let source_assets = BTreeMap::from([(
+            source_resource,
+            EditorSourceImageAsset {
+                mime: "image/png".into(),
+                bytes: vec![1, 2, 3],
+            },
+        )]);
+        let source_nodes = BTreeMap::from([(node_id, source_resource)]);
+        let replacement_assets = BTreeMap::from([(
+            replacement_sha,
+            EditorReplacementAsset {
+                sha256: replacement_sha,
+                mime: "image/jpeg".into(),
+                bytes: vec![9, 8, 7, 6],
+            },
+        )]);
+        let replacements = BTreeMap::from([(node_id, replacement_sha)]);
+
+        let resources = current_image_resources_v1(
+            &source_assets,
+            &source_nodes,
+            &replacement_assets,
+            &replacements,
+        )
+        .expect("current image resources");
+
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].node_ids, vec![node_id]);
+        assert_eq!(resources[0].mime, "image/jpeg");
+        assert_eq!(resources[0].bytes, vec![9, 8, 7, 6]);
+        assert_ne!(resources[0].resource_id, source_resource);
+    }
+
+    #[test]
+    fn current_image_resources_group_shared_source_and_replacement_assets() {
+        let node_a: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId");
+        let node_b: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+                .expect("canonical NodeId");
+        let node_c: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000003\"")
+                .expect("canonical NodeId");
+        let node_d: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000004\"")
+                .expect("canonical NodeId");
+        let source_resource: ResourceId =
+            serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
+                .expect("canonical ResourceId");
+        let replacement_sha = digest(0x66);
+
+        let resources = current_image_resources_v1(
+            &BTreeMap::from([(
+                source_resource,
+                EditorSourceImageAsset {
+                    mime: "image/png".into(),
+                    bytes: vec![1, 2, 3],
+                },
+            )]),
+            &BTreeMap::from([(node_a, source_resource), (node_b, source_resource)]),
+            &BTreeMap::from([(
+                replacement_sha,
+                EditorReplacementAsset {
+                    sha256: replacement_sha,
+                    mime: "image/jpeg".into(),
+                    bytes: vec![4, 5, 6],
+                },
+            )]),
+            &BTreeMap::from([(node_c, replacement_sha), (node_d, replacement_sha)]),
+        )
+        .expect("current image resources");
+
+        assert_eq!(resources.len(), 2);
+        assert_eq!(resources[0].resource_id, source_resource);
+        assert_eq!(resources[0].node_ids, vec![node_a, node_b]);
+        let replacement_resource = replacement_asset_resource_id(replacement_sha);
+        let replacement = resources
+            .iter()
+            .find(|resource| resource.resource_id == replacement_resource)
+            .expect("replacement resource");
+        assert_eq!(replacement.node_ids, vec![node_c, node_d]);
+        assert_eq!(replacement.bytes, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn current_image_resources_fail_closed_when_replacement_bytes_are_missing() {
+        let node_id: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId");
+        let replacement_sha = digest(0x77);
+        let error = current_image_resources_v1(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::from([(node_id, replacement_sha)]),
+        )
+        .expect_err("missing replacement bytes must fail");
+
+        assert_eq!(
+            error,
+            EditorCurrentImageResourceError::MissingReplacementAsset {
+                sha256: replacement_sha,
+            }
+        );
     }
 
     #[test]
