@@ -1,0 +1,78 @@
+name: Publisher direct research launcher contract
+
+on:
+  pull_request:
+    paths:
+      - "tools/windows/run_master_projection_stack_auth_direct.ps1"
+      - "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+      - ".github/workflows/publisher-direct-research-launchers-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publisher-direct-research-launchers-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parse-and-bound:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Parse direct launchers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($path in @(
+            "tools/windows/run_master_projection_stack_auth_direct.ps1",
+            "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -ne 0) {
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
+              throw "PowerShell parser rejected $path"
+            }
+          }
+
+      - name: Enforce offline bounded launcher contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $paths = @(
+            "tools/windows/run_master_projection_stack_auth_direct.ps1",
+            "tools/windows/run_paragraph_metrics_auth_direct.ps1"
+          )
+          foreach ($path in $paths) {
+            $text = Get-Content -LiteralPath $path -Raw
+            foreach ($forbidden in @(
+              "Invoke-WebRequest",
+              "Start-BitsTransfer",
+              "curl.exe",
+              "config.cmd",
+              "registration token",
+              "actions/runner-registration"
+            )) {
+              if ($text.Contains($forbidden)) {
+                throw "Forbidden direct-launcher capability '$forbidden' in $path"
+              }
+            }
+            foreach ($required in @(
+              "git hash-object",
+              "Publisher Build mismatch",
+              "MSPUB.EXE"
+            )) {
+              if (-not $text.Contains($required)) {
+                throw "Missing bounded direct-launcher marker '$required' in $path"
+              }
+            }
+          }
