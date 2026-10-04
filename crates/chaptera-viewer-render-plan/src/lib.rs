@@ -1182,7 +1182,7 @@ pub fn build_page_render_plan_v1(
             {
                 let projected_for_frame = visual.projected_instances.iter().filter(|projected| {
                     projected.scene_instance.target_page_id == page.id.as_canonical().to_string()
-                        && projected.target_frame_node_id == node.origin
+                        && projected.target_frame_node_id == Some(node.origin)
                 });
                 let mut has_projection = false;
                 let mut paint_scalar_end = None::<u32>;
@@ -1278,70 +1278,120 @@ pub fn build_page_render_plan_v1(
         .collect::<Vec<_>>();
 
     #[cfg(feature = "projected-scene-instances")]
-    for projected in visual.projected_instances.iter().filter(|projected| {
-        projected.scene_instance.target_page_id == page.id.as_canonical().to_string()
-    }) {
-        if projected.scene_instance.projection_kind != SceneProjectionKindV1::CmoStorySlot {
-            return Err(RenderPlanErrorV1::ProjectedKindUnsupported {
-                instance_id: projected.scene_instance.instance_id.clone(),
-            });
-        }
-        let origin_node_id =
-            parse_node_id(&projected.scene_instance.origin_node_id, "origin_node_id")?;
-        let paint = visual
-            .paints
-            .iter()
-            .find(|paint| paint.node_id == origin_node_id);
-        let image = visual
-            .images
-            .iter()
-            .find(|image| image.node_ids.contains(&origin_node_id))
-            .map(|image| {
-                let source_window = image
-                    .placements
-                    .iter()
-                    .find(|placement| placement.node_id == origin_node_id)
-                    .and_then(|placement| placement.source_window.as_ref())
-                    .map(|window| RenderImageSourceWindowV1 {
-                        left_q16: window.left_q16,
-                        top_q16: window.top_q16,
-                        right_q16: window.right_q16,
-                        bottom_q16: window.bottom_q16,
-                    });
-                RenderImageRefV1 {
-                    resource_id: image.resource_id,
-                    mime: image.mime.clone(),
-                    source_window,
-                }
-            });
-        let node = NodeRenderPlanV1 {
-            node_id: origin_node_id,
-            projected_scene_instance: Some(projected.scene_instance.clone()),
-            bounds: projected.bounds,
-            text_bounds: projected.text_content_bounds,
-            transform: projected.transform.clone(),
-            solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
-            solid_line: paint
-                .and_then(|paint| paint.solid_line.as_ref())
-                .map(|line| RenderSolidLineV1 {
-                    rgb: line.rgb,
-                    width_emu: line.width_emu,
-                }),
-            decorative_border: render_decorative_border_v1(visual, origin_node_id),
-            image,
-            text: projected_text(visual, projected)?,
-            table: None,
-        };
+    {
+        let mut inherited_master_nodes = Vec::new();
 
-        let insert_at = nodes
-            .iter()
-            .position(|candidate| {
-                candidate.projected_scene_instance.is_none()
-                    && candidate.node_id == projected.target_frame_node_id
-            })
-            .map(|index| index + 1)
-            .unwrap_or(nodes.len());
-        nodes.insert(insert_at, node);
+        for projected in visual.projected_instances.iter().filter(|projected| {
+            projected.scene_instance.target_page_id == page.id.as_canonical().to_string()
+        }) {
+            let origin_node_id =
+                parse_node_id(&projected.scene_instance.origin_node_id, "origin_node_id")?;
+            let paint = visual
+                .paints
+                .iter()
+                .find(|paint| paint.node_id == origin_node_id);
+            let image = visual
+                .images
+                .iter()
+                .find(|image| image.node_ids.contains(&origin_node_id))
+                .map(|image| {
+                    let source_window = image
+                        .placements
+                        .iter()
+                        .find(|placement| placement.node_id == origin_node_id)
+                        .and_then(|placement| placement.source_window.as_ref())
+                        .map(|window| RenderImageSourceWindowV1 {
+                            left_q16: window.left_q16,
+                            top_q16: window.top_q16,
+                            right_q16: window.right_q16,
+                            bottom_q16: window.bottom_q16,
+                        });
+                    RenderImageRefV1 {
+                        resource_id: image.resource_id,
+                        mime: image.mime.clone(),
+                        source_window,
+                    }
+                });
+            let table = visual
+                .tables
+                .iter()
+                .find(|table| table.node_id == origin_node_id)
+                .map(|table| RenderTableV1 {
+                    story_id: table.story_id,
+                    rows: table.rows,
+                    columns: table.columns,
+                    cells: table
+                        .cells
+                        .iter()
+                        .map(|cell| RenderTableCellV1 {
+                            id: cell.id,
+                            row: cell.address.row,
+                            column: cell.address.column,
+                            row_span: cell.row_span,
+                            column_span: cell.column_span,
+                            text: cell.text.clone(),
+                            bounds: cell.bounds,
+                            fill_rgb: cell.fill_rgb,
+                            fill_visible: cell.fill_visible,
+                        })
+                        .collect(),
+                });
+            let node = NodeRenderPlanV1 {
+                node_id: origin_node_id,
+                projected_scene_instance: Some(projected.scene_instance.clone()),
+                bounds: projected.bounds,
+                text_bounds: projected.text_content_bounds,
+                transform: projected.transform.clone(),
+                solid_fill_rgb: paint.and_then(|paint| paint.solid_fill_rgb),
+                solid_line: paint
+                    .and_then(|paint| paint.solid_line.as_ref())
+                    .map(|line| RenderSolidLineV1 {
+                        rgb: line.rgb,
+                        width_emu: line.width_emu,
+                    }),
+                decorative_border: render_decorative_border_v1(visual, origin_node_id),
+                image,
+                text: projected_text(visual, projected)?,
+                table,
+            };
+
+            match projected.scene_instance.projection_kind {
+                SceneProjectionKindV1::InheritedMaster => {
+                    if projected.target_frame_node_id.is_some() {
+                        return Err(RenderPlanErrorV1::ProjectedKindUnsupported {
+                            instance_id: projected.scene_instance.instance_id.clone(),
+                        });
+                    }
+                    inherited_master_nodes.push(node);
+                }
+                SceneProjectionKindV1::CmoStorySlot => {
+                    let target_frame_node_id = projected.target_frame_node_id.ok_or_else(|| {
+                        RenderPlanErrorV1::ProjectedTargetFrameMissing {
+                            instance_id: projected.scene_instance.instance_id.clone(),
+                        }
+                    })?;
+                    let insert_at = nodes
+                        .iter()
+                        .position(|candidate| {
+                            candidate.projected_scene_instance.is_none()
+                                && candidate.node_id == target_frame_node_id
+                        })
+                        .map(|index| index + 1)
+                        .unwrap_or(nodes.len());
+                    nodes.insert(insert_at, node);
+                }
+                SceneProjectionKindV1::DirectPageLocal => {
+                    return Err(RenderPlanErrorV1::ProjectedKindUnsupported {
+                        instance_id: projected.scene_instance.instance_id.clone(),
+                    });
+                }
+            }
+        }
+
+        if !inherited_master_nodes.is_empty() {
+            inherited_master_nodes.extend(nodes);
+            nodes = inherited_master_nodes;
+        }
     }
 
     Ok(PageRenderPlanV1 {
@@ -1421,7 +1471,7 @@ where
                         .find(|projected| {
                             projected.scene_instance.instance_id == instance.instance_id
                         })
-                        .map(|projected| projected.target_frame_node_id)
+                        .and_then(|projected| projected.target_frame_node_id)
                 })
             }
             #[cfg(not(feature = "projected-scene-instances"))]
@@ -3764,7 +3814,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance.clone(),
-                target_frame_node_id: origin_node_id,
+                target_frame_node_id: Some(origin_node_id),
                 target_frame_paint_scalar_end: None,
                 text_content_bounds: None,
                 bounds: RectEmu::new(
@@ -3818,7 +3868,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance,
-                target_frame_node_id: frame_id,
+                target_frame_node_id: Some(frame_id),
                 target_frame_paint_scalar_end: None,
                 text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,
@@ -3864,7 +3914,7 @@ mod tests {
             .projected_instances
             .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
                 scene_instance: instance,
-                target_frame_node_id: frame_id,
+                target_frame_node_id: Some(frame_id),
                 target_frame_paint_scalar_end: Some(3),
                 text_content_bounds: None,
                 bounds: visual.scene.nodes[0].bounds,
@@ -3893,6 +3943,81 @@ mod tests {
         assert_eq!(
             visual.document.stories[0].text, source,
             "paint clipping must not mutate canonical Viewer Story text"
+        );
+    }
+
+    #[cfg(feature = "projected-scene-instances")]
+    #[test]
+    fn inherited_master_lane_paints_below_page_local_and_preserves_instance_order() {
+        let mut visual = fixture();
+        let page_id = visual.document.pages[0].id;
+        let first_origin: NodeId =
+            serde_json::from_str("\"01890f47-0d30-7abc-8def-0123456789ab\"")
+                .expect("first master origin");
+        let second_origin: NodeId =
+            serde_json::from_str("\"01890f47-0d31-7abc-8def-0123456789ab\"")
+                .expect("second master origin");
+        let source_master =
+            "01890f47-0d32-7abc-8def-0123456789ab".to_owned();
+
+        for (index, origin) in [first_origin, second_origin].into_iter().enumerate() {
+            visual
+                .projected_instances
+                .push(pub_viewer::ViewerProjectedSceneInstanceV1 {
+                    scene_instance: SceneInstanceV1 {
+                        schema_version: SCENE_INSTANCE_SCHEMA_V1.to_owned(),
+                        instance_id: format!("sha256:inherited-master-order-{index}"),
+                        projection_kind: SceneProjectionKindV1::InheritedMaster,
+                        origin_node_id: origin.as_canonical().to_string(),
+                        target_page_id: page_id.as_canonical().to_string(),
+                        source_parent_origin: Some(source_master.clone()),
+                        story_authority_id: None,
+                        cmo_slot_index: None,
+                        cmo_scalar_index: None,
+                    },
+                    target_frame_node_id: None,
+                    target_frame_paint_scalar_end: None,
+                    text_content_bounds: None,
+                    bounds: RectEmu::new(
+                        LengthEmu::new(10 + i64::try_from(index).expect("bounded index")),
+                        LengthEmu::new(20),
+                        LengthEmu::new(30),
+                        LengthEmu::new(40),
+                    ),
+                    transform: Affine2D::identity(),
+                });
+        }
+
+        let direct_ids = visual
+            .scene
+            .nodes
+            .iter()
+            .filter(|node| node.parent_origin == page_id.into_canonical())
+            .map(|node| node.origin)
+            .collect::<Vec<_>>();
+        let plan = build_page_render_plan_v1(&visual, 0).expect("render plan");
+
+        assert_eq!(plan.nodes[0].node_id, first_origin);
+        assert_eq!(plan.nodes[1].node_id, second_origin);
+        assert!(
+            plan.nodes[0]
+                .projected_scene_instance
+                .as_ref()
+                .is_some_and(|instance| instance.projection_kind == SceneProjectionKindV1::InheritedMaster)
+        );
+        assert!(
+            plan.nodes[1]
+                .projected_scene_instance
+                .as_ref()
+                .is_some_and(|instance| instance.projection_kind == SceneProjectionKindV1::InheritedMaster)
+        );
+        assert_eq!(
+            plan.nodes[2..]
+                .iter()
+                .map(|node| node.node_id)
+                .collect::<Vec<_>>(),
+            direct_ids,
+            "page-local lane must remain above inherited master without reordering"
         );
     }
 
