@@ -60,6 +60,7 @@ NETWORK_DEPENDENCY_RE = re.compile(
 FORBIDDEN_NETWORK_PACKAGES = {"reqwest", "ureq", "hyper", "curl", "webbrowser"}
 
 PROCESS_LAUNCH_TOKENS = ("Command::new(", "std::process::Command::new(")
+ALLOWED_DESKTOP_PROCESS_PATH = Path("apps/chaptera-desktop/src/reader_update_control.rs")
 ALLOWED_DESKTOP_PROCESS_CONTEXT = (
     '--product-smoke-v1',
     'activated Reader health smoke',
@@ -157,10 +158,10 @@ def scan_desktop_process_launch(repo_root: Path) -> list[str]:
 
     path, index, token = occurrences[0]
     relative = path.relative_to(repo_root)
-    if relative != Path("apps/chaptera-desktop/src/main.rs"):
+    if relative != ALLOWED_DESKTOP_PROCESS_PATH:
         return [
             f"{relative}: reviewed process launch moved outside the admitted updater "
-            "health-smoke location"
+            f"health-smoke location {ALLOWED_DESKTOP_PROCESS_PATH}"
         ]
 
     text = path.read_text(encoding="utf-8")
@@ -189,6 +190,9 @@ def self_test() -> None:
     assert NETWORK_DEPENDENCY_RE.search('hyper = { version = "1" }')
     assert not NETWORK_DEPENDENCY_RE.search('description = "hyperlink support"')
     assert "hyperlink" not in FORBIDDEN_RUNTIME_TOKENS
+    assert ALLOWED_DESKTOP_PROCESS_PATH == Path(
+        "apps/chaptera-desktop/src/reader_update_control.rs"
+    )
 
     alias_manifest = tomllib.loads(
         """
