@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-// The cadence API is intentionally staged one PR before its UI consumer (#227).
+// The cadence API is intentionally staged one PR before its UI consumer (#227). Continuity V2 negative-control note: unrelated shell edits must not admit continuity.
 mod acceptance;
 mod acceptance_v2;
 mod acceptance_v2_cli;
