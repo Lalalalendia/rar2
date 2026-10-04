@@ -77,7 +77,7 @@ jobs:
         run: |
           set -euo pipefail
           root="_witness/lalamu/pub-corpus/corpus/native/unclassified"
-          export CHAPTERA_FDPP_PROVENANCE_PUB="$root/9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966.pub"
+          export CHAPTERA_FDPP_PROVENANCE_PUB="${GITHUB_WORKSPACE}/$root/9d6a7f3638c49e043795416545e7f2305498dcfecd064cfa9ada03e27167e966.pub"
           cargo test \
             --manifest-path vendor/producer-a/Cargo.toml \
             -p pub-reader \
