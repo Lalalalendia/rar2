@@ -170,16 +170,17 @@ TIER_A = READER_SHARED + (
 
 READER_DESKTOP = (
     "apps/chaptera-desktop/Cargo.toml",
-    "apps/chaptera-desktop/src/main.rs",
     "apps/chaptera-desktop/src/diagnostic_sweep.rs",
     "apps/chaptera-desktop/src/image_decode_adapter.rs",
     "apps/chaptera-desktop/src/product_smoke.rs",
+    "apps/chaptera-desktop/src/reader_product_cli.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
     "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/render_backend.rs",
 )
 
 READER_WINDOWS_SMOKE = READER_SHARED + (
+    "apps/chaptera-desktop/src/main.rs",
     ".github/workflows/chaptera-reader-windows-smoke.yml",
 )
 
@@ -359,6 +360,7 @@ SHARED_DESKTOP_FILES = {
     "apps/chaptera-desktop/src/diagnostic_sweep.rs",
     "apps/chaptera-desktop/src/image_decode_adapter.rs",
     "apps/chaptera-desktop/src/product_smoke.rs",
+    "apps/chaptera-desktop/src/reader_product_cli.rs",
     "apps/chaptera-desktop/src/reader_product_ui.rs",
     "apps/chaptera-desktop/src/reader_update_control.rs",
     "apps/chaptera-desktop/src/fallback_font.rs",
@@ -401,6 +403,36 @@ def windows_dll_bootstrap_errors(source: str) -> list[str]:
         errors.append(
             "Windows DLL search bootstrap order drifted; cfg + Err handling + install + exit(2) must precede argument handling"
         )
+    return errors
+
+
+READER_PRODUCT_CLI_SOURCE = "apps/chaptera-desktop/src/main.rs"
+
+
+def reader_product_cli_bootstrap_errors(source: str) -> list[str]:
+    errors: list[str] = []
+    if "mod reader_product_cli;" not in source:
+        errors.append("Desktop main must retain the Reader product CLI module")
+
+    main_marker = "fn main() -> eframe::Result<()> {"
+    main_start = source.find(main_marker)
+    if main_start < 0:
+        errors.append("Desktop main entrypoint is missing")
+        return errors
+
+    gui_marker = "let initial_path = first_arg.map(PathBuf::from);"
+    gui_start = source.find(gui_marker, main_start)
+    if gui_start < 0:
+        errors.append("Desktop GUI bootstrap marker is missing")
+        return errors
+
+    prefix = source[main_start:gui_start]
+    product_call = "reader_product_cli::try_handle_product_smoke(first_arg.as_deref(), &mut args)"
+    probe_call = "reader_product_cli::try_handle_reader_probe("
+    if product_call not in prefix:
+        errors.append("Desktop main must dispatch Reader product smoke through reader_product_cli")
+    if probe_call not in prefix:
+        errors.append("Desktop main must dispatch Reader activation/smoke probes through reader_product_cli")
     return errors
 
 
@@ -483,6 +515,12 @@ def main() -> int:
     if bootstrap_errors:
         for error in bootstrap_errors:
             print(f"reader-pr-ci: Windows DLL bootstrap invariant failed: {error}")
+        return 2
+
+    reader_cli_errors = reader_product_cli_bootstrap_errors(desktop_main)
+    if reader_cli_errors:
+        for error in reader_cli_errors:
+            print(f"reader-pr-ci: Reader product CLI bootstrap invariant failed: {error}")
         return 2
 
     dynamic_evidence_only = test_region_evidence_only_paths(args.base, args.head, paths)
