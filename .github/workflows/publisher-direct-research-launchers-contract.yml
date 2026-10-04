@@ -39,7 +39,7 @@ jobs:
               [ref]$errors
             )
             if ($errors.Count -ne 0) {
-              $errors | ForEach-Object { Write-Error "$path: $($_.Message)" }
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
               throw "PowerShell parser rejected $path"
             }
           }
