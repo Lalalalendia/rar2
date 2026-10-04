@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: carlton-current-viewer-yab-supported-subset-\${{ github.ref }}
+  group: carlton-current-viewer-yab-supported-subset-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -147,7 +147,7 @@ jobs:
 
           $env:CHAPTERA_DESKTOP_ACCEPTANCE_V1 = "1"
           $env:CHAPTERA_DESKTOP_ACCEPTANCE_VISIBLE_STORY = "1"
-          $env:CHAPTERA_RAR_COMMIT = "\${{ github.sha }}"
+          $env:CHAPTERA_RAR_COMMIT = "${{ github.sha }}"
           $env:CHAPTERA_SOURCE_HASH = "bf9cda0f632b5820ab9dbdbe1b838b2a988b2f3fdd69253c22b4fc3aef9f11c3"
           $env:CHAPTERA_CARLTON_OBSERVATION = $observation
 
