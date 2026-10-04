@@ -70,15 +70,23 @@ jobs:
               "git hash-object",
               "Publisher Build mismatch",
               "MSPUB.EXE",
-              "OutputRoot is not empty",
-              "chaptera.master-projection-stack-auth.v1",
-              "MASTER-PROJECTION-STACK-AUTH-01",
-              "allowedVerdicts",
-              "armWinners",
-              "ambiguous_or_creation_order_sensitive"
+              "OutputRoot is not empty"
             )) {
               if (-not $text.Contains($required)) {
                 throw "Missing bounded direct-launcher marker '$required' in $path"
+              }
+            }
+            if ($path -eq "tools/windows/run_master_projection_stack_auth_direct.ps1") {
+              foreach ($required in @(
+                "chaptera.master-projection-stack-auth.v1",
+                "MASTER-PROJECTION-STACK-AUTH-01",
+                "allowedVerdicts",
+                "armWinners",
+                "ambiguous_or_creation_order_sensitive"
+              )) {
+                if (-not $text.Contains($required)) {
+                  throw "Missing master-stack receipt marker '$required' in $path"
+                }
               }
             }
           }
