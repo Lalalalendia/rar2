@@ -798,7 +798,8 @@ impl ResizeTransaction {
             Err(reason) => return Ok(self.install_candidate(Err(reason))),
         };
 
-        let constrained = match plan_resize_constraint_v1(self.before, self.handle, raw, modifiers) {
+        let constrained = match plan_resize_constraint_v1(self.before, self.handle, raw, modifiers)
+        {
             Ok(plan) => Ok(plan.constrained_rect),
             Err(_) => Err(ResizeInvalidReason::Constraint),
         };
