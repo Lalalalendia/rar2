@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use pub_reader::{build_legacy_0x22_noquill_source_graph, PubBridgeDiagnostic};
+use pub_reader::{
+    PubBridgeDiagnostic, analyze_mature_0x2c_page_roles,
+    build_legacy_0x22_noquill_source_graph,
+};
 use pub_viewer::{open_pub_geometry, viewer_geometry_environment_v0_1};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -84,6 +87,50 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|image| image.node_ids.len())
                 .sum::<usize>();
+            let image_crop_placement_count = visual
+                .images
+                .iter()
+                .flat_map(|image| image.placements.iter())
+                .filter(|placement| placement.source_window.is_some())
+                .count();
+
+            let mature_page_role_prevalence =
+                if visual.document.source.format_version.as_deref() == Some("0x2c") {
+                    match analyze_mature_0x2c_page_roles(Cursor::new(bytes.as_slice())) {
+                        Ok(receipt) => {
+                            let group_child_count = receipt
+                                .pages
+                                .iter()
+                                .map(|page| page.group_child_count)
+                                .sum::<usize>();
+                            let pages_with_group_children = receipt
+                                .pages
+                                .iter()
+                                .filter(|page| page.group_child_count > 0)
+                                .count();
+                            let applied_master_relation_count = receipt
+                                .pages
+                                .iter()
+                                .filter(|page| page.applied_master_seq_num.is_some())
+                                .count();
+                            json!({
+                                "state": "observed_current_reader_authority",
+                                "page_count": receipt.confirmed_page_count,
+                                "group_child_count": group_child_count,
+                                "pages_with_group_children": pages_with_group_children,
+                                "applied_master_relation_count": applied_master_relation_count,
+                            })
+                        }
+                        Err(error) => json!({
+                            "state": "current_reader_authority_unavailable",
+                            "error_signature_sha256": sha256_hex(format!("{error:#}").as_bytes()),
+                        }),
+                    }
+                } else {
+                    json!({
+                        "state": "not_applicable_non_mature_0x2c",
+                    })
+                };
             let legacy_object_residuals = legacy_object_residual_census(
                 &bytes,
                 visual.document.source.source_hash,
@@ -108,6 +155,19 @@ fn main() -> Result<()> {
                 "inherited_typography_run_count": inherited_typography_run_count,
                 "image_resource_count": visual.images.len(),
                 "image_placement_count": image_placement_count,
+                "semantic_prevalence": {
+                    "image_crop": {
+                        "state": "observed_viewer_projection",
+                        "placement_count": image_crop_placement_count,
+                    },
+                    "mature_page_roles": mature_page_role_prevalence,
+                    "grounded_guides": {
+                        "state": "not_wired_to_active_corpus_open_bundle"
+                    },
+                    "mail_merge": {
+                        "state": "not_wired_to_generic_reader_corpus_receipt"
+                    }
+                },
                 "paint_node_count": visual.paints.len(),
                 "solid_fill_count": visual.paints.iter().filter(|paint| paint.solid_fill_rgb.is_some()).count(),
                 "solid_line_count": visual.paints.iter().filter(|paint| paint.solid_line.is_some()).count(),
