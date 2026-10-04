@@ -9,7 +9,7 @@ function Start-EncodedPowerShell([string]$Script,[string[]]$ChildArgs,[string]$S
         if($a -match '^-{1,2}[A-Za-z][A-Za-z0-9_-]*$'){$parts += $a}else{$parts += (Quote-PsLiteral $a)}
     }
     $call = $parts -join ' '
-    $command = '$ErrorActionPreference=''Stop''; try { ' + $call + '; exit 0 } catch { Write-Error $_; exit 1 }'
+    $command = '$ErrorActionPreference=''Stop''; try { ' + $call + '; if(-not $?) { exit 1 }; exit 0 } catch { Write-Error $_; exit 1 }'
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $argLine='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
     return Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $argLine -NoNewWindow -PassThru -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
