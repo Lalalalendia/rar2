@@ -1,3 +1,4 @@
+//! Admission probe: this shell is the Selection Keyboard behavior owner.
 //! Desktop selection-keyboard event integration.
 //!
 //! Owns canvas shortcuts and the Story Alt+Arrow escape route. The existing
