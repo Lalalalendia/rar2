@@ -69,6 +69,7 @@ use std::time::{Duration, Instant, SystemTime};
 const APP_TITLE: &str = "Chaptera PUB Reader — Technical Preview";
 #[cfg(not(feature = "reader-only"))]
 const APP_TITLE: &str = "Chaptera Editor";
+// CI-DESKTOP-MAINRS-FANOUT-02 Phase 3B negative control: unrelated main.rs-only edit.
 
 const READER_PRODUCT_LABEL: &str = "Chaptera PUB Reader";
 const READER_FIRST_RUN_HEADING: &str = "Open a PUB file";
