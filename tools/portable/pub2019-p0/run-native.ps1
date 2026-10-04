@@ -38,6 +38,8 @@ function Assert-BundleManifest([string]$Root) {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "bundle-manifest.json missing" }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ([string]$manifest.schema -ne "chaptera.pub2019-portable-p0.v1") { throw "Unexpected bundle manifest schema." }
+    if ([string]$manifest.paragraph_probe_crt -ne "static-msvc") { throw "Portable paragraph probe is not declared static-msvc." }
+    if ([string]$manifest.paragraph_probe_dependency_audit -ne "no-vcruntime-msvcp-ucrt-imports") { throw "Portable paragraph probe dependency audit is missing or unexpected." }
     foreach ($item in @($manifest.files)) {
         $relative = [string]$item.path
         $candidate = Join-Path $Root ($relative.Replace("/", "\"))
@@ -47,6 +49,16 @@ function Assert-BundleManifest([string]$Root) {
         $actual = Get-Sha256 $candidate
         if ($actual -ne [string]$item.sha256) { throw "Bundle SHA-256 mismatch: $relative" }
     }
+
+    $probeDepsPath = Join-Path $Root "runtime\paragraph-metrics-probe-dependencies.txt"
+    if (-not (Test-Path -LiteralPath $probeDepsPath -PathType Leaf)) { throw "Paragraph probe dependency audit missing." }
+    $probeDeps = Get-Content -LiteralPath $probeDepsPath -Raw
+    foreach ($forbidden in @("VCRUNTIME", "MSVCP", "api-ms-win-crt", "ucrtbase.dll")) {
+        if ($probeDeps -match [regex]::Escape($forbidden)) {
+            throw "Portable paragraph probe dependency audit contains external CRT component: $forbidden"
+        }
+    }
+
     return $manifest
 }
 
