@@ -329,8 +329,10 @@ jobs:
               raise SystemExit("cropped-image residual drift")
           if mapping["table_node_count"] != 1:
               raise SystemExit("table residual drift")
-          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 102:
+          if mapping["input_page_count"] != 3 or mapping["input_node_count"] != 108:
               raise SystemExit("Carlton supported-subset input census drift")
+          if mapping.get("semantic_duplicate_node_id_count") != 2:
+              raise SystemExit("Carlton semantic duplicate-node census drift")
 
           summary = renderer_receipt["renderer_result"]["summary"]
           if summary["page_count"] != 3:
