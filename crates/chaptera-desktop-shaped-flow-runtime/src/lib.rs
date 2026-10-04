@@ -516,86 +516,49 @@ mod tests {
     }
 
     #[test]
-    fn real_sample_newsletter_format_override_changes_current_typography_input() {
-        let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
-            eprintln!("CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated gate owns this test");
+    fn real_text_style_format_override_changes_current_typography_input() {
+        let Some(path) = env::var_os("CHAPTERA_TEXT_STYLE_FIXTURE") else {
+            eprintln!("CHAPTERA_TEXT_STYLE_FIXTURE not set; dedicated gate owns this test");
             return;
         };
-        let bytes = fs::read(path).expect("read pinned SampleNewsletter");
+        let bytes = fs::read(path).expect("read pinned text-style.pub");
         let digest = Sha256::digest(&bytes);
         let mut digest_bytes = [0_u8; 32];
         digest_bytes.copy_from_slice(&digest);
         let source_hash = Sha256Digest::from_bytes(digest_bytes);
-        let mut editor = open_mature_0x2c_editor(&bytes, source_hash)
-            .expect("open real SampleNewsletter editor");
+        let mut editor =
+            open_mature_0x2c_editor(&bytes, source_hash).expect("open real text-style.pub editor");
 
         let story_id = editor
             .graph()
             .stories
-            .iter()
-            .find_map(|(story_id, story)| {
-                if story.text.is_empty() {
-                    return None;
-                }
-                editor
-                    .current_text_format_state_hash_v1(*story_id)
-                    .ok()
-                    .map(|_| *story_id)
+            .keys()
+            .copied()
+            .find(|id| {
+                current_story_effective_typography_v1(&editor, *id)
+                    .is_ok_and(|runs| !runs.is_empty())
             })
-            .expect("fixture exposes one Story with canonical text-format overlay state");
-        let scalar_end = u32::try_from(editor.graph().stories[&story_id].text.chars().count())
-            .expect("Story scalar length fits u32");
-
-        let state_hash = editor
-            .current_text_format_state_hash_v1(story_id)
-            .expect("Bold seed state hash");
-        editor
-            .set_text_format_property_v1(
-                story_id,
-                0,
-                scalar_end,
-                FormatPropertyV1::Bold,
-                FormatValueV1::Bool(false),
-                &state_hash,
-            )
-            .expect("seed Bold override");
-        let state_hash = editor
-            .current_text_format_state_hash_v1(story_id)
-            .expect("Italic seed state hash");
-        editor
-            .set_text_format_property_v1(
-                story_id,
-                0,
-                scalar_end,
-                FormatPropertyV1::Italic,
-                FormatValueV1::Bool(false),
-                &state_hash,
-            )
-            .expect("seed Italic override");
-
+            .expect("text-style.pub exposes bounded effective typography");
         let before = current_story_effective_typography_v1(&editor, story_id)
-            .expect("seeded effective typography");
+            .expect("source effective typography");
         let first = before.first().expect("non-empty typography").clone();
-        assert!(!first.bold);
-        assert!(!first.italic);
-
         let state_hash = editor
             .current_text_format_state_hash_v1(story_id)
-            .expect("Bold toggle state hash");
+            .expect("state hash");
         editor
             .set_text_format_property_v1(
                 story_id,
                 first.scalar_start,
                 first.scalar_end,
                 FormatPropertyV1::Bold,
-                FormatValueV1::Bool(true),
+                FormatValueV1::Bool(!first.bold),
                 &state_hash,
             )
             .expect("set Bold override");
 
         let after = current_story_effective_typography_v1(&editor, story_id)
             .expect("edited effective typography");
-        assert!(after[0].bold);
+        assert_eq!(after[0].bold, !first.bold);
         assert_eq!(after[0].italic, first.italic);
         assert_eq!(after[0].font_resource_id, first.font_resource_id);
         assert_eq!(after[0].font_size_emu, first.font_size_emu);
