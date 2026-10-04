@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   assertReaderSceneSourceNeutral,
+  decorativeBorderPlacementPaintPlan,
   imageContentRotationGeometry,
   imagePaintGeometry,
   imageRecolorPaintPlan,
@@ -13,6 +14,44 @@ import {
   tableCellFillPaintPlan,
   tableCellPaintGeometry
 } from "./render-v1.mjs";
+
+test("decorative BorderArt placement uses exact server geometry and bounded image resources", () => {
+  const resource = {
+    resource_id: "resource:border-top",
+    mime: "image/png",
+    availability: "inline_data_url",
+    inline_data_url: "data:image/png;base64,cG5n"
+  };
+  const placement = {
+    slot: "top",
+    resource_id: resource.resource_id,
+    bounds: { x: 100, y: 200, width: 300, height: 40 }
+  };
+
+  assert.deepEqual(
+    decorativeBorderPlacementPaintPlan(placement, resource),
+    {
+      slot: "top",
+      resource_id: resource.resource_id,
+      href: resource.inline_data_url,
+      geometry: { x: 100, y: 200, width: 300, height: 40 }
+    }
+  );
+  assert.equal(
+    decorativeBorderPlacementPaintPlan(
+      { ...placement, slot: "publisher_private_slot" },
+      resource
+    ),
+    null
+  );
+  assert.equal(
+    decorativeBorderPlacementPaintPlan(
+      placement,
+      { ...resource, availability: "descriptor_only", inline_data_url: undefined }
+    ),
+    null
+  );
+});
 
 test("Viewer-materialized OLE preview PNG uses the generic image resource paint path", () => {
   const resource = {

@@ -33,9 +33,9 @@ use chaptera_scene_instance::{
 };
 use chaptera_viewer_render_plan::{
     AuthoredPageRenderLaneV1, AuthoredPageRenderNodeV1, ExplicitRenderTextFontResourceV1,
-    PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1, apply_authored_page_render_lane_v1,
-    build_page_render_plan_with_text_layout_resolver_v1,
-    build_page_render_plan_with_text_layout_v1,
+    NodeRenderPlanV1, PageRenderPlanV1, RenderPlanErrorV1, RenderSolidLineV1,
+    apply_authored_page_render_lane_v1, build_page_render_plan_with_text_layout_resolver_v1,
+    build_page_render_plan_with_text_layout_v1, layout_decorative_border_v1,
 };
 use eframe::egui;
 use pub_interaction::{
@@ -127,6 +127,50 @@ fn build_desktop_page_render_plan_with_source_fonts(
     build_page_render_plan_with_text_layout_resolver_v1(visual, page_index, &fallback, |fragment| {
         source_fonts.resource_for_fragment(fragment)
     })
+}
+
+fn paint_document_node_decorative_border(
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    node: &NodeRenderPlanV1,
+    image_textures: &BTreeMap<String, CachedImageTexture>,
+) {
+    let (Some(border), Some(line)) = (node.decorative_border.as_ref(), node.solid_line.as_ref())
+    else {
+        return;
+    };
+    let Some(stretch_pictures) = border.stretch_pictures else {
+        return;
+    };
+    let Some(placements) =
+        layout_decorative_border_v1(border, node.bounds, line.width_emu, stretch_pictures)
+    else {
+        return;
+    };
+
+    for placement in placements {
+        let key = format!("{:?}", placement.resource_id);
+        let Some(texture) = image_textures.get(&key) else {
+            continue;
+        };
+        let Some(rect) = render_backend::physical_rect_to_egui(
+            page_rect,
+            scene_scale,
+            placement.bounds.x.get(),
+            placement.bounds.y.get(),
+            placement.bounds.width.get(),
+            placement.bounds.height.get(),
+        ) else {
+            continue;
+        };
+        painter.image(
+            texture.texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
 }
 
 fn editor_authored_page_render_lane(
@@ -2439,21 +2483,7 @@ impl ViewerApp {
                     }
                 }
                 if save_clicked {
-                    match self.save_editor_project_sidecar() {
-                        Ok(path) => {
-                            self.project_status = Some(format!(
-                                "Saved editor project with {operation_count} operations."
-                            ));
-                            self.edit_status = Some(format!(
-                                "Project saved to {}. Source PUB was not overwritten.",
-                                path.display()
-                            ));
-                        }
-                        Err(error) => {
-                            self.edit_status =
-                                Some(format!("Could not save editor project: {error}"));
-                        }
-                    }
+                    self.save_project_with_status(operation_count);
                 }
                 if redo_clicked {
                     self.apply_redo();
@@ -4739,6 +4769,64 @@ impl ViewerApp {
         self.canvas_resize = None;
     }
 
+    fn save_project_with_status(&mut self, operation_count: usize) {
+        if operation_count == 0 {
+            self.project_status = Some("Editor project has no edit operations to save.".to_owned());
+            self.edit_status =
+                Some("Nothing new to save. Source PUB was not overwritten.".to_owned());
+            return;
+        }
+
+        if self.saved_project_operation_count().ok().flatten() == Some(operation_count) {
+            self.project_status = Some(format!(
+                "Editor project is already saved with {operation_count} operations."
+            ));
+            self.edit_status = Some(
+                "Chaptera Project is already saved. Source PUB was not overwritten.".to_owned(),
+            );
+            return;
+        }
+
+        match self.save_editor_project_sidecar() {
+            Ok(path) => {
+                self.project_status = Some(format!(
+                    "Saved editor project with {operation_count} operations."
+                ));
+                self.edit_status = Some(format!(
+                    "Project saved to {}. Source PUB was not overwritten.",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                self.edit_status = Some(format!("Could not save editor project: {error}"));
+            }
+        }
+    }
+
+    fn process_global_save_shortcut(&mut self, ctx: &egui::Context) {
+        if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
+            return;
+        }
+
+        let save_pressed = ctx.input(|input| {
+            let command = input.modifiers.ctrl || input.modifiers.command;
+            command
+                && !input.modifiers.alt
+                && !input.modifiers.shift
+                && input.key_pressed(egui::Key::S)
+        });
+        if !save_pressed {
+            return;
+        }
+
+        let operation_count = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.operations().len())
+            .unwrap_or(0);
+        self.save_project_with_status(operation_count);
+    }
+
     fn process_global_history_shortcuts(&mut self, ctx: &egui::Context) {
         if reader_only_mode() || self.text_mode.is_some() || ctx.wants_keyboard_input() {
             return;
@@ -4960,6 +5048,43 @@ impl ViewerApp {
                     self.image_decode_diagnostics.insert(
                         key.clone(),
                         image_decode_adapter::diagnostic_for(key, embedded.mime.clone(), &error),
+                    );
+                }
+            }
+        }
+
+        for resource in &visual.decorative_border_resources {
+            let key = format!("{:?}", resource.resource_id);
+            if self.image_textures.contains_key(&key)
+                || self.image_decode_diagnostics.contains_key(&key)
+            {
+                continue;
+            }
+
+            let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+            match image_decode_adapter::decode_texture_image_v1(
+                &resource.bytes,
+                &resource.mime,
+                &expected_sha256,
+            ) {
+                Ok(admitted) => {
+                    let texture = ctx.load_texture(
+                        format!("pub-borderart-{key}"),
+                        admitted.color_image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.image_textures.insert(
+                        key,
+                        CachedImageTexture {
+                            texture,
+                            _cache_identity_sha256: admitted.cache_identity_sha256,
+                        },
+                    );
+                }
+                Err(error) => {
+                    self.image_decode_diagnostics.insert(
+                        key.clone(),
+                        image_decode_adapter::diagnostic_for(key, resource.mime.clone(), &error),
                     );
                 }
             }
@@ -5771,6 +5896,13 @@ impl ViewerApp {
                             .or(source_texture)
                             .map(|cached| cached.texture.id()),
                     );
+                    paint_document_node_decorative_border(
+                        &painter,
+                        page_rect,
+                        scene_scale,
+                        render_node,
+                        &self.image_textures,
+                    );
 
                     painter.rect_stroke(
                         node_rect,
@@ -6105,6 +6237,7 @@ impl eframe::App for ViewerApp {
         if !text_keyboard_owned {
             self.process_canvas_object_keyboard(ctx);
             self.process_global_history_shortcuts(ctx);
+            self.process_global_save_shortcut(ctx);
         }
 
         debug_assert_eq!(
@@ -8304,11 +8437,56 @@ mod tests {
             "Ctrl+Y must not append a new authoring operation"
         );
 
-        harness.get_by_label("Save Project").click();
+        let save_operation_count = harness
+            .state()
+            .editor
+            .as_ref()
+            .expect("editor")
+            .operations()
+            .len();
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
         harness.step();
         harness.step();
         let sidecar = editor_project_sidecar_path(&fixture).expect("sidecar path");
-        assert!(sidecar.is_file(), "GUI Save Project must write the sidecar");
+        assert!(
+            sidecar.is_file(),
+            "Ctrl+S must write the EditorProject sidecar"
+        );
+        let shortcut_sidecar = fs::read(&sidecar).expect("read Ctrl+S sidecar");
+        assert_eq!(
+            harness
+                .state()
+                .editor
+                .as_ref()
+                .expect("editor")
+                .operations()
+                .len(),
+            save_operation_count,
+            "Ctrl+S must not append an Editor operation"
+        );
+
+        harness.get_by_label("Save Project").click();
+        harness.step();
+        harness.step();
+        let button_sidecar = fs::read(&sidecar).expect("read Save Project sidecar");
+        assert_eq!(
+            shortcut_sidecar, button_sidecar,
+            "Ctrl+S and Save Project must materialize identical sidecar bytes"
+        );
+
+        harness.press_key_modifiers(egui::Modifiers::CTRL, egui::Key::S);
+        harness.step();
+        assert_eq!(
+            harness.state().project_status.as_deref(),
+            Some("Editor project is already saved with 2 operations."),
+            "Ctrl+S on an already-saved project must be an honest no-op confirmation"
+        );
+        assert_eq!(
+            fs::read(&sidecar).expect("read unchanged sidecar"),
+            button_sidecar,
+            "saved-state Ctrl+S must not change sidecar bytes"
+        );
+
         // Save happens after command enablement is computed for this frame.
         // Advance once more so the accessibility tree reflects the saved sidecar.
         harness.step();
@@ -10628,6 +10806,42 @@ mod tests {
                     },
                 );
             }
+
+            for resource in &self.visual.decorative_border_resources {
+                let key = format!("{:?}", resource.resource_id);
+                if self.image_textures.contains_key(&key) {
+                    continue;
+                }
+                let expected_sha256 = image_decode_adapter::exact_sha256_hex(&resource.bytes);
+                let admitted = image_decode_adapter::decode_texture_image_v1(
+                    &resource.bytes,
+                    &resource.mime,
+                    &expected_sha256,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "clean golden BorderArt decode failed for {} / {}: {error}",
+                        key, resource.mime
+                    )
+                });
+                let [width, height] = admitted.color_image.size;
+                assert!(
+                    width <= max_texture_side && height <= max_texture_side,
+                    "BorderArt golden image {width}x{height} exceeds active egui texture limit {max_texture_side}"
+                );
+                let texture = ctx.load_texture(
+                    format!("borderart-golden-{key}"),
+                    admitted.color_image,
+                    egui::TextureOptions::LINEAR,
+                );
+                self.image_textures.insert(
+                    key,
+                    CachedImageTexture {
+                        texture,
+                        _cache_identity_sha256: admitted.cache_identity_sha256,
+                    },
+                );
+            }
         }
     }
 
@@ -10672,6 +10886,13 @@ mod tests {
                             node,
                             node_rect,
                             texture.map(|cached| cached.texture.id()),
+                        );
+                        paint_document_node_decorative_border(
+                            &painter,
+                            page_rect,
+                            scene_scale,
+                            node,
+                            &self.image_textures,
                         );
                         let outcome = render_backend::paint_document_node_foreground(
                             &painter,

@@ -285,6 +285,7 @@ const reasonLabels = {
   stacking_order_unavailable: "The original stacking order is not fully supported.",
   node_kind_partial: "Some page objects do not yet have a supported visual representation.",
   image_resource_not_inline: "Some images are unavailable in this viewing session.",
+  decorative_border_unresolved: "A decorative border is present but cannot be placed safely in this viewing session.",
   viewer_fidelity_warnings: "The document has display limitations described below.",
   shared_text_layout_unavailable: "Some text uses an approximate preview layout.",
   text_layout_partial: "Some text does not yet have fully supported page layout.",
