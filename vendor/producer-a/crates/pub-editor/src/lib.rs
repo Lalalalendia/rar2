@@ -1,4 +1,5 @@
 //! Bounded authoring session for Publisher migration workflows.
+//! CI positive-control note: shared crate facade changes must retain Continuity V2 Windows proof.
 //!
 //! This crate does not make a general "editable PUB" claim. Every edit
 //! operation is capability-gated and preserves the immutable source identity.
