@@ -65,6 +65,8 @@ struct CurrentNode {
 #[derive(Debug, Deserialize)]
 struct CurrentProjectedSceneInstance {
     instance_id: String,
+    #[serde(default)]
+    projection_kind: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +107,8 @@ struct CurrentCensus {
 
 #[derive(Debug, Deserialize)]
 struct CurrentText {
+    scalar_start: u32,
+    scalar_end: u32,
     #[serde(default)]
     typography: Vec<CurrentTypographyRun>,
     #[serde(default)]
@@ -115,6 +119,7 @@ struct CurrentText {
 struct CurrentTypographyRun {
     scalar_start: u32,
     scalar_end: u32,
+    text_size_emu: u32,
     #[serde(default)]
     color_rgb: Option<[u8; 3]>,
 }
@@ -173,6 +178,16 @@ struct MappingSummary {
     mapped_image_use_count: usize,
     mapped_text_node_count: usize,
     mapped_text_run_count: usize,
+    mapped_resource_node_count: usize,
+    text_node_count: usize,
+    text_resource_residual_node_count: usize,
+    text_resource_residual_signature_counts: BTreeMap<String, usize>,
+    text_partial_residual_signature_counts: BTreeMap<String, usize>,
+    text_resource_residual_cooccurrence_counts: BTreeMap<String, usize>,
+    text_resource_residual_projection_lane_counts: BTreeMap<String, usize>,
+    text_resource_residual_signature_lane_counts: BTreeMap<String, usize>,
+    shared_resolved_line_count: usize,
+    shared_resolved_line_outcome_counts: BTreeMap<String, usize>,
     backend_fallback_reason_counts: BTreeMap<String, usize>,
     cropped_image_use_count: usize,
     table_node_count: usize,
@@ -181,6 +196,9 @@ struct MappingSummary {
     shaped_span_line_count: usize,
     missing_shaping_line_count: usize,
     unresolved_text_color_line_count: usize,
+    residual_node_signature_counts: BTreeMap<String, usize>,
+    residual_projection_lane_counts: BTreeMap<String, usize>,
+    residual_signature_lane_counts: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -200,34 +218,130 @@ struct MaterializedEnvelope {
     request: PacketRenderRequest,
 }
 
-fn uniform_color_for_range(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColorRangeDisposition {
+    Resolved([u8; 3]),
+    MissingRgb,
+    MixedRgb,
+    CoverageGap,
+    InvalidRange,
+}
+
+impl ColorRangeDisposition {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::Resolved(_) => "resolved",
+            Self::MissingRgb => "missing_rgb",
+            Self::MixedRgb => "mixed_rgb",
+            Self::CoverageGap => "coverage_gap",
+            Self::InvalidRange => "invalid_range",
+        }
+    }
+}
+
+fn color_range_disposition(
     runs: &[CurrentTypographyRun],
     scalar_start: u32,
     scalar_end: u32,
-) -> Option<[u8; 3]> {
+) -> ColorRangeDisposition {
     if scalar_start >= scalar_end {
-        return None;
+        return ColorRangeDisposition::InvalidRange;
     }
+
     let mut cursor = scalar_start;
-    let mut resolved = None;
+    let mut colors = BTreeSet::<[u8; 3]>::new();
+    let mut missing_rgb = false;
     for run in runs {
-        let start = run.scalar_start.max(scalar_start);
-        let end = run.scalar_end.min(scalar_end);
-        if start >= end {
+        if run.scalar_end <= scalar_start || run.scalar_start >= scalar_end {
             continue;
         }
-        if start != cursor {
-            return None;
+        if run.scalar_end <= run.scalar_start {
+            return ColorRangeDisposition::InvalidRange;
         }
-        let color = run.color_rgb?;
-        match resolved {
-            None => resolved = Some(color),
-            Some(existing) if existing == color => {}
-            Some(_) => return None,
+        let start = run.scalar_start.max(scalar_start);
+        let end = run.scalar_end.min(scalar_end);
+        if start < cursor {
+            return ColorRangeDisposition::InvalidRange;
+        }
+        if start > cursor {
+            return ColorRangeDisposition::CoverageGap;
+        }
+        if let Some(color) = run.color_rgb {
+            colors.insert(color);
+        } else {
+            missing_rgb = true;
         }
         cursor = end;
     }
-    (cursor == scalar_end).then_some(resolved).flatten()
+
+    if cursor != scalar_end {
+        return ColorRangeDisposition::CoverageGap;
+    }
+    if missing_rgb {
+        return ColorRangeDisposition::MissingRgb;
+    }
+    match colors.len() {
+        1 => ColorRangeDisposition::Resolved(*colors.iter().next().expect("one color exists")),
+        0 => ColorRangeDisposition::MissingRgb,
+        _ => ColorRangeDisposition::MixedRgb,
+    }
+}
+
+fn text_size_profile_tag(text: &CurrentText) -> &'static str {
+    if text.scalar_start >= text.scalar_end || text.typography.is_empty() {
+        return "size_profile_unknown";
+    }
+
+    let mut cursor = text.scalar_start;
+    let mut sizes = BTreeSet::<u32>::new();
+    for run in &text.typography {
+        if run.scalar_end <= text.scalar_start || run.scalar_start >= text.scalar_end {
+            continue;
+        }
+        if run.scalar_end <= run.scalar_start {
+            return "size_profile_unknown";
+        }
+        let start = run.scalar_start.max(text.scalar_start);
+        let end = run.scalar_end.min(text.scalar_end);
+        if start != cursor || run.text_size_emu == 0 {
+            return "size_profile_unknown";
+        }
+        sizes.insert(run.text_size_emu);
+        cursor = end;
+    }
+    if cursor != text.scalar_end {
+        return "size_profile_unknown";
+    }
+    match sizes.len() {
+        1 => "uniform_size",
+        n if n > 1 => "mixed_size",
+        _ => "size_profile_unknown",
+    }
+}
+
+fn text_cooccurrence_tag(node: &CurrentNode) -> String {
+    let mut tags = Vec::new();
+    if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
+        tags.push("paint");
+    }
+    if let Some(image) = &node.image {
+        if image.source_window.is_some() {
+            tags.push("cropped_image");
+        } else {
+            tags.push("image");
+        }
+    }
+    if node.table.is_some() {
+        tags.push("table");
+    }
+    if node.decorative_border.is_some() {
+        tags.push("decorative_border");
+    }
+    if tags.is_empty() {
+        "none".into()
+    } else {
+        tags.join("+")
+    }
 }
 
 fn checked_add(left: i64, right: i64, label: &str) -> Result<i64> {
@@ -306,6 +420,12 @@ fn main() -> Result<()> {
     let mut text_runs = Vec::<FixedTextRun>::new();
     let mut used_glyph_ids = BTreeSet::<u32>::new();
     let mut mapped_text_nodes = BTreeSet::<NodeId>::new();
+    let mut mapped_resource_nodes = BTreeSet::<NodeId>::new();
+    let mut text_node_ids = BTreeSet::<NodeId>::new();
+    let mut residual_reasons = BTreeMap::<NodeId, BTreeSet<String>>::new();
+    let mut text_residual_reasons = BTreeMap::<NodeId, BTreeSet<String>>::new();
+    let mut text_cooccurrence_by_node = BTreeMap::<NodeId, String>::new();
+    let mut text_projection_lane_by_node = BTreeMap::<NodeId, String>::new();
     let mut summary = MappingSummary {
         input_page_count: input.pages.len(),
         input_node_count: actual_node_count,
@@ -354,6 +474,10 @@ fn main() -> Result<()> {
             }
             if node.table.is_some() {
                 summary.table_node_count += 1;
+                residual_reasons
+                    .entry(resolved_node_id)
+                    .or_default()
+                    .insert("table".into());
             }
 
             if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
@@ -366,11 +490,16 @@ fn main() -> Result<()> {
                     }),
                 });
                 summary.mapped_paint_node_count += 1;
+                mapped_resource_nodes.insert(resolved_node_id);
             }
 
             if let Some(image) = &node.image {
                 if image.source_window.is_some() {
                     summary.cropped_image_use_count += 1;
+                    residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert("cropped_image".into());
                 } else {
                     let asset = image_assets.get(&image.resource_id).copied().ok_or_else(|| {
                         anyhow::anyhow!(
@@ -389,14 +518,32 @@ fn main() -> Result<()> {
                         .or_default()
                         .push(resolved_node_id);
                     summary.mapped_image_use_count += 1;
+                    mapped_resource_nodes.insert(resolved_node_id);
                 }
             }
 
             let Some(text) = &node.text else {
                 continue;
             };
+            text_node_ids.insert(resolved_node_id);
+            text_cooccurrence_by_node.insert(resolved_node_id, text_cooccurrence_tag(node));
+            text_projection_lane_by_node.insert(
+                resolved_node_id,
+                node.projected_scene_instance
+                    .as_ref()
+                    .and_then(|instance| instance.projection_kind.clone())
+                    .unwrap_or_else(|| "base".into()),
+            );
             let Some(layout) = &text.layout else {
                 summary.missing_shaping_line_count += 1;
+                residual_reasons
+                    .entry(resolved_node_id)
+                    .or_default()
+                    .insert("text_layout_missing".into());
+                text_residual_reasons
+                    .entry(resolved_node_id)
+                    .or_default()
+                    .insert("text_layout_missing".into());
                 continue;
             };
 
@@ -406,6 +553,19 @@ fn main() -> Result<()> {
                         .backend_fallback_reason_counts
                         .entry(reason.clone())
                         .or_default() += 1;
+                    let tag = if reason == "shared_layout_incomplete" {
+                        format!("backend_fallback:{reason}:{}", text_size_profile_tag(text))
+                    } else {
+                        format!("backend_fallback:{reason}")
+                    };
+                    residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert(tag.clone());
+                    text_residual_reasons
+                        .entry(resolved_node_id)
+                        .or_default()
+                        .insert(tag);
                 }
                 CurrentTextLayoutDisposition::SharedResolved {
                     font_resource_id,
@@ -437,18 +597,47 @@ fn main() -> Result<()> {
                     let mut node_mapped = false;
 
                     for line in &layout.lines {
+                        summary.shared_resolved_line_count += 1;
                         let current_line_top = line_top;
                         line_top = checked_add(line_top, line.line_height_emu, "text line top")?;
 
                         if line.text.is_empty() {
+                            *summary
+                                .shared_resolved_line_outcome_counts
+                                .entry("empty_text".into())
+                                .or_default() += 1;
                             continue;
                         }
                         if !line.spans.is_empty() {
                             summary.shaped_span_line_count += 1;
+                            *summary
+                                .shared_resolved_line_outcome_counts
+                                .entry("shaped_span".into())
+                                .or_default() += 1;
+                            residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("shaped_span".into());
+                            text_residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("shaped_span".into());
                             continue;
                         }
                         let Some(shaping) = &line.shaping else {
                             summary.missing_shaping_line_count += 1;
+                            *summary
+                                .shared_resolved_line_outcome_counts
+                                .entry("missing_shaping".into())
+                                .or_default() += 1;
+                            residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("missing_shaping".into());
+                            text_residual_reasons
+                                .entry(resolved_node_id)
+                                .or_default()
+                                .insert("missing_shaping".into());
                             continue;
                         };
                         if shaping.units_per_em == 0 {
@@ -466,13 +655,32 @@ fn main() -> Result<()> {
                             bail!("SharedResolved shaping environment differs from packet font");
                         }
 
-                        let Some(fill_rgb) = uniform_color_for_range(
+                        let fill_rgb = match color_range_disposition(
                             &text.typography,
                             line.scalar_start,
                             line.scalar_end,
-                        ) else {
-                            summary.unresolved_text_color_line_count += 1;
-                            continue;
+                        ) {
+                            ColorRangeDisposition::Resolved(color) => color,
+                            disposition => {
+                                summary.unresolved_text_color_line_count += 1;
+                                let tag = format!(
+                                    "unresolved_text_color:{}",
+                                    disposition.code()
+                                );
+                                *summary
+                                    .shared_resolved_line_outcome_counts
+                                    .entry(tag.clone())
+                                    .or_default() += 1;
+                                residual_reasons
+                                    .entry(resolved_node_id)
+                                    .or_default()
+                                    .insert(tag.clone());
+                                text_residual_reasons
+                                    .entry(resolved_node_id)
+                                    .or_default()
+                                    .insert(tag);
+                                continue;
+                            }
                         };
 
                         let baseline_x = checked_add(
@@ -510,17 +718,139 @@ fn main() -> Result<()> {
                             fill_rgb,
                         });
                         summary.mapped_text_run_count += 1;
+                        *summary
+                            .shared_resolved_line_outcome_counts
+                            .entry("emitted".into())
+                            .or_default() += 1;
                         node_mapped = true;
                     }
 
                     if node_mapped {
                         mapped_text_nodes.insert(resolved_node_id);
+                        mapped_resource_nodes.insert(resolved_node_id);
+                    } else if !text_residual_reasons.contains_key(&resolved_node_id) {
+                        let tag = if layout.lines.is_empty() {
+                            "shared_resolved:no_lines"
+                        } else if layout.lines.iter().all(|line| line.text.is_empty()) {
+                            "shared_resolved:empty_only"
+                        } else {
+                            "shared_resolved:no_emittable_run"
+                        };
+                        residual_reasons
+                            .entry(resolved_node_id)
+                            .or_default()
+                            .insert(tag.into());
+                        text_residual_reasons
+                            .entry(resolved_node_id)
+                            .or_default()
+                            .insert(tag.into());
                     }
                 }
             }
         }
     }
     summary.mapped_text_node_count = mapped_text_nodes.len();
+    summary.mapped_resource_node_count = mapped_resource_nodes.len();
+    summary.text_node_count = text_node_ids.len();
+
+    for node_id in &text_node_ids {
+        let Some(reasons) = text_residual_reasons.get(node_id) else {
+            continue;
+        };
+        let signature = reasons.iter().cloned().collect::<Vec<_>>().join("+");
+        if mapped_text_nodes.contains(node_id) {
+            *summary
+                .text_partial_residual_signature_counts
+                .entry(signature)
+                .or_default() += 1;
+        } else {
+            *summary
+                .text_resource_residual_signature_counts
+                .entry(signature.clone())
+                .or_default() += 1;
+            let cooccurrence = text_cooccurrence_by_node
+                .get(node_id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".into());
+            *summary
+                .text_resource_residual_cooccurrence_counts
+                .entry(cooccurrence)
+                .or_default() += 1;
+            let lane = text_projection_lane_by_node
+                .get(node_id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".into());
+            *summary
+                .text_resource_residual_projection_lane_counts
+                .entry(lane.clone())
+                .or_default() += 1;
+            *summary
+                .text_resource_residual_signature_lane_counts
+                .entry(format!("{signature}@{lane}"))
+                .or_default() += 1;
+            summary.text_resource_residual_node_count += 1;
+        }
+    }
+    if mapped_text_nodes.len() + summary.text_resource_residual_node_count != text_node_ids.len() {
+        bail!("current Viewer text-resource partition does not cover every text node exactly once");
+    }
+    let line_outcome_total = summary
+        .shared_resolved_line_outcome_counts
+        .values()
+        .copied()
+        .sum::<usize>();
+    if line_outcome_total != summary.shared_resolved_line_count {
+        bail!("current Viewer SharedResolved line outcomes do not partition every line exactly once");
+    }
+
+    for page in &input.pages {
+        for node in &page.nodes {
+            let resolved_node_id = resolved_output_node_id_v1(node)?;
+            if mapped_resource_nodes.contains(&resolved_node_id) {
+                continue;
+            }
+            let signature = residual_reasons
+                .get(&resolved_node_id)
+                .filter(|reasons| !reasons.is_empty())
+                .map(|reasons| reasons.iter().cloned().collect::<Vec<_>>().join("+"))
+                .unwrap_or_else(|| {
+                    if node.text.is_some() {
+                        "text:no_supported_text_resource".into()
+                    } else if node.decorative_border.is_some() {
+                        "decorative_border".into()
+                    } else {
+                        "geometry_only".into()
+                    }
+                });
+            *summary
+                .residual_node_signature_counts
+                .entry(signature.clone())
+                .or_default() += 1;
+
+            let lane = node
+                .projected_scene_instance
+                .as_ref()
+                .and_then(|instance| instance.projection_kind.as_deref())
+                .unwrap_or("base")
+                .to_owned();
+            *summary
+                .residual_projection_lane_counts
+                .entry(lane.clone())
+                .or_default() += 1;
+            *summary
+                .residual_signature_lane_counts
+                .entry(format!("{signature}@{lane}"))
+                .or_default() += 1;
+        }
+    }
+    let residual_total = summary
+        .residual_node_signature_counts
+        .values()
+        .copied()
+        .sum::<usize>();
+    if residual_total + mapped_resource_nodes.len() != actual_node_count {
+        bail!("current Viewer residual partition does not cover every node exactly once");
+    }
 
     let image_resources = image_uses
         .into_iter()

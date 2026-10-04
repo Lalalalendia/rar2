@@ -39,6 +39,31 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertIn("shaped_span_line_count", text)
         self.assertIn("missing_shaping_line_count", text)
         self.assertIn("unresolved_text_color_line_count", text)
+        self.assertIn("residual_node_signature_counts", text)
+        self.assertIn("residual_projection_lane_counts", text)
+        self.assertIn("text_resource_residual_signature_counts", text)
+        self.assertIn("text_partial_residual_signature_counts", text)
+        self.assertIn("mapped_resource_node_count", text)
+        self.assertIn("text_resource_residual_node_count", text)
+        self.assertIn("current Viewer residual partition does not cover every node exactly once", text)
+        self.assertIn("current Viewer text-resource partition does not cover every text node exactly once", text)
+        self.assertIn("shared_resolved:no_emittable_run", text)
+        self.assertIn("text_resource_residual_cooccurrence_counts", text)
+        self.assertIn("text_resource_residual_projection_lane_counts", text)
+        self.assertIn("shared_resolved_line_outcome_counts", text)
+        self.assertIn("backend_fallback:{reason}:{}", text)
+        self.assertIn("uniform_size", text)
+        self.assertIn("mixed_size", text)
+        self.assertIn("size_profile_unknown", text)
+        self.assertIn("unresolved_text_color:{}", text)
+        self.assertIn("missing_rgb", text)
+        self.assertIn("mixed_rgb", text)
+        self.assertIn("coverage_gap", text)
+        self.assertIn("invalid_range", text)
+        self.assertIn("text_resource_residual_signature_lane_counts", text)
+        self.assertIn("residual_signature_lane_counts", text)
+        self.assertIn("shared_resolved_line_count", text)
+        self.assertIn("current Viewer SharedResolved line outcomes do not partition every line exactly once", text)
 
     def test_runner_reuses_order_preserving_donor_and_existing_renderer(self) -> None:
         text = RUNNER.read_text(encoding="utf-8")
@@ -48,5 +73,6 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertNotIn("pub_viewer", text)
 
 
+# Current-main rerun marker after paragraph-spacing consumer landing.
 if __name__ == "__main__":
     unittest.main()

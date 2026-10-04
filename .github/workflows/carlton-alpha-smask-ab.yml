@@ -176,8 +176,8 @@ jobs:
               raise SystemExit("baseline and alpha mapping summaries differ")
           baseline = json.loads(Path(os.environ["CHAPTERA_BASELINE_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
           alpha = json.loads(Path(os.environ["CHAPTERA_ALPHA_RENDERER"]).read_text(encoding="utf-8"))["renderer_result"]
-          expected_baseline = {"page_count": 3, "node_painted": 45, "node_partial": 0, "node_unsupported": 57}
-          expected_alpha = {"page_count": 3, "node_painted": 78, "node_partial": 0, "node_unsupported": 24}
+          expected_baseline = {"page_count": 3, "node_painted": 45, "node_partial": 0, "node_unsupported": 63}
+          expected_alpha = {"page_count": 3, "node_painted": 78, "node_partial": 0, "node_unsupported": 30}
           if baseline["summary"] != {**expected_baseline, "diagnostic_codes": baseline["summary"]["diagnostic_codes"]}:
               raise SystemExit(f"baseline summary drift: {baseline['summary']!r}")
           for key, value in expected_baseline.items():
@@ -192,7 +192,10 @@ jobs:
               raise SystemExit("alpha diagnostic survived SMask renderer")
           b = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in baseline["node_reports"]}
           a = {item["origin_node_id"]: (item["disposition"], item["code"]) for item in alpha["node_reports"]}
-          if b.keys() != a.keys() or len(b) != 102:
+          mapping = baseline_mapping["mapping"]
+          if mapping.get("input_node_count") != 108 or mapping.get("semantic_duplicate_node_id_count") != 2:
+              raise SystemExit(f"current inherited-master Carlton census drift: {mapping!r}")
+          if b.keys() != a.keys() or len(b) != mapping["input_node_count"]:
               raise SystemExit("baseline/alpha node report identity set drift")
           changed = [(node_id, b[node_id], a[node_id]) for node_id in b if b[node_id] != a[node_id]]
           if len(changed) != 33:
