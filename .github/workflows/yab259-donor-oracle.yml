@@ -18,8 +18,11 @@ concurrency:
 jobs:
   validate-yab259:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
+      - name: Checkout current rar2 research branch
+        uses: actions/checkout@v4
+
       - name: Checkout exact Yab donor
         uses: actions/checkout@v4
         with:
@@ -31,13 +34,16 @@ jobs:
       - name: Install workspace Rust toolchain
         uses: dtolnay/rust-toolchain@1.85.0
 
+      - name: Install receipt validator dependency
+        run: python -m pip install "jsonschema==4.23.0"
+
       - name: Verify exact donor identity
         working-directory: donor
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "4f5d8a57abc089d1ed8eb1326cf9bed602281f7e"
-          git status --short
+          test -z "$(git status --short)"
           grep -q 'name = "pub-pdf"' crates/pub-pdf/Cargo.toml
           grep -q 'const FIXED_FLOW_RECEIPT_VERSION: &str = "chaptera.fixed-pdf-shaped-flow-receipt.v1";' crates/pub-cli/src/fixed_pdf.rs
 
@@ -68,3 +74,57 @@ jobs:
       - name: Test real SampleNewsletter shaped-flow PDF witness
         working-directory: donor
         run: cargo test -p pub-cli sample_newsletter_pdf_is_deterministic_with_explicit_fallback_and_losses -- --nocapture
+
+      - name: Materialize exact Chaptera fallback font
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p crates/chaptera-desktop-fallback-font-resource/src/bin
+          cat > crates/chaptera-desktop-fallback-font-resource/src/bin/yab259_oracle_font.rs <<'RS'
+          use chaptera_desktop_fallback_font_resource as resource;
+          use std::{env, fs, path::PathBuf};
+
+          fn main() {
+              let output = PathBuf::from(env::args_os().nth(1).expect("output path"));
+              resource::validate().expect("pinned fallback font must validate");
+              fs::write(output, resource::bytes()).expect("write pinned fallback font");
+          }
+          RS
+          cargo run -q -p chaptera-desktop-fallback-font-resource --bin yab259_oracle_font -- "$RUNNER_TEMP/Ubuntu-Light.ttf"
+          test "$(wc -c < "$RUNNER_TEMP/Ubuntu-Light.ttf")" -eq 361676
+          echo "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70  $RUNNER_TEMP/Ubuntu-Light.ttf" | sha256sum -c -
+
+      - name: Build exact Yab donor CLI
+        working-directory: donor
+        run: cargo build -p pub-cli
+
+      - name: Produce exact rar2 shaped-flow receipt through Yab donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/run_local_fixed_pdf_shaped_flow.py             --fixture .web-v0/SampleNewsletter.pub             --fallback-font "$RUNNER_TEMP/Ubuntu-Light.ttf"             --pdf-output "$RUNNER_TEMP/SampleNewsletter.shaped-flow.pdf"             --receipt-output "$RUNNER_TEMP/fixed-pdf-shaped-flow.real.json"             -- "$GITHUB_WORKSPACE/donor/target/debug/pub-cli" convert {fixture} --to pdf --output {pdf} --fallback-font {font} --json
+
+      - name: Independently validate sanitized receipt
+        run: python tools/validate_fixed_pdf_shaped_flow_receipt.py "$RUNNER_TEMP/fixed-pdf-shaped-flow.real.json"
+
+      - name: Validate PDF structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y qpdf poppler-utils
+          qpdf --check "$RUNNER_TEMP/SampleNewsletter.shaped-flow.pdf"
+          pdfinfo "$RUNNER_TEMP/SampleNewsletter.shaped-flow.pdf" > "$RUNNER_TEMP/SampleNewsletter.pdfinfo.txt"
+          pdftotext "$RUNNER_TEMP/SampleNewsletter.shaped-flow.pdf" "$RUNNER_TEMP/SampleNewsletter.txt"
+
+      - name: Retain exact donor evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: yab259-fixed-pdf-oracle-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/SampleNewsletter.shaped-flow.pdf
+            ${{ runner.temp }}/fixed-pdf-shaped-flow.real.json
+            ${{ runner.temp }}/SampleNewsletter.pdfinfo.txt
+            ${{ runner.temp }}/SampleNewsletter.txt
+          if-no-files-found: error
+          retention-days: 14
