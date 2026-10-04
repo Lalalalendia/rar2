@@ -80,9 +80,8 @@ pub enum ParagraphAlignmentTransitionErrorV1 {
 impl fmt::Display for ParagraphAlignmentTransitionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NonCanonicalTargets => {
-                formatter.write_str("paragraph alignment targets are not canonical sorted unique ids")
-            }
+            Self::NonCanonicalTargets => formatter
+                .write_str("paragraph alignment targets are not canonical sorted unique ids"),
             Self::SnapshotShapeMismatch => formatter.write_str(
                 "paragraph alignment before/after snapshots do not cover the same targets",
             ),
@@ -175,7 +174,6 @@ pub(crate) fn apply_paragraph_alignment_override_transition_v1(
     Ok(())
 }
 
-
 pub(crate) fn paragraph_alignment_operation_snapshots_v1(
     operation: &EditOperation,
 ) -> Option<(
@@ -256,10 +254,7 @@ mod tests {
     fn transition_is_exact_atomic_and_reversible() {
         let first = paragraph(1);
         let second = paragraph(2);
-        let mut state = BTreeMap::from([(
-            first,
-            AuthoredParagraphAlignmentValueV1::Left,
-        )]);
+        let mut state = BTreeMap::from([(first, AuthoredParagraphAlignmentValueV1::Left)]);
         let before = paragraph_alignment_override_snapshots_v1(&state, &[first, second]);
         let after = vec![
             ParagraphAlignmentOverrideSnapshotV1 {
@@ -294,10 +289,7 @@ mod tests {
     fn stale_transition_fails_without_partial_mutation() {
         let first = paragraph(1);
         let second = paragraph(2);
-        let mut state = BTreeMap::from([(
-            first,
-            AuthoredParagraphAlignmentValueV1::Center,
-        )]);
+        let mut state = BTreeMap::from([(first, AuthoredParagraphAlignmentValueV1::Center)]);
         let before = vec![
             ParagraphAlignmentOverrideSnapshotV1 {
                 paragraph_id: first,
@@ -368,8 +360,8 @@ mod tests {
             }],
         };
 
-        let state =
-            paragraph_alignment_override_state_from_history_v1(&[set, clear_first]).expect("history replay");
+        let state = paragraph_alignment_override_state_from_history_v1(&[set, clear_first])
+            .expect("history replay");
         assert_eq!(
             state,
             BTreeMap::from([(second, AuthoredParagraphAlignmentValueV1::Right)])
