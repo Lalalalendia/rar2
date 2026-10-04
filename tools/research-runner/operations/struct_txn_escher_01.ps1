@@ -467,6 +467,12 @@ elseif ($addedCandidates.Count -eq 1) {
 $targetSummary = $null
 if ($null -ne $target) {
     $escherShape = $target.escher_shape
+    $foptObservations = [ordered]@{}
+    foreach ($property in $escherShape.PSObject.Properties) {
+        if ($property.Name -match "(?i)fopt|option") {
+            $foptObservations[$property.Name] = $property.Value
+        }
+    }
     $targetSummary = [ordered]@{
         selection = $targetSelection
         com_shape_id = [long]$created.id
@@ -481,6 +487,7 @@ if ($null -ne $target) {
         escher_fsp = $escherShape.fsp
         escher_client_anchor = $escherShape.client_anchor
         escher_client_data = $escherShape.client_data
+        escher_fopt_observations = $foptObservations
         escher_observation_keys = @($escherShape.PSObject.Properties.Name | Sort-Object)
     }
 }
@@ -578,7 +585,7 @@ $result = [ordered]@{
         geometry_rediscovery_claimed = $false
         universal_allocator_claimed = $false
         effect_carrier_semantics_promoted = $false
-        effect_carrier_instantiation_requires_semantic_review_of_private_target = $true
+        effect_carrier_instantiation_exposed_for_bounded_review = $true
     }
 }
 Write-PubJson -Value $result -Path (Join-Path $analysisDir "struct-txn-escher-01.json")
