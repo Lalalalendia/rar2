@@ -53,3 +53,22 @@ jobs:
         run: |
           cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
             real_sample_newsletter_current_story_builds_deterministically_and_rebinds_after_edit -- --nocapture
+
+      - name: Acquire pinned OBS-006A text-style.pub
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/text-style.pub"
+          curl -fsSL \
+            "https://raw.githubusercontent.com/fosnola/libmspub-test/33d8f78db8b8b319098c3d5ba3ad3e952369b323/testset/9.0/text-style.pub" \
+            -o "$fixture"
+          actual_sha="$(sha256sum "$fixture" | awk '{print $1}')"
+          test "$actual_sha" = "525ee897523e09b2fb8e6d435e307c3cd4ce4c12d2060fc81854bcf619263967"
+          actual_len="$(wc -c < "$fixture" | tr -d ' ')"
+          test "$actual_len" = "20480"
+          echo "CHAPTERA_TEXT_STYLE_FIXTURE=$fixture" >> "$GITHUB_ENV"
+
+      - name: Real Bold overlay reaches current typography input
+        run: |
+          cargo test --manifest-path crates/chaptera-desktop-shaped-flow-runtime/Cargo.toml \
+            real_text_style_format_override_changes_current_typography_input -- --nocapture
