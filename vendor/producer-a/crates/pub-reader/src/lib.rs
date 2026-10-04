@@ -149,10 +149,10 @@ pub use salvage::{
     probe_reader_salvage_candidate_with_trigger,
 };
 pub use salvage_authority::{ReaderSalvageAuthority, typed_corruption_authority};
-pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Seek, SeekFrom};
+pub use story_provenance::has_exact_mature_quill_story_identity_v1;
 pub use structural_base::{
     PUB_STRUCTURAL_BASE_SCHEMA_V1, PubStructuralBaseCandidate, PubStructuralBaseManifest,
     PubStructuralBaseStreamDigest, build_mature_0x2c_structural_base_manifest,
