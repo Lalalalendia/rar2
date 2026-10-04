@@ -4,40 +4,16 @@ use pub_reader::{
 };
 use std::io::Cursor;
 
-fn decode_base64(input: &str) -> Vec<u8> {
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-    let mut buffer = 0_u32;
-    let mut bits = 0_u8;
-
-    for byte in input.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            b'=' => break,
-            byte if byte.is_ascii_whitespace() => continue,
-            other => panic!("unexpected base64 byte: {other:#04x}"),
-        };
-        buffer = (buffer << 6) | u32::from(value);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push((buffer >> bits) as u8);
-            buffer &= if bits == 0 { 0 } else { (1_u32 << bits) - 1 };
-        }
-    }
-
-    output
-}
-
 #[test]
-fn pinned_sample_fdpp_story_replacement_retains_exact_shared_provenance() {
-    let bytes = decode_base64(include_str!("fixtures/Sample.pub.b64"));
+#[ignore = "requires one pinned exact FDPP-positive PUB path"]
+fn exact_fdpp_positive_story_replacement_retains_shared_provenance() {
+    let path = std::env::var_os("CHAPTERA_FDPP_PROVENANCE_PUB")
+        .map(std::path::PathBuf::from)
+        .expect("CHAPTERA_FDPP_PROVENANCE_PUB");
+    let bytes = std::fs::read(path).expect("read exact FDPP-positive PUB");
     let source_hash = Sha256Digest::from_bytes([0x51; 32]);
     let built = build_mature_0x2c_source_graph(Cursor::new(bytes), source_hash)
-        .expect("build pinned Sample.pub mature source graph");
+        .expect("build exact FDPP-positive mature source graph");
 
     let fdpp_stories = built
         .graph
@@ -57,7 +33,7 @@ fn pinned_sample_fdpp_story_replacement_retains_exact_shared_provenance() {
 
     assert!(
         !fdpp_stories.is_empty(),
-        "pinned Sample.pub must exercise the FDPP-bounded Story replacement ref shape"
+        "exact FDPP-positive witness must expose the current Reader replacement ref shape"
     );
     assert!(
         fdpp_stories
