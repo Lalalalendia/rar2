@@ -94,8 +94,7 @@ pub fn add_full_story_paragraph_alignment_to_idml(
             });
         };
 
-        let marker =
-            "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n";
+        let marker = "    <ParagraphStyleRange AppliedParagraphStyle=\"ParagraphStyle/$ID/[No paragraph style]\">\n";
         if xml.matches(marker).count() != 1 {
             return Err(IdmlParagraphAlignmentError::UnexpectedStoryMarkup {
                 story_id: item.story_id,
