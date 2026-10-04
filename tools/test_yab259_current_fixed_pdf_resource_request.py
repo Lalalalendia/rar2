@@ -6,6 +6,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / "tools" / "yab259_current_fixed_pdf_resource_request.rs"
+RUNNER = ROOT / "tools" / "run_yab259_current_fixed_pdf_resource_request.py"
 
 
 class CurrentFixedPdfResourceRequestTests(unittest.TestCase):
@@ -32,6 +33,12 @@ class CurrentFixedPdfResourceRequestTests(unittest.TestCase):
             '"chaptera.fixed-pdf-packet-render-request.v1"',
             text,
         )
+
+
+    def test_python_runner_uses_input_without_explicit_stdin_pipe(self) -> None:
+        text = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("input=json.dumps(", text)
+        self.assertNotIn("stdin=subprocess.PIPE", text)
 
 
 if __name__ == "__main__":
