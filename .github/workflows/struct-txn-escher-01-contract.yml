@@ -9,6 +9,10 @@ on:
       - vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
       - .github/workflows/struct-txn-escher-01-contract.yml
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows-contract:
     runs-on: windows-latest
