@@ -1,0 +1,37 @@
+name: Current semantic prevalence V1
+
+on:
+  pull_request:
+    paths:
+      - 'vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs'
+      - 'tools/corpus/current_semantic_prevalence.py'
+      - 'tools/corpus/test_current_semantic_prevalence.py'
+      - '.github/workflows/current-semantic-prevalence-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs'
+      - 'tools/corpus/current_semantic_prevalence.py'
+      - 'tools/corpus/test_current_semantic_prevalence.py'
+      - '.github/workflows/current-semantic-prevalence-v1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: current-semantic-prevalence-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check current corpus receipt producer
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-viewer --bin corpus-reader-receipt
+      - name: Test prevalence aggregation invariants
+        run: |
+          python -m py_compile tools/corpus/current_semantic_prevalence.py
+          PYTHONPATH=tools/corpus python tools/corpus/test_current_semantic_prevalence.py
