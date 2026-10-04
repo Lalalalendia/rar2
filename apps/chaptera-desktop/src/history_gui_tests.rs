@@ -55,7 +55,11 @@ fn gui_ctrl_history_shortcuts_reuse_canonical_undo_redo_without_hidden_operation
     let after = {
         let app = harness.state_mut();
         let editor = app.editor.as_mut().expect("editor loaded");
-        assert_eq!(editor.operations().len(), 0, "fresh fixture starts with no authoring operations");
+        assert_eq!(
+            editor.operations().len(),
+            0,
+            "fresh fixture starts with no authoring operations"
+        );
         let x = before
             .x
             .checked_add(pub_editor::LengthEmu::new(127_000))
@@ -64,9 +68,15 @@ fn gui_ctrl_history_shortcuts_reuse_canonical_undo_redo_without_hidden_operation
             .y
             .checked_add(pub_editor::LengthEmu::new(254_000))
             .expect("bounded y");
-        editor.move_node_to(node_id, x, y).expect("bounded MoveNode");
+        editor
+            .move_node_to(node_id, x, y)
+            .expect("bounded MoveNode");
         let after = editor.graph().nodes[&node_id].header.bounds;
-        assert_eq!(editor.operations().len(), 1, "setup emits exactly one durable operation");
+        assert_eq!(
+            editor.operations().len(),
+            1,
+            "setup emits exactly one durable operation"
+        );
         app.sync_visual_geometry_from_editor();
         after
     };
@@ -78,7 +88,11 @@ fn gui_ctrl_history_shortcuts_reuse_canonical_undo_redo_without_hidden_operation
         let app = harness.state();
         let editor = app.editor.as_ref().expect("editor loaded");
         assert_eq!(editor.graph().nodes[&node_id].header.bounds, before);
-        assert_eq!(editor.operations().len(), 0, "Ctrl+Z moves the one operation to redo");
+        assert_eq!(
+            editor.operations().len(),
+            0,
+            "Ctrl+Z moves the one operation to redo"
+        );
         assert_eq!(
             app.visual
                 .as_ref()
