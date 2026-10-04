@@ -5,19 +5,21 @@ on:
     paths:
       - ".github/workflows/master-projection-stack-auth-once.yml"
       - "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
+      - "tools/windows/run_master_projection_stack_auth_direct.ps1"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/master-projection-stack-auth-once.yml"
       - "tools/research-runner/operations/master_projection_stack_auth_01.ps1"
+      - "tools/windows/run_master_projection_stack_auth_direct.ps1"
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: master-projection-stack-publisher-2019
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'publisher-2019' || github.ref }}
   cancel-in-progress: false
 
 jobs:
