@@ -477,10 +477,7 @@ mod tests {
         .expect("valid move transaction");
 
         let raw = drag
-            .update(DocumentPoint::new(
-                LengthEmu::new(-5),
-                LengthEmu::ZERO,
-            ))
+            .update(DocumentPoint::new(LengthEmu::new(-5), LengthEmu::ZERO))
             .expect("raw preview");
         let snapped = index(Vec::new())
             .snap_rect(moving, raw, LengthEmu::new(10))
