@@ -3,7 +3,6 @@ name: CHAPTERA-WIN-DLL-SEARCH-HARDEN-01 runtime probe
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/windows_dll_search.rs"
       - "apps/chaptera-desktop/src/bin/chaptera-dll-search-probe.rs"
       - ".github/workflows/chaptera-win-dll-search-harden.yml"
