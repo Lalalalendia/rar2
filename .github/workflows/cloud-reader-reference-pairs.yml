@@ -1,5 +1,7 @@
 name: Cloud Reader reference PUB-PDF pairs
 
+# Measurement trigger for #1139 first-line-fit discriminator; no runtime semantics.
+
 on:
   workflow_call:
   workflow_dispatch:
