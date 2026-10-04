@@ -90,10 +90,7 @@ fn aspect_corner_x_control_uses_exact_rational_rounding() {
         },
     )
     .expect("aspect x");
-    assert_eq!(
-        plan.aspect_control_axis,
-        Some(ResizeAspectControlAxisV1::X)
-    );
+    assert_eq!(plan.aspect_control_axis, Some(ResizeAspectControlAxisV1::X));
     assert!(plan.aspect_applied);
     assert_eq!(plan.constrained_rect, rect(0, 0, 4, 3));
 }
@@ -129,10 +126,7 @@ fn aspect_y_control_can_expand_other_axis_beyond_raw() {
         },
     )
     .expect("aspect y");
-    assert_eq!(
-        plan.aspect_control_axis,
-        Some(ResizeAspectControlAxisV1::Y)
-    );
+    assert_eq!(plan.aspect_control_axis, Some(ResizeAspectControlAxisV1::Y));
     assert_eq!(plan.constrained_rect, rect(0, 0, 200, 100));
 }
 
@@ -296,8 +290,7 @@ fn all_eight_typed_handles_are_accepted_without_string_dispatch() {
     let base = rect(100, 100, 80, 40);
     let raw = rect(90, 90, 100, 60);
     for handle in ResizeHandle::ALL {
-        let result =
-            plan_resize_constraint_v1(base, handle, raw, ResizeModifierMaskV1::default());
+        let result = plan_resize_constraint_v1(base, handle, raw, ResizeModifierMaskV1::default());
         assert!(result.is_ok(), "typed handle {handle:?} should be admitted");
     }
 }
