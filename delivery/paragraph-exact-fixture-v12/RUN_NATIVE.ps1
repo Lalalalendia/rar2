@@ -63,7 +63,81 @@ function Find-ExactFixture([string]$DiagPath){
 }
 function Quote-PsLiteral([string]$Value){return "'"+$Value.Replace("'","''")+"'"}
 function Start-EncodedPowerShell([string]$Script,[string[]]$ChildArgs,[string]$Stdout,[string]$Stderr){
-    $parts=@('&',(Quote-PsLiteral $Script));foreach($a in $ChildArgs){$parts+=(Quote-PsLiteral $a)};$command=$parts -join ' ';$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command));$argLine='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
+    $parts=@('&',(Quote-PsLiteral $Script))
+    foreach($a in $ChildArgs){
+        if($a -match '^-{1,2}[A-Za-z][A-Za-z0-9_-]*
+function Invoke-Step([string]$Label,[string]$Script,[string[]]$ChildArgs,[int]$TimeoutSeconds,[string]$LogDir,[string]$LiveLog,[string]$WatchRoot){
+    New-Item -ItemType Directory -Force -Path $LogDir|Out-Null;$stdout=Join-Path $LogDir 'stdout.txt';$stderr=Join-Path $LogDir 'stderr.txt';$start=Get-Date
+    Write-Host '';Write-Host ('=== '+$Label+' ===') -ForegroundColor Cyan
+    $p=Start-EncodedPowerShell $Script $ChildArgs $stdout $stderr
+    while(-not $p.HasExited){
+        Start-Sleep -Seconds 10;$p.Refresh();$elapsed=[int]((Get-Date)-$start).TotalSeconds;$mp=@(Get-MspubPids)-join ',';$files=0;if(Test-Path -LiteralPath $WatchRoot){$files=@(Get-ChildItem -LiteralPath $WatchRoot -File -Recurse -ErrorAction SilentlyContinue).Count}
+        $line=('['+(Get-Date -Format 'HH:mm:ss')+"] $Label RUNNING elapsed=${elapsed}s child=$($p.Id) MSPUB=[$mp] evidence_files=$files");Write-Host $line;$line|Add-Content -LiteralPath $LiveLog -Encoding UTF8
+        foreach($lp in @($stdout,$stderr)){if(Test-Path -LiteralPath $lp){$tail=Get-Content -LiteralPath $lp -Tail 3 -ErrorAction SilentlyContinue;foreach($t in $tail){if(-not [string]::IsNullOrWhiteSpace($t)){Write-Host ('  > '+$t)}}}}
+        if($elapsed -ge $TimeoutSeconds){try{Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}catch{};foreach($id in @(Get-MspubPids)){try{Stop-Process -Id $id -Force -ErrorAction SilentlyContinue}catch{}};throw "$Label timed out after $TimeoutSeconds s"}
+    }
+    $p.WaitForExit();$p.Refresh();$exitCode=[int]$p.ExitCode
+    if($exitCode -ne 0){throw "$Label failed with exit code $exitCode"}
+}
+function Copy-SafeTree([string]$SourceRoot,[string]$DestRoot){New-Item -ItemType Directory -Force -Path $DestRoot|Out-Null;foreach($name in @('analysis','logs')){$src=Join-Path $SourceRoot $name;if(Test-Path -LiteralPath $src){Copy-Item -LiteralPath $src -Destination $DestRoot -Recurse -Force}};foreach($name in @('environment.json','evidence-manifest.json')){$src=Join-Path $SourceRoot $name;if(Test-Path -LiteralPath $src -PathType Leaf){Copy-Item -LiteralPath $src -Destination (Join-Path $DestRoot $name) -Force}}}
+function Invoke-SelfTest{
+    $base=Join-Path $env:TEMP ('paragraph-v12-selftest-'+[guid]::NewGuid().ToString('N'));New-Item -ItemType Directory -Force -Path $base|Out-Null
+    try{
+        $fake=Join-Path $base 'fake child.ps1'
+        @(
+            'param([string]$PacketPath,[string]$OutputRoot)',
+            "if(`$PacketPath -ne 'path with spaces' -or `$OutputRoot -ne 'second value'){exit 7}",
+            'exit 0'
+        )|Set-Content -LiteralPath $fake -Encoding ASCII
+        $o=Join-Path $base 'o.txt';$e=Join-Path $base 'e.txt'
+        $p=Start-EncodedPowerShell $fake @('-PacketPath','path with spaces','-OutputRoot','second value') $o $e
+        $p.WaitForExit();$p.Refresh();$exitCode=[int]$p.ExitCode
+        if($exitCode -ne 0){throw 'encoded named-parameter invocation self-test failed'}
+        $o2=Join-Path $base 'o2.txt';$e2=Join-Path $base 'e2.txt'
+        $p2=Start-EncodedPowerShell $fake @('-NoSuchParameter','x') $o2 $e2
+        $p2.WaitForExit();$p2.Refresh();$badExit=[int]$p2.ExitCode
+        if($badExit -eq 0){throw 'invalid named parameter incorrectly returned success'}
+        Write-Host 'SELFTEST PASS'
+    }finally{Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue}
+}
+if($SelfTest){Invoke-SelfTest;exit 0}
+
+$stamp=Get-Date -Format 'yyyyMMdd-HHmmss';$WorkRoot=Join-Path $Root ('work\'+$stamp);$ReturnRoot=Join-Path $Root ('return\'+$stamp);$LiveDir=Join-Path $Root 'live';New-Item -ItemType Directory -Force -Path $WorkRoot,$ReturnRoot,$LiveDir|Out-Null;$LiveLog=Join-Path $LiveDir ('LIVE-CONSOLE-'+$stamp+'.log')
+$summary=[ordered]@{schema='chaptera.paragraph-exact-fixture-v12.v1';started_at=(Get-Date).ToString('o');publisher=$null;fixture=$null;status='running'}
+try{
+    Assert-NotElevated;Assert-Payload;Ensure-PublisherPreflightIdle
+    $P0Root=Join-Path $WorkRoot 'p0';Expand-Archive -LiteralPath $P0Zip -DestinationPath $P0Root -Force;[void](Assert-P0Manifest $P0Root);$summary.publisher=Assert-Publisher $P0Root
+    $recovery=Join-Path $ReturnRoot 'FIXTURE-RECOVERY.json';$fixture=Find-ExactFixture $recovery
+    if([string]::IsNullOrWhiteSpace($fixture)){throw 'Exact canonical paragraph fixture SHA 5bf6057b... was not found on this machine.'}
+    $fixtureCopy=Join-Path $WorkRoot 'fixture\minimal-blank-v1-generated.pub';New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fixtureCopy)|Out-Null;Copy-Item -LiteralPath $fixture -Destination $fixtureCopy -Force
+    if((Get-Sha256 $fixtureCopy) -ne $ExpectedFixtureSha){throw 'Copied fixture SHA mismatch.'};$summary.fixture=[ordered]@{sha256=$ExpectedFixtureSha;bytes=$ExpectedFixtureBytes;provenance='recovered_exact_local_5bf6057b'}
+    $env:PUB_RESEARCH_FIXTURE=$fixtureCopy
+    $Out=Join-Path $WorkRoot 'paragraph-metrics';New-Item -ItemType Directory -Force -Path $Out|Out-Null
+    $packet=Join-Path $P0Root 'tools\research-runner\experiments\paragraph-metrics-auth-01.packet.json';$operation=Join-Path $P0Root 'tools\research-runner\operations\paragraph_metrics_auth_01.ps1'
+    Invoke-Step 'PARAGRAPH NATIVE MATRIX' $operation @('-PacketPath',$packet,'-OutputRoot',$Out) 900 (Join-Path $ReturnRoot 'native-console') $LiveLog $Out
+    $nativeReceipt=Join-Path $Out 'analysis\paragraph-metrics-auth-01.json'
+    if(-not(Test-Path -LiteralPath $nativeReceipt -PathType Leaf)){throw 'native semantic receipt missing after paragraph operation; refusing downstream analysis'}
+    $nativePre=Get-Content -LiteralPath $nativeReceipt -Raw|ConvertFrom-Json
+    if([string]$nativePre.verdict -ne 'native-semantic-arms-captured-with-common-seed' -or @($nativePre.arms).Count -ne 11){throw 'native paragraph operation did not produce the expected 11-arm common-seed receipt'}
+    [ordered]@{schema='chaptera.paragraph-exact-fixture-environment.v1';publisher=$summary.publisher;fixture=$summary.fixture}|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $Out 'environment.json') -Encoding UTF8
+    $pythonRoot=Join-Path $WorkRoot 'python';Expand-Archive -LiteralPath (Join-Path $P0Root 'runtime\python-3.13.16-embed-amd64.zip') -DestinationPath $pythonRoot -Force;$python=Join-Path $pythonRoot 'python.exe'
+    $blast=Join-Path $P0Root 'tools\research-runner\analysis\paragraph_metrics_auth_01_blast_radius.py';$struct=Join-Path $P0Root 'tools\research-runner\analysis\paragraph_metrics_auth_01_structural.py';$probe=Join-Path $P0Root 'runtime\paragraph-metrics-probe.exe'
+    & $python $blast --output-root $Out;if($LASTEXITCODE -ne 0){throw 'blast-radius analysis failed'}
+    & $python $struct --output-root $Out --snapshot-tool $probe;if($LASTEXITCODE -ne 0){throw 'structural analysis failed'}
+    $final=Join-Path $P0Root 'tools\research-runner\finalize_native_run.ps1';Invoke-Step 'PARAGRAPH FINALIZE' $final @('-PacketPath',$packet,'-OutputRoot',$Out) 180 (Join-Path $ReturnRoot 'finalize-console') $LiveLog $Out
+    $required=@('analysis\paragraph-metrics-auth-01.json','analysis\paragraph-metrics-auth-01-blast-radius.json','analysis\paragraph-metrics-auth-01-structural.json','environment.json','evidence-manifest.json','logs\paragraph-metrics-auth-01.txt');foreach($rel in $required){if(-not(Test-Path -LiteralPath (Join-Path $Out $rel) -PathType Leaf)){throw "required evidence missing: $rel"}}
+    $native=Get-Content -LiteralPath (Join-Path $Out 'analysis\paragraph-metrics-auth-01.json') -Raw|ConvertFrom-Json;if([string]$native.verdict -ne 'native-semantic-arms-captured-with-common-seed'){throw "unexpected native verdict: $($native.verdict)"};if(@($native.arms).Count -ne 11){throw 'expected 11 native arms'}
+    $summary.status='success';Copy-SafeTree $Out (Join-Path $ReturnRoot 'paragraph-metrics')
+}catch{$summary.status='failed';$summary.error=$_.Exception.Message}
+$summary.finished_at=(Get-Date).ToString('o');$summary|ConvertTo-Json -Depth 15|Set-Content -LiteralPath (Join-Path $ReturnRoot 'SUMMARY.json') -Encoding UTF8;if(Test-Path -LiteralPath $LiveLog){Copy-Item -LiteralPath $LiveLog -Destination (Join-Path $ReturnRoot 'LIVE-RUN.log') -Force}
+$zip=Join-Path $Root ('RETURN-TO-CHAT-PARAGRAPH-'+$stamp+'.zip');if(Test-Path -LiteralPath $zip){Remove-Item -LiteralPath $zip -Force};Compress-Archive -Path (Join-Path $ReturnRoot '*') -DestinationPath $zip -CompressionLevel Optimal
+Write-Host '';Write-Host ('FINAL STATUS: '+$summary.status);Write-Host ('RETURN ZIP: '+$zip) -ForegroundColor Green
+if($summary.status -eq 'success'){exit 0}else{exit 2}
+){$parts+=$a}else{$parts+=(Quote-PsLiteral $a)}
+    }
+    $call=$parts -join ' '
+    $command="$ErrorActionPreference='Stop';try{$call;exit 0}catch{Write-Error $_;exit 1}"
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command));$argLine='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
     return Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $argLine -NoNewWindow -PassThru -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
 }
 function Invoke-Step([string]$Label,[string]$Script,[string[]]$ChildArgs,[int]$TimeoutSeconds,[string]$LogDir,[string]$LiveLog,[string]$WatchRoot){
