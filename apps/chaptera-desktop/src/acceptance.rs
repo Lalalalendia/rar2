@@ -69,6 +69,52 @@ pub(crate) fn select_story_edit(editor: &EditorSession) -> Option<(StoryId, u32,
     None
 }
 
+fn select_visible_story_edit(
+    editor: &EditorSession,
+    visual: &pub_viewer::ViewerGeometryDocument,
+) -> Option<(StoryId, u32, String)> {
+    for page in &visual.document.pages {
+        let page_origin = page.id.into_canonical();
+        for scene_node in visual
+            .scene
+            .nodes
+            .iter()
+            .filter(|node| node.parent_origin == page_origin)
+        {
+            if visual
+                .projected_instances
+                .iter()
+                .any(|projected| projected.target_frame_node_id == scene_node.origin)
+            {
+                continue;
+            }
+            let Some(fragment) = visual
+                .text_fragments
+                .iter()
+                .find(|fragment| fragment.frame_id == scene_node.origin)
+            else {
+                continue;
+            };
+            let story_id = fragment.story_id;
+            if editor.can_replace_story_text(story_id).is_err() {
+                continue;
+            }
+            let Some(story) = editor.graph().stories.get(&story_id) else {
+                continue;
+            };
+            let Some((index, ch)) = story.text.chars().enumerate().find(|(_, ch)| *ch != '\r')
+            else {
+                continue;
+            };
+            let Ok(start) = u32::try_from(index) else {
+                continue;
+            };
+            return Some((story_id, start, ch.to_string()));
+        }
+    }
+    None
+}
+
 pub(crate) fn select_move(
     editor: &EditorSession,
     visual: &pub_viewer::ViewerGeometryDocument,
@@ -243,8 +289,15 @@ pub fn run(fixture: &Path, project_path: &Path, export_path: &Path) -> Result<Va
     let mut editor = pub_editor::open_mature_0x2c_editor(&source_before, source_hash)
         .map_err(|error| format!("open EditorSession: {error}"))?;
 
-    let (story_id, start_scalar, expected_before) = select_story_edit(&editor)
-        .ok_or_else(|| "no capability-approved ordinary Story".to_owned())?;
+    let visible_story_gate =
+        env::var("CHAPTERA_DESKTOP_ACCEPTANCE_VISIBLE_STORY").as_deref() == Ok("1");
+    let story_selection = if visible_story_gate {
+        select_visible_story_edit(&editor, &visual)
+    } else {
+        select_story_edit(&editor)
+    };
+    let (story_id, start_scalar, expected_before) = story_selection
+        .ok_or_else(|| "no capability-approved ordinary Story in the requested scope".to_owned())?;
     let end_scalar = start_scalar
         .checked_add(1)
         .ok_or_else(|| "Story scalar range overflow".to_owned())?;
@@ -351,7 +404,7 @@ pub fn run(fixture: &Path, project_path: &Path, export_path: &Path) -> Result<Va
         return Err("projected SceneInstance unexpectedly admits MoveNode".to_owned());
     }
 
-    Ok(json!({
+    let mut observation = json!({
         "protocol_version": PROTOCOL_VERSION,
         "source_hash": expected_source_hash,
         "rar_commit": rar_commit,
@@ -402,5 +455,9 @@ pub fn run(fixture: &Path, project_path: &Path, export_path: &Path) -> Result<Va
             "projected_object_mutation_fails_closed": projected_denied,
             "reopen_used_fresh_session": true,
         },
-    }))
+    });
+    if visible_story_gate {
+        observation["invariants"]["visible_story_gate_used"] = json!(true);
+    }
+    Ok(observation)
 }
