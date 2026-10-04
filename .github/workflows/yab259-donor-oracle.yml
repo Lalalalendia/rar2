@@ -227,7 +227,8 @@ jobs:
               fs::write(output, resource::bytes()).expect("write pinned fallback font");
           }
           RS
-          cargo run -q -p chaptera-desktop-fallback-font-resource --bin yab259_oracle_font -- "$RUNNER_TEMP/Ubuntu-Light.ttf"
+          rustup toolchain install 1.94.1 --profile minimal
+          cargo +1.94.1 run -q -p chaptera-desktop-fallback-font-resource --bin yab259_oracle_font -- "$RUNNER_TEMP/Ubuntu-Light.ttf"
           test "$(wc -c < "$RUNNER_TEMP/Ubuntu-Light.ttf")" -eq 361676
           echo "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70  $RUNNER_TEMP/Ubuntu-Light.ttf" | sha256sum -c -
 
