@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use pub_layout::{BoundedShapedFlowScene, BoundedShapedText, font_fingerprint_sha256};
-use pub_model::LengthEmu;
+use pub_model::{LengthEmu, NodeId, StoryId};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
@@ -37,11 +37,23 @@ struct DesktopFixedOutputPacketV1 {
     protocol_version: String,
     source_hash: String,
     project_state_id: String,
+    story_states: Vec<DesktopFixedOutputStoryStateV1>,
+    story_mutation_ids: Vec<StoryId>,
+    move_node_ids: Vec<NodeId>,
+    resize_node_ids: Vec<NodeId>,
+    replacement_node_ids: Vec<NodeId>,
     shaped_flow: BoundedShapedFlowScene,
     node_paints: Vec<FixedNodePaint>,
     image_resources: Vec<FixedImageResource>,
     font: DesktopFixedOutputFontV1,
     invariants: DesktopFixedOutputInvariantsV1,
+}
+
+#[derive(Debug, Deserialize)]
+struct DesktopFixedOutputStoryStateV1 {
+    story_id: StoryId,
+    story_state_id: String,
+    scalar_count: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +138,25 @@ fn validate_packet(request: &RenderRequest) -> Result<()> {
         != packet.font.fingerprint_sha256
     {
         bail!("desktop fixed-output packet font identity differs from shaped-flow environment");
+    }
+
+    for story_id in &packet.story_mutation_ids {
+        let state = packet
+            .story_states
+            .iter()
+            .find(|state| state.story_id == *story_id)
+            .ok_or_else(|| anyhow::anyhow!("mutated Story has no current state identity"))?;
+        if state.story_state_id.is_empty() || state.scalar_count == 0 {
+            bail!("mutated Story current state is invalid");
+        }
+        if !packet
+            .shaped_flow
+            .lines
+            .iter()
+            .any(|line| line.story_origin == *story_id && !line.text.is_empty())
+        {
+            bail!("mutated Story has no materialized current shaped line");
+        }
     }
     Ok(())
 }
@@ -235,6 +266,42 @@ fn render(request: RenderRequest) -> Result<RenderResult> {
         &PdfTargetProfile::basic_geometry_v0_1(),
     )
     .context("render current Editor packet with recovered pub-pdf")?;
+
+    let require_painted = |node_id: &NodeId, label: &str| -> Result<()> {
+        let report = rendered
+            .report
+            .nodes
+            .iter()
+            .find(|node| node.origin == *node_id)
+            .ok_or_else(|| anyhow::anyhow!("{label} target is absent from PDF render report"))?;
+        if report.disposition != PdfRenderDisposition::Painted {
+            bail!(
+                "{label} target was not painted by fixed PDF backend: code={}",
+                report.code
+            );
+        }
+        Ok(())
+    };
+
+    for node_id in &packet.move_node_ids {
+        require_painted(node_id, "MoveNode")?;
+    }
+    for node_id in &packet.resize_node_ids {
+        require_painted(node_id, "ResizeNode")?;
+    }
+    for node_id in &packet.replacement_node_ids {
+        require_painted(node_id, "ReplaceImage")?;
+        let resource_count = packet
+            .image_resources
+            .iter()
+            .filter(|resource| resource.node_ids.contains(node_id))
+            .count();
+        if resource_count != 1 {
+            bail!(
+                "ReplaceImage target must bind exactly one effective image resource, found {resource_count}"
+            );
+        }
+    }
 
     let output_path = env::var_os("CHAPTERA_PDF_OUTPUT")
         .ok_or_else(|| anyhow::anyhow!("CHAPTERA_PDF_OUTPUT is required"))?;
