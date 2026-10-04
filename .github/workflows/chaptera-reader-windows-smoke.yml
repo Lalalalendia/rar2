@@ -83,6 +83,19 @@ jobs:
           if ($fixtureBytes -ne 291840) {
             throw "SampleNewsletter byte length mismatch: $fixtureBytes"
           }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $brochure = Join-Path $env:RUNNER_TEMP "SampleBrochure.pub"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleBrochure.pub" -OutFile $brochure
+          $brochureHash = (Get-FileHash $brochure -Algorithm SHA256).Hash.ToLowerInvariant()
+          $brochureBytes = (Get-Item $brochure).Length
+          if ($brochureHash -ne "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87") {
+            throw "SampleBrochure SHA-256 mismatch: $brochureHash"
+          }
+          if ($brochureBytes -ne 161792) {
+            throw "SampleBrochure byte length mismatch: $brochureBytes"
+          }
+          "CHAPTERA_SAMPLE_BROCHURE=$brochure" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
           $before = $fixtureHash
           $viewer = Start-Process -FilePath $exe -ArgumentList @("--smoke-check", $fixture) -Wait -PassThru
