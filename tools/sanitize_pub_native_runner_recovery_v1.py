@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 INPUT_SCHEMA = "chaptera.pub-native-runner-recovery.v1"
@@ -24,6 +25,18 @@ ALLOWED_VERDICTS = {
 }
 ALLOWED_RECOVERY_ACTIONS = {"none", "start", "restart"}
 ALLOWED_VALIDATION_STATUS = {"not_run", "success", "failure"}
+ALLOWED_SERVICE_STATUS = {
+    "Stopped",
+    "Start Pending",
+    "Stop Pending",
+    "Running",
+    "Continue Pending",
+    "Pause Pending",
+    "Paused",
+    "Unknown",
+}
+HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+ISO_UTC_RE = re.compile(r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$")
 
 
 def require_dict(value: object, name: str) -> dict:
@@ -39,10 +52,13 @@ def require_allowed(value: object, allowed: set[str], name: str) -> str:
     return text
 
 
-def optional_status(value: object) -> str | None:
+def optional_status(value: object, name: str) -> str | None:
     if value is None:
         return None
-    return str(value)
+    text = str(value)
+    if text not in ALLOWED_SERVICE_STATUS:
+        raise ValueError(f"unexpected {name}: {text!r}")
+    return text
 
 
 def sanitize(payload: dict) -> dict:
@@ -74,8 +90,12 @@ def sanitize(payload: dict) -> dict:
     )
 
     packet_sha = packet.get("sha256")
-    if not isinstance(packet_sha, str) or len(packet_sha) != 64:
-        raise ValueError("packet SHA-256 must be a 64-character string")
+    if not isinstance(packet_sha, str) or HEX64_RE.fullmatch(packet_sha) is None:
+        raise ValueError("packet SHA-256 must be exactly 64 hexadecimal characters")
+
+    captured_at_utc = payload.get("captured_at_utc")
+    if not isinstance(captured_at_utc, str) or ISO_UTC_RE.fullmatch(captured_at_utc) is None:
+        raise ValueError("captured_at_utc must be an ISO-8601 UTC timestamp")
 
     service_count = runner.get("service_count")
     if not isinstance(service_count, int) or service_count < 0:
@@ -91,7 +111,7 @@ def sanitize(payload: dict) -> dict:
 
     ready = verdict == "runner-and-publisher-environment-ready"
     if ready:
-        if optional_status(runner.get("service_status_after")) != "Running":
+        if optional_status(runner.get("service_status_after"), "runner.service_status_after") != "Running":
             raise ValueError("ready verdict requires Running service")
         if listener_present is not True:
             raise ValueError("ready verdict requires Runner.Listener")
@@ -102,13 +122,17 @@ def sanitize(payload: dict) -> dict:
 
     return {
         "schema": OUTPUT_SCHEMA,
-        "captured_at_utc": payload.get("captured_at_utc"),
+        "captured_at_utc": captured_at_utc,
         "expected_environment": EXPECTED_ENVIRONMENT,
         "packet_sha256": packet_sha.lower(),
         "runner": {
             "service_count": service_count,
-            "service_status_before": optional_status(runner.get("service_status_before")),
-            "service_status_after": optional_status(runner.get("service_status_after")),
+            "service_status_before": optional_status(
+                runner.get("service_status_before"), "runner.service_status_before"
+            ),
+            "service_status_after": optional_status(
+                runner.get("service_status_after"), "runner.service_status_after"
+            ),
             "recovery_action": recovery_action,
             "listener_present": listener_present,
         },
@@ -144,11 +168,15 @@ def self_test() -> None:
         "SENTINEL_GITHUB_URL",
         "SENTINEL_CREDENTIAL",
         "SENTINEL_PRIVATE_ERROR",
+        "SENTINEL_REPOSITORY_ROOT",
+        "SENTINEL_RUNNER_ROOT",
+        "SENTINEL_RUNNER_FILE",
+        "SENTINEL_PREPARE_ROOT",
     ]
     payload = {
         "schema": INPUT_SCHEMA,
         "captured_at_utc": "2026-10-04T10:00:00Z",
-        "repository_root": "SENTINEL_REPOSITORY_ROOT",
+        "repository_root": secret_markers[7],
         "expected_environment": EXPECTED_ENVIRONMENT,
         "packet": {
             "path": secret_markers[1],
@@ -162,8 +190,8 @@ def self_test() -> None:
             "service_start_mode": "Automatic",
             "recovery_action": "start",
             "executable": secret_markers[0],
-            "root": "SENTINEL_RUNNER_ROOT",
-            "runner_file": "SENTINEL_RUNNER_FILE",
+            "root": secret_markers[8],
+            "runner_file": secret_markers[9],
             "agent_name": secret_markers[3],
             "github_url": secret_markers[4],
             "listener_present": True,
@@ -175,7 +203,7 @@ def self_test() -> None:
         },
         "environment_validation": {
             "status": "success",
-            "output_root": "SENTINEL_PREPARE_ROOT",
+            "output_root": secret_markers[10],
             "error": secret_markers[6],
         },
         "verdict": "runner-and-publisher-environment-ready",
@@ -203,6 +231,33 @@ def self_test() -> None:
         pass
     else:
         raise AssertionError("ready verdict without listener must fail")
+
+    bad_status = json.loads(json.dumps(payload))
+    bad_status["runner"]["service_status_after"] = "SENTINEL_PRIVATE_STATUS"
+    try:
+        sanitize(bad_status)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unbounded service status must fail")
+
+    bad_timestamp = json.loads(json.dumps(payload))
+    bad_timestamp["captured_at_utc"] = "SENTINEL_PRIVATE_TIMESTAMP"
+    try:
+        sanitize(bad_timestamp)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unbounded timestamp must fail")
+
+    bad_sha = json.loads(json.dumps(payload))
+    bad_sha["packet"]["sha256"] = "x" * 64
+    try:
+        sanitize(bad_sha)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("non-hex packet SHA must fail")
 
     print("pub native runner recovery summary self-test: ok")
 
