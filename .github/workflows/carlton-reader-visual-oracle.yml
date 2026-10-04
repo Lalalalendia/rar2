@@ -283,18 +283,36 @@ jobs:
               raise SystemExit(
                   f"canonical Cmo projected-page distribution drift: {golden.get('projected_page_counts')!r}"
               )
-          if len(golden.get("projected_scene_instance_ids", [])) != 4:
-              raise SystemExit("expected four canonical Cmo SceneInstance ids")
+          all_projected_ids = golden.get("projected_scene_instance_ids", [])
+          cmo_projected_ids = golden.get("cmo_projected_scene_instance_ids", [])
+          if len(cmo_projected_ids) != 4:
+              raise SystemExit(
+                  f"expected four canonical Cmo SceneInstance ids, got {len(cmo_projected_ids)}"
+              )
+          if not set(cmo_projected_ids).issubset(set(all_projected_ids)):
+              raise SystemExit("Cmo SceneInstance ids are not a subset of all projected ids")
 
-          projected = [
+          all_projected = [
               instance
               for page in golden["pages"]
               for instance in page.get("projected_instances", [])
+          ]
+          projected = [
+              instance
+              for instance in all_projected
+              if instance.get("projection_kind") == "cmo_story_slot"
+          ]
+          inherited_master = [
+              instance
+              for instance in all_projected
+              if instance.get("projection_kind") == "inherited_master"
           ]
           if len(projected) != 4:
               raise SystemExit(
                   f"expected four projected Cmo carrier receipts, got {len(projected)}"
               )
+          if not inherited_master:
+              raise SystemExit("expected inherited-master projected receipts alongside Cmo")
           unresolved = [
               {
                   "instance_id": instance.get("instance_id"),
@@ -373,6 +391,8 @@ jobs:
               "projected_scene_instance_count": len(
                   golden["projected_scene_instance_ids"]
               ),
+              "cmo_projected_scene_instance_count": len(projected),
+              "inherited_master_projected_scene_instance_count": len(inherited_master),
               "projected_page_counts": golden["projected_page_counts"],
               "reader_render": {
                   "backend": golden["render_backend"],

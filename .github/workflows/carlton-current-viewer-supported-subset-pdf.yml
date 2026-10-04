@@ -250,8 +250,18 @@ jobs:
 
           packet_nodes = [node["node_id"] for page in packet["pages"] for node in page["nodes"]]
           request_nodes = [node["origin"] for node in request["scene"]["nodes"]]
-          if packet_nodes != request_nodes:
-              raise SystemExit("product node paint order changed before renderer")
+          origin_mapping = request["scene"].get("origin_mapping", [])
+          mapped_authoring_nodes = [entry["authoring_origin"] for entry in origin_mapping]
+          mapped_resolved_nodes = [entry["resolved_node_origin"] for entry in origin_mapping]
+
+          if packet_nodes != mapped_authoring_nodes:
+              raise SystemExit("product authoring-node paint order changed before renderer")
+          if request_nodes != mapped_resolved_nodes:
+              raise SystemExit("resolved output node order differs from scene origin mapping")
+          if len(request_nodes) != len(set(request_nodes)):
+              raise SystemExit("resolved output NodeIds must remain unique")
+          if len(request_nodes) != len(packet_nodes):
+              raise SystemExit("node cardinality changed before renderer")
 
           binding_pages = packet["binding"].get("page_ids")
           if binding_pages != packet_pages:
