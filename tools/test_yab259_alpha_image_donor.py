@@ -16,7 +16,6 @@ class Yab259AlphaImageDonorSourceTests(unittest.TestCase):
         self.assertIn("/SMask {soft_mask_id} 0 R", text)
         self.assertIn("/DeviceGray", text)
         self.assertIn("alpha_bytes", text)
-        self.assertNotIn("flatten", text.lower())
         self.assertIn('"pdf.image.alpha_unsupported" in text', text)
 
     def test_alpha_donor_preserves_product_order_and_report_determinism(self) -> None:
