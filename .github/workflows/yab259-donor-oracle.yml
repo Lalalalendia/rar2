@@ -60,6 +60,66 @@ jobs:
           git diff --check
           git diff -- crates/pub-viewer/src/lib.rs > "$RUNNER_TEMP/yab259-rustfmt-only.patch"
 
+      - name: Apply bounded Yab 259 compile repair
+        working-directory: donor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/pub-layout/src/shaped_flow.rs")
+          text = path.read_text(encoding="utf-8")
+          replacements = [
+              (
+                  """        let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      0,
+                      true,
+                      &candidate,
+                      &runtime.shaping,
+                  )""",
+                  """        let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      full.units_per_em,
+                      0,
+                      true,
+                      &candidate,
+                      &runtime.shaping,
+                  )""",
+              ),
+              (
+                  """        let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      4,
+                      false,
+                      &candidate,
+                      &runtime.shaping,
+                  )""",
+                  """        let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      full.units_per_em,
+                      4,
+                      false,
+                      &candidate,
+                      &runtime.shaping,
+                  )""",
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit("bounded compile-repair anchor mismatch")
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          cargo fmt --all
+          git diff --check
+          git diff -- crates/pub-layout/src/shaped_flow.rs > "$RUNNER_TEMP/yab259-compile-repair.patch"
+
       - name: Check owning packages
         working-directory: donor
         run: cargo check -p pub-layout -p pub-pdf -p pub-viewer -p pub-cli --all-targets
@@ -137,6 +197,7 @@ jobs:
           name: yab259-fixed-pdf-oracle-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/yab259-rustfmt-only.patch
+            ${{ runner.temp }}/yab259-compile-repair.patch
             ${{ runner.temp }}/SampleNewsletter.shaped-flow.pdf
             ${{ runner.temp }}/fixed-pdf-shaped-flow.real.json
             ${{ runner.temp }}/SampleNewsletter.pdfinfo.txt
@@ -189,6 +250,64 @@ jobs:
           }
           git diff --check
           git diff -- crates/pub-viewer/src/lib.rs | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\yab259-rustfmt-only.patch"
+
+      - name: Apply bounded Yab 259 compile repair
+        working-directory: donor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $path = "crates/pub-layout/src/shaped_flow.rs"
+          $text = Get-Content -Raw -Encoding utf8 $path
+          $old1 = @'
+                  let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      0,
+                      true,
+                      &candidate,
+                      &runtime.shaping,
+                  )
+          '@
+          $new1 = @'
+                  let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      full.units_per_em,
+                      0,
+                      true,
+                      &candidate,
+                      &runtime.shaping,
+                  )
+          '@
+          $old2 = @'
+                  let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      4,
+                      false,
+                      &candidate,
+                      &runtime.shaping,
+                  )
+          '@
+          $new2 = @'
+                  let evaluated = evaluate_candidate(
+                      &scalars,
+                      &full.glyphs,
+                      full.units_per_em,
+                      4,
+                      false,
+                      &candidate,
+                      &runtime.shaping,
+                  )
+          '@
+          if (-not $text.Contains($old1) -or -not $text.Contains($old2)) {
+            throw "bounded compile-repair anchor mismatch"
+          }
+          $text = $text.Replace($old1, $new1).Replace($old2, $new2)
+          Set-Content -Encoding utf8 $path $text
+          cargo fmt --all
+          git diff --check
+          git diff -- crates/pub-layout/src/shaped_flow.rs | Set-Content -Encoding utf8 "$env:RUNNER_TEMP\yab259-compile-repair.patch"
 
       - name: Test real SampleNewsletter shaped-flow PDF witness
         working-directory: donor
@@ -247,6 +366,7 @@ jobs:
           name: yab259-fixed-pdf-native-oracle-${{ github.run_id }}
           path: |
             ${{ runner.temp }}\yab259-rustfmt-only.patch
+            ${{ runner.temp }}\yab259-compile-repair.patch
             ${{ runner.temp }}\SampleNewsletter.shaped-flow.pdf
             ${{ runner.temp }}\fixed-pdf-shaped-flow.real.json
           if-no-files-found: error
