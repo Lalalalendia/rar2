@@ -151,7 +151,10 @@ fn classify_kind_family(
         }
     }
 
-    Err("fixed-PDF input operation family is not an admitted Story+Move or Stage-0.2 profile".into())
+    Err(
+        "fixed-PDF input operation family is not an admitted Story+Move or Stage-0.2 profile"
+            .into(),
+    )
 }
 
 fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, String> {
@@ -375,10 +378,7 @@ mod tests {
         );
         assert!(
             classify_kind_family(
-                &[
-                    ProjectOperationKind::StoryRange,
-                    ProjectOperationKind::Move,
-                ],
+                &[ProjectOperationKind::StoryRange, ProjectOperationKind::Move,],
                 1,
             )
             .is_err()
