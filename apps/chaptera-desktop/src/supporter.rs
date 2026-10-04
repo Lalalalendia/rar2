@@ -153,7 +153,10 @@ pub(crate) fn format_receipt(receipt: ValueReceipt, profile: MarketProfile) -> S
             },
         ) => format!("Страниц открыто: {}", receipt.page_count),
         (MarketProfile::Ru, ValueReceiptKind::SearchMatches { match_count }) => {
-            format!("Страниц: {} · совпадений: {match_count}", receipt.page_count)
+            format!(
+                "Страниц: {} · совпадений: {match_count}",
+                receipt.page_count
+            )
         }
         (MarketProfile::Ru, ValueReceiptKind::TextCopied) => {
             "Текст восстановлен и скопирован".to_owned()
