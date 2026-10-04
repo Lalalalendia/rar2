@@ -10,6 +10,7 @@ mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
 mod duplicate_authored_rectangle_v1;
+mod imported_paragraph_alignment_v1;
 mod imported_paragraphs_v1;
 mod writer_assessment;
 
@@ -34,6 +35,10 @@ pub use duplicate_authored_rectangle_v1::{
     DUPLICATE_OFFSET_EMU_V1, DUPLICATE_PLACEMENT_POLICY_V1, DuplicateAuthoredRectangleErrorV1,
     DuplicateAuthoredRectanglePlanV1, plan_duplicate_authored_rectangle_v1,
     validate_duplicate_authored_rectangle_source_v1,
+};
+pub use imported_paragraph_alignment_v1::{
+    ImportedParagraphAlignmentValueV1, ImportedParagraphBaseAlignmentErrorV1,
+    ImportedParagraphBaseAlignmentV1,
 };
 pub use imported_paragraphs_v1::{ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
 pub use writer_assessment::{

@@ -55,6 +55,13 @@ jobs:
           "CHAPTERA_CARLTON_PUB=$pub" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CHAPTERA_CARLTON_REFERENCE_PDF=$reference" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Prove real imported ParagraphId to base-alignment seam
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor real_carlton_imported_paragraph_base_alignment_uses_current_paragraph_ids -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw "Carlton paragraph base-alignment seam failed" }
+
       - name: Build current Editor acceptance binary
         run: cargo build -p chaptera-desktop --release --bin chaptera-editor
 
