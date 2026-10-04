@@ -1,8 +1,8 @@
 use crate::seeded::inspect_pub_seed_manifest;
 use pub_model::Sha256Digest;
 use pub_reader::{
-    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, QUILL_STREAM_PATH,
-    build_mature_0x2c_source_graph, resolve_pub_source_graph,
+    CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, QUILL_STREAM_PATH, build_mature_0x2c_source_graph,
+    resolve_pub_source_graph,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -132,7 +132,10 @@ impl fmt::Display for BootstrapNewDocBlocked {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SeedHashMismatch { expected, actual } => {
-                write!(formatter, "bootstrap seed SHA mismatch: expected {expected}, got {actual}")
+                write!(
+                    formatter,
+                    "bootstrap seed SHA mismatch: expected {expected}, got {actual}"
+                )
             }
             Self::TemplateHashMismatch {
                 path,
@@ -146,7 +149,10 @@ impl fmt::Display for BootstrapNewDocBlocked {
                 write!(formatter, "bootstrap seed manifest failed: {detail}")
             }
             Self::CfbMaterialization { path, detail } => {
-                write!(formatter, "bootstrap CFB replacement failed for {path}: {detail}")
+                write!(
+                    formatter,
+                    "bootstrap CFB replacement failed for {path}: {detail}"
+                )
             }
             Self::OutputManifest { detail } => {
                 write!(formatter, "bootstrap output manifest failed: {detail}")
@@ -156,16 +162,28 @@ impl fmt::Display for BootstrapNewDocBlocked {
                 write!(formatter, "bootstrap changed unowned logical stream {path}")
             }
             Self::MissingOwnedStreamMutation { path } => {
-                write!(formatter, "bootstrap did not change required owned stream {path}")
+                write!(
+                    formatter,
+                    "bootstrap did not change required owned stream {path}"
+                )
             }
             Self::ReopenSourceGraph { detail } => {
-                write!(formatter, "bootstrap output SourceGraph reopen failed: {detail}")
+                write!(
+                    formatter,
+                    "bootstrap output SourceGraph reopen failed: {detail}"
+                )
             }
             Self::ReopenResolve { detail } => {
-                write!(formatter, "bootstrap output semantic resolve failed: {detail}")
+                write!(
+                    formatter,
+                    "bootstrap output semantic resolve failed: {detail}"
+                )
             }
             Self::OutputSemantic { detail } => {
-                write!(formatter, "bootstrap output semantic check failed: {detail}")
+                write!(
+                    formatter,
+                    "bootstrap output semantic check failed: {detail}"
+                )
             }
         }
     }
@@ -221,11 +239,12 @@ pub fn materialize_bounded_bootstrap_new_doc_candidate(
     let (changed_streams, preserved_stream_count) =
         validate_preservation(&seed_manifest, &output_manifest)?;
 
-    let reopened = build_mature_0x2c_source_graph(Cursor::new(&output), output_hash).map_err(
-        |error| BootstrapNewDocBlocked::ReopenSourceGraph {
-            detail: format!("{error:#}"),
-        },
-    )?;
+    let reopened =
+        build_mature_0x2c_source_graph(Cursor::new(&output), output_hash).map_err(|error| {
+            BootstrapNewDocBlocked::ReopenSourceGraph {
+                detail: format!("{error:#}"),
+            }
+        })?;
     let resolved = resolve_pub_source_graph(&reopened.graph).map_err(|error| {
         BootstrapNewDocBlocked::ReopenResolve {
             detail: format!("{error:#}"),
@@ -392,11 +411,12 @@ fn validate_preservation(
     let mut changed = Vec::new();
     let mut preserved = 0usize;
     for (path, before) in &seed_streams {
-        let after = output_streams.get(path).ok_or_else(|| {
-            BootstrapNewDocBlocked::OutputManifest {
-                detail: format!("output lost logical stream {path}"),
-            }
-        })?;
+        let after =
+            output_streams
+                .get(path)
+                .ok_or_else(|| BootstrapNewDocBlocked::OutputManifest {
+                    detail: format!("output lost logical stream {path}"),
+                })?;
         if before.len == after.len && before.sha256 == after.sha256 {
             preserved += 1;
             continue;
