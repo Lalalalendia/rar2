@@ -4,6 +4,7 @@
 )]
 
 // The cadence API is intentionally staged one PR before its UI consumer (#227).
+// CI-DESKTOP-MAINRS-FANOUT-02 Fallback Font negative-control marker.
 mod acceptance;
 mod acceptance_v2;
 mod acceptance_v2_cli;
