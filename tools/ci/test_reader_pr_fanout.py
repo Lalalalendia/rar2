@@ -83,6 +83,41 @@ fn main() -> eframe::Result<()> {
     assert mod.windows_dll_bootstrap_errors(
         valid_dll_bootstrap.replace("std::process::exit(2);", "return Ok(());")
     )
+
+    valid_reader_cli_bootstrap = """mod reader_product_cli;
+
+fn main() -> eframe::Result<()> {
+    let mut args = std::env::args_os().skip(1).peekable();
+    let first_arg = args.next();
+    if reader_product_cli::try_handle_product_smoke(first_arg.as_deref(), &mut args) {
+        return Ok(());
+    }
+    if reader_product_cli::try_handle_reader_probe(
+        first_arg.as_deref(),
+        &mut args,
+        reader_only_mode(),
+    ) {
+        return Ok(());
+    }
+    let initial_path = first_arg.map(PathBuf::from);
+}
+"""
+    assert mod.reader_product_cli_bootstrap_errors(valid_reader_cli_bootstrap) == []
+    assert mod.reader_product_cli_bootstrap_errors(
+        valid_reader_cli_bootstrap.replace("mod reader_product_cli;\\n", "")
+    )
+    assert mod.reader_product_cli_bootstrap_errors(
+        valid_reader_cli_bootstrap.replace(
+            "reader_product_cli::try_handle_product_smoke",
+            "reader_product_cli::missing_product_smoke",
+        )
+    )
+    assert mod.reader_product_cli_bootstrap_errors(
+        valid_reader_cli_bootstrap.replace(
+            "reader_product_cli::try_handle_reader_probe",
+            "reader_product_cli::missing_reader_probe",
+        )
+    )
     assert_scope(
         ["apps/chaptera-server/src/reader_scene_v1.rs"],
         evidence_only_paths={"apps/chaptera-server/src/reader_scene_v1.rs"},
@@ -254,9 +289,21 @@ fn main() -> eframe::Result<()> {
     assert_scope(
         ["apps/chaptera-desktop/src/main.rs"],
         tier_a=True,
+        reader_windows_smoke=True,
+        reader_windows=False,
+        editor_windows=False,
+        visual_oracle=True,
+        typography_golden=True,
+        update_accept=False,
+    )
+    assert_scope(
+        ["apps/chaptera-desktop/src/reader_product_cli.rs"],
+        tier_a=True,
         reader_windows_smoke=False,
         reader_windows=True,
         editor_windows=False,
+        visual_oracle=False,
+        typography_golden=False,
         update_accept=False,
     )
     assert_scope(
