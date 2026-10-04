@@ -89,7 +89,8 @@ jobs:
                   check=True,
               )
           print(f"base_repair_sha256={base_digest}")
-          print(f"ordered_repair_sha256={ordered_digest}")\n          print(f"alpha_repair_sha256={alpha_digest}")
+          print(f"ordered_repair_sha256={ordered_digest}")
+          print(f"alpha_repair_sha256={alpha_digest}")
           PY
 
   carlton-real-pdf:
@@ -365,7 +366,9 @@ jobs:
               "renderer_summary": summary,
               "page_significant_fractions": [page["diff"]["significant_fraction"] for page in diff["pages"]],
               "page_order_preserved": True,
-              "node_order_preserved": True,\n              "alpha_soft_mask_enabled": True,\n              "node_code_counts": node_codes,
+              "node_order_preserved": True,
+              "alpha_soft_mask_enabled": True,
+              "node_code_counts": node_codes,
               "reference_is_pre_edit_published_pdf": True,
               "reference_diff_includes_intentional_story_move_delta": True,
               "private_packet_retained": False,
