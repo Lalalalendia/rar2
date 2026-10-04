@@ -112,18 +112,21 @@ jobs:
           assert receipt["schema"] == "chaptera.editable-paragraph-alignment-center-consumer-matrix.v1"
           assert receipt["source_count"] == 53, receipt["source_count"]
           assert receipt["center_story_count"] == 183, receipt["center_story_count"]
+          assert receipt["content_bearing_center_story_count"] + receipt["empty_center_story_count"] == 183
+          assert receipt["empty_center_story_count"] > 0
           assert receipt["materializable_source_count"] == 51, receipt[
               "materializable_source_count"
-          ]
-          assert receipt["materializable_center_story_count"] == 181, receipt[
-              "materializable_center_story_count"
           ]
           assert receipt["non_materializable_source_count"] == 2, receipt[
               "non_materializable_source_count"
           ]
-          assert receipt["non_materializable_center_story_count"] == 2, receipt[
-              "non_materializable_center_story_count"
-          ]
+          assert (
+              receipt["materializable_center_story_count"]
+              + receipt["materializable_empty_center_story_count"]
+              + receipt["non_materializable_center_story_count"]
+              + receipt["non_materializable_empty_center_story_count"]
+              == 183
+          )
           assert receipt["summary"] == {
               "all_center_source_routes_accounted": True,
               "all_materializable_libreoffice_save_reopen_verified": True,
@@ -132,8 +135,9 @@ jobs:
           }
           assert receipt["claims"] == {
               "all_center_sources_materializable": False,
+              "consumer_survival_proven_for_empty_center_class": False,
               "consumer_survival_proven_for_full_center_source_class": False,
-              "consumer_survival_proven_for_materializable_center_class": True,
+              "consumer_survival_proven_for_materializable_content_bearing_center_class": True,
               "loss_report_or_manifest_changed": False,
               "measurement_only": True,
               "right_class_fully_proven": False,
