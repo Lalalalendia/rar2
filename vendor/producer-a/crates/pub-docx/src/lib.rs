@@ -211,6 +211,7 @@ mod tests {
                 profile: DOCX_PROFILE_TEXT_FIRST.into(),
                 schema_fence: Some(DOCX_SCHEMA_FENCE_WORDPROCESSINGML_2006.into()),
             },
+            conversion_fence: None,
             features: Vec::new(),
             losses: Vec::new(),
             blockers: Vec::new(),
