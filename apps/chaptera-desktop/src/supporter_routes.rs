@@ -49,15 +49,13 @@ impl SupporterRoutes {
     pub(crate) fn effect(&self, action: SupporterAction) -> Option<SupporterRouteEffect> {
         let base = self.public_base.as_deref()?;
         match action {
-            SupporterAction::Support => Some(SupporterRouteEffect::OpenUrl(format!(
-                "{base}/support"
-            ))),
-            SupporterAction::Share => {
-                Some(SupporterRouteEffect::CopyText(base.to_owned()))
+            SupporterAction::Support => {
+                Some(SupporterRouteEffect::OpenUrl(format!("{base}/support")))
             }
-            SupporterAction::Report => Some(SupporterRouteEffect::OpenUrl(format!(
-                "{base}/report"
-            ))),
+            SupporterAction::Share => Some(SupporterRouteEffect::CopyText(base.to_owned())),
+            SupporterAction::Report => {
+                Some(SupporterRouteEffect::OpenUrl(format!("{base}/report")))
+            }
             SupporterAction::ArchiveHelp => Some(SupporterRouteEffect::OpenUrl(format!(
                 "{base}/archive-help"
             ))),
@@ -87,16 +85,13 @@ mod tests {
 
     #[test]
     fn explicit_support_click_can_carry_only_closed_attribution() {
-        let routes =
-            SupporterRoutes::from_https_origin("https://chaptera.example")
-                .expect("valid HTTPS origin");
+        let routes = SupporterRoutes::from_https_origin("https://chaptera.example")
+            .expect("valid HTTPS origin");
         let attribution = SupportClickAttribution::baseline(
             crate::supporter::MarketProfile::Ru,
             crate::supporter::ValueReceipt {
                 page_count: 2_048,
-                kind: crate::supporter::ValueReceiptKind::SearchMatches {
-                    match_count: 4_096,
-                },
+                kind: crate::supporter::ValueReceiptKind::SearchMatches { match_count: 4_096 },
             },
             2,
         )
@@ -112,9 +107,8 @@ mod tests {
 
     #[test]
     fn canonical_origin_maps_only_to_chaptera_owned_routes() {
-        let routes =
-            SupporterRoutes::from_https_origin("https://chaptera.example/")
-                .expect("valid HTTPS origin");
+        let routes = SupporterRoutes::from_https_origin("https://chaptera.example/")
+            .expect("valid HTTPS origin");
 
         assert_eq!(
             routes.effect(SupporterAction::Support),
@@ -162,9 +156,8 @@ mod tests {
 
     #[test]
     fn local_actions_never_generate_external_effects() {
-        let routes =
-            SupporterRoutes::from_https_origin("https://chaptera.example")
-                .expect("valid HTTPS origin");
+        let routes = SupporterRoutes::from_https_origin("https://chaptera.example")
+            .expect("valid HTTPS origin");
         assert_eq!(routes.effect(SupporterAction::Later), None);
         assert_eq!(routes.effect(SupporterAction::AlreadySupported), None);
     }
