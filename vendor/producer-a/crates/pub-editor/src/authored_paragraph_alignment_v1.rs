@@ -1,4 +1,4 @@
-use crate::ImportedParagraphAlignmentValueV1;
+use crate::{EditOperation, ImportedParagraphAlignmentValueV1};
 use pub_model::{ParagraphId, StoryId, TextRange};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -173,6 +173,49 @@ pub(crate) fn apply_paragraph_alignment_override_transition_v1(
         }
     }
     Ok(())
+}
+
+
+pub(crate) fn paragraph_alignment_operation_snapshots_v1(
+    operation: &EditOperation,
+) -> Option<(
+    &[ParagraphAlignmentOverrideSnapshotV1],
+    &[ParagraphAlignmentOverrideSnapshotV1],
+)> {
+    match operation {
+        EditOperation::SetParagraphAlignmentOverride { before, after, .. }
+        | EditOperation::ClearParagraphAlignmentOverride { before, after, .. } => {
+            Some((before, after))
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn paragraph_alignment_override_state_from_history_v1(
+    operations: &[EditOperation],
+) -> Result<
+    BTreeMap<ParagraphId, AuthoredParagraphAlignmentValueV1>,
+    ParagraphAlignmentTransitionErrorV1,
+> {
+    let mut overrides = BTreeMap::new();
+    for operation in operations {
+        let Some((before, after)) = paragraph_alignment_operation_snapshots_v1(operation) else {
+            continue;
+        };
+        apply_paragraph_alignment_override_transition_v1(&mut overrides, before, after)?;
+    }
+    Ok(overrides)
+}
+
+pub(crate) fn validate_paragraph_alignment_operation_against_history_v1(
+    history_before: &[EditOperation],
+    operation: &EditOperation,
+) -> Result<(), ParagraphAlignmentTransitionErrorV1> {
+    let mut overrides = paragraph_alignment_override_state_from_history_v1(history_before)?;
+    let Some((before, after)) = paragraph_alignment_operation_snapshots_v1(operation) else {
+        return Err(ParagraphAlignmentTransitionErrorV1::SnapshotShapeMismatch);
+    };
+    apply_paragraph_alignment_override_transition_v1(&mut overrides, before, after)
 }
 
 #[cfg(test)]
