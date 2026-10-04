@@ -1,5 +1,7 @@
 name: Cloud Reader reference PUB-PDF pairs
 
+# Measurement owner #1376: force one exact Carlton reference run for test-only diagnostics.
+
 on:
   workflow_call:
   workflow_dispatch:
