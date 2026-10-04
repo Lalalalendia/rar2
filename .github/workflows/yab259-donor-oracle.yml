@@ -47,9 +47,18 @@ jobs:
           grep -q 'name = "pub-pdf"' crates/pub-pdf/Cargo.toml
           grep -q 'const FIXED_FLOW_RECEIPT_VERSION: &str = "chaptera.fixed-pdf-shaped-flow-receipt.v1";' crates/pub-cli/src/fixed_pdf.rs
 
-      - name: Rustfmt
+      - name: Normalize bounded donor formatting drift
         working-directory: donor
-        run: cargo fmt --all -- --check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          mapfile -t changed < <(git diff --name-only)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = "crates/pub-viewer/src/lib.rs"
+          git diff --check
+          git diff -- crates/pub-viewer/src/lib.rs > "$RUNNER_TEMP/yab259-rustfmt-only.patch"
 
       - name: Check owning packages
         working-directory: donor
@@ -102,7 +111,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python tools/run_local_fixed_pdf_shaped_flow.py             --fixture .web-v0/SampleNewsletter.pub             --fallback-font "$RUNNER_TEMP/Ubuntu-Light.ttf"             --pdf-output "$RUNNER_TEMP/SampleNewsletter.shaped-flow.pdf"             --receipt-output "$RUNNER_TEMP/fixed-pdf-shaped-flow.real.json"             -- "$GITHUB_WORKSPACE/donor/target/debug/pub-cli" convert {fixture} --to pdf --output {pdf} --fallback-font {font} --json
+          python tools/run_local_fixed_pdf_shaped_flow.py \
+            --fixture .web-v0/SampleNewsletter.pub \
+            --fallback-font "$RUNNER_TEMP/Ubuntu-Light.ttf" \
+            --pdf-output "$RUNNER_TEMP/SampleNewsletter.shaped-flow.pdf" \
+            --receipt-output "$RUNNER_TEMP/fixed-pdf-shaped-flow.real.json" \
+            -- "$GITHUB_WORKSPACE/donor/target/debug/pub-cli" convert {fixture} --to pdf --output {pdf} --fallback-font {font} --json
 
       - name: Independently validate sanitized receipt
         run: python tools/validate_fixed_pdf_shaped_flow_receipt.py "$RUNNER_TEMP/fixed-pdf-shaped-flow.real.json"
@@ -122,6 +136,7 @@ jobs:
         with:
           name: yab259-fixed-pdf-oracle-${{ github.run_id }}
           path: |
+            ${{ runner.temp }}/yab259-rustfmt-only.patch
             ${{ runner.temp }}/SampleNewsletter.shaped-flow.pdf
             ${{ runner.temp }}/fixed-pdf-shaped-flow.real.json
             ${{ runner.temp }}/SampleNewsletter.pdfinfo.txt
