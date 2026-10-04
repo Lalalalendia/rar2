@@ -314,10 +314,23 @@ jobs:
           def sha(path):
               return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+          packet = json.loads(Path(os.environ["CHAPTERA_CURRENT_VIEWER_PACKET"]).read_text(encoding="utf-8"))
           mapping_receipt = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_MAPPING"]).read_text(encoding="utf-8"))
           renderer_receipt = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_RENDERER"]).read_text(encoding="utf-8"))
           diff = json.loads(Path(os.environ["CHAPTERA_SUPPORTED_DIFF"]).read_text(encoding="utf-8"))
           mapping = mapping_receipt["mapping"]
+          viewer_census = packet["census"]
+
+          if viewer_census["backend_fallback_reason_counts"].get("shared_layout_incomplete") != 12:
+              raise SystemExit(f"SharedLayoutIncomplete census drift: {viewer_census['backend_fallback_reason_counts']!r}")
+          if sum(viewer_census["shared_layout_incomplete_spacing_authority_counts"].values()) != 12:
+              raise SystemExit("spacing-authority partition does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_family_authority_counts"].values()) != 12:
+              raise SystemExit("family-authority partition does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_font_binding_counts"].values()) != 12:
+              raise SystemExit("font-binding partition does not cover every SharedLayoutIncomplete node")
+          if sum(viewer_census["shared_layout_incomplete_spacing_family_binding_counts"].values()) != 12:
+              raise SystemExit("spacing/family/binding cross-tab does not cover every SharedLayoutIncomplete node")
 
           expected_fallback = {
               "shared_layout_incomplete": 12,
@@ -351,6 +364,7 @@ jobs:
               "packet_sha256": sha(os.environ["CHAPTERA_CURRENT_VIEWER_PACKET"]),
               "pdf_sha256": sha(os.environ["CHAPTERA_SUPPORTED_PDF"]),
               "pdf_bytes": Path(os.environ["CHAPTERA_SUPPORTED_PDF"]).stat().st_size,
+              "viewer_packet_census": viewer_census,
               "mapping": mapping,
               "renderer_summary": summary,
               "page_significant_fractions": [page["diff"]["significant_fraction"] for page in diff["pages"]],
