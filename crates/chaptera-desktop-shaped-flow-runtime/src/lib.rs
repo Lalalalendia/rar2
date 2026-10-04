@@ -532,30 +532,70 @@ mod tests {
         let story_id = editor
             .graph()
             .stories
-            .keys()
-            .copied()
-            .find(|id| current_story_effective_typography_v1(&editor, *id).is_ok())
-            .expect("fixture exposes bounded effective typography");
-        let before = current_story_effective_typography_v1(&editor, story_id)
-            .expect("source effective typography");
-        let first = before.first().expect("non-empty typography").clone();
+            .iter()
+            .find_map(|(story_id, story)| {
+                if story.text.is_empty() {
+                    return None;
+                }
+                editor
+                    .current_text_format_state_hash_v1(*story_id)
+                    .ok()
+                    .map(|_| *story_id)
+            })
+            .expect("fixture exposes one Story with canonical text-format overlay state");
+        let scalar_end = u32::try_from(editor.graph().stories[&story_id].text.chars().count())
+            .expect("Story scalar length fits u32");
+
         let state_hash = editor
             .current_text_format_state_hash_v1(story_id)
-            .expect("state hash");
+            .expect("Bold seed state hash");
+        editor
+            .set_text_format_property_v1(
+                story_id,
+                0,
+                scalar_end,
+                FormatPropertyV1::Bold,
+                FormatValueV1::Bool(false),
+                &state_hash,
+            )
+            .expect("seed Bold override");
+        let state_hash = editor
+            .current_text_format_state_hash_v1(story_id)
+            .expect("Italic seed state hash");
+        editor
+            .set_text_format_property_v1(
+                story_id,
+                0,
+                scalar_end,
+                FormatPropertyV1::Italic,
+                FormatValueV1::Bool(false),
+                &state_hash,
+            )
+            .expect("seed Italic override");
+
+        let before = current_story_effective_typography_v1(&editor, story_id)
+            .expect("seeded effective typography");
+        let first = before.first().expect("non-empty typography").clone();
+        assert!(!first.bold);
+        assert!(!first.italic);
+
+        let state_hash = editor
+            .current_text_format_state_hash_v1(story_id)
+            .expect("Bold toggle state hash");
         editor
             .set_text_format_property_v1(
                 story_id,
                 first.scalar_start,
                 first.scalar_end,
                 FormatPropertyV1::Bold,
-                FormatValueV1::Bool(!first.bold),
+                FormatValueV1::Bool(true),
                 &state_hash,
             )
             .expect("set Bold override");
 
         let after = current_story_effective_typography_v1(&editor, story_id)
             .expect("edited effective typography");
-        assert_eq!(after[0].bold, !first.bold);
+        assert!(after[0].bold);
         assert_eq!(after[0].italic, first.italic);
         assert_eq!(after[0].font_resource_id, first.font_resource_id);
         assert_eq!(after[0].font_size_emu, first.font_size_emu);
