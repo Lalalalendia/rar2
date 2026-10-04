@@ -1478,9 +1478,8 @@ pub enum EditorTextFormatBaseErrorV1 {
 impl fmt::Display for EditorTextFormatBaseErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SourceIdentityChanged => formatter.write_str(
-                "editor source identity changed before text-format base projection",
-            ),
+            Self::SourceIdentityChanged => formatter
+                .write_str("editor source identity changed before text-format base projection"),
             Self::MissingStory { story_id } => write!(
                 formatter,
                 "text-format base Story {} is missing",
@@ -1577,18 +1576,20 @@ fn source_text_format_overlay_from_runs_v1(
             });
         }
 
-        let bold = run.bold.as_ref().ok_or_else(|| {
-            EditorTextFormatBaseErrorV1::UnsupportedBase {
-                story_id,
-                reason: "bounded effective bold is unavailable".to_owned(),
-            }
-        })?;
-        let italic = run.italic.as_ref().ok_or_else(|| {
-            EditorTextFormatBaseErrorV1::UnsupportedBase {
-                story_id,
-                reason: "bounded effective italic is unavailable".to_owned(),
-            }
-        })?;
+        let bold =
+            run.bold
+                .as_ref()
+                .ok_or_else(|| EditorTextFormatBaseErrorV1::UnsupportedBase {
+                    story_id,
+                    reason: "bounded effective bold is unavailable".to_owned(),
+                })?;
+        let italic =
+            run.italic
+                .as_ref()
+                .ok_or_else(|| EditorTextFormatBaseErrorV1::UnsupportedBase {
+                    story_id,
+                    reason: "bounded effective italic is unavailable".to_owned(),
+                })?;
         if bold.effective_value != (bold.inherited_value ^ bold.local_toggle)
             || italic.effective_value != (italic.inherited_value ^ italic.local_toggle)
         {
@@ -6483,8 +6484,7 @@ mod asset_reachability_tests {
             "1111111111111111111111111111111111111111111111111111111111111111"
                 .parse()
                 .expect("test source hash");
-        let story_id =
-            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x51; 16]));
+        let story_id = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x51; 16]));
         let run = PubTypographyRun {
             story_id,
             story_utf16_start: 0,
@@ -6534,8 +6534,7 @@ mod asset_reachability_tests {
             "2222222222222222222222222222222222222222222222222222222222222222"
                 .parse()
                 .expect("test source hash");
-        let story_id =
-            StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x52; 16]));
+        let story_id = StoryId::from_canonical(pub_model::CanonicalId::from_bytes([0x52; 16]));
         let run = PubTypographyRun {
             story_id,
             story_utf16_start: 0,
