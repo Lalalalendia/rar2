@@ -4645,7 +4645,10 @@ impl ViewerApp {
                     .ctx()
                     .input(|input| input.pointer.button_released(egui::PointerButton::Primary));
 
-                self.process_rectangle_primary_pointer(
+                rectangle_creation_shell::process_rectangle_primary_pointer(
+                    &mut self.rectangle_creation,
+                    reader_only_mode(),
+                    self.text_mode.is_some(),
                     page.id,
                     page_rect,
                     press_screen,
@@ -4711,7 +4714,8 @@ impl ViewerApp {
                     && let (Some(pointer_start), Some(pointer_current)) =
                         (press_document, pointer_document)
                 {
-                    if self.process_rectangle_drag_started(
+                    if rectangle_creation_shell::process_rectangle_drag_started(
+                        &mut self.rectangle_creation,
                         page.id,
                         pointer_start,
                         pointer_current,
@@ -4819,7 +4823,11 @@ impl ViewerApp {
                     && self.text_mode.is_none()
                     && response.drag_stopped_by(egui::PointerButton::Primary)
                 {
-                    if self.process_rectangle_drag_stopped(pointer_document, &mut rectangle_frame) {
+                    if rectangle_creation_shell::process_rectangle_drag_stopped(
+                        &mut self.rectangle_creation,
+                        pointer_document,
+                        &mut rectangle_frame,
+                    ) {
                     } else if self.text_box_creation.active()
                         && self.text_box_creation.gesture_token.is_some()
                     {
@@ -4876,7 +4884,11 @@ impl ViewerApp {
                     && response.dragged_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
-                    if self.process_rectangle_dragged(point, &mut rectangle_frame) {
+                    if rectangle_creation_shell::process_rectangle_dragged(
+                        &mut self.rectangle_creation,
+                        point,
+                        &mut rectangle_frame,
+                    ) {
                     } else if self.text_box_creation.active()
                         && self.text_box_creation.gesture_token.is_some()
                     {
@@ -5077,7 +5089,13 @@ impl ViewerApp {
                     }
                 }
 
-                self.paint_rectangle_preview(&painter, page.id, page_rect, scene_scale);
+                rectangle_creation_shell::paint_rectangle_preview(
+                    &self.rectangle_creation,
+                    &painter,
+                    page.id,
+                    page_rect,
+                    scene_scale,
+                );
 
                 if self.text_box_creation.page_id == Some(page.id)
                     && let Ok(text_box_creation::TextBoxCreatePreviewV1::Bounds(bounds)) =
