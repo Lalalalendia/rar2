@@ -318,6 +318,76 @@ mod tests {
     }
 
     #[test]
+    fn real_sample_newsletter_stage01_targets_have_fixed_output_materializers() {
+        let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
+            eprintln!(
+                "CHAPTERA_SAMPLE_NEWSLETTER not set; dedicated real-fixture gate owns this test"
+            );
+            return;
+        };
+
+        let bytes = fs::read(path).expect("read pinned SampleNewsletter");
+        let digest = Sha256::digest(&bytes);
+        let mut digest_bytes = [0_u8; 32];
+        digest_bytes.copy_from_slice(&digest);
+        let source_hash = Sha256Digest::from_bytes(digest_bytes);
+        let editor =
+            open_mature_0x2c_editor(&bytes, source_hash).expect("open real SampleNewsletter editor");
+        let packet =
+            build_current_fixed_output_packet_v1(&editor, &test_font()).expect("fixed packet");
+
+        let story_id: StoryId =
+            serde_json::from_str("\"0439345d-6742-58f7-ad3e-4890fcf2c39f\"")
+                .expect("Stage 0.1 StoryId");
+        let move_node: pub_model::NodeId =
+            serde_json::from_str("\"ee3b63ad-6a7c-533b-a5d1-16daabe17ef7\"")
+                .expect("Stage 0.1 Move NodeId");
+        let resize_node: pub_model::NodeId =
+            serde_json::from_str("\"7db9dd3a-c63e-5eb7-a32d-f09d8a226658\"")
+                .expect("Stage 0.1 Resize NodeId");
+        let replace_node: pub_model::NodeId =
+            serde_json::from_str("\"e16c5d91-b8ab-52fd-a88f-823db671a69f\"")
+                .expect("Stage 0.1 ReplaceImage NodeId");
+
+        let has_text = |node_id| {
+            packet
+                .shaped_flow
+                .lines
+                .iter()
+                .any(|line| line.frame_origin == node_id && !line.text.is_empty())
+        };
+        let has_paint = |node_id| packet.node_paints.iter().any(|paint| paint.node_id == node_id);
+        let has_image = |node_id| {
+            packet
+                .image_resources
+                .iter()
+                .any(|resource| resource.node_ids.contains(&node_id))
+        };
+        let materialized = |node_id| has_text(node_id) || has_paint(node_id) || has_image(node_id);
+
+        assert!(
+            packet
+                .shaped_flow
+                .lines
+                .iter()
+                .any(|line| line.story_origin == story_id && !line.text.is_empty()),
+            "accepted Stage 0.1 Story must have a physical shaped-text materializer"
+        );
+        assert!(
+            materialized(move_node),
+            "exact Stage 0.1 Move target has no text/paint/image fixed-output materializer"
+        );
+        assert!(
+            materialized(resize_node),
+            "exact Stage 0.1 Resize target has no text/paint/image fixed-output materializer"
+        );
+        assert!(
+            has_image(replace_node),
+            "exact Stage 0.1 ReplaceImage target has no exact source image backing"
+        );
+    }
+
+    #[test]
     fn real_sample_newsletter_current_story_builds_deterministically_and_rebinds_after_edit() {
         let Some(path) = env::var_os("CHAPTERA_SAMPLE_NEWSLETTER") else {
             eprintln!(
