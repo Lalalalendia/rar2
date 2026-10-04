@@ -43,6 +43,11 @@ def classify_node(node: dict[str, Any]) -> tuple[list[str], dict[str, int]]:
     reasons: list[str] = []
     line_counts: collections.Counter[str] = collections.Counter()
 
+    if node.get("projected_scene_instance") is None:
+        reasons.append("scene_projection:base")
+    else:
+        reasons.append("scene_projection:projected")
+
     if node.get("solid_fill_rgb") is not None or node.get("solid_line") is not None:
         reasons.append("mapped_paint_present")
 
