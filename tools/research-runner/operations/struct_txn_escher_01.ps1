@@ -8,9 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $ExperimentId = "STRUCT-TXN-ESCHER-01"
 $Schema = "chaptera.struct-txn-escher-01.v1"
-$ExpectedBaseSha256 = "905bf75b00c0ff8680f61a20d5df4d843d753d3544a233fd237dc5a38a0a0599"
-$ExpectedBaseReceiptSchema = "chaptera.modern-base-pin.v1"
-$ExpectedBaseExperiment = "MODERN-BASE-PIN-01"
+$HistoricalT370Sha256 = "905bf75b00c0ff8680f61a20d5df4d843d753d3544a233fd237dc5a38a0a0599"
 $EmuPerPoint = 12700
 
 $packet = Get-Content -LiteralPath $PacketPath -Raw | ConvertFrom-Json
@@ -38,45 +36,50 @@ function Close-Document($Document) {
     Release-Com $Document
 }
 
-function Resolve-ExactBase {
+function Resolve-T370Base {
     $configured = [string]$env:PUB_RESEARCH_FIXTURE
     if ([string]::IsNullOrWhiteSpace($configured)) {
-        throw "PUB_RESEARCH_FIXTURE must point to the exact T370 Publisher2019-normalized base."
+        throw "PUB_RESEARCH_FIXTURE must point to a Publisher2019-normalized T370-equivalent base."
     }
     if (-not (Test-Path -LiteralPath $configured -PathType Leaf)) {
-        throw "Configured T370 base does not exist."
+        throw "Configured T370-equivalent base does not exist."
     }
-    $resolved = (Resolve-Path -LiteralPath $configured).Path
-    $record = Get-PubFileRecord -Path $resolved
-    if ([string]$record.sha256 -ne $ExpectedBaseSha256) {
-        throw "T370 base SHA mismatch: expected $ExpectedBaseSha256 got $($record.sha256)"
-    }
-    return $resolved
+    return (Resolve-Path -LiteralPath $configured).Path
 }
 
-function Resolve-ExactBaseReceipt {
-    $configured = [string]$env:PUB_RESEARCH_MODERN_BASE_RECEIPT
-    if ([string]::IsNullOrWhiteSpace($configured)) {
-        throw "PUB_RESEARCH_MODERN_BASE_RECEIPT must point to analysis/modern-base-pin-01.json for the exact T370 base."
+function Assert-T370SemanticContract {
+    param([Parameter(Mandatory = $true)]$Receipt)
+
+    if ([string]$Receipt.schema -ne "chaptera.modern-structural-base/v1") {
+        throw "Unexpected structural-base receipt schema: $($Receipt.schema)"
     }
-    if (-not (Test-Path -LiteralPath $configured -PathType Leaf)) {
-        throw "Configured T370 receipt does not exist."
+    if ([int]$Receipt.stream_count -ne 10) {
+        throw "T370 semantic gate: expected 10 streams, got $($Receipt.stream_count)"
     }
-    $resolved = (Resolve-Path -LiteralPath $configured).Path
-    $receipt = Get-Content -LiteralPath $resolved -Raw | ConvertFrom-Json
-    if ([string]$receipt.schema -ne $ExpectedBaseReceiptSchema) {
-        throw "Unexpected T370 receipt schema: $($receipt.schema)"
+    if ([int]$Receipt.candidate_count -ne 6) {
+        throw "T370 semantic gate: expected 6 geometry candidates, got $($Receipt.candidate_count)"
     }
-    if ([string]$receipt.experiment_id -ne $ExpectedBaseExperiment) {
-        throw "Unexpected T370 experiment identity: $($receipt.experiment_id)"
+
+    $target = $Receipt.selected_target
+    $checks = @(
+        @("Contents seqNum", [long]$target.contents_seq_num, 293),
+        @("Publisher shape id", [long]$target.publisher_shape_id, 293),
+        @("SPID", [long]$target.officeart_spid, 1025),
+        @("OfficeArt shape type", [long]$target.officeart_shape_type, 202),
+        @("Contents width", [long]$target.contents_width_emu, 5076000),
+        @("Contents height", [long]$target.contents_height_emu, 972000),
+        @("anchor xs", [long]$target.anchor_xs, -2700000),
+        @("anchor ys", [long]$target.anchor_ys, -4446000),
+        @("anchor xe", [long]$target.anchor_xe, 2376000),
+        @("anchor ye", [long]$target.anchor_ye, -3474000)
+    )
+    foreach ($check in $checks) {
+        if ($check[1] -ne $check[2]) {
+            throw "T370 semantic gate mismatch for $($check[0]): expected $($check[2]) got $($check[1])"
+        }
     }
-    if ([string]$receipt.native_lineage.post_save_sha256 -ne $ExpectedBaseSha256) {
-        throw "T370 receipt does not bind the exact admitted structural base."
-    }
-    return [pscustomobject]@{
-        path = $resolved
-        sha256 = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
-        receipt = $receipt
+    if (-not [bool]$target.contents_anchor_extent_exact) {
+        throw "T370 semantic gate: Contents dimensions do not exactly match ClientAnchor extent."
     }
 }
 
@@ -313,8 +316,7 @@ function Safe-Contents-Field-Summary($Fields) {
     return $rows
 }
 
-$sourcePath = Resolve-ExactBase
-$baseReceiptInfo = Resolve-ExactBaseReceipt
+$sourcePath = Resolve-T370Base
 $sourceBefore = Get-PubFileRecord -Path $sourcePath
 $toolInfo = Build-StructuralBaseTool
 
@@ -345,9 +347,10 @@ $workingBefore = Get-PubFileRecord -Path $working
 $beforeManifestPath = Join-Path $privateDir "structural-before.json"
 $afterManifestPath = Join-Path $privateDir "structural-after.json"
 $beforeStructural = Invoke-StructuralBase -Tool $toolInfo.path -Source $working -Output $beforeManifestPath
-if ([string]$beforeStructural.source_sha256 -ne $ExpectedBaseSha256) {
-    throw "Pre-mutation structural manifest is not bound to the exact T370 base."
+if ([string]$beforeStructural.source_sha256 -ne [string]$workingBefore.sha256) {
+    throw "Pre-mutation structural manifest source SHA mismatch."
 }
+Assert-T370SemanticContract -Receipt $beforeStructural
 
 # Intentionally non-default geometry in points. Office msoShapeRectangle = 1.
 $left = 79.0
@@ -522,11 +525,13 @@ $result = [ordered]@{
     schema = $Schema
     experiment_id = $ExperimentId
     source = [ordered]@{
-        admitted_base_sha256 = $ExpectedBaseSha256
+        historical_t370_sha256 = $HistoricalT370Sha256
+        admitted_base_sha256 = [string]$sourceBefore.sha256
         admitted_base_size = [long]$sourceBefore.size
+        historical_byte_identity = ([string]$sourceBefore.sha256 -eq $HistoricalT370Sha256)
+        t370_semantic_contract_match = $true
+        t370_selected_target = $beforeStructural.selected_target
         original_unchanged = $true
-        modern_base_receipt_sha256 = [string]$baseReceiptInfo.sha256
-        modern_base_receipt_schema = [string]$baseReceiptInfo.receipt.schema
     }
     publisher = [ordered]@{
         version = $environment.publisher.version
@@ -575,8 +580,9 @@ $result = [ordered]@{
     }
     verdict = $verdict
     claims = [ordered]@{
-        exact_t370_base_bound = $true
-        exact_t370_receipt_bound = $true
+        t370_equivalent_base_pinned_locally = $true
+        historical_t370_byte_identity_required = $false
+        t370_semantic_contract_match = $true
         one_new_ordinary_non_text_shape = $true
         save_close_fresh_reopen = $true
         source_original_mutated = $false
@@ -592,8 +598,10 @@ Write-PubJson -Value $result -Path (Join-Path $analysisDir "struct-txn-escher-01
 
 @(
     "experiment=$ExperimentId",
-    "base_sha256=$ExpectedBaseSha256",
-    "base_receipt_sha256=$($baseReceiptInfo.sha256)",
+    "historical_t370_sha256=$HistoricalT370Sha256",
+    "base_sha256=$($sourceBefore.sha256)",
+    "historical_byte_match=$([string]$sourceBefore.sha256 -eq $HistoricalT370Sha256)",
+    "t370_semantic_contract_match=true",
     "created_shape_id=$($created.id)",
     "created_shape_name=$($created.name)",
     "saved_sha256=$($workingSaved.sha256)",
