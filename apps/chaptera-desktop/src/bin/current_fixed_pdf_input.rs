@@ -144,8 +144,8 @@ fn run(
         .apply_project_with_assets(&project, &asset_bytes)
         .map_err(|error| format!("fresh EditorProject replay failed: {error}"))?;
 
-    let font_bytes =
-        fs::read(font_path).map_err(|error| format!("read font {}: {error}", font_path.display()))?;
+    let font_bytes = fs::read(font_path)
+        .map_err(|error| format!("read font {}: {error}", font_path.display()))?;
     let font_sha = sha256_hex(&font_bytes);
     let font_resource_id = format!("chaptera:pinned-fixed-pdf:{font_sha}");
     let font = ExplicitDesktopFontResourceV1 {
@@ -168,13 +168,9 @@ fn run(
         "resize_node_id": targets.resize_node_id,
         "replacement_node_id": targets.replacement_node_id,
     });
-    let input = build_current_fixed_pdf_resource_input_v1(
-        &editor,
-        targets.story_id,
-        binding,
-        &font,
-    )
-    .map_err(|error| format!("build current fixed-PDF resource input: {error}"))?;
+    let input =
+        build_current_fixed_pdf_resource_input_v1(&editor, targets.story_id, binding, &font)
+            .map_err(|error| format!("build current fixed-PDF resource input: {error}"))?;
 
     let after = fs::read(source_path)
         .map_err(|error| format!("re-read source {}: {error}", source_path.display()))?;
@@ -182,7 +178,10 @@ fn run(
         return Err("immutable source PUB changed during current-state assembly".into());
     }
 
-    if let Some(parent) = output_path.parent().filter(|value| !value.as_os_str().is_empty()) {
+    if let Some(parent) = output_path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
     }
@@ -194,7 +193,10 @@ fn run(
 }
 
 fn main() {
-    let args = env::args_os().skip(1).map(PathBuf::from).collect::<Vec<_>>();
+    let args = env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
     if args.len() != 5 {
         eprintln!(
             "usage: chaptera-current-fixed-pdf-input SOURCE.pub PROJECT.json REPLACEMENT FONT OUTPUT.json"
