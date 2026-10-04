@@ -1,17 +1,15 @@
 use anyhow::{Context, Result, bail};
 use pub_master_projection::{
     ExactReferenceFieldV1, MASTER_FIELD_ID, MasterProjectionSourceInputV1,
-    MasterProjectionSourceOutputV1, PageProjectionCoordinateV1, RAW_TYPE_PAGE,
-    REFERENCE_U32_WIRE, build_source_output_v1,
+    MasterProjectionSourceOutputV1, PageProjectionCoordinateV1, RAW_TYPE_PAGE, REFERENCE_U32_WIRE,
+    build_source_output_v1,
 };
 use pub_model::{CanonicalId, PageId, Sha256Digest};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
-use super::{
-    PubSourceGraph, analyze_mature_0x2c_page_roles, derive_pub_page_id,
-};
+use super::{PubSourceGraph, analyze_mature_0x2c_page_roles, derive_pub_page_id};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PubMasterProjectionBridgeV1 {
@@ -143,8 +141,8 @@ pub fn build_mature_0x2c_master_projection_bridge_v1(
         source_hash: source_hash.to_string(),
         pages: coordinates,
     };
-    let output = build_source_output_v1(&input)
-        .context("apply canonical root PAGE-master semantic gate")?;
+    let output =
+        build_source_output_v1(&input).context("apply canonical root PAGE-master semantic gate")?;
 
     if output.receipt.relation_count != expected_relation_sources.len() {
         bail!(
@@ -202,9 +200,7 @@ fn verify_page_identity(
         .with_context(|| format!("derive vendor {label} PAGE identity for seq {seq_num}"))?;
 
     if root_as_vendor != vendor_derived {
-        bail!(
-            "root/vendor {label} PAGE identity mismatch for source coordinate {seq_num}"
-        );
+        bail!("root/vendor {label} PAGE identity mismatch for source coordinate {seq_num}");
     }
     if !graph.pages.contains_key(&vendor_derived) {
         bail!(
