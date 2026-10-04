@@ -11,6 +11,7 @@ from xml.etree import ElementTree as ET
 STYLE_NS = "urn:oasis:names:tc:opendocument:xmlns:style:1.0"
 TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
 FO_NS = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+DRAW_NS = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
 
 
 def local(tag: str) -> str:
@@ -206,9 +207,31 @@ def libreoffice_paragraph_alignment_counts(path: Path) -> Counter:
     return counts
 
 
-def verify_libreoffice(path: Path, items: list[dict]) -> dict:
-    root = ET.parse(path).getroot()
-    styles: dict[str, str] = {}
+def odg_story_frame_names(root: ET.Element, story_id: str) -> set[str]:
+    style_name = odg_style_name(story_id)
+    names: set[str] = set()
+    for frame in (node for node in root.iter() if local(node.tag) == "frame"):
+        if any(
+            local(node.tag) == "p"
+            and node.attrib.get(f"{{{TEXT_NS}}}style-name") == style_name
+            for node in frame.iter()
+        ):
+            name = frame.attrib.get(f"{{{DRAW_NS}}}name")
+            if name:
+                names.add(name)
+    return names
+
+
+def odg_root_from_package(root: Path) -> ET.Element:
+    path = root / "output.odg"
+    if not path.is_file():
+        raise AssertionError("wire ODG output is required for consumer identity")
+    with zipfile.ZipFile(path) as archive:
+        return ET.fromstring(archive.read("content.xml"))
+
+
+def paragraph_style_table(root: ET.Element) -> dict[str, tuple[str | None, str | None]]:
+    styles: dict[str, tuple[str | None, str | None]] = {}
     for node in root.iter():
         if local(node.tag) != "style":
             continue
@@ -216,43 +239,93 @@ def verify_libreoffice(path: Path, items: list[dict]) -> dict:
         family = node.attrib.get(f"{{{STYLE_NS}}}family")
         if not name or family != "paragraph":
             continue
+        parent = node.attrib.get(f"{{{STYLE_NS}}}parent-style-name")
         props = next(
             (child for child in node.iter() if local(child.tag) == "paragraph-properties"),
             None,
         )
-        if props is None:
-            continue
-        align = props.attrib.get(f"{{{FO_NS}}}text-align")
-        if align:
-            styles[name] = align.casefold()
+        align = (
+            props.attrib.get(f"{{{FO_NS}}}text-align").casefold()
+            if props is not None and props.attrib.get(f"{{{FO_NS}}}text-align")
+            else None
+        )
+        styles[name] = (align, parent)
+    return styles
 
-    paragraph_style_refs = {
-        node.attrib.get(f"{{{TEXT_NS}}}style-name")
+
+def resolve_paragraph_alignment(
+    styles: dict[str, tuple[str | None, str | None]],
+    style_name: str | None,
+) -> str | None:
+    seen: set[str] = set()
+    current = style_name
+    while current and current not in seen:
+        seen.add(current)
+        item = styles.get(current)
+        if item is None:
+            return None
+        align, parent = item
+        if align:
+            return align
+        current = parent
+    return None
+
+
+def verify_libreoffice(path: Path, items: list[dict], wire_root: Path) -> dict:
+    source_root = odg_root_from_package(wire_root)
+    root = ET.parse(path).getroot()
+    styles = paragraph_style_table(root)
+    frames = {
+        node.attrib.get(f"{{{DRAW_NS}}}name"): node
         for node in root.iter()
-        if local(node.tag) == "p"
-        and node.attrib.get(f"{{{TEXT_NS}}}style-name")
+        if local(node.tag) == "frame"
+        and node.attrib.get(f"{{{DRAW_NS}}}name")
     }
 
-    verified = 0
+    verified_stories = 0
+    verified_frames = 0
     for item in items:
-        style_name = odg_style_name(item["story_id"])
-        actual = styles.get(style_name)
-        if actual != item["alignment"]:
+        expected_frames = odg_story_frame_names(source_root, item["story_id"])
+        if not expected_frames:
             raise AssertionError(
-                f"LibreOffice fresh reopen lost exact Story style {style_name}: "
-                f"expected={item['alignment']!r} actual={actual!r}"
+                f"wire ODG Story {item['story_id']} has no named frame carrier"
             )
-        if style_name not in paragraph_style_refs:
-            raise AssertionError(
-                f"LibreOffice Story style {style_name} is no longer referenced"
-            )
-        verified += 1
+        for frame_name in sorted(expected_frames):
+            frame = frames.get(frame_name)
+            if frame is None:
+                raise AssertionError(
+                    f"LibreOffice fresh reopen lost Story frame {frame_name}"
+                )
+            paragraphs = [node for node in frame.iter() if local(node.tag) == "p"]
+            if not paragraphs:
+                raise AssertionError(
+                    f"LibreOffice Story frame {frame_name} has no paragraph carriers"
+                )
+            observed: list[str | None] = []
+            for paragraph in paragraphs:
+                direct = paragraph.attrib.get(f"{{{FO_NS}}}text-align")
+                if direct:
+                    alignment = direct.casefold()
+                else:
+                    alignment = resolve_paragraph_alignment(
+                        styles,
+                        paragraph.attrib.get(f"{{{TEXT_NS}}}style-name"),
+                    )
+                observed.append(alignment)
+            if any(value != item["alignment"] for value in observed):
+                raise AssertionError(
+                    f"LibreOffice Story frame {frame_name} alignment mismatch: "
+                    f"expected={item['alignment']!r} observed={observed!r}"
+                )
+            verified_frames += 1
+        verified_stories += 1
 
     observed = libreoffice_paragraph_alignment_counts(path)
     return {
         "expected_story_counts": dict(sorted(expected_counts(items).items())),
-        "libreoffice_exact_story_style_count": verified,
-        "libreoffice_exact_story_styles_match": verified == len(items),
+        "libreoffice_exact_story_frame_count": verified_frames,
+        "libreoffice_exact_story_count": verified_stories,
+        "libreoffice_exact_story_frames_match": verified_stories == len(items),
         "libreoffice_paragraph_alignment_counts": dict(sorted(observed.items())),
     }
 
@@ -264,6 +337,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path)
     parser.add_argument("--input", type=Path)
     parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--wire-root", type=Path)
     args = parser.parse_args()
 
     items = load_expected(args.expected)
@@ -278,7 +352,9 @@ def main() -> int:
     else:
         if args.input is None:
             parser.error("libreoffice mode requires --input")
-        result = verify_libreoffice(args.input, items)
+        if args.wire_root is None:
+            parser.error("libreoffice mode requires --wire-root")
+        result = verify_libreoffice(args.input, items, args.wire_root)
 
     payload = {
         "schema": "chaptera.editable-paragraph-alignment-consumer-check.v1",
