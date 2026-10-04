@@ -34,6 +34,7 @@ jobs:
       - name: Prove authoritative Rust current-state fixed-output seams
         run: |
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor fixed_image_resources -- --nocapture
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor fixed_node_paint -- --nocapture
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor fixed_output_state -- --nocapture
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin fixed_output_state_v1 -- --nocapture
       - name: Run fixed-PDF producer boundary tests
