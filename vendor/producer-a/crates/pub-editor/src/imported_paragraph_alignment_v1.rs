@@ -1,4 +1,4 @@
-use crate::{EditorSession, ImportedParagraphProjectionErrorV1, ImportedParagraphV1};
+use crate::{EditorSession, ImportedParagraphProjectionErrorV1};
 use pub_model::{ParagraphId, StoryId, TextRange};
 use pub_reader::{PubParagraphAlignment, PubParagraphAlignmentRun};
 use std::fmt;
@@ -162,7 +162,7 @@ mod tests {
     }
 
     fn story_id() -> StoryId {
-        serde_json::from_str(""10000000-0000-4000-8000-000000000001"")
+        serde_json::from_str("\"10000000-0000-4000-8000-000000000001\"")
             .expect("canonical StoryId")
     }
 
@@ -197,10 +197,7 @@ mod tests {
         let first = run(2, 5, PubParagraphAlignment::Center);
         let second = run(5, 8, PubParagraphAlignment::Center);
         assert_eq!(
-            resolve_paragraph_alignment_v1(
-                TextRange::new(2, 8).unwrap(),
-                &[&second, &first]
-            ),
+            resolve_paragraph_alignment_v1(TextRange::new(2, 8).unwrap(), &[&second, &first]),
             Some(ImportedParagraphAlignmentValueV1::Center)
         );
     }
