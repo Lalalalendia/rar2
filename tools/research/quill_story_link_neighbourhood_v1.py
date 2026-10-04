@@ -11,7 +11,11 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "corpus"))
-from harvest_pub import common_crawl_fetch  # type: ignore
+from harvest_pub import (  # type: ignore
+    common_crawl_fetch,
+    decode_common_crawl_arc_member,
+    decode_common_crawl_warc_member,
+)
 
 COLLINFO = "https://index.commoncrawl.org/collinfo.json"
 UA = "Chaptera-PUB-research/1.0 (+bounded-link-neighbourhood-probe)"
@@ -107,6 +111,93 @@ def pubish_href(url: str) -> bool:
     return path.endswith(".pub") or ".pub?" in path
 
 
+def fallback_common_crawl_fetch(
+    row: dict[str, str],
+    timeout: int,
+    max_bytes: int,
+) -> tuple[bytes, dict, list[dict[str, str]]]:
+    attempts: list[dict[str, str]] = []
+
+    seed = {
+        "direct_url": row["url"],
+        "cc_warc_filename": row["filename"],
+        "cc_warc_offset": row["offset"],
+        "cc_warc_length": row["length"],
+    }
+    try:
+        payload, meta = common_crawl_fetch(
+            seed,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            retries=1,
+        )
+        attempts.append({"transport": "data.commoncrawl.org", "status": "success"})
+        return payload, meta, attempts
+    except Exception as exc:
+        attempts.append(
+            {
+                "transport": "data.commoncrawl.org",
+                "status": "error",
+                "error_class": type(exc).__name__,
+            }
+        )
+
+    filename = row["filename"].strip().lstrip("/")
+    offset = int(row["offset"])
+    length = int(row["length"])
+    end = offset + length - 1
+    legacy_arc = filename.casefold().endswith(".arc.gz")
+    decoder = (
+        decode_common_crawl_arc_member
+        if legacy_arc
+        else decode_common_crawl_warc_member
+    )
+
+    for transport, base in (
+        ("commoncrawl.s3.amazonaws.com", "https://commoncrawl.s3.amazonaws.com/"),
+        ("s3.amazonaws.com/commoncrawl", "https://s3.amazonaws.com/commoncrawl/"),
+    ):
+        archive_url = base + filename
+        try:
+            req = urllib.request.Request(
+                archive_url,
+                headers={
+                    "User-Agent": UA,
+                    "Accept": "*/*",
+                    "Accept-Encoding": "identity",
+                    "Range": f"bytes={offset}-{end}",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                status = getattr(response, "status", 0)
+                if status != 206:
+                    raise ValueError(f"range request returned HTTP {status}")
+                compressed = response.read(length + 1)
+            if len(compressed) != length:
+                raise ValueError(
+                    f"range length mismatch: expected {length}, got {len(compressed)}"
+                )
+            payload, meta = decoder(compressed, max_bytes)
+            meta.update(
+                {
+                    "cc_fetch_source": "research_fallback_range",
+                    "cc_archive_transport": transport,
+                }
+            )
+            attempts.append({"transport": transport, "status": "success"})
+            return payload, meta, attempts
+        except Exception as exc:
+            attempts.append(
+                {
+                    "transport": transport,
+                    "status": "error",
+                    "error_class": type(exc).__name__,
+                }
+            )
+
+    raise RuntimeError(json.dumps(attempts, sort_keys=True))
+
+
 def main() -> int:
     out = Path("out")
     out.mkdir(exist_ok=True)
@@ -178,22 +269,37 @@ def main() -> int:
 
         candidate_links = {}
         fetched_html = 0
+        transport_attempts: list[dict[str, str]] = []
+        transport_success_counts: dict[str, int] = {}
         for row in index_rows:
-            seed = {
-                "direct_url": row["url"],
-                "cc_warc_filename": row["filename"],
-                "cc_warc_offset": row["offset"],
-                "cc_warc_length": row["length"],
-            }
             try:
-                payload, meta = common_crawl_fetch(
-                    seed,
+                payload, meta, row_attempts = fallback_common_crawl_fetch(
+                    row,
                     timeout=25,
                     max_bytes=4 * 1024 * 1024,
-                    retries=1,
+                )
+                transport_attempts.extend(row_attempts)
+                successful = next(
+                    (
+                        attempt["transport"]
+                        for attempt in reversed(row_attempts)
+                        if attempt["status"] == "success"
+                    ),
+                    "unknown",
+                )
+                transport_success_counts[successful] = (
+                    transport_success_counts.get(successful, 0) + 1
                 )
             except Exception as exc:
                 errors.append(type(exc).__name__)
+                try:
+                    decoded = json.loads(str(exc))
+                    if isinstance(decoded, list):
+                        transport_attempts.extend(
+                            item for item in decoded if isinstance(item, dict)
+                        )
+                except json.JSONDecodeError:
+                    pass
                 continue
 
             content_type = str(meta.get("content_type", "")).casefold()
@@ -259,6 +365,28 @@ def main() -> int:
                 "collections_queried": len(crawls),
                 "indexed_parent_html_candidates": len(index_rows),
                 "fetched_html_count": fetched_html,
+                "transport_success_counts": transport_success_counts,
+                "transport_attempt_summary": {
+                    key: sum(
+                        1
+                        for attempt in transport_attempts
+                        if attempt.get("transport") == key
+                    )
+                    for key in sorted(
+                        {
+                            attempt.get("transport", "unknown")
+                            for attempt in transport_attempts
+                        }
+                    )
+                },
+                "transport_error_classes": sorted(
+                    {
+                        attempt.get("error_class", "")
+                        for attempt in transport_attempts
+                        if attempt.get("status") == "error"
+                        and attempt.get("error_class")
+                    }
+                ),
                 "pub_link_count": len(links),
                 "exact_basename_link_count": sum(
                     row["basename_matches_target"] for row in links
@@ -275,7 +403,7 @@ def main() -> int:
         "targets": target_reports,
         "evidence_boundary": (
             "exact two remaining target parent directories only, queried as explicit http/https and www/non-www prefix variants; Common Crawl historical "
-            "HTML captures through 2017 are sampled with bounded fetch count; receipt retains "
+            "HTML captures through 2017 are sampled with bounded fetch count; each record uses the canonical data.commoncrawl.org range path first and then two S3 range transports as bounded fallbacks; receipt retains "
             "only public URLs, anchor samples, capture counts/timestamps and aggregate errors; "
             "no document text or PUB bytes are retained"
         ),
