@@ -19,7 +19,9 @@ const GENERAL_CONTAINER: u8 = 0x88;
 // historical fail-closed/raw behavior until separately grounded.
 const OPL_CHP_EXTENDED_HIGH_BITS: u8 = 0x02;
 const FBOLD_ID: u16 = 0x0202;
+const FITALIC_ID: u16 = 0x0203;
 const FBOLD_CS_ID: u16 = 0x0237;
+const FITALIC_CS_ID: u16 = 0x0238;
 const FONT_INDEX_CONTAINER_ID: u16 = 0x0224;
 const TEXT_SIZE_ID: u16 = 0x020C;
 const BARE_COLOR_INDEX_ID: u16 = 0x002E;
@@ -186,6 +188,16 @@ pub enum QuillTypographyValueSource {
     InheritedStsh1,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuillEffectiveBoolean {
+    pub local_toggle: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_toggle_source: Option<RawSpan>,
+    pub inherited_value: bool,
+    pub inherited_style_source: RawSpan,
+    pub effective_value: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuillParagraphSelectorSource {
@@ -237,6 +249,10 @@ pub struct QuillEffectiveTypographyRun {
     #[serde(default)]
     pub color_inherited: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<QuillEffectiveBoolean>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<QuillEffectiveBoolean>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_style_index: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_selector_source: Option<QuillParagraphSelectorSource>,
@@ -259,6 +275,8 @@ impl QuillEffectiveTypographyRun {
         self.font_source == QuillTypographyValueSource::InheritedStsh1
             || self.text_size_source == QuillTypographyValueSource::InheritedStsh1
             || self.color_inherited
+            || self.bold.is_some()
+            || self.italic.is_some()
     }
 }
 
@@ -343,6 +361,22 @@ struct CharacterDefaultObservation {
     font_pairs: Vec<(u32, String)>,
     text_sizes_emu: Vec<u32>,
     color_indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct FdpcBooleanObservation {
+    fdpc_descriptor_ordinal: u32,
+    fdpc_style_ordinal: u32,
+    bold_toggle_sources: Vec<RawSpan>,
+    italic_toggle_sources: Vec<RawSpan>,
+}
+
+#[derive(Debug, Clone)]
+struct CharacterBooleanDefaultObservation {
+    logical_style_index: u32,
+    style_source: RawSpan,
+    bold_sources: Vec<RawSpan>,
+    italic_sources: Vec<RawSpan>,
 }
 
 fn validate_monotone_fdpc_text_offsets(
@@ -522,6 +556,11 @@ pub fn parse_bounded_typography(
     )?;
 
     validate_monotone_fdpc_text_offsets(&styles)?;
+    let fdpc_boolean_observations = if unknown_block_types.is_empty() {
+        collect_fdpc_boolean_observations(bytes, &styles)?
+    } else {
+        Vec::new()
+    };
 
     let text_start = u32::try_from(story_catalog.text.source.offset)
         .map_err(|_| QuillTypographyReadError::new("TEXT offset exceeds u32"))?;
@@ -709,6 +748,11 @@ pub fn parse_bounded_typography(
             &font_names,
             &mut inheritance_unknown_block_types,
         )?;
+        let character_boolean_defaults = if inheritance_unknown_block_types.is_empty() {
+            collect_character_boolean_defaults(bytes, &character_defaults)?
+        } else {
+            Vec::new()
+        };
         apply_bounded_implicit_style_zero(&mut paragraph_ranges, &character_defaults);
         apply_paragraph_alignment_defaults(&mut paragraph_ranges, &paragraph_defaults);
         if inheritance_unknown_block_types.is_empty() {
@@ -729,6 +773,8 @@ pub fn parse_bounded_typography(
                 &ranges,
                 &paragraph_ranges,
                 &character_defaults,
+                &fdpc_boolean_observations,
+                &character_boolean_defaults,
                 &story_extents,
                 &text_color_references,
             )?;
@@ -1493,10 +1539,122 @@ fn build_size_only_runs(
     Ok(runs)
 }
 
+fn collect_boolean_sources_from_style(
+    bytes: &[u8],
+    style_source: &RawSpan,
+) -> Result<(Vec<RawSpan>, Vec<RawSpan>), QuillTypographyReadError> {
+    let start = usize::try_from(style_source.offset)
+        .map_err(|_| QuillTypographyReadError::new("style offset exceeds usize"))?;
+    let len = usize::try_from(style_source.len)
+        .map_err(|_| QuillTypographyReadError::new("style length exceeds usize"))?;
+    let end = checked_end(start, len, bytes.len(), "boolean style")?;
+    if len < 4 {
+        return Err(QuillTypographyReadError::new(
+            "boolean style is shorter than its length prefix",
+        ));
+    }
+
+    let mut cursor = start + 4;
+    let mut bold_sources = Vec::new();
+    let mut italic_sources = Vec::new();
+    let mut unknown = BTreeSet::new();
+    while cursor < end {
+        let block_start = cursor;
+        let (block, next) = parse_block(bytes, cursor, end, &mut unknown)?;
+        if !unknown.is_empty() {
+            return Err(QuillTypographyReadError::new(
+                "boolean projection crossed unknown fixed Quill block framing",
+            ));
+        }
+        let source = RawSpan {
+            stream: style_source.stream.clone(),
+            offset: block_start as u64,
+            len: (next - block_start) as u64,
+        };
+        if block.id == FBOLD_ID {
+            bold_sources.push(source);
+        } else if block.id == FITALIC_ID {
+            italic_sources.push(source);
+        }
+        cursor = next;
+    }
+    if cursor != end {
+        return Err(QuillTypographyReadError::new(
+            "boolean style did not close exactly",
+        ));
+    }
+    Ok((bold_sources, italic_sources))
+}
+
+fn collect_fdpc_boolean_observations(
+    bytes: &[u8],
+    styles: &[StyleObservation],
+) -> Result<Vec<FdpcBooleanObservation>, QuillTypographyReadError> {
+    styles
+        .iter()
+        .map(|style| {
+            let (bold_toggle_sources, italic_toggle_sources) =
+                collect_boolean_sources_from_style(bytes, &style.style_source)?;
+            Ok(FdpcBooleanObservation {
+                fdpc_descriptor_ordinal: style.fdpc_descriptor_ordinal,
+                fdpc_style_ordinal: style.fdpc_style_ordinal,
+                bold_toggle_sources,
+                italic_toggle_sources,
+            })
+        })
+        .collect()
+}
+
+fn collect_character_boolean_defaults(
+    bytes: &[u8],
+    defaults: &[CharacterDefaultObservation],
+) -> Result<Vec<CharacterBooleanDefaultObservation>, QuillTypographyReadError> {
+    defaults
+        .iter()
+        .map(|default| {
+            let (bold_sources, italic_sources) =
+                collect_boolean_sources_from_style(bytes, &default.style_source)?;
+            Ok(CharacterBooleanDefaultObservation {
+                logical_style_index: default.logical_style_index,
+                style_source: default.style_source.clone(),
+                bold_sources,
+                italic_sources,
+            })
+        })
+        .collect()
+}
+
+fn resolve_effective_boolean(
+    local_sources: &[RawSpan],
+    inherited_sources: &[RawSpan],
+    inherited_style_source: &RawSpan,
+) -> Option<QuillEffectiveBoolean> {
+    let (local_toggle, local_toggle_source) = match local_sources {
+        [] => (false, None),
+        [source] => (true, Some(source.clone())),
+        _ => return None,
+    };
+    let inherited_value = match inherited_sources {
+        [] => false,
+        [_] => true,
+        _ => return None,
+    };
+
+    Some(QuillEffectiveBoolean {
+        local_toggle,
+        local_toggle_source,
+        inherited_value,
+        inherited_style_source: inherited_style_source.clone(),
+        effective_value: inherited_value ^ local_toggle,
+    })
+}
+
 fn build_effective_runs(
     fdpc_ranges: &[QuillTypographyRange],
     paragraph_ranges: &[ParagraphTypographyRange],
     defaults: &[CharacterDefaultObservation],
+    fdpc_boolean_observations: &[FdpcBooleanObservation],
+    character_boolean_defaults: &[CharacterBooleanDefaultObservation],
     story_extents: &[StoryExtent],
     text_color_references: &[u32],
 ) -> Result<Vec<QuillEffectiveTypographyRun>, QuillTypographyReadError> {
@@ -1566,6 +1724,49 @@ fn build_effective_runs(
             None
         };
 
+        let mut local_boolean_matches = fdpc_boolean_observations.iter().filter(|candidate| {
+            candidate.fdpc_descriptor_ordinal == fdpc.fdpc_descriptor_ordinal
+                && candidate.fdpc_style_ordinal == fdpc.fdpc_style_ordinal
+        });
+        let local_boolean = match (local_boolean_matches.next(), local_boolean_matches.next()) {
+            (Some(candidate), None) => Some(candidate),
+            _ => None,
+        };
+
+        // Ordinary bold/italic is intentionally narrower than the existing
+        // font/size implicit-style-0 path. The proven XOR law is consumed only
+        // when FDPP explicitly selects one STSH1 character default.
+        let explicit_boolean_default =
+            if paragraph.selector_source == Some(QuillParagraphSelectorSource::ExplicitFdpp0x19) {
+                paragraph.selected_style_index.and_then(|style_index| {
+                    let mut matches = character_boolean_defaults
+                        .iter()
+                        .filter(|candidate| candidate.logical_style_index == style_index);
+                    match (matches.next(), matches.next()) {
+                        (Some(candidate), None) => Some(candidate),
+                        _ => None,
+                    }
+                })
+            } else {
+                None
+            };
+
+        let (bold, italic) = match (local_boolean, explicit_boolean_default) {
+            (Some(local), Some(inherited)) => (
+                resolve_effective_boolean(
+                    &local.bold_toggle_sources,
+                    &inherited.bold_sources,
+                    &inherited.style_source,
+                ),
+                resolve_effective_boolean(
+                    &local.italic_toggle_sources,
+                    &inherited.italic_sources,
+                    &inherited.style_source,
+                ),
+            ),
+            _ => (None, None),
+        };
+
         let (font_index, font_name, font_source) =
             if let [(font_index, font_name)] = explicit_font_pairs.as_slice() {
                 (
@@ -1625,7 +1826,9 @@ fn build_effective_runs(
 
         let uses_inheritance = font_source == QuillTypographyValueSource::InheritedStsh1
             || text_size_source == QuillTypographyValueSource::InheritedStsh1
-            || color_inherited;
+            || color_inherited
+            || bold.is_some()
+            || italic.is_some();
         let (
             inherited_style_index,
             inherited_selector_source,
@@ -1677,6 +1880,8 @@ fn build_effective_runs(
             text_size_source,
             color_rgb,
             color_inherited,
+            bold,
+            italic,
             inherited_style_index,
             inherited_selector_source,
             fdpc_descriptor_ordinal: fdpc.fdpc_descriptor_ordinal,
@@ -2284,10 +2489,10 @@ fn parse_block(
         (end, None)
     } else {
         let data_len = match block_type {
-            // OplChp boolean suppression/delta forms proven on text-style.pub
-            // and independently bounded on SampleBrochure. We use them only
-            // for framing here; effective bold semantics remain out of scope.
-            0x00 if matches!(id, FBOLD_ID | FBOLD_CS_ID) => 0,
+            // OplChp boolean suppression/delta forms. Ordinary FBold/FItalic
+            // are consumed by the bounded effective-typography XOR path;
+            // FBoldCS/FItalicCS remain framing-only BiDi counterparts here.
+            0x00 if matches!(id, FBOLD_ID | FITALIC_ID | FBOLD_CS_ID | FITALIC_CS_ID) => 0,
             0x78 | 0x05 | 0x08 => 0,
             0x10 | 0x18 | 0x07 => 2,
             0x20 | 0x58 | 0x68 | 0x70 | 0xB8 => 4,
@@ -2576,7 +2781,7 @@ mod tests {
             color_indices: Vec::new(),
         };
 
-        let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story], &[])
+        let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[], &[], &[story], &[])
             .expect("effective run");
         assert_eq!(runs.len(), 1);
         let run = &runs[0];
@@ -2658,7 +2863,7 @@ mod tests {
             color_indices: Vec::new(),
         };
 
-        let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story], &[])
+        let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[], &[], &[story], &[])
             .expect("bounded segmentation");
         assert!(runs.is_empty());
     }
@@ -2822,7 +3027,7 @@ mod tests {
             color_indices: Vec::new(),
         };
 
-        let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[story], &[])
+        let runs = build_effective_runs(&[fdpc], &[paragraph], &[default], &[], &[], &[story], &[])
             .expect("bounded implicit style-0 effective run");
         let [run] = runs.as_slice() else {
             panic!("expected one effective run");
@@ -2942,6 +3147,8 @@ mod tests {
                 std::slice::from_ref(&fdpc),
                 std::slice::from_ref(&paragraph),
                 &defaults,
+                &[],
+                &[],
                 &[story],
                 &[],
             )
@@ -2957,6 +3164,8 @@ mod tests {
             &[explicit_family_fdpc],
             std::slice::from_ref(&paragraph),
             &defaults,
+            &[],
+            &[],
             &[story],
             &[],
         )
@@ -3598,6 +3807,276 @@ mod tests {
             default_alignment_supported, 0,
             "a supported selected STSH1 paragraph alignment would have been consumed by merged #959"
         );
+    }
+
+    #[test]
+    fn ordinary_boolean_resolution_uses_inherited_xor_local_toggle() {
+        let stream = pub_core::StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let story = StoryExtent {
+            story_index: 0,
+            story_syid: QuillSyid(7),
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+        };
+        let fdpc = QuillTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpc_descriptor_ordinal: 1,
+            fdpc_style_ordinal: 2,
+            fdpc_style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 100,
+                len: 12,
+            },
+            text_offset_source: RawSpan {
+                stream: stream.clone(),
+                offset: 40,
+                len: 4,
+            },
+            font_indices: vec![3],
+            font_names: vec!["Explicit Face".to_owned()],
+            script_fonts: Vec::new(),
+            text_sizes_emu: vec![12 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+            color_indices: Vec::new(),
+            story_intersections: Vec::new(),
+        };
+        let paragraph = ParagraphTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpp_descriptor_ordinal: 4,
+            fdpp_style_ordinal: 5,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 200,
+                len: 10,
+            },
+            selected_style_index: Some(2),
+            selector_source: Some(QuillParagraphSelectorSource::ExplicitFdpp0x19),
+            default_style_selector_present: true,
+            alignment: None,
+            alignment_source_value: None,
+            alignment_source: None,
+        };
+        let default = CharacterDefaultObservation {
+            logical_style_index: 2,
+            stsh_descriptor_ordinal: 6,
+            stsh_record_ordinal: 4,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 300,
+                len: 12,
+            },
+            font_pairs: vec![(9, "Default Face".to_owned())],
+            text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+            color_indices: Vec::new(),
+        };
+        let inherited_bold_source = RawSpan {
+            stream: stream.clone(),
+            offset: 306,
+            len: 2,
+        };
+        let inherited_italic_source = RawSpan {
+            stream: stream.clone(),
+            offset: 308,
+            len: 2,
+        };
+        let boolean_default = CharacterBooleanDefaultObservation {
+            logical_style_index: 2,
+            style_source: default.style_source.clone(),
+            bold_sources: vec![inherited_bold_source],
+            italic_sources: vec![inherited_italic_source],
+        };
+        let no_local_toggle = FdpcBooleanObservation {
+            fdpc_descriptor_ordinal: 1,
+            fdpc_style_ordinal: 2,
+            bold_toggle_sources: Vec::new(),
+            italic_toggle_sources: Vec::new(),
+        };
+
+        let runs = build_effective_runs(
+            std::slice::from_ref(&fdpc),
+            std::slice::from_ref(&paragraph),
+            std::slice::from_ref(&default),
+            std::slice::from_ref(&no_local_toggle),
+            std::slice::from_ref(&boolean_default),
+            std::slice::from_ref(&story),
+            &[],
+        )
+        .expect("effective boolean run");
+        let [run] = runs.as_slice() else {
+            panic!("expected one effective boolean run");
+        };
+        let bold = run.bold.as_ref().expect("bounded bold");
+        assert!(bold.inherited_value);
+        assert!(!bold.local_toggle);
+        assert!(bold.local_toggle_source.is_none());
+        assert!(bold.effective_value);
+        let italic = run.italic.as_ref().expect("bounded italic");
+        assert!(italic.inherited_value);
+        assert!(!italic.local_toggle);
+        assert!(italic.effective_value);
+
+        let bold_local_source = RawSpan {
+            stream: stream.clone(),
+            offset: 106,
+            len: 2,
+        };
+        let italic_local_source = RawSpan {
+            stream,
+            offset: 108,
+            len: 2,
+        };
+        let local_toggle = FdpcBooleanObservation {
+            fdpc_descriptor_ordinal: 1,
+            fdpc_style_ordinal: 2,
+            bold_toggle_sources: vec![bold_local_source.clone()],
+            italic_toggle_sources: vec![italic_local_source.clone()],
+        };
+        let runs = build_effective_runs(
+            &[fdpc],
+            &[paragraph],
+            &[default],
+            &[local_toggle],
+            &[boolean_default],
+            &[story],
+            &[],
+        )
+        .expect("suppressed boolean run");
+        let [run] = runs.as_slice() else {
+            panic!("expected one suppressed boolean run");
+        };
+        let bold = run.bold.as_ref().expect("bounded bold suppression");
+        assert!(bold.inherited_value);
+        assert!(bold.local_toggle);
+        assert_eq!(bold.local_toggle_source.as_ref(), Some(&bold_local_source));
+        assert!(!bold.effective_value);
+        let italic = run.italic.as_ref().expect("bounded italic suppression");
+        assert!(italic.inherited_value);
+        assert!(italic.local_toggle);
+        assert_eq!(
+            italic.local_toggle_source.as_ref(),
+            Some(&italic_local_source)
+        );
+        assert!(!italic.effective_value);
+    }
+
+    #[test]
+    fn ordinary_boolean_resolution_does_not_widen_implicit_style_zero() {
+        let stream = pub_core::StreamPath("/Quill/QuillSub/CONTENTS".into());
+        let story = StoryExtent {
+            story_index: 0,
+            story_syid: QuillSyid(7),
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+        };
+        let fdpc = QuillTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpc_descriptor_ordinal: 1,
+            fdpc_style_ordinal: 2,
+            fdpc_style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 100,
+                len: 12,
+            },
+            text_offset_source: RawSpan {
+                stream: stream.clone(),
+                offset: 40,
+                len: 4,
+            },
+            font_indices: vec![3],
+            font_names: vec!["Explicit Face".to_owned()],
+            script_fonts: Vec::new(),
+            text_sizes_emu: vec![12 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+            color_indices: Vec::new(),
+            story_intersections: Vec::new(),
+        };
+        let paragraph = ParagraphTypographyRange {
+            global_start_utf16: 0,
+            global_end_utf16: 10,
+            fdpp_descriptor_ordinal: 4,
+            fdpp_style_ordinal: 5,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 200,
+                len: 10,
+            },
+            selected_style_index: Some(0),
+            selector_source: Some(
+                QuillParagraphSelectorSource::ImplicitStyleZeroFromBoundedEvidence,
+            ),
+            default_style_selector_present: false,
+            alignment: None,
+            alignment_source_value: None,
+            alignment_source: None,
+        };
+        let default = CharacterDefaultObservation {
+            logical_style_index: 0,
+            stsh_descriptor_ordinal: 6,
+            stsh_record_ordinal: 0,
+            style_source: RawSpan {
+                stream: stream.clone(),
+                offset: 300,
+                len: 12,
+            },
+            font_pairs: vec![(9, "Default Face".to_owned())],
+            text_sizes_emu: vec![10 * QUILL_TEXT_SIZE_EMU_PER_POINT],
+            color_indices: Vec::new(),
+        };
+        let local = FdpcBooleanObservation {
+            fdpc_descriptor_ordinal: 1,
+            fdpc_style_ordinal: 2,
+            bold_toggle_sources: vec![RawSpan {
+                stream: stream.clone(),
+                offset: 106,
+                len: 2,
+            }],
+            italic_toggle_sources: Vec::new(),
+        };
+        let inherited = CharacterBooleanDefaultObservation {
+            logical_style_index: 0,
+            style_source: default.style_source.clone(),
+            bold_sources: vec![RawSpan {
+                stream,
+                offset: 306,
+                len: 2,
+            }],
+            italic_sources: Vec::new(),
+        };
+
+        let runs = build_effective_runs(
+            &[fdpc],
+            &[paragraph],
+            &[default],
+            &[local],
+            &[inherited],
+            &[story],
+            &[],
+        )
+        .expect("implicit style-zero typography");
+        let [run] = runs.as_slice() else {
+            panic!("expected one effective run");
+        };
+        assert!(run.bold.is_none());
+        assert!(run.italic.is_none());
+    }
+
+    #[test]
+    fn ordinary_italic_zero_payload_is_known_framing_but_bidi_is_not_consumed() {
+        let bytes = [0x03, 0x02, 0x38, 0x02];
+        let mut unknown = BTreeSet::new();
+        let (ordinary, next) =
+            parse_block(&bytes, 0, bytes.len(), &mut unknown).expect("ordinary italic");
+        assert_eq!(ordinary.id, FITALIC_ID);
+        assert_eq!(ordinary.block_type, 0x00);
+        assert_eq!(next, 2);
+
+        let (bidi, end) =
+            parse_block(&bytes, next, bytes.len(), &mut unknown).expect("BiDi italic framing");
+        assert_eq!(bidi.id, FITALIC_CS_ID);
+        assert_eq!(bidi.block_type, 0x00);
+        assert_eq!(end, bytes.len());
+        assert!(unknown.is_empty());
     }
 
     #[test]

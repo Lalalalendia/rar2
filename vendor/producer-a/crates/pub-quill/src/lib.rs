@@ -22,7 +22,8 @@ pub use story::{
     parse_bounded_fdpp_exact_story_catalog, parse_confirmed_story_catalog,
 };
 pub use writer::{
-    QuillStoryTextEdit, QuillStoryTextWritePlan, QuillStoryWriteError, plan_quill_story_text_edit,
+    QuillBooleanToggleWritePlan, QuillStoryTextEdit, QuillStoryTextWritePlan, QuillStoryWriteError,
+    plan_quill_boolean_toggle_write, plan_quill_story_text_edit,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,11 +39,12 @@ pub use tokn::{
     TOKN_PROPERTY_KIND, TOKN_PROPERTY_STATE, TOKN_PROPERTY_TEXT_LENGTH,
 };
 pub use typography::{
-    QUILL_TEXT_SIZE_EMU_PER_POINT, QuillEffectiveTypographyRun, QuillExplicitTypographyRun,
-    QuillParagraphAlignment, QuillParagraphAlignmentRun, QuillParagraphSelectorSource,
-    QuillScriptFontEntry, QuillScriptFontEntryDisposition, QuillScriptFontMapObservation,
-    QuillTextSizeRun, QuillTypographyCatalog, QuillTypographyRange, QuillTypographyReadError,
-    QuillTypographyStoryIntersection, QuillTypographyValueSource, parse_bounded_typography,
+    QUILL_TEXT_SIZE_EMU_PER_POINT, QuillEffectiveBoolean, QuillEffectiveTypographyRun,
+    QuillExplicitTypographyRun, QuillParagraphAlignment, QuillParagraphAlignmentRun,
+    QuillParagraphSelectorSource, QuillScriptFontEntry, QuillScriptFontEntryDisposition,
+    QuillScriptFontMapObservation, QuillTextSizeRun, QuillTypographyCatalog, QuillTypographyRange,
+    QuillTypographyReadError, QuillTypographyStoryIntersection, QuillTypographyValueSource,
+    parse_bounded_typography,
 };
 
 #[cfg(feature = "research-inspection")]

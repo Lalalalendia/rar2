@@ -13,6 +13,36 @@ const BTEC: [u8; 4] = *b"BTEC";
 const TOKN: [u8; 4] = *b"TOKN";
 const SERVICE_PAGE_ALIGNMENT: u32 = 0x200;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuillBooleanToggleWritePlan {
+    pub inherited_value: bool,
+    pub desired_effective_value: bool,
+    pub local_toggle: bool,
+}
+
+impl QuillBooleanToggleWritePlan {
+    pub const fn should_materialize_local_toggle(self) -> bool {
+        self.local_toggle
+    }
+}
+
+/// Inverse of the bounded ordinary Quill boolean rule:
+/// effective = inherited XOR local_toggle.
+///
+/// This plans semantic local-delta state only. It does not mutate FDPC/STSH
+/// bytes; native carrier insertion/removal remains a separately gated writer
+/// operation.
+pub const fn plan_quill_boolean_toggle_write(
+    inherited_value: bool,
+    desired_effective_value: bool,
+) -> QuillBooleanToggleWritePlan {
+    QuillBooleanToggleWritePlan {
+        inherited_value,
+        desired_effective_value,
+        local_toggle: inherited_value ^ desired_effective_value,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuillStoryTextEdit {
     pub story_syid: QuillSyid,
@@ -995,6 +1025,29 @@ mod tests {
     const STRS_OFFSET: usize = 0xa00;
     const BTEP_OFFSET: usize = 0xc00;
     const BTEC_OFFSET: usize = 0xe00;
+
+    #[test]
+    fn boolean_toggle_writer_inverse_matches_xor_truth_table() {
+        let cases = [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ];
+
+        for (inherited, desired, expected_toggle) in cases {
+            let plan = plan_quill_boolean_toggle_write(inherited, desired);
+            assert_eq!(plan.inherited_value, inherited);
+            assert_eq!(plan.desired_effective_value, desired);
+            assert_eq!(plan.local_toggle, expected_toggle);
+            assert_eq!(plan.should_materialize_local_toggle(), expected_toggle);
+            assert_eq!(
+                inherited ^ plan.local_toggle,
+                desired,
+                "planned local delta must reconstruct desired effective value"
+            );
+        }
+    }
 
     #[test]
     fn last_proven_capacity_edge_succeeds() {
