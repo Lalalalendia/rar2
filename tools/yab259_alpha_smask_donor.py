@@ -158,7 +158,7 @@ def prepare_alpha_smask_pdf_donor(
 
     replace_once(
         pdf,
-        """    for resource_id in image_ids {
+        r"""    for resource_id in image_ids {
         let PreparedImage::Rgb {
             width,
             height,
@@ -177,7 +177,7 @@ def prepare_alpha_smask_pdf_donor(
         objects.push(stream);
     }
 """,
-        """    for resource_id in image_ids {
+        r"""    for resource_id in image_ids {
         let PreparedImage::Rgb {
             width,
             height,
