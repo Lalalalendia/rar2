@@ -4,7 +4,7 @@ use pub_contents::{
 };
 use pub_core::StreamPath;
 use pub_escher::{PUBLISHER_FIELD_SHAPE_ID, inspect_sp_containers};
-use pub_model::Sha256Digest;
+use pub_model::{LengthEmu, Sha256Digest};
 use pub_reader::{
     CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH, build_mature_0x2c_structural_base_manifest,
 };
@@ -837,10 +837,10 @@ fn validate_created_candidate(
             ),
         });
     }
-    if shape.bounds_emu.x != T406_PERSISTED_X_EMU
-        || shape.bounds_emu.y != T406_PERSISTED_Y_EMU
-        || shape.bounds_emu.width != T406_PERSISTED_WIDTH_EMU
-        || shape.bounds_emu.height != T406_PERSISTED_HEIGHT_EMU
+    if shape.bounds_emu.x != LengthEmu(T406_PERSISTED_X_EMU)
+        || shape.bounds_emu.y != LengthEmu(T406_PERSISTED_Y_EMU)
+        || shape.bounds_emu.width != LengthEmu(T406_PERSISTED_WIDTH_EMU)
+        || shape.bounds_emu.height != LengthEmu(T406_PERSISTED_HEIGHT_EMU)
     {
         return Err(StructuralReplayMaterializationBlocked::OutputValidation {
             detail: format!("created bounds mismatch: {:?}", shape.bounds_emu),
