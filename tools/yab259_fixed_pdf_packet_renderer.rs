@@ -30,12 +30,20 @@ struct RenderSummary {
 }
 
 #[derive(Debug, Serialize)]
+struct RenderNodeReport {
+    origin_node_id: String,
+    disposition: &'static str,
+    code: String,
+}
+
+#[derive(Debug, Serialize)]
 struct RenderResult {
     protocol_version: &'static str,
     binding: Value,
     renderer_revision: String,
     target_profile: String,
     summary: RenderSummary,
+    node_reports: Vec<RenderNodeReport>,
 }
 
 fn main() -> Result<()> {
@@ -76,6 +84,22 @@ fn main() -> Result<()> {
         .into_iter()
         .collect();
 
+    let mut node_reports = output
+        .report
+        .nodes
+        .iter()
+        .map(|node| RenderNodeReport {
+            origin_node_id: node.origin.as_canonical().to_string(),
+            disposition: match node.disposition {
+                PdfRenderDisposition::Painted => "painted",
+                PdfRenderDisposition::Partial => "partial",
+                PdfRenderDisposition::Unsupported => "unsupported",
+            },
+            code: node.code.clone(),
+        })
+        .collect::<Vec<_>>();
+    node_reports.sort_by(|left, right| left.origin_node_id.cmp(&right.origin_node_id));
+
     let result = RenderResult {
         protocol_version: RESULT_VERSION,
         binding: request.binding,
@@ -88,6 +112,7 @@ fn main() -> Result<()> {
             node_unsupported,
             diagnostic_codes,
         },
+        node_reports,
     };
     println!("{}", serde_json::to_string(&result)?);
     Ok(())
