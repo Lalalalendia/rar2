@@ -51,16 +51,28 @@ impl fmt::Display for ResizeConstraintErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRect(label) => {
-                write!(formatter, "{label} must have positive, non-overflowing bounds")
+                write!(
+                    formatter,
+                    "{label} must have positive, non-overflowing bounds"
+                )
             }
             Self::UnsafeEmu(label) => {
-                write!(formatter, "{label} is outside the V1 JavaScript-safe EMU range")
+                write!(
+                    formatter,
+                    "{label} is outside the V1 JavaScript-safe EMU range"
+                )
             }
             Self::CrossedAxis(label) => {
-                write!(formatter, "{label} resize crossed the fixed center/opposite edge")
+                write!(
+                    formatter,
+                    "{label} resize crossed the fixed center/opposite edge"
+                )
             }
             Self::CenterParity(label) => {
-                write!(formatter, "{label} extent parity cannot preserve doubled center")
+                write!(
+                    formatter,
+                    "{label} extent parity cannot preserve doubled center"
+                )
             }
         }
     }
@@ -379,10 +391,7 @@ fn axis_edges(
         if delta.rem_euclid(2) != 0 {
             return Err(ResizeConstraintErrorV1::CenterParity(label));
         }
-        (
-            delta / 2,
-            (i128::from(center2) + i128::from(extent)) / 2,
-        )
+        (delta / 2, (i128::from(center2) + i128::from(extent)) / 2)
     } else if positive_handle {
         (
             i128::from(base_start),
@@ -416,13 +425,8 @@ pub fn plan_resize_constraint_v1(
 
     let desired_width = desired_width(base_rect, raw_target_rect, handle, modifiers.centered)?;
     let desired_height = desired_height(base_rect, raw_target_rect, handle, modifiers.centered)?;
-    let (width, height, aspect_applied, aspect_control_axis) = constrained_extents(
-        base_rect,
-        desired_width,
-        desired_height,
-        handle,
-        modifiers,
-    )?;
+    let (width, height, aspect_applied, aspect_control_axis) =
+        constrained_extents(base_rect, desired_width, desired_height, handle, modifiers)?;
     let width = checked_value(width, "constrained.width")?;
     let height = checked_value(height, "constrained.height")?;
     if width <= 0 || height <= 0 {
@@ -504,14 +508,10 @@ pub fn plan_resize_constraint_v1(
         }
     }
 
-    if !active_x(handle)
-        && (left != base_rect.x.get() || right - left != base_rect.width.get())
-    {
+    if !active_x(handle) && (left != base_rect.x.get() || right - left != base_rect.width.get()) {
         return Err(ResizeConstraintErrorV1::InvalidRect("inactive_x"));
     }
-    if !active_y(handle)
-        && (top != base_rect.y.get() || bottom - top != base_rect.height.get())
-    {
+    if !active_y(handle) && (top != base_rect.y.get() || bottom - top != base_rect.height.get()) {
         return Err(ResizeConstraintErrorV1::InvalidRect("inactive_y"));
     }
 
