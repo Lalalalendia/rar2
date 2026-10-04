@@ -26,7 +26,8 @@ use chaptera_server::{
 };
 use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_2, EDITOR_PROJECT_VERSION_V0_4, EDITOR_PROJECT_VERSION_V0_11,
-    EditOperation, EditorProject, EditorProjectIdentity, LengthEmu, RectEmu, Sha256Digest,
+    EDITOR_PROJECT_VERSION_V0_15, EditOperation, EditorProject, EditorProjectIdentity, LengthEmu,
+    RectEmu, Sha256Digest,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
@@ -753,6 +754,39 @@ fn cloud_revision_projection_strips_local_lineage_and_keeps_replayable_schema() 
     assert_eq!(projected.schema_version, EDITOR_PROJECT_VERSION_V0_4);
     assert!(projected.identity.is_none());
     assert_eq!(projected.source_hash, project.source_hash);
+    assert_eq!(projected.operations, project.operations);
+}
+
+#[test]
+fn cloud_revision_projection_uses_v015_for_paragraph_alignment_history() {
+    let paragraph_id = "44444444-4444-4444-8444-444444444444";
+    let set: EditOperation = serde_json::from_value(serde_json::json!({
+        "kind": "set_paragraph_alignment_override",
+        "paragraph_ids": [paragraph_id],
+        "value": "center",
+        "before": [{"paragraph_id": paragraph_id}],
+        "after": [{"paragraph_id": paragraph_id, "value": "center"}]
+    }))
+    .unwrap();
+    let clear: EditOperation = serde_json::from_value(serde_json::json!({
+        "kind": "clear_paragraph_alignment_override",
+        "paragraph_ids": [paragraph_id],
+        "before": [{"paragraph_id": paragraph_id, "value": "center"}],
+        "after": [{"paragraph_id": paragraph_id}]
+    }))
+    .unwrap();
+
+    let project = EditorProject {
+        schema_version: EDITOR_PROJECT_VERSION_V0_15.to_owned(),
+        source_hash: Sha256Digest::from_str(SAMPLE_SOURCE_SHA256).unwrap(),
+        identity: None,
+        assets: Vec::new(),
+        table_grids: Vec::new(),
+        operations: vec![set, clear],
+    };
+
+    let projected = cloud_revision_project(&project);
+    assert_eq!(projected.schema_version, EDITOR_PROJECT_VERSION_V0_15);
     assert_eq!(projected.operations, project.operations);
 }
 
