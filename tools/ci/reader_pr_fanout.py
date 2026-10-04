@@ -366,6 +366,44 @@ SHARED_DESKTOP_FILES = {
 }
 
 
+WINDOWS_DLL_BOOTSTRAP_SOURCE = "apps/chaptera-desktop/src/main.rs"
+
+
+def windows_dll_bootstrap_errors(source: str) -> list[str]:
+    errors: list[str] = []
+    module_marker = '#[cfg(target_os = "windows")]\nmod windows_dll_search;'
+    if module_marker not in source:
+        errors.append("Windows DLL policy module must remain cfg-gated and wired in Desktop main.rs")
+
+    main_marker = "fn main() -> eframe::Result<()> {"
+    main_start = source.find(main_marker)
+    if main_start < 0:
+        errors.append("Desktop main entrypoint is missing")
+        return errors
+
+    args_marker = "let mut args = std::env::args_os().skip(1).peekable();"
+    args_start = source.find(args_marker, main_start)
+    if args_start < 0:
+        errors.append("Desktop argument bootstrap marker is missing")
+        return errors
+
+    prefix = source[main_start:args_start]
+    cfg_pos = prefix.find('#[cfg(target_os = "windows")]')
+    err_pos = prefix.find("if let Err(")
+    call_pos = prefix.find("windows_dll_search::install_process_policy()")
+    exit_pos = prefix.find("std::process::exit(2);", max(call_pos, 0))
+
+    if min(cfg_pos, err_pos, call_pos, exit_pos) < 0:
+        errors.append(
+            "Desktop main must install the Windows DLL search policy fail-closed before argument handling"
+        )
+    elif not (cfg_pos < err_pos < call_pos < exit_pos):
+        errors.append(
+            "Windows DLL search bootstrap order drifted; cfg + Err handling + install + exit(2) must precede argument handling"
+        )
+    return errors
+
+
 def classify(
     paths: list[str],
     dynamic_evidence_only_paths: set[str] | None = None,
@@ -430,6 +468,23 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = changed_paths(args.base, args.head)
+
+    try:
+        desktop_main = subprocess.check_output(
+            ["git", "show", f"{args.head}:{WINDOWS_DLL_BOOTSTRAP_SOURCE}"],
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        print(
+            f"reader-pr-ci: could not read {WINDOWS_DLL_BOOTSTRAP_SOURCE} at {args.head}: {error}"
+        )
+        return 2
+    bootstrap_errors = windows_dll_bootstrap_errors(desktop_main)
+    if bootstrap_errors:
+        for error in bootstrap_errors:
+            print(f"reader-pr-ci: Windows DLL bootstrap invariant failed: {error}")
+        return 2
+
     dynamic_evidence_only = test_region_evidence_only_paths(args.base, args.head, paths)
     scopes = classify(paths, dynamic_evidence_only)
     receipt = {
