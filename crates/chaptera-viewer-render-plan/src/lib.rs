@@ -1077,7 +1077,6 @@ fn resolved_vertical_offset_emu_v1(
     }
 }
 
-
 fn uniform_laid_out_height_emu_v1(
     first_line_extent_emu: i64,
     baseline_advance_emu: i64,
@@ -1993,6 +1992,7 @@ fn resolve_text_layout_v1(
         LengthEmu::new(font_size_emu),
     )
     .map(LengthEmu::get)
+    .map(|extent| extent.min(line_height_emu))
     .unwrap_or(line_height_emu);
     let laid_out_height_emu =
         uniform_laid_out_height_emu_v1(first_line_extent_emu, line_height_emu, lines.len())
