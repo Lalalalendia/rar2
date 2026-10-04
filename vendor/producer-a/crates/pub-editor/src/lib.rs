@@ -74,7 +74,7 @@ use pub_odg::{
 };
 use pub_reader::{
     PubAssetExportBundle, PubParagraphAlignmentRun, PubResolvedGraph, PubResolvedNodePayload,
-    PubResolvedStoryFrame, PubTypographyBooleanV1, PubTypographyRun, PubTypographySizeRun,
+    PubResolvedStoryFrame, PubTypographyRun, PubTypographySizeRun,
     build_mature_0x2c_asset_export_bundle_from_bytes, build_mature_0x2c_source_graph,
     materialize_bounded_simple_table_cells, resolve_pub_source_graph,
 };
@@ -6498,12 +6498,12 @@ mod asset_reachability_tests {
             size_inherited: true,
             color_rgb: Some([0x11, 0x22, 0x33]),
             color_inherited: true,
-            bold: Some(PubTypographyBooleanV1 {
+            bold: Some(pub_reader::PubTypographyBooleanV1 {
                 local_toggle: true,
                 inherited_value: true,
                 effective_value: false,
             }),
-            italic: Some(PubTypographyBooleanV1 {
+            italic: Some(pub_reader::PubTypographyBooleanV1 {
                 local_toggle: false,
                 inherited_value: true,
                 effective_value: true,
@@ -6548,12 +6548,12 @@ mod asset_reachability_tests {
             size_inherited: false,
             color_rgb: None,
             color_inherited: false,
-            bold: Some(PubTypographyBooleanV1 {
+            bold: Some(pub_reader::PubTypographyBooleanV1 {
                 local_toggle: false,
                 inherited_value: false,
                 effective_value: false,
             }),
-            italic: Some(PubTypographyBooleanV1 {
+            italic: Some(pub_reader::PubTypographyBooleanV1 {
                 local_toggle: false,
                 inherited_value: false,
                 effective_value: false,
