@@ -1,0 +1,96 @@
+name: Current 1050 semantic prevalence V1
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs'
+      - 'tools/corpus/current_semantic_prevalence.py'
+      - '.github/workflows/current-1050-semantic-prevalence-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'vendor/producer-a/crates/pub-viewer/src/bin/corpus-reader-receipt.rs'
+      - 'tools/corpus/current_semantic_prevalence.py'
+      - '.github/workflows/current-1050-semantic-prevalence-v1.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: current-1050-semantic-prevalence-v1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rar2-target
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+
+      - name: Download pinned exact 1050 materialization
+        uses: actions/download-artifact@v4
+        with:
+          name: pub-corpus-1000-36573574820
+          path: out/pinned1050
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: 36573574820
+
+      - name: Verify exact 1050 identity
+        run: |
+          python - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          pubs=sorted(Path("out/pinned1050/materialized/native").glob("*.pub"))
+          shas=[p.stem.casefold() for p in pubs]
+          digest=hashlib.sha256("".join(x+"\n" for x in shas).encode()).hexdigest()
+          assert len(shas)==1050,len(shas)
+          assert len(set(shas))==1050,len(set(shas))
+          assert digest=="21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43",digest
+          print(json.dumps({"count":len(shas),"sha_list_digest":"sha256:"+digest},indent=2))
+          PY
+
+      - name: Build current Reader receipt producer
+        run: |
+          cargo build \
+            --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer \
+            --release \
+            --bin corpus-reader-receipt
+
+      - name: Run current semantic prevalence over exact 1050
+        run: |
+          mkdir -p out/semantic-prevalence
+          python tools/corpus/current_semantic_prevalence.py \
+            --exe "$CARGO_TARGET_DIR/release/corpus-reader-receipt" \
+            --corpus out/pinned1050/materialized/native \
+            --out out/semantic-prevalence/summary.json \
+            --rows-out out/semantic-prevalence/rows.json \
+            --workers 8
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path("out/semantic-prevalence/summary.json").read_text())
+          assert p["corpus_file_count"]==1050,p
+          assert p["opened_file_count"]+p["failed_or_unsupported_count"]==1050,p
+          assert p["grounded_guides"]["state"]=="not_wired_to_active_corpus_open_bundle",p
+          assert p["mail_merge"]["state"]=="not_wired_to_generic_reader_corpus_receipt",p
+          print(json.dumps(p,indent=2,sort_keys=True))
+          PY
+
+      - name: Upload source-free semantic prevalence receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: current-1050-semantic-prevalence-${{ github.run_id }}
+          path: out/semantic-prevalence/**
+          if-no-files-found: error
+          retention-days: 90
