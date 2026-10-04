@@ -29,9 +29,6 @@ pub enum ImportedParagraphProjectionErrorV1 {
         start: u64,
         end: u64,
     },
-    TerminalCrProvenanceUnknown {
-        story_id: StoryId,
-    },
 }
 
 impl fmt::Display for ImportedParagraphProjectionErrorV1 {
@@ -54,11 +51,6 @@ impl fmt::Display for ImportedParagraphProjectionErrorV1 {
             } => write!(
                 formatter,
                 "invalid imported paragraph range for Story {} paragraph {ordinal}: {start}..{end}",
-                story_id.as_canonical()
-            ),
-            Self::TerminalCrProvenanceUnknown { story_id } => write!(
-                formatter,
-                "cannot project terminal-CR paragraph topology for Story {} without exact mature-Quill provenance",
                 story_id.as_canonical()
             ),
         }
@@ -86,11 +78,9 @@ impl EditorSession {
             let protected_terminal_cr =
                 imported_mature_quill_terminal_cr_is_proven_v1(&self.graph.source, story);
             if story.text.ends_with('\r') && !protected_terminal_cr {
-                return Err(
-                    ImportedParagraphProjectionErrorV1::TerminalCrProvenanceUnknown {
-                        story_id: *story_id,
-                    },
-                );
+                // Story-local fail closed: do not invent imported paragraph
+                // topology, but do not suppress independently proven Stories.
+                continue;
             }
             result.extend(project_imported_story_paragraphs_v1(
                 self.source_hash,
