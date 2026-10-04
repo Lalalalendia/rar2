@@ -3,7 +3,8 @@ name: Editor Desktop History Shortcuts V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
+      - "apps/chaptera-desktop/src/history.rs"
+      - "apps/chaptera-desktop/src/history_gui_tests.rs"
       - ".github/workflows/editor-desktop-history-shortcuts-v1.yml"
   workflow_dispatch:
 
@@ -15,8 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  history-shortcuts:
-    runs-on: windows-latest
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +26,33 @@ jobs:
         with:
           toolchain: "1.94.1"
           components: rustfmt, clippy
+
+      - name: Format Desktop history slice
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+      - name: Check Desktop history integration
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Clippy Desktop history integration
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+  gui-real-pub:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
 
       - name: Acquire pinned Apache POI SampleNewsletter
         shell: pwsh
@@ -41,8 +70,8 @@ jobs:
           }
           "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Format Desktop history slice
-        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
-
-      - name: Test real GUI Undo Redo shortcut walkthrough
-        run: cargo test -p chaptera-desktop gui_only_v0_walkthrough_uses_real_widgets -- --ignored --nocapture
+      - name: Prove Ctrl Z Ctrl Y canonical history
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_ctrl_history_shortcuts_reuse_canonical_undo_redo_without_hidden_operation
+          -- --ignored --nocapture
