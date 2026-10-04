@@ -1,3 +1,4 @@
+// CI control: substantive pub-editor facade/core change must allocate TextBox Restore jobs.
 //! Bounded authoring session for Publisher migration workflows.
 //!
 //! This crate does not make a general "editable PUB" claim. Every edit
