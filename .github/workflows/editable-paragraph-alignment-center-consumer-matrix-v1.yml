@@ -1,0 +1,149 @@
+name: Editable Paragraph Alignment Center Consumer Matrix V1
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/editable-paragraph-alignment-center-consumer-matrix-v1.yml"
+      - "tools/ci/editable_paragraph_alignment_center_consumer_matrix.py"
+      - "tools/verify_editable_paragraph_alignment.py"
+      - "tools/ci/scribus_idml_consumer.py"
+      - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-export/**"
+      - "vendor/producer-a/crates/pub-idml/**"
+      - "vendor/producer-a/crates/pub-odg/**"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: editable-paragraph-alignment-center-consumer-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/editable-paragraph-alignment-center-matrix
+      CORPUS_ROOT: ${{ github.workspace }}/input/corpus/materialized/native
+      EVIDENCE_ROOT: ${{ github.workspace }}/target/editable-paragraph-alignment-center-matrix-evidence
+      PINNED_CORPUS_RUN_ID: "36573574820"
+      PINNED_CORPUS_ARTIFACT: "pub-corpus-1000-36573574820"
+      PINNED_CORPUS_COUNT: "1050"
+      PINNED_CORPUS_DIGEST: "21e9c00963410e1004d407e6476f2e909c6561a4374b4ddadad052499e448d43"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check evidence tooling
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-editor -p pub-export -- --check
+          python -m py_compile             tools/ci/editable_paragraph_alignment_center_consumer_matrix.py             tools/verify_editable_paragraph_alignment.py
+
+      - name: Download pinned exact 1050 corpus
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PINNED_CORPUS_ARTIFACT }}
+          path: input/corpus
+          github-token: ${{ github.token }}
+          repository: Lalalalendia/rar2
+          run-id: ${{ env.PINNED_CORPUS_RUN_ID }}
+
+      - name: Verify exact corpus identity
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CORPUS_ROOT"])
+          paths = sorted(root.glob("*.pub"))
+          shas = [path.stem.casefold() for path in paths]
+          digest = hashlib.sha256(
+              "".join(sha + "\n" for sha in shas).encode("ascii")
+          ).hexdigest()
+          assert len(paths) == int(os.environ["PINNED_CORPUS_COUNT"]), len(paths)
+          assert len(set(shas)) == len(shas), "duplicate corpus SHA"
+          assert digest == os.environ["PINNED_CORPUS_DIGEST"], digest
+          print(f"verified {len(paths)} exact PUB files; sha-list digest={digest}")
+          PY
+
+      - name: Build alignment and editable-route probes
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path vendor/producer-a/Cargo.toml             -p pub-editor --release             --bin editable_paragraph_alignment_probe             --bin editable_route_probe
+
+      - name: Install independent editable-output consumers
+        run: |
+          set -euo pipefail
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo timeout 900s apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends             scribus libreoffice-draw xvfb fonts-montserrat python3-uno
+
+      - name: Run exact all-Center-source consumer matrix
+        run: |
+          set -euo pipefail
+          python tools/ci/editable_paragraph_alignment_center_consumer_matrix.py             --corpus-root "$CORPUS_ROOT"             --alignment-probe "$CARGO_TARGET_DIR/release/editable_paragraph_alignment_probe"             --route-probe "$CARGO_TARGET_DIR/release/editable_route_probe"             --verifier tools/verify_editable_paragraph_alignment.py             --scribus-helper tools/ci/scribus_idml_consumer.py             --evidence-root "$EVIDENCE_ROOT"
+
+      - name: Validate Center-class receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          receipt = json.loads(
+              (Path(os.environ["EVIDENCE_ROOT"]) / "receipt.json").read_text()
+          )
+          assert receipt["schema"] == "chaptera.editable-paragraph-alignment-center-consumer-matrix.v1"
+          assert receipt["source_count"] == 53, receipt["source_count"]
+          assert receipt["center_story_count"] == 183, receipt["center_story_count"]
+          assert receipt["summary"] == {
+              "all_libreoffice_save_reopen_verified": True,
+              "all_materialized": True,
+              "all_scribus_save_reopen_verified": True,
+              "all_wire_verified": True,
+          }
+          assert receipt["claims"] == {
+              "consumer_survival_proven_for_center_class": True,
+              "loss_report_or_manifest_changed": False,
+              "measurement_only": True,
+              "right_class_fully_proven": False,
+              "story_text_recorded": False,
+          }
+          print(json.dumps({
+              "source_count": receipt["source_count"],
+              "center_story_count": receipt["center_story_count"],
+              "right_story_count_in_selected_sources": receipt[
+                  "right_story_count_in_selected_sources"
+              ],
+              "summary": receipt["summary"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload source-safe Center consumer matrix
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editable-paragraph-alignment-center-consumer-v1-${{ github.run_id }}
+          path: |
+            target/editable-paragraph-alignment-center-matrix-evidence/receipt.json
+            target/editable-paragraph-alignment-center-matrix-evidence/*/expected.json
+            target/editable-paragraph-alignment-center-matrix-evidence/*/wire.json
+            target/editable-paragraph-alignment-center-matrix-evidence/*/scribus.json
+            target/editable-paragraph-alignment-center-matrix-evidence/*/libreoffice.json
+          if-no-files-found: warn
+          retention-days: 90
