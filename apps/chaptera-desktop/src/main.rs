@@ -25,8 +25,8 @@ mod page_navigation;
 #[cfg(all(test, not(feature = "reader-only")))]
 mod page_navigation_gui_tests;
 mod product_smoke;
-mod reader_product_ui;
 mod reader_product_cli;
+mod reader_product_ui;
 mod reader_salvage;
 mod reader_update_control;
 mod rectangle_creation;
