@@ -45,19 +45,18 @@ fn no_modifiers_match_existing_raw_resize_semantics() {
         .expect("constrained update");
 
     assert_eq!(raw_update, constrained_update);
-    assert_eq!(raw.commit().unwrap().after, constrained.commit().unwrap().after);
+    assert_eq!(
+        raw.commit().unwrap().after,
+        constrained.commit().unwrap().after
+    );
 }
 
 #[test]
 fn ctrl_centered_resize_preserves_exact_center() {
     let before = rect(0, 0, 100, 50);
-    let mut transaction = ResizeTransaction::begin(
-        node_id(3),
-        before,
-        ResizeHandle::Right,
-        point(100, 25),
-    )
-    .expect("transaction");
+    let mut transaction =
+        ResizeTransaction::begin(node_id(3), before, ResizeHandle::Right, point(100, 25))
+            .expect("transaction");
 
     assert_eq!(
         transaction
@@ -154,13 +153,9 @@ fn shift_on_edge_handle_is_inert() {
 #[test]
 fn toggling_modifiers_mid_drag_recomputes_from_original_base_and_pointer() {
     let before = rect(0, 0, 100, 50);
-    let mut transaction = ResizeTransaction::begin(
-        node_id(8),
-        before,
-        ResizeHandle::Right,
-        point(100, 25),
-    )
-    .expect("transaction");
+    let mut transaction =
+        ResizeTransaction::begin(node_id(8), before, ResizeHandle::Right, point(100, 25))
+            .expect("transaction");
     let pointer = point(120, 25);
 
     assert_eq!(
@@ -192,13 +187,9 @@ fn toggling_modifiers_mid_drag_recomputes_from_original_base_and_pointer() {
 #[test]
 fn terminal_constraint_invalid_state_cannot_commit_stale_preview() {
     let before = rect(0, 0, 100, 50);
-    let mut transaction = ResizeTransaction::begin(
-        node_id(9),
-        before,
-        ResizeHandle::Right,
-        point(100, 25),
-    )
-    .expect("transaction");
+    let mut transaction =
+        ResizeTransaction::begin(node_id(9), before, ResizeHandle::Right, point(100, 25))
+            .expect("transaction");
 
     assert_eq!(
         transaction
