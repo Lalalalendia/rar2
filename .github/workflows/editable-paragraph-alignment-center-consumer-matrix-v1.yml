@@ -8,6 +8,7 @@ on:
       - "tools/verify_editable_paragraph_alignment.py"
       - "tools/ci/scribus_idml_consumer.py"
       - "vendor/producer-a/crates/pub-editor/**"
+      - "vendor/producer-a/crates/pub-reader/**"
       - "vendor/producer-a/crates/pub-export/**"
       - "vendor/producer-a/crates/pub-idml/**"
       - "vendor/producer-a/crates/pub-odg/**"
