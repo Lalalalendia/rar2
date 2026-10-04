@@ -8,8 +8,14 @@ use std::fs::{self, OpenOptions};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 
 pub const JOURNAL_SCHEMA_VERSION: &str = "chaptera.update-journal.v1";
+#[cfg(windows)]
+const RECOVERY_RENAME_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(windows)]
+const RECOVERY_RENAME_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -414,7 +420,7 @@ impl UpdateEngine {
                         if let Some(parent) = paths.rejected_candidate.parent() {
                             fs::create_dir_all(parent)?;
                         }
-                        rename_path(&current, &paths.rejected_candidate)?;
+                        rename_recovery_current(&current, &paths.rejected_candidate)?;
                     }
                     rename_path(&paths.previous_tree, &current)?;
                 } else if !(current.is_dir() && paths.rejected_candidate.exists()) {
@@ -611,11 +617,54 @@ fn rename_path(src: &Path, dst: &Path) -> Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::rename(src, dst)?;
+    fs::rename(src, dst).map_err(|error| rename_error(src, dst, error))?;
     if let Some(parent) = dst.parent() {
         sync_directory_if_supported(parent)?;
     }
     Ok(())
+}
+
+fn rename_recovery_current(src: &Path, dst: &Path) -> Result<()> {
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    #[cfg(windows)]
+    {
+        let deadline = Instant::now() + RECOVERY_RENAME_RETRY_TIMEOUT;
+        loop {
+            match fs::rename(src, dst) {
+                Ok(()) => break,
+                Err(error)
+                    if error.kind() == io::ErrorKind::PermissionDenied
+                        && error.raw_os_error() == Some(5)
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(RECOVERY_RENAME_RETRY_INTERVAL);
+                }
+                Err(error) => return Err(rename_error(src, dst, error)),
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fs::rename(src, dst).map_err(|error| rename_error(src, dst, error))?;
+
+    if let Some(parent) = dst.parent() {
+        sync_directory_if_supported(parent)?;
+    }
+    Ok(())
+}
+
+fn rename_error(src: &Path, dst: &Path, error: io::Error) -> UpdateError {
+    UpdateError::Io(io::Error::new(
+        error.kind(),
+        format!(
+            "rename {} -> {} failed: {error}",
+            src.display(),
+            dst.display()
+        ),
+    ))
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<()> {

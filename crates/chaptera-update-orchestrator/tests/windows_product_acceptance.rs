@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 #[derive(Default)]
@@ -308,6 +310,59 @@ fn real_installed_reader_update_rollback_cycle() {
     assert_eq!(fs::read(&external_state).unwrap(), original_external);
 }
 
+
+#[cfg(windows)]
+#[test]
+fn recovery_waits_for_transient_exclusive_current_handle_release() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("install");
+    let candidate = temp.path().join("candidate");
+
+    seed_tree(&root.join("current"), b"U1", b"reader-A");
+    seed_tree(&candidate, b"U2", b"reader-B");
+
+    let engine = UpdateEngine::new(&root);
+    engine
+        .begin_verified_candidate(
+            "transient-recovery-lock",
+            "2.0.0",
+            &candidate,
+            Path::new("chaptera-updater.bin"),
+        )
+        .unwrap();
+    engine.retain_previous().unwrap();
+    engine.activate_candidate().unwrap();
+
+    let current = root.join("current");
+    let locked_reader = current.join("reader.bin");
+    let exclusive_reader = OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&locked_reader)
+        .expect("exclusive activated Reader handle");
+
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(exclusive_reader);
+    });
+
+    let started = Instant::now();
+    assert_eq!(
+        engine.recover().unwrap(),
+        RecoveryOutcome::UnconfirmedCandidateRolledBack
+    );
+    release.join().unwrap();
+
+    assert!(
+        started.elapsed() >= Duration::from_millis(150),
+        "recovery should have observed the transient exclusive lock"
+    );
+    assert_eq!(
+        fs::read(current.join("reader.bin")).unwrap(),
+        b"reader-A",
+        "recovery must restore the retained predecessor after the transient lock releases"
+    );
+}
 
 #[cfg(windows)]
 #[test]
