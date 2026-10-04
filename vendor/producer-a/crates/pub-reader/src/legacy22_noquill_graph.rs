@@ -1,16 +1,19 @@
 use super::{
     CONTENTS_STREAM_PATH, PubBridgeDiagnostic, PubEffectivePageProjection,
-    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyOleSource,
-    PubNodePayload, PubSourceGraph, PubSourceGraphBuild, PubStoryFrameSource,
+    PubEffectivePageProjectionAuthority, PubExplicitShapePaintSource, PubLegacyCharacterStyleRun,
+    PubLegacyOleSource, PubLegacyUnderlineStyle, PubNodePayload, PubSourceGraph,
+    PubSourceGraphBuild, PubStoryFrameSource,
     PubTableCellCoordinates, PubTableCellSource, PubTableSource, PubTableStoryOwnershipSource,
     ROLE_DOCUMENT, ROLE_NODE, ROLE_PAGE, ROLE_STORY, bounded_wmf_metafile, derive_pub_id,
     source_ref,
 };
 use anyhow::{Context, Result, bail};
 use pub_contents::{
-    LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22Directory, Legacy0x22DirectoryEntry,
-    Legacy0x22ResolvedTable, parse_legacy_0x22_directory, parse_legacy_0x22_formatting_descriptor,
-    parse_legacy_0x22_resolved_tables, parse_legacy_0x22_text_info_map,
+    LEGACY_0X22_TABLE_CHUNK_TYPE, Legacy0x22CharacterRun, Legacy0x22Directory,
+    Legacy0x22DirectoryEntry, Legacy0x22ResolvedTable, Legacy0x22Underline,
+    parse_legacy_0x22_directory, parse_legacy_0x22_formatting_descriptor,
+    parse_legacy_0x22_formatting_runs, parse_legacy_0x22_resolved_tables,
+    parse_legacy_0x22_text_info_map,
 };
 use pub_core::{RawSpan, StreamPath};
 use pub_model::{
@@ -52,6 +55,13 @@ struct LegacyIdList {
 struct LegacyImageWmfProfile {
     source: RawSpan,
     normalized_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyAdmittedStoryRange {
+    story_id: StoryId,
+    absolute_start: u32,
+    absolute_end: u32,
 }
 
 pub fn read_legacy_0x22_image_wmfs<R: Read + Seek>(
@@ -245,6 +255,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
         .get(text_start..text_end)
         .context("legacy no-Quill text range exceeds Contents")?;
     let mut story_by_owner = BTreeMap::<u16, StoryId>::new();
+    let mut story_source_ranges = Vec::<LegacyAdmittedStoryRange>::new();
     let mut diagnostics = Vec::new();
     let resolved_tables = if directory
         .entries
@@ -324,6 +335,16 @@ pub fn build_legacy_0x22_noquill_from_contents(
                             ],
                         },
                     );
+                    let absolute_end = text_start
+                        .checked_add(end)
+                        .context("legacy owner absolute text end overflow")?;
+                    story_source_ranges.push(LegacyAdmittedStoryRange {
+                        story_id,
+                        absolute_start: u32::try_from(absolute_start)
+                            .context("legacy owner absolute text start does not fit u32")?,
+                        absolute_end: u32::try_from(absolute_end)
+                            .context("legacy owner absolute text end does not fit u32")?,
+                    });
                     story_by_owner.insert(owner.owner_id, story_id);
                 }
                 Err(_) => diagnostics.push(PubBridgeDiagnostic::LegacyTextEncodingUnresolved {
@@ -361,6 +382,37 @@ pub fn build_legacy_0x22_noquill_from_contents(
             &mut diagnostics,
         )?;
     }
+
+    let legacy_character_style_runs = if descriptor
+        .character_fkp_page_range()
+        .chain(descriptor.paragraph_fkp_page_range())
+        .chain(descriptor.cell_style_fkp_page_range())
+        .all(|page_index| {
+            usize::from(page_index)
+                .checked_mul(pub_contents::FKP_PAGE_SIZE)
+                .and_then(|offset| offset.checked_add(pub_contents::FKP_PAGE_SIZE))
+                .is_some_and(|end| end <= contents.len())
+        })
+    {
+        match parse_legacy_0x22_formatting_runs(contents_stream.clone(), contents) {
+            Ok(formatting) => project_legacy_character_style_runs(
+                &graph.source,
+                &story_source_ranges,
+                &formatting.character_runs,
+            ),
+            Err(error) => {
+                diagnostics.push(PubBridgeDiagnostic::LegacyTextFormattingUnresolved {
+                    reason: error.to_string(),
+                });
+                Vec::new()
+            }
+        }
+    } else {
+        diagnostics.push(PubBridgeDiagnostic::LegacyTextFormattingUnresolved {
+            reason: "formatting_fkp_page_out_of_bounds".to_owned(),
+        });
+        Vec::new()
+    };
 
     for (page_object_id, page_id) in &page_object_to_id {
         let page_entry = directory
@@ -407,6 +459,7 @@ pub fn build_legacy_0x22_noquill_from_contents(
         source_page_paint_orders: Vec::new(),
         diagnostics,
         typography_runs: Vec::new(),
+        legacy_character_style_runs,
         typography_size_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
         script_font_maps: Vec::new(),
@@ -1014,6 +1067,85 @@ fn materialize_unowned_text_story(
     Ok(())
 }
 
+fn project_legacy_character_style_runs(
+    source: &SourceDescriptor,
+    story_ranges: &[LegacyAdmittedStoryRange],
+    character_runs: &[Legacy0x22CharacterRun],
+) -> Vec<PubLegacyCharacterStyleRun> {
+    let mut projected = Vec::new();
+
+    for run in character_runs {
+        let Some(style) = run.style.as_ref() else {
+            continue;
+        };
+        for story in story_ranges {
+            let start = run.fc_first.max(story.absolute_start);
+            let end = run.fc_lim.min(story.absolute_end);
+            if start >= end {
+                continue;
+            }
+
+            let mut source_refs = vec![
+                source_ref(
+                    source,
+                    &run.fc_first_source,
+                    Some("contents/0x22/chpx-range".into()),
+                    Some("fc_first".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+                source_ref(
+                    source,
+                    &run.fc_lim_source,
+                    Some("contents/0x22/chpx-range".into()),
+                    Some("fc_lim".into()),
+                    SourceRole::Relation,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ),
+            ];
+            if let Some(property_source) = run.property_source.as_ref() {
+                source_refs.push(source_ref(
+                    source,
+                    property_source,
+                    Some("contents/0x22/chpx-property".into()),
+                    Some("character_style".into()),
+                    SourceRole::Semantic,
+                    AuthorityClass::Authoritative,
+                    ReadConfidence::Exact,
+                ));
+            }
+
+            projected.push(PubLegacyCharacterStyleRun {
+                story_id: story.story_id,
+                story_scalar_start: start - story.absolute_start,
+                story_scalar_end: end - story.absolute_start,
+                bold: style.bold,
+                italic: style.italic,
+                small_caps: style.small_caps,
+                all_caps: style.caps,
+                source_font_index: style.font_index,
+                text_size_half_points: style.size_half_points(),
+                baseline_shift_half_points: style.baseline_shift_half_points,
+                legacy_color_index: style.legacy_color_index,
+                underline: style.underline.map(|value| match value {
+                    Legacy0x22Underline::None => PubLegacyUnderlineStyle::None,
+                    Legacy0x22Underline::Single => PubLegacyUnderlineStyle::Single,
+                    Legacy0x22Underline::WordsOnly => PubLegacyUnderlineStyle::WordsOnly,
+                    Legacy0x22Underline::Double => PubLegacyUnderlineStyle::Double,
+                }),
+                letter_spacing_eighth_points: style.letter_spacing_eighth_points,
+                raw_payload: style.raw_payload.clone(),
+                source_refs,
+            });
+        }
+    }
+
+    projected.sort_by_key(|run| (run.story_id, run.story_scalar_start, run.story_scalar_end));
+    projected
+}
+
 fn decode_bounded_legacy_ascii(bytes: &[u8]) -> Result<String> {
     if bytes.iter().any(|byte| *byte >= 0x80) {
         bail!(
@@ -1321,6 +1453,123 @@ fn read_i32(bytes: &[u8], offset: usize) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_character_style_projection_splits_exactly_at_story_boundaries() {
+        let source_hash: Sha256Digest =
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap();
+        let source = SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("0x22-noquill".into()),
+            adapter_version: "test".into(),
+            source_hash,
+        };
+        let story_a = derive_legacy_story_id(&source_hash, 10).unwrap();
+        let story_b = derive_legacy_story_id(&source_hash, 11).unwrap();
+        let stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let span = |offset: u64, len: u64| RawSpan {
+            stream: stream.clone(),
+            offset,
+            len,
+        };
+        let style = pub_contents::decode_legacy_0x22_character_style(&[
+            0x0c, 0x00, 0x03, 0x00, 0x04, 0x00, 0x00, 0x02, 0x31, 0x00,
+        ])
+        .unwrap();
+        let run = Legacy0x22CharacterRun {
+            fc_first: 102,
+            fc_lim: 106,
+            fc_first_source: span(0x210, 4),
+            fc_lim_source: span(0x214, 4),
+            property_pointer: 0xfc,
+            property_pointer_source: span(0x218, 1),
+            property_source: Some(span(0x3f0, 11)),
+            style: Some(style.clone()),
+        };
+
+        let projected = project_legacy_character_style_runs(
+            &source,
+            &[
+                LegacyAdmittedStoryRange {
+                    story_id: story_a,
+                    absolute_start: 100,
+                    absolute_end: 104,
+                },
+                LegacyAdmittedStoryRange {
+                    story_id: story_b,
+                    absolute_start: 104,
+                    absolute_end: 108,
+                },
+            ],
+            &[run],
+        );
+
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0].story_id, story_a);
+        assert_eq!((projected[0].story_scalar_start, projected[0].story_scalar_end), (2, 4));
+        assert_eq!(projected[1].story_id, story_b);
+        assert_eq!((projected[1].story_scalar_start, projected[1].story_scalar_end), (0, 2));
+        for item in &projected {
+            assert!(item.small_caps);
+            assert!(item.all_caps);
+            assert_eq!(item.source_font_index, Some(3));
+            assert_eq!(item.text_size_half_points, Some(24));
+            assert_eq!(item.legacy_color_index, None);
+            assert_eq!(item.underline, Some(PubLegacyUnderlineStyle::Single));
+            assert_eq!(item.letter_spacing_eighth_points, Some(12));
+            assert_eq!(item.raw_payload, style.raw_payload);
+            assert_eq!(item.source_refs.len(), 3);
+        }
+    }
+
+    #[test]
+    fn legacy_character_style_projection_preserves_signed_baseline_shift() {
+        let source_hash: Sha256Digest =
+            "0000000000000000000000000000000000000000000000000000000000000000"
+                .parse()
+                .unwrap();
+        let source = SourceDescriptor {
+            format: "pub".into(),
+            format_version: Some("0x22-noquill".into()),
+            adapter_version: "test".into(),
+            source_hash,
+        };
+        let story_id = derive_legacy_story_id(&source_hash, 12).unwrap();
+        let stream = StreamPath(CONTENTS_STREAM_PATH.into());
+        let span = |offset: u64, len: u64| RawSpan {
+            stream: stream.clone(),
+            offset,
+            len,
+        };
+        let style = pub_contents::decode_legacy_0x22_character_style(&[
+            0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0xfa,
+        ])
+        .unwrap();
+        let projected = project_legacy_character_style_runs(
+            &source,
+            &[LegacyAdmittedStoryRange {
+                story_id,
+                absolute_start: 80,
+                absolute_end: 88,
+            }],
+            &[Legacy0x22CharacterRun {
+                fc_first: 80,
+                fc_lim: 88,
+                fc_first_source: span(0x200, 4),
+                fc_lim_source: span(0x204, 4),
+                property_pointer: 0xfc,
+                property_pointer_source: span(0x208, 1),
+                property_source: Some(span(0x3f8, 8)),
+                style: Some(style),
+            }],
+        );
+
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].baseline_shift_half_points, Some(-6));
+        assert_eq!(projected[0].text_size_half_points, None);
+    }
 
     #[test]
     fn ascii_decoder_fails_closed_on_unproven_codepage() {

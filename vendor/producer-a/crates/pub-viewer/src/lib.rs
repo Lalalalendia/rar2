@@ -80,7 +80,8 @@ use pub_reader::{
     FailureTelemetryChoice, LEGACY_OLE_WMF_PREVIEW_RASTERIZER_V1, LegacyOleCachedPresentationScan,
     LegacyOleCachedPresentationSelection, MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1,
     PubAssetExportDiagnostic, PubBridgeDiagnostic, PubEffectivePaintAuthority,
-    PubExplicitImageCropSource, PubParagraphAlignment, PubResolveDiagnostic, PubResolvedGraph,
+    PubExplicitImageCropSource, PubLegacyUnderlineStyle, PubParagraphAlignment,
+    PubResolveDiagnostic, PubResolvedGraph,
     PubResolvedGraphBuild, PubResolvedNodePayload, PubScriptFontEntryDisposition,
     PubSourceGraphBuild, PubSourcePagePaintOrderV1, PubTextFrameVerticalAlignment, WmfPreviewRgba,
     analyze_legacy_0x22_page_roles, analyze_mature_0x2c_page_roles, build_failure_envelope,
@@ -249,6 +250,8 @@ pub struct ViewerGeometryDocument {
     pub text_fragments: Vec<ViewerTextFragment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub typography_runs: Vec<ViewerTypographyRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_character_style_runs: Vec<ViewerLegacyCharacterStyleRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paragraph_alignments: Vec<ViewerParagraphAlignmentRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -992,6 +995,39 @@ impl ViewerParagraphAlignmentRun {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerLegacyUnderlineStyle {
+    None,
+    Single,
+    WordsOnly,
+    Double,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerLegacyCharacterStyleRun {
+    pub story_id: StoryId,
+    pub scalar_start: u32,
+    pub scalar_end: u32,
+    pub bold: bool,
+    pub italic: bool,
+    pub small_caps: bool,
+    pub all_caps: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_font_index: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_size_half_points: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_shift_half_points: Option<i8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_color_index: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<ViewerLegacyUnderlineStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing_eighth_points: Option<i16>,
+    pub source_story_text_sha256: Sha256Digest,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerTypographyRun {
     pub story_id: StoryId,
@@ -1019,6 +1055,44 @@ pub fn viewer_story_text_sha256(text: &str) -> Sha256Digest {
     let mut bytes = [0_u8; 32];
     bytes.copy_from_slice(&digest);
     Sha256Digest::from_bytes(bytes)
+}
+
+fn viewer_legacy_character_style_runs(
+    source: &PubSourceGraphBuild,
+    graph: &PubResolvedGraph,
+) -> Vec<ViewerLegacyCharacterStyleRun> {
+    source
+        .legacy_character_style_runs
+        .iter()
+        .filter_map(|run| {
+            let story = graph.stories.get(&run.story_id)?;
+            let scalar_len = u32::try_from(story.text.chars().count()).ok()?;
+            if run.story_scalar_start > run.story_scalar_end || run.story_scalar_end > scalar_len {
+                return None;
+            }
+            Some(ViewerLegacyCharacterStyleRun {
+                story_id: run.story_id,
+                scalar_start: run.story_scalar_start,
+                scalar_end: run.story_scalar_end,
+                bold: run.bold,
+                italic: run.italic,
+                small_caps: run.small_caps,
+                all_caps: run.all_caps,
+                source_font_index: run.source_font_index,
+                text_size_half_points: run.text_size_half_points,
+                baseline_shift_half_points: run.baseline_shift_half_points,
+                legacy_color_index: run.legacy_color_index,
+                underline: run.underline.map(|value| match value {
+                    PubLegacyUnderlineStyle::None => ViewerLegacyUnderlineStyle::None,
+                    PubLegacyUnderlineStyle::Single => ViewerLegacyUnderlineStyle::Single,
+                    PubLegacyUnderlineStyle::WordsOnly => ViewerLegacyUnderlineStyle::WordsOnly,
+                    PubLegacyUnderlineStyle::Double => ViewerLegacyUnderlineStyle::Double,
+                }),
+                letter_spacing_eighth_points: run.letter_spacing_eighth_points,
+                source_story_text_sha256: viewer_story_text_sha256(&story.text),
+            })
+        })
+        .collect()
 }
 
 pub const VIEWER_IMAGE_SOURCE_Q16_ONE: i64 = 1 << 16;
@@ -2110,6 +2184,18 @@ fn open_legacy_0x22_noquill_bundle(
             .push(viewer_fallback_flow_metrics_diagnostic());
     }
 
+    let legacy_character_style_runs = viewer_legacy_character_style_runs(&source, &resolved.graph);
+    if !legacy_character_style_runs.is_empty() {
+        document.diagnostics.push(ViewerDiagnostic {
+            code: "viewer.text.legacy_character_style_preserved".to_owned(),
+            severity: ViewerDiagnosticSeverity::FidelityWarning,
+            message: format!(
+                "{} bounded Publisher97 character-style range(s) are preserved with exact Story-relative ranges. Their raw CHPX bytes stay inside the source adapter; caps, baseline shift, underline, letter spacing, and palette-slot semantics are not yet executed by the renderer.",
+                legacy_character_style_runs.len()
+            ),
+        });
+    }
+
     let scene = resolve_bounded_geometry(&projection, environment).map_err(|blocked| {
         let codes = blocked
             .projection_errors
@@ -2171,6 +2257,7 @@ fn open_legacy_0x22_noquill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        legacy_character_style_runs,
         paragraph_alignments: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
@@ -2300,6 +2387,7 @@ fn open_legacy_0x22_quill_bundle(
         story_frames,
         text_fragments,
         typography_runs: Vec::new(),
+        legacy_character_style_runs: Vec::new(),
         paragraph_alignments: Vec::new(),
         script_font_maps: Vec::new(),
         tables: Vec::new(),
@@ -2756,6 +2844,7 @@ fn open_mature_0x2c_bundle(
         story_frames,
         text_fragments,
         typography_runs,
+        legacy_character_style_runs: Vec::new(),
         paragraph_alignments,
         script_font_maps,
         tables,
@@ -3602,6 +3691,11 @@ fn map_bridge_diagnostic(diagnostic: &PubBridgeDiagnostic) -> ViewerDiagnostic {
             "viewer.text.legacy_encoding_unresolved",
             ViewerDiagnosticSeverity::FidelityWarning,
             "Legacy text bytes are preserved, but their character encoding is not proven; page geometry remains available without guessing text.",
+        ),
+        LegacyTextFormattingUnresolved { .. } => (
+            "viewer.text.legacy_formatting_unresolved",
+            ViewerDiagnosticSeverity::FidelityWarning,
+            "Legacy text remains available, but its bounded old-generation formatting records could not be projected safely.",
         ),
         McldRecordCountMismatch { .. } => (
             "viewer.table.mcld_layout_metrics_unavailable",
@@ -5080,6 +5174,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
@@ -5239,6 +5334,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
@@ -5695,6 +5791,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
@@ -5806,6 +5903,7 @@ mod tests {
             story_frames: initial_frames.clone(),
             text_fragments: initial_fragments,
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
@@ -5876,6 +5974,7 @@ mod tests {
             story_frames: Vec::new(),
             text_fragments: Vec::new(),
             typography_runs: Vec::new(),
+            legacy_character_style_runs: Vec::new(),
             paragraph_alignments: Vec::new(),
             script_font_maps: Vec::new(),
             tables: Vec::new(),
