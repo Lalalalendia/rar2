@@ -198,29 +198,7 @@ impl ViewerApp {
                             }
                         }
                     }
-                } else if self.rectangle_creation.active() {
-                    if self.rectangle_creation.gesture_token.is_some() {
-                        match self.rectangle_creation.cancel() {
-                            Ok(()) => {
-                                self.edit_status =
-                                    Some("Cancelled the Rectangle draw gesture.".to_owned());
-                            }
-                            Err(error) => {
-                                self.edit_status =
-                                    Some(format!("Rectangle gesture cancel failed: {error}"));
-                            }
-                        }
-                    } else {
-                        match self.rectangle_creation.deactivate_to_select() {
-                            Ok(()) => {
-                                self.edit_status = Some("Rectangle tool deactivated.".to_owned());
-                            }
-                            Err(error) => {
-                                self.edit_status =
-                                    Some(format!("Rectangle tool could not deactivate: {error}"));
-                            }
-                        }
-                    }
+                } else if self.process_rectangle_escape() {
                 } else if self.canvas_resize.take().is_some() || self.canvas_drag.take().is_some() {
                     self.edit_status = Some("Cancelled the active canvas gesture.".to_owned());
                 } else if self.canvas_selection.len() > 0 {
