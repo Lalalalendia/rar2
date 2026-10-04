@@ -464,6 +464,39 @@ mod tests {
     }
 
     #[test]
+    fn move_transaction_composes_snapped_preview_without_changing_size() {
+        use crate::{DocumentPoint, MoveTransaction};
+
+        let moving = node_id(1);
+        let before = rect(10, 20, 100, 80);
+        let mut drag = MoveTransaction::begin(
+            moving,
+            before,
+            DocumentPoint::new(LengthEmu::ZERO, LengthEmu::ZERO),
+        )
+        .expect("valid move transaction");
+
+        let raw = drag
+            .update(DocumentPoint::new(
+                LengthEmu::new(-5),
+                LengthEmu::ZERO,
+            ))
+            .expect("raw preview");
+        let snapped = index(Vec::new())
+            .snap_rect(moving, raw, LengthEmu::new(10))
+            .expect("snapped preview");
+        drag.set_preview_origin(snapped.bounds.x, snapped.bounds.y)
+            .expect("apply transient snap");
+
+        let preview = drag.preview_bounds();
+        assert_eq!(preview.x, LengthEmu::ZERO);
+        assert_eq!(preview.y, before.y);
+        assert_eq!(preview.width, before.width);
+        assert_eq!(preview.height, before.height);
+        assert!(drag.has_moved());
+    }
+
+    #[test]
     fn negative_tolerance_is_rejected() {
         assert_eq!(
             index(Vec::new())
