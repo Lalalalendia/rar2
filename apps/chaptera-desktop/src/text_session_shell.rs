@@ -1,10 +1,7 @@
-//! Desktop direct-text session event integration.
-//!
-//! Story/session law remains in text_session.rs. This module owns the ViewerApp
-//! bridge for entry, pointer activation, exit, caret routing, text events and
-//! keyboard events.
+//! Desktop canvas text entry, input, focus, caret and widget integration.
+//! The existing text_session module remains the Story/session semantic authority.
 
-use super::{ViewerApp, text_session};
+use super::{SceneHitEntry, ViewerApp, text_session};
 use eframe::egui;
 
 impl ViewerApp {
@@ -181,6 +178,7 @@ impl ViewerApp {
             self.edit_status = Some(format!("Canvas caret move rejected: {error}"));
         }
     }
+
     pub(super) fn process_canvas_text_input(&mut self, ctx: &egui::Context) -> bool {
         if self.text_mode.is_none() {
             return false;
@@ -244,5 +242,178 @@ impl ViewerApp {
             }
         }
         true
+    }
+
+    pub(super) fn finish_canvas_text_frame(&mut self, ctx: &egui::Context) {
+        if self.text_mode.is_some() && ctx.wants_keyboard_input() {
+            self.exit_canvas_text_mode("explicit_exit");
+        }
+    }
+}
+
+pub(super) struct CanvasTextPointerRequest {
+    pub(super) canvas_hit: Option<String>,
+    pub(super) text_pointer_request: Option<(String, pub_interaction::DocumentPoint)>,
+    pub(super) text_activation_request: Option<(
+        pub_editor::StoryId,
+        pub_editor::NodeId,
+        String,
+        pub_interaction::DocumentPoint,
+    )>,
+    pub(super) text_exit_request: bool,
+}
+
+pub(super) fn canvas_text_pointer_request(
+    mode: Option<&text_session::DesktopTextMode>,
+    topmost: Option<&SceneHitEntry>,
+    visual: &super::ViewerGeometryDocument,
+    editor: Option<&pub_editor::EditorSession>,
+    page_id_text: &str,
+    point: pub_interaction::DocumentPoint,
+) -> CanvasTextPointerRequest {
+    let mut request = CanvasTextPointerRequest {
+        canvas_hit: None,
+        text_pointer_request: None,
+        text_activation_request: None,
+        text_exit_request: false,
+    };
+    if let Some(mode) = mode {
+        match topmost {
+            Some(hit) if hit.node_id == mode.frame_id => {
+                request.canvas_hit = Some(hit.instance_id.clone());
+                request.text_pointer_request = Some((page_id_text.to_owned(), point));
+            }
+            Some(hit) => {
+                request.text_exit_request = true;
+                request.canvas_hit = Some(hit.instance_id.clone());
+            }
+            None => {
+                request.text_exit_request = true;
+                request.canvas_hit = None;
+            }
+        }
+    } else if let Some(hit) = topmost {
+        request.canvas_hit = Some(hit.instance_id.clone());
+        if strict_document_rect_interior(&hit.bounds, point)
+            && let Some(fragment) = visual
+                .text_fragments
+                .iter()
+                .find(|fragment| fragment.frame_id == hit.node_id)
+            && editor.is_some_and(|editor| editor.can_replace_story_text(fragment.story_id).is_ok())
+        {
+            request.text_activation_request = Some((
+                fragment.story_id,
+                fragment.frame_id,
+                page_id_text.to_owned(),
+                point,
+            ));
+        }
+    } else {
+        request.canvas_hit = None;
+    }
+    request
+}
+
+pub(super) fn paint_canvas_text_caret(
+    mode: Option<&text_session::DesktopTextMode>,
+    painter: &egui::Painter,
+    page_rect: egui::Rect,
+    scene_scale: f32,
+    page_id_text: &str,
+) {
+    if let Some(mode) = mode
+        && let Some(stop) = text_session::focus_caret(mode)
+        && stop.page_id == page_id_text
+    {
+        let x = page_rect.left() + stop.page_x_emu as f32 * scene_scale;
+        let y_top = page_rect.top() + stop.page_y_top_emu as f32 * scene_scale;
+        let y_bottom = page_rect.top() + stop.page_y_bottom_emu as f32 * scene_scale;
+        painter.line_segment(
+            [egui::pos2(x, y_top), egui::pos2(x, y_bottom)],
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(232, 126, 36)),
+        );
+    }
+}
+
+pub(super) fn show_canvas_edit_text_button(
+    ui: &mut egui::Ui,
+    text_mode_active: bool,
+    visual: &super::ViewerGeometryDocument,
+    editor: Option<&pub_editor::EditorSession>,
+    selected_node_id: pub_editor::NodeId,
+    selected_rect: egui::Rect,
+    page_rect: egui::Rect,
+) -> Option<(pub_editor::StoryId, pub_editor::NodeId)> {
+    if !text_mode_active
+        && let Some(fragment) = visual
+            .text_fragments
+            .iter()
+            .find(|fragment| fragment.frame_id == selected_node_id)
+        && editor.is_some_and(|editor| editor.can_replace_story_text(fragment.story_id).is_ok())
+    {
+        let button_width = 76.0_f32;
+        let button_height = 22.0_f32;
+        let button_min = egui::pos2(
+            selected_rect.left(),
+            (selected_rect.top() - button_height - 4.0_f32).max(page_rect.top() + 2.0_f32),
+        );
+        let button_rect =
+            egui::Rect::from_min_size(button_min, egui::vec2(button_width, button_height));
+        if ui
+            .put(button_rect, egui::Button::new("Edit Text"))
+            .clicked()
+        {
+            return Some((fragment.story_id, selected_node_id));
+        }
+    }
+    None
+}
+
+pub(super) fn strict_document_rect_interior(
+    bounds: &pub_editor::RectEmu,
+    point: pub_interaction::DocumentPoint,
+) -> bool {
+    let x = i128::from(point.x.get());
+    let y = i128::from(point.y.get());
+    let left = i128::from(bounds.x.get());
+    let top = i128::from(bounds.y.get());
+    let right = left + i128::from(bounds.width.get());
+    let bottom = top + i128::from(bounds.height.get());
+    x > left && x < right && y > top && y < bottom
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strict_document_rect_interior;
+
+    #[test]
+    fn strict_text_activation_interior_excludes_exact_frame_boundary() {
+        let bounds = pub_editor::RectEmu::new(
+            pub_editor::LengthEmu::new(100),
+            pub_editor::LengthEmu::new(200),
+            pub_editor::LengthEmu::new(300),
+            pub_editor::LengthEmu::new(400),
+        );
+        assert!(strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(250),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+        assert!(!strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(100),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
+        assert!(!strict_document_rect_interior(
+            &bounds,
+            pub_interaction::DocumentPoint::new(
+                pub_editor::LengthEmu::new(400),
+                pub_editor::LengthEmu::new(400),
+            ),
+        ));
     }
 }

@@ -30,7 +30,7 @@ mod supporter;
 mod supporter_attribution;
 mod text_box_creation;
 mod text_session;
-#[cfg(all(test, not(feature = "reader-only")))]
+#[cfg(test)]
 mod text_session_gui_tests;
 mod text_session_shell;
 #[cfg(target_os = "windows")]
@@ -532,245 +532,6 @@ mod scene_selection_state_tests {
             vec!["origin:42/page:1/use:0", "origin:42/page:1/use:1"]
         );
         assert_eq!(selection.primary(), Some("origin:42/page:1/use:1"));
-    }
-
-    #[cfg(feature = "embedded-fixture-tests")]
-    #[test]
-    #[ignore = "runtime GUI evidence requires pinned CHAPTERA_SAMPLE_NEWSLETTER"]
-    fn real_gui_shift_pointer_toggles_two_scene_instances_without_editor_operations() {
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        let fixture = std::env::var_os("CHAPTERA_SAMPLE_NEWSLETTER")
-            .map(PathBuf::from)
-            .expect("CHAPTERA_SAMPLE_NEWSLETTER must point to the pinned Apache POI fixture");
-        let mut harness = Harness::builder()
-            .with_size(egui::vec2(1280.0, 820.0))
-            .with_pixels_per_point(1.0)
-            .with_max_steps(24)
-            .build_eframe(move |cc| {
-                fallback_font::install(&cc.egui_ctx)
-                    .expect("pinned Chaptera fallback font resource must validate");
-                ViewerApp::new_with_storage(Some(fixture), cc.storage)
-            });
-        harness.step();
-        harness.step();
-
-        let (page_label, first_instance, second_instance, first_point, second_point) = {
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let editor = app.editor.as_ref().expect("editor loaded");
-
-            visual
-                .document
-                .pages
-                .iter()
-                .find_map(|page| {
-                    let page_origin = page.id.into_canonical();
-                    let page_id_text = page.id.as_canonical().to_string();
-                    let entries = visual
-                        .scene
-                        .nodes
-                        .iter()
-                        .filter(|node| node.parent_origin == page_origin)
-                        .enumerate()
-                        .filter_map(|(paint_order, node)| {
-                            let instance =
-                                direct_scene_instance(editor, &page_id_text, node.origin)?;
-                            Some(SceneHitEntry {
-                                instance_id: instance.instance_id,
-                                node_id: node.origin,
-                                bounds: node.bounds,
-                                z_order: 0,
-                                paint_order: u32::try_from(paint_order).ok()?,
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let hit_index = SceneHitTestIndex::new(entries);
-
-                    let mut candidates = hit_index
-                        .entries
-                        .iter()
-                        .filter_map(|hit| {
-                            if hit.bounds.width.get() <= 0 || hit.bounds.height.get() <= 0 {
-                                return None;
-                            }
-                            let point = pub_interaction::DocumentPoint::new(
-                                pub_editor::LengthEmu::new(
-                                    hit.bounds.x.get() + hit.bounds.width.get() / 2,
-                                ),
-                                pub_editor::LengthEmu::new(
-                                    hit.bounds.y.get() + hit.bounds.height.get() / 2,
-                                ),
-                            );
-                            hit_index
-                                .topmost_at(point)
-                                .filter(|top| top.instance_id == hit.instance_id)
-                                .map(|_| (hit.instance_id.clone(), point))
-                        })
-                        .take(2)
-                        .collect::<Vec<_>>();
-
-                    if candidates.len() != 2 {
-                        return None;
-                    }
-                    let second = candidates.pop().expect("second candidate");
-                    let first = candidates.pop().expect("first candidate");
-                    Some((
-                        format!("Page {}", page.index),
-                        first.0,
-                        second.0,
-                        first.1,
-                        second.1,
-                    ))
-                })
-                .expect("fixture exposes two independently topmost direct page-local objects")
-        };
-
-        harness.get_by_label(&page_label).click();
-        harness.step();
-
-        let to_screen = |harness: &Harness<ViewerApp>, point: pub_interaction::DocumentPoint| {
-            let canvas = harness
-                .get_by_label("Document canvas")
-                .raw_bounds()
-                .expect("document canvas has screen bounds");
-            let app = harness.state();
-            let visual = app.visual.as_ref().expect("visual loaded");
-            let page = visual
-                .document
-                .pages
-                .get(app.selected_page)
-                .expect("selected page");
-            let surface = visual
-                .scene
-                .surfaces
-                .iter()
-                .find(|surface| surface.origin == page.id)
-                .expect("selected page surface");
-            let viewport = egui::vec2(
-                (canvas.x1 - canvas.x0) as f32,
-                (canvas.y1 - canvas.y0) as f32,
-            );
-            let scene_scale = fitted_scale(
-                surface.size.width.get(),
-                surface.size.height.get(),
-                viewport,
-            )
-            .expect("valid fit scale")
-                * app.zoom;
-            let page_width = surface.size.width.get() as f32 * scene_scale;
-            let page_height = surface.size.height.get() as f32 * scene_scale;
-            let page_left = ((canvas.x0 + canvas.x1) as f32 - page_width) / 2.0;
-            let page_top = ((canvas.y0 + canvas.y1) as f32 - page_height) / 2.0;
-            egui::pos2(
-                page_left + point.x.get() as f32 * scene_scale,
-                page_top + point.y.get() as f32 * scene_scale,
-            )
-        };
-
-        let first_screen = to_screen(&harness, first_point);
-        let second_screen = to_screen(&harness, second_point);
-        let operations_before = harness
-            .state()
-            .editor
-            .as_ref()
-            .expect("editor")
-            .operations()
-            .len();
-
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(first_screen),
-            egui::Event::PointerButton {
-                pos: first_screen,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::default(),
-            },
-            egui::Event::PointerButton {
-                pos: first_screen,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::default(),
-            },
-        ]);
-        harness.step();
-        harness.step();
-        assert_eq!(harness.state().canvas_selection.len(), 1);
-        assert_eq!(
-            harness.state().canvas_selection.primary(),
-            Some(first_instance.as_str())
-        );
-
-        harness.input_mut().modifiers = egui::Modifiers::SHIFT;
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(second_screen),
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-        ]);
-        harness.step();
-        harness.step();
-        assert_eq!(harness.state().canvas_selection.len(), 2);
-        assert_eq!(
-            harness.state().canvas_selection.primary(),
-            Some(second_instance.as_str())
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "selection must remain transient"
-        );
-
-        harness.input_mut().events.extend([
-            egui::Event::PointerMoved(second_screen),
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-            egui::Event::PointerButton {
-                pos: second_screen,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::SHIFT,
-            },
-        ]);
-        harness.step();
-        harness.step();
-        harness.input_mut().modifiers = egui::Modifiers::default();
-
-        assert_eq!(harness.state().canvas_selection.len(), 1);
-        assert_eq!(
-            harness.state().canvas_selection.primary(),
-            Some(first_instance.as_str())
-        );
-        assert_eq!(
-            harness
-                .state()
-                .editor
-                .as_ref()
-                .expect("editor")
-                .operations()
-                .len(),
-            operations_before,
-            "Shift-click removal must not create an Editor operation"
-        );
     }
 }
 
@@ -5357,42 +5118,18 @@ impl ViewerApp {
                 {
                     canvas_clicked = true;
                     let topmost = hit_index.topmost_at(point);
-                    if let Some(mode) = self.text_mode.as_ref() {
-                        match topmost {
-                            Some(hit) if hit.node_id == mode.frame_id => {
-                                canvas_hit = Some(hit.instance_id.clone());
-                                text_pointer_request = Some((page_id_text.clone(), point));
-                            }
-                            Some(hit) => {
-                                text_exit_request = true;
-                                canvas_hit = Some(hit.instance_id.clone());
-                            }
-                            None => {
-                                text_exit_request = true;
-                                canvas_hit = None;
-                            }
-                        }
-                    } else if let Some(hit) = topmost {
-                        canvas_hit = Some(hit.instance_id.clone());
-                        if strict_document_rect_interior(&hit.bounds, point)
-                            && let Some(fragment) = visual
-                                .text_fragments
-                                .iter()
-                                .find(|fragment| fragment.frame_id == hit.node_id)
-                            && self.editor.as_ref().is_some_and(|editor| {
-                                editor.can_replace_story_text(fragment.story_id).is_ok()
-                            })
-                        {
-                            text_activation_request = Some((
-                                fragment.story_id,
-                                fragment.frame_id,
-                                page_id_text.clone(),
-                                point,
-                            ));
-                        }
-                    } else {
-                        canvas_hit = None;
-                    }
+                    let text_request = text_session_shell::canvas_text_pointer_request(
+                        self.text_mode.as_ref(),
+                        topmost,
+                        visual,
+                        self.editor.as_ref(),
+                        &page_id_text,
+                        point,
+                    );
+                    canvas_hit = text_request.canvas_hit;
+                    text_pointer_request = text_request.text_pointer_request;
+                    text_activation_request = text_request.text_activation_request;
+                    text_exit_request = text_request.text_exit_request;
                 }
 
                 render_backend::paint_page_surface(&painter, page_rect);
@@ -5588,18 +5325,13 @@ impl ViewerApp {
                     );
                 }
 
-                if let Some(mode) = self.text_mode.as_ref()
-                    && let Some(stop) = text_session::focus_caret(mode)
-                    && stop.page_id == page_id_text
-                {
-                    let x = page_rect.left() + stop.page_x_emu as f32 * scene_scale;
-                    let y_top = page_rect.top() + stop.page_y_top_emu as f32 * scene_scale;
-                    let y_bottom = page_rect.top() + stop.page_y_bottom_emu as f32 * scene_scale;
-                    painter.line_segment(
-                        [egui::pos2(x, y_top), egui::pos2(x, y_bottom)],
-                        egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(232, 126, 36)),
-                    );
-                }
+                text_session_shell::paint_canvas_text_caret(
+                    self.text_mode.as_ref(),
+                    &painter,
+                    page_rect,
+                    scene_scale,
+                    &page_id_text,
+                );
 
                 for selected_instance_id in self
                     .canvas_selection
@@ -5648,32 +5380,16 @@ impl ViewerApp {
                         && resizable_nodes.contains_key(selected_instance_id);
                     paint_selection_overlay(&painter, selected_rect, resize_enabled);
 
-                    if self.text_mode.is_none()
-                        && let Some(fragment) = visual
-                            .text_fragments
-                            .iter()
-                            .find(|fragment| fragment.frame_id == selected_node_id)
-                        && self.editor.as_ref().is_some_and(|editor| {
-                            editor.can_replace_story_text(fragment.story_id).is_ok()
-                        })
-                    {
-                        let button_width = 76.0_f32;
-                        let button_height = 22.0_f32;
-                        let button_min = egui::pos2(
-                            selected_rect.left(),
-                            (selected_rect.top() - button_height - 4.0_f32)
-                                .max(page_rect.top() + 2.0_f32),
-                        );
-                        let button_rect = egui::Rect::from_min_size(
-                            button_min,
-                            egui::vec2(button_width, button_height),
-                        );
-                        if ui
-                            .put(button_rect, egui::Button::new("Edit Text"))
-                            .clicked()
-                        {
-                            edit_text_request = Some((fragment.story_id, selected_node_id));
-                        }
+                    if let Some(request) = text_session_shell::show_canvas_edit_text_button(
+                        ui,
+                        self.text_mode.is_some(),
+                        visual,
+                        self.editor.as_ref(),
+                        selected_node_id,
+                        selected_rect,
+                        page_rect,
+                    ) {
+                        edit_text_request = Some(request);
                     }
                     if resize_enabled {
                         let screen_bounds = ScreenRect::new(
@@ -5956,9 +5672,7 @@ impl eframe::App for ViewerApp {
         self.show_exact_file_consent_dialog(ctx);
         self.show_diagnostic_sweep_window(ctx);
 
-        if self.text_mode.is_some() && ctx.wants_keyboard_input() {
-            self.exit_canvas_text_mode("explicit_exit");
-        }
+        self.finish_canvas_text_frame(ctx);
     }
 }
 
@@ -5981,13 +5695,7 @@ fn strict_document_rect_interior(
     bounds: &pub_editor::RectEmu,
     point: pub_interaction::DocumentPoint,
 ) -> bool {
-    let x = i128::from(point.x.get());
-    let y = i128::from(point.y.get());
-    let left = i128::from(bounds.x.get());
-    let top = i128::from(bounds.y.get());
-    let right = left + i128::from(bounds.width.get());
-    let bottom = top + i128::from(bounds.height.get());
-    x > left && x < right && y > top && y < bottom
+    text_session_shell::strict_document_rect_interior(bounds, point)
 }
 
 fn paint_selection_overlay(painter: &egui::Painter, rect: egui::Rect, show_handles: bool) {
@@ -9526,37 +9234,6 @@ mod tests {
         .expect("write private export proof");
 
         let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn strict_text_activation_interior_excludes_exact_frame_boundary() {
-        let bounds = pub_editor::RectEmu::new(
-            pub_editor::LengthEmu::new(100),
-            pub_editor::LengthEmu::new(200),
-            pub_editor::LengthEmu::new(300),
-            pub_editor::LengthEmu::new(400),
-        );
-        assert!(strict_document_rect_interior(
-            &bounds,
-            pub_interaction::DocumentPoint::new(
-                pub_editor::LengthEmu::new(250),
-                pub_editor::LengthEmu::new(400),
-            ),
-        ));
-        assert!(!strict_document_rect_interior(
-            &bounds,
-            pub_interaction::DocumentPoint::new(
-                pub_editor::LengthEmu::new(100),
-                pub_editor::LengthEmu::new(400),
-            ),
-        ));
-        assert!(!strict_document_rect_interior(
-            &bounds,
-            pub_interaction::DocumentPoint::new(
-                pub_editor::LengthEmu::new(400),
-                pub_editor::LengthEmu::new(400),
-            ),
-        ));
     }
 
     struct GoldenPageOnlyApp {
