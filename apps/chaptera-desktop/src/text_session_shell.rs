@@ -123,6 +123,67 @@ impl ViewerApp {
         }
     }
 
+    pub(super) fn canvas_boolean_format_state_v1(
+        &self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) -> Result<text_session::DesktopBooleanSelectionStateV1, String> {
+        let editor = self
+            .editor
+            .as_ref()
+            .ok_or_else(|| "Editor session is unavailable.".to_owned())?;
+        let mode = self
+            .text_mode
+            .as_ref()
+            .ok_or_else(|| "Text editing is not active.".to_owned())?;
+        text_session::boolean_format_selection_state_v1(editor, mode, property)
+    }
+
+    pub(super) fn apply_canvas_boolean_format_toggle_v1(
+        &mut self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::apply_boolean_format_toggle_v1(editor, mode, property)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_authoring_change(&format!(
+                "{} formatting committed through one canonical text-format operation.",
+                property.label()
+            )),
+            Err(error) => {
+                self.edit_status =
+                    Some(format!("{} formatting rejected: {error}", property.label()));
+            }
+        }
+    }
+
+    pub(super) fn clear_canvas_boolean_format_override_v1(
+        &mut self,
+        property: text_session::DesktopBooleanFormatPropertyV1,
+    ) {
+        let outcome = match (&mut self.editor, &mut self.text_mode) {
+            (Some(editor), Some(mode)) => {
+                text_session::clear_boolean_format_override_v1(editor, mode, property)
+            }
+            _ => return,
+        };
+        match outcome {
+            Ok(_) => self.finish_authoring_change(&format!(
+                "{} Chaptera override cleared; source/base formatting is effective again.",
+                property.label()
+            )),
+            Err(error) => {
+                self.edit_status = Some(format!(
+                    "{} override clear rejected: {error}",
+                    property.label()
+                ));
+            }
+        }
+    }
+
     fn apply_canvas_text_keyboard(
         &mut self,
         command: chaptera_text_input_adapter::keyboard::KeyboardCommandV1,
@@ -221,6 +282,28 @@ impl ViewerApp {
                         continue;
                     }
 
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::B
+                    {
+                        self.apply_canvas_boolean_format_toggle_v1(
+                            text_session::DesktopBooleanFormatPropertyV1::Bold,
+                        );
+                        continue;
+                    }
+
+                    if (modifiers.ctrl || modifiers.command)
+                        && !modifiers.alt
+                        && !modifiers.shift
+                        && key == egui::Key::I
+                    {
+                        self.apply_canvas_boolean_format_toggle_v1(
+                            text_session::DesktopBooleanFormatPropertyV1::Italic,
+                        );
+                        continue;
+                    }
+
                     if modifiers.ctrl || modifiers.command || modifiers.alt {
                         continue;
                     }
@@ -244,7 +327,129 @@ impl ViewerApp {
         true
     }
 
+    fn show_canvas_text_format_controls_v1(&mut self, ctx: &egui::Context) {
+        if self.text_mode.is_none() {
+            return;
+        }
+
+        let bold = self
+            .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Bold)
+            .ok();
+        let italic = self
+            .canvas_boolean_format_state_v1(text_session::DesktopBooleanFormatPropertyV1::Italic)
+            .ok();
+
+        let label = |letter: &str, state: Option<text_session::DesktopBooleanSelectionStateV1>| {
+            let Some(state) = state else {
+                return letter.to_owned();
+            };
+            if matches!(
+                state.effective,
+                text_session::DesktopBooleanEffectiveStateV1::Mixed
+            ) || matches!(
+                state.provenance,
+                text_session::DesktopBooleanProvenanceStateV1::Mixed
+            ) {
+                format!("{letter}±")
+            } else if matches!(
+                state.provenance,
+                text_session::DesktopBooleanProvenanceStateV1::Base
+            ) {
+                format!("{letter}·")
+            } else {
+                letter.to_owned()
+            }
+        };
+        let active = |state: Option<text_session::DesktopBooleanSelectionStateV1>| {
+            state.is_some_and(|state| {
+                matches!(
+                    state.effective,
+                    text_session::DesktopBooleanEffectiveStateV1::Uniform(true)
+                )
+            })
+        };
+
+        egui::Area::new(egui::Id::new("canvas-text-format-toolbar-v1"))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 56.0))
+            .movable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong("Text");
+
+                        let bold_response = ui
+                            .add_enabled_ui(bold.is_some(), |ui| {
+                                ui.selectable_label(
+                                    active(bold),
+                                    egui::RichText::new(label("B", bold)).strong(),
+                                )
+                            })
+                            .inner;
+                        bold_response.clone().on_hover_text(
+                            "Bold. · = source/base; ± = mixed. Ctrl+B uses this same operation.",
+                        );
+                        if bold_response.clicked() {
+                            self.apply_canvas_boolean_format_toggle_v1(
+                                text_session::DesktopBooleanFormatPropertyV1::Bold,
+                            );
+                        }
+
+                        let italic_response = ui
+                            .add_enabled_ui(italic.is_some(), |ui| {
+                                ui.selectable_label(
+                                    active(italic),
+                                    egui::RichText::new(label("I", italic)).italics(),
+                                )
+                            })
+                            .inner;
+                        italic_response.clone().on_hover_text(
+                            "Italic. · = source/base; ± = mixed. Ctrl+I uses this same operation.",
+                        );
+                        if italic_response.clicked() {
+                            self.apply_canvas_boolean_format_toggle_v1(
+                                text_session::DesktopBooleanFormatPropertyV1::Italic,
+                            );
+                        }
+
+                        ui.menu_button("Revert", |ui| {
+                            let bold_enabled =
+                                bold.is_some_and(|state| state.has_chaptera_override());
+                            if ui
+                                .add_enabled(bold_enabled, egui::Button::new("Bold to source/base"))
+                                .clicked()
+                            {
+                                self.clear_canvas_boolean_format_override_v1(
+                                    text_session::DesktopBooleanFormatPropertyV1::Bold,
+                                );
+                                ui.close_menu();
+                            }
+
+                            let italic_enabled =
+                                italic.is_some_and(|state| state.has_chaptera_override());
+                            if ui
+                                .add_enabled(
+                                    italic_enabled,
+                                    egui::Button::new("Italic to source/base"),
+                                )
+                                .clicked()
+                            {
+                                self.clear_canvas_boolean_format_override_v1(
+                                    text_session::DesktopBooleanFormatPropertyV1::Italic,
+                                );
+                                ui.close_menu();
+                            }
+                        });
+
+                        if bold.is_none() && italic.is_none() {
+                            ui.weak("Select a non-empty Story range.");
+                        }
+                    });
+                });
+            });
+    }
+
     pub(super) fn finish_canvas_text_frame(&mut self, ctx: &egui::Context) {
+        self.show_canvas_text_format_controls_v1(ctx);
         if self.text_mode.is_some() && ctx.wants_keyboard_input() {
             self.exit_canvas_text_mode("explicit_exit");
         }
