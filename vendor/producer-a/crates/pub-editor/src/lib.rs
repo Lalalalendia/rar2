@@ -6,6 +6,7 @@
 //! resolved authoring graph. Native PUB materialization remains a separate
 //! writer gate.
 
+mod authored_paragraph_alignment_v1;
 mod authored_stack_lifecycle_v1;
 mod authored_stack_runtime_v1;
 mod create_shape_runtime_v1;
@@ -14,6 +15,11 @@ mod imported_paragraph_alignment_v1;
 mod imported_paragraphs_v1;
 mod writer_assessment;
 
+pub use authored_paragraph_alignment_v1::{
+    AuthoredParagraphAlignmentValueV1, EffectiveParagraphAlignmentV1,
+    EffectiveParagraphAlignmentValueV1, ParagraphAlignmentAuthorityV1,
+    ParagraphAlignmentOverrideSnapshotV1, ParagraphAlignmentTransitionErrorV1,
+};
 pub use authored_stack_lifecycle_v1::{
     AUTHORED_STACK_PROTOCOL_V1, AuthoredStackLifecycleErrorV1, AuthoredStackLifecycleKindV1,
     AuthoredStackLifecycleTransitionV1, AuthoredStackV1,
@@ -75,7 +81,9 @@ use pub_model::{
     EffectiveTableTrackV1, Node, NodeHeader, NodeKind, ResourceId, SourceDerivedIdInput, Story,
     StoryFrame, TableColumnId, TableRowId, derive_source_canonical_id, validate_story_frames,
 };
-pub use pub_model::{LengthEmu, NodeId, PageId, RectEmu, Sha256Digest, StoryId, TableCellId};
+pub use pub_model::{
+    LengthEmu, NodeId, PageId, ParagraphId, RectEmu, Sha256Digest, StoryId, TableCellId,
+};
 use pub_odg::{
     ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgEmbeddedImagePlacement,
     OdgFullStoryTypographyPlacement, add_embedded_images_to_odg, add_full_story_typography_to_odg,
@@ -108,7 +116,8 @@ pub const EDITOR_PROJECT_VERSION_V0_11: &str = "pub-editor-v0.11";
 pub const EDITOR_PROJECT_VERSION_V0_12: &str = "pub-editor-v0.12";
 pub const EDITOR_PROJECT_VERSION_V0_13: &str = "pub-editor-v0.13";
 pub const EDITOR_PROJECT_VERSION_V0_14: &str = "pub-editor-v0.14";
-pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_14;
+pub const EDITOR_PROJECT_VERSION_V0_15: &str = "pub-editor-v0.15";
+pub const EDITOR_PROJECT_VERSION_CURRENT: &str = EDITOR_PROJECT_VERSION_V0_15;
 pub const MAX_MOVE_NODES_V1: usize = 1024;
 pub const MAX_RESIZE_NODES_V1: usize = 1024;
 pub const PUB_MATURE_0X2C_PERSISTENCE_PROFILE: &str = "mature-0x2c";
@@ -338,6 +347,17 @@ pub enum EditOperation {
         before_state_hash: String,
         after_state_hash: String,
     },
+    SetParagraphAlignmentOverride {
+        paragraph_ids: Vec<ParagraphId>,
+        value: AuthoredParagraphAlignmentValueV1,
+        before: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+        after: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+    },
+    ClearParagraphAlignmentOverride {
+        paragraph_ids: Vec<ParagraphId>,
+        before: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+        after: Vec<ParagraphAlignmentOverrideSnapshotV1>,
+    },
 }
 
 impl EditOperation {
@@ -375,7 +395,9 @@ impl EditOperation {
             | Self::DeleteNode { .. }
             | Self::ReorderAuthoredStack { .. }
             | Self::SetTextFormatProperty { .. }
-            | Self::ClearTextFormatPropertyOverride { .. } => Vec::new(),
+            | Self::ClearTextFormatPropertyOverride { .. }
+            | Self::SetParagraphAlignmentOverride { .. }
+            | Self::ClearParagraphAlignmentOverride { .. } => Vec::new(),
         }
     }
 }
@@ -517,6 +539,15 @@ impl PersistenceRequirements for EditOperation {
                     property_path: Some("story.character_format".into()),
                 }]
             }
+            Self::SetParagraphAlignmentOverride { paragraph_ids, .. }
+            | Self::ClearParagraphAlignmentOverride { paragraph_ids, .. } => paragraph_ids
+                .iter()
+                .map(|paragraph_id| PersistenceRequirement {
+                    feature: "story.paragraph_alignment".into(),
+                    origin: Some(paragraph_id.into_canonical()),
+                    property_path: Some("paragraph.alignment".into()),
+                })
+                .collect(),
         }
     }
 }
@@ -1109,6 +1140,19 @@ pub enum EditorError {
     TextFormatTextMutationConflict {
         story_id: StoryId,
     },
+    ParagraphAlignmentTargetsEmpty,
+    ParagraphAlignmentProjectionUnavailable,
+    ParagraphAlignmentParagraphUnavailable {
+        paragraph_id: ParagraphId,
+    },
+    ParagraphAlignmentNoChange,
+    StaleParagraphAlignmentOverride {
+        paragraph_id: ParagraphId,
+    },
+    ParagraphAlignmentTransitionInvalid,
+    ParagraphAlignmentLifecycleUnsupported {
+        story_id: StoryId,
+    },
     NothingToUndo,
     NothingToRedo,
 }
@@ -1427,6 +1471,31 @@ impl fmt::Display for EditorError {
                 "story {} has active character-format history and cannot change text until range rebasing is implemented",
                 story_id.as_canonical()
             ),
+            Self::ParagraphAlignmentTargetsEmpty => {
+                formatter.write_str("paragraph alignment operation requires at least one ParagraphId")
+            }
+            Self::ParagraphAlignmentProjectionUnavailable => formatter.write_str(
+                "current Story state does not expose a canonical imported Paragraph projection",
+            ),
+            Self::ParagraphAlignmentParagraphUnavailable { paragraph_id } => write!(
+                formatter,
+                "paragraph {} is not a current imported Paragraph target",
+                paragraph_id.as_canonical()
+            ),
+            Self::ParagraphAlignmentNoChange => formatter
+                .write_str("paragraph alignment operation produces no canonical state change"),
+            Self::StaleParagraphAlignmentOverride { paragraph_id } => write!(
+                formatter,
+                "paragraph alignment override for {} changed since the operation was recorded",
+                paragraph_id.as_canonical()
+            ),
+            Self::ParagraphAlignmentTransitionInvalid => formatter
+                .write_str("paragraph alignment override transition is not canonical"),
+            Self::ParagraphAlignmentLifecycleUnsupported { story_id } => write!(
+                formatter,
+                "story {} has authored paragraph alignment overrides; Story text/topology mutation is fenced until paragraph lifecycle semantics are implemented",
+                story_id.as_canonical()
+            ),
             Self::NothingToUndo => formatter.write_str("editor session has nothing to undo"),
             Self::NothingToRedo => formatter.write_str("editor session has nothing to redo"),
         }
@@ -1499,6 +1568,21 @@ impl EditorError {
             Self::TextFormatUnsupported { .. } => "text_format_unsupported",
             Self::TextFormatStateInvalid { .. } => "text_format_state_invalid",
             Self::TextFormatTextMutationConflict { .. } => "text_format_text_mutation_conflict",
+            Self::ParagraphAlignmentTargetsEmpty => "paragraph_alignment_targets_empty",
+            Self::ParagraphAlignmentProjectionUnavailable => {
+                "paragraph_alignment_projection_unavailable"
+            }
+            Self::ParagraphAlignmentParagraphUnavailable { .. } => {
+                "paragraph_alignment_paragraph_unavailable"
+            }
+            Self::ParagraphAlignmentNoChange => "paragraph_alignment_no_change",
+            Self::StaleParagraphAlignmentOverride { .. } => {
+                "stale_paragraph_alignment_override"
+            }
+            Self::ParagraphAlignmentTransitionInvalid => "paragraph_alignment_transition_invalid",
+            Self::ParagraphAlignmentLifecycleUnsupported { .. } => {
+                "paragraph_alignment_lifecycle_unsupported"
+            }
             Self::NothingToUndo => "nothing_to_undo",
             Self::NothingToRedo => "nothing_to_redo",
         }
