@@ -14,6 +14,7 @@ on:
       - "crates/chaptera-scene-instance/**"
       - "services/editor-api/story_range_v1.py"
       - "vendor/producer-a/crates/pub-editor/src/lib.rs"
+      - "vendor/producer-a/crates/pub-editor/src/bin/fixed_output_state_v1.rs"
       - ".github/workflows/editor-fixed-pdf-producer-boundary.yml"
   workflow_dispatch:
 
@@ -34,5 +35,6 @@ jobs:
         run: |
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor fixed_image_resources -- --nocapture
           cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor fixed_output_state -- --nocapture
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor --bin fixed_output_state_v1 -- --nocapture
       - name: Run fixed-PDF producer boundary tests
         run: python tools/test_build_editor_fixed_pdf_receipt.py -v
