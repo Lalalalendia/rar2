@@ -321,31 +321,27 @@ pub fn inspect_t370_ordinary_shape_replay_base(
         }
     })?;
 
+    let shape_reference = parse_confirmed_chunk_reference(&contents, &trailer.directory, 293)
+        .map_err(|error| StructuralReplayPlanBlocked::Contents {
+            detail: error.to_string(),
+        })?;
     let shape_reference =
-        parse_confirmed_chunk_reference(&contents, &trailer.directory, 293).map_err(|error| {
-            StructuralReplayPlanBlocked::Contents {
-                detail: error.to_string(),
-            }
+        shape_reference.ok_or_else(|| StructuralReplayPlanBlocked::Precondition {
+            field: "seq293",
+            expected: "occupied shape reference".into(),
+            actual: "empty".into(),
         })?;
-    let shape_reference = shape_reference.ok_or_else(|| StructuralReplayPlanBlocked::Precondition {
-        field: "seq293",
-        expected: "occupied shape reference".into(),
-        actual: "empty".into(),
-    })?;
 
-    let service_reference =
-        parse_confirmed_chunk_reference(&contents, &trailer.directory, 305).map_err(|error| {
-            StructuralReplayPlanBlocked::Contents {
-                detail: error.to_string(),
-            }
+    let service_reference = parse_confirmed_chunk_reference(&contents, &trailer.directory, 305)
+        .map_err(|error| StructuralReplayPlanBlocked::Contents {
+            detail: error.to_string(),
         })?;
-    let service_reference = service_reference.ok_or_else(|| {
-        StructuralReplayPlanBlocked::Precondition {
+    let service_reference =
+        service_reference.ok_or_else(|| StructuralReplayPlanBlocked::Precondition {
             field: "seq305",
             expected: "occupied service reference".into(),
             actual: "empty".into(),
-        }
-    })?;
+        })?;
 
     let manifest = build_mature_0x2c_structural_base_manifest(source_pub).map_err(|error| {
         StructuralReplayPlanBlocked::StructuralBase {
@@ -380,14 +376,17 @@ pub fn inspect_t370_ordinary_shape_replay_base(
             actual: "missing/ambiguous".into(),
         })?;
 
-    let escher = pub_cfb::read_stream_reader(Cursor::new(source_pub), ESCHER_STREAM_PATH)
-        .map_err(|error| StructuralReplayPlanBlocked::CfbRead {
+    let escher = pub_cfb::read_stream_reader(Cursor::new(source_pub), ESCHER_STREAM_PATH).map_err(
+        |error| StructuralReplayPlanBlocked::CfbRead {
             path: ESCHER_STREAM_PATH,
             detail: format!("{error:#}"),
-        })?;
-    let inventory = inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher)
-        .map_err(|error| StructuralReplayPlanBlocked::Escher {
-            detail: error.to_string(),
+        },
+    )?;
+    let inventory =
+        inspect_sp_containers(StreamPath(ESCHER_STREAM_PATH.into()), &escher).map_err(|error| {
+            StructuralReplayPlanBlocked::Escher {
+                detail: error.to_string(),
+            }
         })?;
     let max_observed_spid = inventory
         .shapes
@@ -490,8 +489,7 @@ pub fn plan_bounded_t406_ordinary_shape_replay(
         oid_mutation_required: false,
         dw_next_unique_oid_mutation_required: false,
         owned_streams: [CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH],
-        allocator_scope:
-            "Publisher2019/build12527 T370-equivalent ordinary non-text creation only",
+        allocator_scope: "Publisher2019/build12527 T370-equivalent ordinary non-text creation only",
     })
 }
 
@@ -510,9 +508,11 @@ pub fn materialize_bounded_t406_create_pub_candidate(
 ) -> Result<StructuralReplayPubCandidate, StructuralReplayMaterializationBlocked> {
     let source_hash = sha256_digest(source_pub);
     if source_hash != Sha256Digest::from_bytes(T406_CAPTURE_SOURCE_HASH) {
-        return Err(StructuralReplayMaterializationBlocked::CaptureSourceHashMismatch {
-            actual: source_hash,
-        });
+        return Err(
+            StructuralReplayMaterializationBlocked::CaptureSourceHashMismatch {
+                actual: source_hash,
+            },
+        );
     }
     require_captured_request(request)?;
     require_template_hash(
@@ -565,16 +565,20 @@ pub fn materialize_bounded_t406_delete_pub_candidate(
 ) -> Result<StructuralReplayDeleteCandidate, StructuralReplayMaterializationBlocked> {
     let source_hash = sha256_digest(source_pub);
     if source_hash != Sha256Digest::from_bytes(T406_CAPTURE_SOURCE_HASH) {
-        return Err(StructuralReplayMaterializationBlocked::CaptureSourceHashMismatch {
-            actual: source_hash,
-        });
+        return Err(
+            StructuralReplayMaterializationBlocked::CaptureSourceHashMismatch {
+                actual: source_hash,
+            },
+        );
     }
     validate_created_candidate(created_pub)?;
 
-    let created_contents = pub_cfb::read_stream_reader(Cursor::new(created_pub), CONTENTS_STREAM_PATH)
-        .map_err(|error| StructuralReplayMaterializationBlocked::Cfb {
-            detail: format!("{error:#}"),
-        })?;
+    let created_contents =
+        pub_cfb::read_stream_reader(Cursor::new(created_pub), CONTENTS_STREAM_PATH).map_err(
+            |error| StructuralReplayMaterializationBlocked::Cfb {
+                detail: format!("{error:#}"),
+            },
+        )?;
     require_template_hash(
         CONTENTS_STREAM_PATH,
         &created_contents,
@@ -584,16 +588,14 @@ pub fn materialize_bounded_t406_delete_pub_candidate(
         .map_err(|error| StructuralReplayMaterializationBlocked::Cfb {
             detail: format!("{error:#}"),
         })?;
-    require_template_hash(
-        ESCHER_STREAM_PATH,
-        &created_escher,
-        T406_NATIVE_ESCHER_HASH,
-    )?;
+    require_template_hash(ESCHER_STREAM_PATH, &created_escher, T406_NATIVE_ESCHER_HASH)?;
 
-    let source_contents = pub_cfb::read_stream_reader(Cursor::new(source_pub), CONTENTS_STREAM_PATH)
-        .map_err(|error| StructuralReplayMaterializationBlocked::Cfb {
-            detail: format!("{error:#}"),
-        })?;
+    let source_contents =
+        pub_cfb::read_stream_reader(Cursor::new(source_pub), CONTENTS_STREAM_PATH).map_err(
+            |error| StructuralReplayMaterializationBlocked::Cfb {
+                detail: format!("{error:#}"),
+            },
+        )?;
     let source_escher = pub_cfb::read_stream_reader(Cursor::new(source_pub), ESCHER_STREAM_PATH)
         .map_err(|error| StructuralReplayMaterializationBlocked::Cfb {
             detail: format!("{error:#}"),
@@ -704,11 +706,13 @@ fn require_template_hash(
     if actual == expected {
         Ok(())
     } else {
-        Err(StructuralReplayMaterializationBlocked::TemplateHashMismatch {
-            path,
-            expected,
-            actual,
-        })
+        Err(
+            StructuralReplayMaterializationBlocked::TemplateHashMismatch {
+                path,
+                expected,
+                actual,
+            },
+        )
     }
 }
 
@@ -737,9 +741,7 @@ fn validate_owned_stream_changes(
             continue;
         }
         if path != CONTENTS_STREAM_PATH && path != ESCHER_STREAM_PATH {
-            return Err(StructuralReplayMaterializationBlocked::UnexpectedStreamMutation {
-                path,
-            });
+            return Err(StructuralReplayMaterializationBlocked::UnexpectedStreamMutation { path });
         }
         changed.push(StructuralReplayStreamDelta {
             path,
@@ -752,9 +754,11 @@ fn validate_owned_stream_changes(
 
     for required in [CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH] {
         if !changed.iter().any(|delta| delta.path == required) {
-            return Err(StructuralReplayMaterializationBlocked::MissingOwnedStreamMutation {
-                path: required,
-            });
+            return Err(
+                StructuralReplayMaterializationBlocked::MissingOwnedStreamMutation {
+                    path: required,
+                },
+            );
         }
     }
     Ok((changed, preserved))
@@ -781,11 +785,12 @@ fn logical_stream_map(
         .iter()
         .filter(|entry| entry.kind == pub_cfb::EntryKind::Stream)
     {
-        let bytes = pub_cfb::read_stream_reader(Cursor::new(pub_bytes), &entry.path).map_err(
-            |error| StructuralReplayMaterializationBlocked::Cfb {
-                detail: format!("{error:#}"),
-            },
-        )?;
+        let bytes =
+            pub_cfb::read_stream_reader(Cursor::new(pub_bytes), &entry.path).map_err(|error| {
+                StructuralReplayMaterializationBlocked::Cfb {
+                    detail: format!("{error:#}"),
+                }
+            })?;
         streams.insert(entry.path.clone(), (entry.len, sha256_digest(&bytes)));
     }
     Ok(streams)
@@ -798,11 +803,7 @@ fn validate_created_candidate(
         .map_err(|error| StructuralReplayMaterializationBlocked::Cfb {
             detail: format!("{error:#}"),
         })?;
-    require_template_hash(
-        CONTENTS_STREAM_PATH,
-        &contents,
-        T406_NATIVE_CONTENTS_HASH,
-    )?;
+    require_template_hash(CONTENTS_STREAM_PATH, &contents, T406_NATIVE_CONTENTS_HASH)?;
     let escher = pub_cfb::read_stream_reader(Cursor::new(output_pub), ESCHER_STREAM_PATH).map_err(
         |error| StructuralReplayMaterializationBlocked::Cfb {
             detail: format!("{error:#}"),
@@ -877,16 +878,17 @@ fn validate_created_candidate(
     require_materialized("created slot_count", trailer.slot_count, 307)?;
     require_materialized("created max_ordinal", trailer.max_ordinal, 306)?;
 
-    let created_reference =
-        parse_confirmed_chunk_reference(&contents, &trailer.directory, 305).map_err(|error| {
-            StructuralReplayMaterializationBlocked::OutputValidation {
+    let created_reference = parse_confirmed_chunk_reference(&contents, &trailer.directory, 305)
+        .map_err(
+            |error| StructuralReplayMaterializationBlocked::OutputValidation {
                 detail: error.to_string(),
-            }
-        })?;
-    let created_reference =
-        created_reference.ok_or_else(|| StructuralReplayMaterializationBlocked::OutputValidation {
+            },
+        )?;
+    let created_reference = created_reference.ok_or_else(|| {
+        StructuralReplayMaterializationBlocked::OutputValidation {
             detail: "created seq305 reference is empty".into(),
-        })?;
+        }
+    })?;
     require_reference(
         &created_reference,
         0x0001,
@@ -896,12 +898,12 @@ fn validate_created_candidate(
         "created seq305",
     )?;
 
-    let relocated_reference =
-        parse_confirmed_chunk_reference(&contents, &trailer.directory, 306).map_err(|error| {
-            StructuralReplayMaterializationBlocked::OutputValidation {
-                detail: error.to_string(),
-            }
-        })?;
+    let relocated_reference = parse_confirmed_chunk_reference(&contents, &trailer.directory, 306)
+        .map_err(|error| {
+        StructuralReplayMaterializationBlocked::OutputValidation {
+            detail: error.to_string(),
+        }
+    })?;
     let relocated_reference = relocated_reference.ok_or_else(|| {
         StructuralReplayMaterializationBlocked::OutputValidation {
             detail: "relocated seq306 reference is empty".into(),
@@ -1055,9 +1057,8 @@ mod tests {
 
     #[test]
     fn t406_plan_consumes_the_bounded_native_allocation_law() {
-        let plan =
-            plan_bounded_t406_ordinary_shape_replay(&admitted_observation(), &request())
-                .expect("bounded T406 plan");
+        let plan = plan_bounded_t406_ordinary_shape_replay(&admitted_observation(), &request())
+            .expect("bounded T406 plan");
 
         assert_eq!(plan.new_shape_seq_num, 305);
         assert_eq!(plan.relocated_service_seq_num, 306);
@@ -1067,7 +1068,10 @@ mod tests {
         assert_eq!(plan.relocated_service_field_0b, 1);
         assert!(!plan.oid_mutation_required);
         assert!(!plan.dw_next_unique_oid_mutation_required);
-        assert_eq!(plan.owned_streams, [CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH]);
+        assert_eq!(
+            plan.owned_streams,
+            [CONTENTS_STREAM_PATH, ESCHER_STREAM_PATH]
+        );
     }
 
     #[test]

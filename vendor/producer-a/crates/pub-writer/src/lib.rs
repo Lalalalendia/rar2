@@ -13,11 +13,10 @@ mod structural_replay;
 
 pub use structural_replay::{
     OrdinaryShapeReplayGeometry, OrdinaryShapeReplayPlan, OrdinaryShapeReplayRequest,
-    OrdinaryShapeReplayTemplate, STRUCT_WRITER_REPLAY_SCHEMA_V0_1,
-    StructuralReplayDeleteCandidate, StructuralReplayMaterializationBlocked,
-    StructuralReplayObservedBase, StructuralReplayPlanBlocked, StructuralReplayPubCandidate,
-    StructuralReplayStreamDelta, inspect_t370_ordinary_shape_replay_base,
-    materialize_bounded_t406_create_pub_candidate,
+    OrdinaryShapeReplayTemplate, STRUCT_WRITER_REPLAY_SCHEMA_V0_1, StructuralReplayDeleteCandidate,
+    StructuralReplayMaterializationBlocked, StructuralReplayObservedBase,
+    StructuralReplayPlanBlocked, StructuralReplayPubCandidate, StructuralReplayStreamDelta,
+    inspect_t370_ordinary_shape_replay_base, materialize_bounded_t406_create_pub_candidate,
     materialize_bounded_t406_delete_pub_candidate, plan_bounded_t406_ordinary_shape_replay,
     plan_bounded_t406_ordinary_shape_replay_from_pub,
 };
