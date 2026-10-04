@@ -137,11 +137,6 @@ pub fn add_full_story_typography_to_odg(
     let mut xml = String::from_utf8(package.parts[content_index].content.clone())
         .map_err(|_| OdgTypographyError::InvalidContentUtf8)?;
 
-    let automatic_marker = "  <office:automatic-styles/>\n";
-    if xml.matches(automatic_marker).count() != 1 {
-        return Err(OdgTypographyError::MissingAutomaticStyles);
-    }
-
     let mut ordered = placements.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|placement| placement.typography.story_id);
 
@@ -188,10 +183,36 @@ pub fn add_full_story_typography_to_odg(
         }
     }
 
-    let replacement =
-        format!("  <office:automatic-styles>\n{style_xml}  </office:automatic-styles>\n");
-    xml = xml.replacen(automatic_marker, &replacement, 1);
+    add_automatic_styles(&mut xml, &style_xml)?;
     package.parts[content_index].content = xml.into_bytes();
+    Ok(())
+}
+
+fn add_automatic_styles(
+    xml: &mut String,
+    style_xml: &str,
+) -> Result<(), OdgTypographyError> {
+    if style_xml.is_empty() {
+        return Ok(());
+    }
+
+    let empty_marker = "  <office:automatic-styles/>\n";
+    if xml.matches(empty_marker).count() == 1 {
+        let replacement =
+            format!("  <office:automatic-styles>\n{style_xml}  </office:automatic-styles>\n");
+        *xml = xml.replacen(empty_marker, &replacement, 1);
+        return Ok(());
+    }
+
+    let open_marker = "  <office:automatic-styles>\n";
+    let close_marker = "  </office:automatic-styles>\n";
+    if xml.matches(open_marker).count() != 1 || xml.matches(close_marker).count() != 1 {
+        return Err(OdgTypographyError::MissingAutomaticStyles);
+    }
+    let close = xml
+        .find(close_marker)
+        .ok_or(OdgTypographyError::MissingAutomaticStyles)?;
+    xml.insert_str(close, style_xml);
     Ok(())
 }
 
@@ -241,20 +262,36 @@ fn apply_style_to_frame(
         .ok_or(OdgTypographyError::MissingFrame { node_id: frame_id })?;
     let frame_end = frame_start + relative_close + close_marker.len();
 
-    let mut block = xml[frame_start..frame_end].to_owned();
+    let block = xml[frame_start..frame_end].to_owned();
     if block.contains("<text:span ") {
         return Err(OdgTypographyError::ExistingTextStyle { node_id: frame_id });
     }
-    if !block.contains("<text:p>") {
+
+    let mut rewritten = String::with_capacity(block.len() + 64);
+    let mut cursor = 0_usize;
+    let mut paragraph_count = 0_usize;
+    while let Some(relative_start) = block[cursor..].find("<text:p") {
+        let paragraph_start = cursor + relative_start;
+        let open_end = block[paragraph_start..]
+            .find('>')
+            .map(|relative| paragraph_start + relative)
+            .ok_or(OdgTypographyError::MissingTextCarrier { node_id: frame_id })?;
+        rewritten.push_str(&block[cursor..=open_end]);
+        write!(
+            rewritten,
+            "<text:span text:style-name=\"{style_name}\">"
+        )
+        .unwrap();
+        cursor = open_end + 1;
+        paragraph_count += 1;
+    }
+    rewritten.push_str(&block[cursor..]);
+
+    if paragraph_count == 0 || rewritten.matches("</text:p>").count() != paragraph_count {
         return Err(OdgTypographyError::MissingTextCarrier { node_id: frame_id });
     }
-
-    block = block.replace(
-        "<text:p>",
-        &format!("<text:p><text:span text:style-name=\"{style_name}\">"),
-    );
-    block = block.replace("</text:p>", "</text:span></text:p>");
-    xml.replace_range(frame_start..frame_end, &block);
+    rewritten = rewritten.replace("</text:p>", "</text:span></text:p>");
+    xml.replace_range(frame_start..frame_end, &rewritten);
     Ok(())
 }
 
