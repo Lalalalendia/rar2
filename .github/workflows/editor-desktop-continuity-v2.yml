@@ -10,6 +10,8 @@ on:
       - "apps/chaptera-desktop/src/acceptance.rs"
       - "apps/chaptera-desktop/src/acceptance_v2.rs"
       - "apps/chaptera-desktop/src/main.rs"
+      - "tools/run_editor_fixed_pdf_current_revision_v1.py"
+      - "crates/chaptera-desktop-shaped-flow-runtime/**"
   workflow_dispatch:
 
 permissions:
@@ -34,7 +36,8 @@ jobs:
           set -euo pipefail
           python -m py_compile \
             tools/validate_editor_desktop_continuity_v2_receipt.py \
-            tools/run_editor_desktop_continuity_v2.py
+            tools/run_editor_desktop_continuity_v2.py \
+            tools/run_editor_fixed_pdf_current_revision_v1.py
           python tools/validate_editor_desktop_continuity_v2_receipt.py --self-test
 
       - name: Check current desktop V2 producer
