@@ -59,7 +59,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cargo test -p pub-editor real_carlton_imported_paragraph_base_alignment_uses_current_paragraph_ids -- --ignored
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-editor real_carlton_imported_paragraph_base_alignment_uses_current_paragraph_ids -- --ignored
           if ($LASTEXITCODE -ne 0) { throw "Carlton paragraph base-alignment seam failed" }
 
       - name: Build current Editor acceptance binary
