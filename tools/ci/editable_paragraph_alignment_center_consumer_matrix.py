@@ -32,10 +32,14 @@ def run_command(
             timeout=timeout,
             check=False,
         )
-        return {
+        result = {
             "status": "success" if completed.returncode == 0 else "failure",
             "returncode": completed.returncode,
         }
+        if completed.returncode != 0:
+            result["stdout_tail"] = completed.stdout[-4000:]
+            result["stderr_tail"] = completed.stderr[-4000:]
+        return result
     except subprocess.TimeoutExpired:
         return {"status": "timeout", "returncode": None}
 
@@ -85,16 +89,15 @@ def main() -> int:
         case_root = args.evidence_root / sha
         case_root.mkdir(parents=True, exist_ok=True)
 
-        items = alignment_probe.get("items", [])
+        all_items = alignment_probe.get("items", [])
+        items = [item for item in all_items if item.get("alignment") == "center"]
         expected = {
             "schema": "chaptera.editable-paragraph-alignment-center-expected.v1",
             "source_sha256": alignment_probe["source_sha256"],
             "eligible_count": len(items),
-            "center_story_count": sum(
-                1 for item in items if item.get("alignment") == "center"
-            ),
+            "center_story_count": len(items),
             "right_story_count": sum(
-                1 for item in items if item.get("alignment") == "right"
+                1 for item in all_items if item.get("alignment") == "right"
             ),
             "items": items,
             "claims": {
@@ -304,6 +307,30 @@ def main() -> int:
         row["libreoffice_alignment_verify"] = lo_verify
         results.append(row)
 
+    summary = {
+        "all_materialized": all(
+            row.get("materialize", {}).get("status") == "success"
+            for row in results
+        ),
+        "all_wire_verified": all(
+            row.get("wire", {}).get("status") == "success"
+            for row in results
+        ),
+        "all_scribus_save_reopen_verified": all(
+            row.get("scribus_import_save", {}).get("status") == "success"
+            and row.get("scribus_fresh_reopen_save", {}).get("status") == "success"
+            and row.get("scribus_alignment_verify", {}).get("status") == "success"
+            for row in results
+        ),
+        "all_libreoffice_save_reopen_verified": all(
+            row.get("libreoffice_import_save", {}).get("status") == "success"
+            and row.get("libreoffice_fresh_reopen_save", {}).get("status") == "success"
+            and row.get("libreoffice_second_reopen_export", {}).get("status") == "success"
+            and row.get("libreoffice_alignment_verify", {}).get("status") == "success"
+            for row in results
+        ),
+    }
+    center_class_proven = all(summary.values())
     receipt = {
         "schema": "chaptera.editable-paragraph-alignment-center-consumer-matrix.v1",
         "source_count": len(results),
@@ -312,32 +339,10 @@ def main() -> int:
             row["right_story_count"] for row in results
         ),
         "sources": results,
-        "summary": {
-            "all_materialized": all(
-                row.get("materialize", {}).get("status") == "success"
-                for row in results
-            ),
-            "all_wire_verified": all(
-                row.get("wire", {}).get("status") == "success"
-                for row in results
-            ),
-            "all_scribus_save_reopen_verified": all(
-                row.get("scribus_import_save", {}).get("status") == "success"
-                and row.get("scribus_fresh_reopen_save", {}).get("status") == "success"
-                and row.get("scribus_alignment_verify", {}).get("status") == "success"
-                for row in results
-            ),
-            "all_libreoffice_save_reopen_verified": all(
-                row.get("libreoffice_import_save", {}).get("status") == "success"
-                and row.get("libreoffice_fresh_reopen_save", {}).get("status") == "success"
-                and row.get("libreoffice_second_reopen_export", {}).get("status") == "success"
-                and row.get("libreoffice_alignment_verify", {}).get("status") == "success"
-                for row in results
-            ),
-        },
+        "summary": summary,
         "claims": {
             "measurement_only": True,
-            "consumer_survival_proven_for_center_class": True,
+            "consumer_survival_proven_for_center_class": center_class_proven,
             "right_class_fully_proven": False,
             "loss_report_or_manifest_changed": False,
             "story_text_recorded": False,
