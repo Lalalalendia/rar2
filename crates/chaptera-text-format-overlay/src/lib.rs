@@ -40,9 +40,7 @@ impl std::error::Error for TextFormatOverlayError {}
 
 pub type Result<T> = std::result::Result<T, TextFormatOverlayError>;
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FormatPropertyV1 {
     Bold,
@@ -76,9 +74,7 @@ impl TryFrom<&str> for FormatPropertyV1 {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum FormatValueV1 {
     Bool(bool),
@@ -198,12 +194,8 @@ fn validate_property_value(
         (FormatPropertyV1::Bold | FormatPropertyV1::Italic, FormatValueV1::Bool(value)) => {
             Ok(FormatValueV1::Bool(*value))
         }
-        (FormatPropertyV1::Bold, _) => {
-            Err(TextFormatOverlayError::new("bold must be boolean"))
-        }
-        (FormatPropertyV1::Italic, _) => {
-            Err(TextFormatOverlayError::new("italic must be boolean"))
-        }
+        (FormatPropertyV1::Bold, _) => Err(TextFormatOverlayError::new("bold must be boolean")),
+        (FormatPropertyV1::Italic, _) => Err(TextFormatOverlayError::new("italic must be boolean")),
         (FormatPropertyV1::TextColorRgb, FormatValueV1::String(value)) => {
             Ok(FormatValueV1::String(validate_rgb(value)?))
         }
@@ -301,13 +293,9 @@ fn base_value_at(
         })?;
     Ok(match property {
         FormatPropertyV1::Bold => FormatValueV1::Bool(run.format.bold),
-        FormatPropertyV1::FontSizeEmu => {
-            FormatValueV1::Integer(run.format.font_size_emu)
-        }
+        FormatPropertyV1::FontSizeEmu => FormatValueV1::Integer(run.format.font_size_emu),
         FormatPropertyV1::Italic => FormatValueV1::Bool(run.format.italic),
-        FormatPropertyV1::TextColorRgb => {
-            FormatValueV1::String(run.format.text_color_rgb.clone())
-        }
+        FormatPropertyV1::TextColorRgb => FormatValueV1::String(run.format.text_color_rgb.clone()),
     })
 }
 
@@ -598,8 +586,7 @@ fn apply_format_operation_v1(
     let before_effective =
         effective_property_segments_v1(state, property, start_scalar, end_scalar)?;
 
-    let mut provisional =
-        trim_property_runs(&state.overrides, property, start_scalar, end_scalar);
+    let mut provisional = trim_property_runs(&state.overrides, property, start_scalar, end_scalar);
     let normalized_value = match kind {
         TextFormatOperationKindV1::SetTextFormatProperty => {
             let value = value.ok_or_else(|| {
@@ -704,29 +691,28 @@ pub fn undo_text_format_operation_v1(
 pub fn replay_text_format_operation_v1(
     receipt: &TextFormatOperationReceiptV1,
 ) -> Result<TextFormatOverlayStateV1> {
-    let replay = match receipt.command.kind {
-        TextFormatOperationKindV1::SetTextFormatProperty => set_text_format_property_v1(
-            &receipt.before_state,
-            receipt.command.start_scalar,
-            receipt.command.end_scalar,
-            receipt.command.property,
-            receipt
-                .command
-                .value
-                .clone()
-                .ok_or_else(|| TextFormatOverlayError::new("replay set operation has no value"))?,
-            &receipt.command.expected_state_hash,
-        )?,
-        TextFormatOperationKindV1::ClearTextFormatPropertyOverride => {
-            clear_text_format_property_override_v1(
+    let replay =
+        match receipt.command.kind {
+            TextFormatOperationKindV1::SetTextFormatProperty => set_text_format_property_v1(
                 &receipt.before_state,
                 receipt.command.start_scalar,
                 receipt.command.end_scalar,
                 receipt.command.property,
+                receipt.command.value.clone().ok_or_else(|| {
+                    TextFormatOverlayError::new("replay set operation has no value")
+                })?,
                 &receipt.command.expected_state_hash,
-            )?
-        }
-    };
+            )?,
+            TextFormatOperationKindV1::ClearTextFormatPropertyOverride => {
+                clear_text_format_property_override_v1(
+                    &receipt.before_state,
+                    receipt.command.start_scalar,
+                    receipt.command.end_scalar,
+                    receipt.command.property,
+                    &receipt.command.expected_state_hash,
+                )?
+            }
+        };
     if replay.after_state != receipt.after_state {
         return Err(TextFormatOverlayError::new(
             "format operation replay did not reproduce canonical state",
@@ -739,13 +725,7 @@ pub fn replay_text_format_operation_v1(
 mod tests {
     use super::*;
 
-    fn fmt(
-        size: u64,
-        bold: bool,
-        italic: bool,
-        color: &str,
-        font: &str,
-    ) -> BaseCharacterFormatV1 {
+    fn fmt(size: u64, bold: bool, italic: bool, color: &str, font: &str) -> BaseCharacterFormatV1 {
         BaseCharacterFormatV1 {
             font_resource_id: font.to_owned(),
             font_size_emu: size,
@@ -760,14 +740,8 @@ mod tests {
         overrides: Vec<TextFormatOverrideRunV1>,
         story_len: u32,
     ) -> TextFormatOverlayStateV1 {
-        build_text_format_overlay_state_v1(
-            "story:1",
-            "rev:1",
-            story_len,
-            base_runs,
-            overrides,
-        )
-        .expect("valid overlay state")
+        build_text_format_overlay_state_v1("story:1", "rev:1", story_len, base_runs, overrides)
+            .expect("valid overlay state")
     }
 
     fn one_base(format: BaseCharacterFormatV1) -> Vec<BaseFormatRunV1> {
@@ -793,7 +767,11 @@ mod tests {
 
     #[test]
     fn explicit_false_differs_from_inherit_when_base_is_true() {
-        let state = state(one_base(fmt(12_000, true, false, "#000000", "font:resolved")), vec![], 6);
+        let state = state(
+            one_base(fmt(12_000, true, false, "#000000", "font:resolved")),
+            vec![],
+            6,
+        );
         let receipt = set_text_format_property_v1(
             &state,
             1,
@@ -812,13 +790,9 @@ mod tests {
                 value: FormatValueV1::Bool(false),
             }]
         );
-        let segments = effective_property_segments_v1(
-            &receipt.after_state,
-            FormatPropertyV1::Bold,
-            1,
-            5,
-        )
-        .unwrap();
+        let segments =
+            effective_property_segments_v1(&receipt.after_state, FormatPropertyV1::Bold, 1, 5)
+                .unwrap();
         assert_eq!(segments[0].value, FormatValueV1::Bool(false));
         assert_eq!(
             segments[0].source,
@@ -828,7 +802,11 @@ mod tests {
 
     #[test]
     fn redundant_explicit_value_equal_to_base_normalizes_away() {
-        let state = state(one_base(fmt(12_000, false, false, "#000000", "font:resolved")), vec![], 6);
+        let state = state(
+            one_base(fmt(12_000, false, false, "#000000", "font:resolved")),
+            vec![],
+            6,
+        );
         let receipt = set_text_format_property_v1(
             &state,
             0,
@@ -878,13 +856,9 @@ mod tests {
                 },
             ]
         );
-        let middle = effective_property_segments_v1(
-            &receipt.after_state,
-            FormatPropertyV1::Bold,
-            2,
-            4,
-        )
-        .unwrap();
+        let middle =
+            effective_property_segments_v1(&receipt.after_state, FormatPropertyV1::Bold, 2, 4)
+                .unwrap();
         assert_eq!(middle[0].value, FormatValueV1::Bool(true));
         assert_eq!(middle[0].source, EffectivePropertySourceV1::Base);
     }
@@ -975,7 +949,11 @@ mod tests {
 
     #[test]
     fn zero_length_and_stale_state_fail_closed() {
-        let state = state(one_base(fmt(12_000, false, false, "#000000", "font:resolved")), vec![], 6);
+        let state = state(
+            one_base(fmt(12_000, false, false, "#000000", "font:resolved")),
+            vec![],
+            6,
+        );
         let zero = set_text_format_property_v1(
             &state,
             2,
@@ -1003,7 +981,11 @@ mod tests {
     fn unsupported_property_invalid_values_and_missing_font_fail_closed() {
         assert!(FormatPropertyV1::try_from("font_family").is_err());
 
-        let state = state(one_base(fmt(12_000, false, false, "#000000", "font:resolved")), vec![], 6);
+        let state = state(
+            one_base(fmt(12_000, false, false, "#000000", "font:resolved")),
+            vec![],
+            6,
+        );
         assert!(
             set_text_format_property_v1(
                 &state,
@@ -1030,10 +1012,16 @@ mod tests {
 
     #[test]
     fn all_v1_properties_are_canonicalized() {
-        let mut current =
-            state(one_base(fmt(12_000, false, false, "#000000", "font:resolved")), vec![], 6);
+        let mut current = state(
+            one_base(fmt(12_000, false, false, "#000000", "font:resolved")),
+            vec![],
+            6,
+        );
         for (property, value) in [
-            (FormatPropertyV1::FontSizeEmu, FormatValueV1::Integer(15_000)),
+            (
+                FormatPropertyV1::FontSizeEmu,
+                FormatValueV1::Integer(15_000),
+            ),
             (FormatPropertyV1::Bold, FormatValueV1::Bool(true)),
             (FormatPropertyV1::Italic, FormatValueV1::Bool(true)),
             (
@@ -1061,7 +1049,11 @@ mod tests {
 
     #[test]
     fn receipt_undo_and_replay_are_exact() {
-        let state = state(one_base(fmt(12_000, true, false, "#000000", "font:resolved")), vec![], 6);
+        let state = state(
+            one_base(fmt(12_000, true, false, "#000000", "font:resolved")),
+            vec![],
+            6,
+        );
         let receipt = set_text_format_property_v1(
             &state,
             1,
