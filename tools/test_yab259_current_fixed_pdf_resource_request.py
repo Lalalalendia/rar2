@@ -39,6 +39,7 @@ class CurrentFixedPdfResourceRequestTests(unittest.TestCase):
         text = RUNNER.read_text(encoding="utf-8")
         self.assertIn("input=json.dumps(", text)
         self.assertNotIn("stdin=subprocess.PIPE", text)
+        self.assertIn('encoding="utf-8"', text)
 
 
 if __name__ == "__main__":
