@@ -154,6 +154,7 @@ def fallback_common_crawl_fetch(
     )
 
     for transport, base in (
+        ("ds5q9oxwqwsfj.cloudfront.net", "https://ds5q9oxwqwsfj.cloudfront.net/"),
         ("commoncrawl.s3.amazonaws.com", "https://commoncrawl.s3.amazonaws.com/"),
         ("s3.amazonaws.com/commoncrawl", "https://s3.amazonaws.com/commoncrawl/"),
     ):
@@ -403,7 +404,7 @@ def main() -> int:
         "targets": target_reports,
         "evidence_boundary": (
             "exact two remaining target parent directories only, queried as explicit http/https and www/non-www prefix variants; Common Crawl historical "
-            "HTML captures through 2017 are sampled with bounded fetch count; each record uses the canonical data.commoncrawl.org range path first and then two S3 range transports as bounded fallbacks; receipt retains "
+            "HTML captures through 2017 are sampled with bounded fetch count; each record uses the canonical data.commoncrawl.org range path first, then the official Common Crawl CloudFront data endpoint, then two S3 range transports as bounded fallbacks; receipt retains "
             "only public URLs, anchor samples, capture counts/timestamps and aggregate errors; "
             "no document text or PUB bytes are retained"
         ),
