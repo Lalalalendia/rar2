@@ -95,6 +95,22 @@ pub struct FullStoryTypographyV1 {
     pub font_size_emu: LengthEmu,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParagraphAlignmentV1 {
+    Center,
+    Right,
+}
+
+/// Bounded physical-writer authority for one Story whose current effective
+/// ParagraphId alignment is completely known, uniform and representable by
+/// the existing full-Story Center/Right target wires.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FullStoryParagraphAlignmentV1 {
+    pub story_id: StoryId,
+    pub alignment: ParagraphAlignmentV1,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TargetProfile {
     pub format: String,
