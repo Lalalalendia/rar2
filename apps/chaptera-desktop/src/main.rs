@@ -1,3 +1,4 @@
+// CI admission probe: unrelated bootstrap comment, outside feature owners.
 #![cfg_attr(
     all(target_os = "windows", not(debug_assertions)),
     windows_subsystem = "windows"
