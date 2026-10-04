@@ -59,9 +59,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .source_refs
                 .iter()
                 .any(|source_ref| source_ref.path.as_deref() == Some("FDPP/storyEnd"));
-            let has_story_catalog_identity = story.source_refs.iter().any(|source_ref| {
-                source_ref.path.as_deref() == Some("Contents/0x65/textId")
-            });
+            let has_story_catalog_identity = story
+                .source_refs
+                .iter()
+                .any(|source_ref| source_ref.path.as_deref() == Some("Contents/0x65/textId"));
             let has_direct_quill_syid = story
                 .source_refs
                 .iter()
