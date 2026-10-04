@@ -29,6 +29,9 @@ pub enum ImportedParagraphProjectionErrorV1 {
         start: u64,
         end: u64,
     },
+    TerminalCrProvenanceUnknown {
+        story_id: StoryId,
+    },
 }
 
 impl fmt::Display for ImportedParagraphProjectionErrorV1 {
@@ -51,6 +54,11 @@ impl fmt::Display for ImportedParagraphProjectionErrorV1 {
             } => write!(
                 formatter,
                 "invalid imported paragraph range for Story {} paragraph {ordinal}: {start}..{end}",
+                story_id.as_canonical()
+            ),
+            Self::TerminalCrProvenanceUnknown { story_id } => write!(
+                formatter,
+                "cannot project terminal-CR paragraph topology for Story {} without exact mature-Quill provenance",
                 story_id.as_canonical()
             ),
         }
@@ -77,6 +85,13 @@ impl EditorSession {
             };
             let protected_terminal_cr =
                 imported_mature_quill_terminal_cr_is_proven_v1(self, *story_id);
+            if story.text.ends_with('\r') && !protected_terminal_cr {
+                return Err(
+                    ImportedParagraphProjectionErrorV1::TerminalCrProvenanceUnknown {
+                        story_id: *story_id,
+                    },
+                );
+            }
             result.extend(project_imported_story_paragraphs_v1(
                 self.source_hash,
                 *story_id,
@@ -263,14 +278,6 @@ mod tests {
         assert_eq!(
             canonical_paragraph_ranges_v1("a\r\rb\r", true),
             vec![(0, 2), (2, 3), (3, 5)]
-        );
-    }
-
-    #[test]
-    fn unproven_terminal_cr_keeps_fail_open_topology_out_of_provenance_path() {
-        assert_eq!(
-            canonical_paragraph_ranges_v1("alpha\r", false),
-            vec![(0, 6), (6, 6)]
         );
     }
 
