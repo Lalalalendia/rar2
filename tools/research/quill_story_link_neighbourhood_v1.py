@@ -129,7 +129,7 @@ def fallback_common_crawl_fetch(
             seed,
             timeout=timeout,
             max_bytes=max_bytes,
-            retries=1,
+            retries=0,
         )
         attempts.append({"transport": "data.commoncrawl.org", "status": "success"})
         return payload, meta, attempts
@@ -155,8 +155,6 @@ def fallback_common_crawl_fetch(
 
     for transport, base in (
         ("ds5q9oxwqwsfj.cloudfront.net", "https://ds5q9oxwqwsfj.cloudfront.net/"),
-        ("commoncrawl.s3.amazonaws.com", "https://commoncrawl.s3.amazonaws.com/"),
-        ("s3.amazonaws.com/commoncrawl", "https://s3.amazonaws.com/commoncrawl/"),
     ):
         archive_url = base + filename
         try:
@@ -254,6 +252,7 @@ def main() -> int:
                             "crawl": str(crawl.get("id", "")),
                             "query_prefix": prefix,
                             "url": url,
+                            "digest": str(row.get("digest", "")),
                             "filename": str(row.get("filename", "")),
                             "offset": str(row.get("offset", "")),
                             "length": str(row.get("length", "")),
@@ -276,7 +275,7 @@ def main() -> int:
             try:
                 payload, meta, row_attempts = fallback_common_crawl_fetch(
                     row,
-                    timeout=25,
+                    timeout=12,
                     max_bytes=4 * 1024 * 1024,
                 )
                 transport_attempts.extend(row_attempts)
@@ -365,6 +364,16 @@ def main() -> int:
                 "parent_prefix_variants": prefixes,
                 "collections_queried": len(crawls),
                 "indexed_parent_html_candidates": len(index_rows),
+                "indexed_parent_pages": [
+                    {
+                        "crawl": row["crawl"],
+                        "timestamp": row["timestamp"],
+                        "url": row["url"],
+                        "digest": row["digest"],
+                        "query_prefix": row["query_prefix"],
+                    }
+                    for row in index_rows
+                ],
                 "fetched_html_count": fetched_html,
                 "transport_success_counts": transport_success_counts,
                 "transport_attempt_summary": {
@@ -404,7 +413,7 @@ def main() -> int:
         "targets": target_reports,
         "evidence_boundary": (
             "exact two remaining target parent directories only, queried as explicit http/https and www/non-www prefix variants; Common Crawl historical "
-            "HTML captures through 2017 are sampled with bounded fetch count; each record uses the canonical data.commoncrawl.org range path first, then the official Common Crawl CloudFront data endpoint, then two S3 range transports as bounded fallbacks; receipt retains "
+            "HTML captures through 2017 are sampled with bounded fetch count; each record uses the canonical data.commoncrawl.org range path once, then the official Common Crawl CloudFront data endpoint once; receipt retains "
             "only public URLs, anchor samples, capture counts/timestamps and aggregate errors; "
             "no document text or PUB bytes are retained"
         ),
