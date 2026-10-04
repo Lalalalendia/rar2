@@ -503,6 +503,50 @@ pub struct EditorReplacementAsset {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditorFixedImageResourceV1 {
+    pub resource_id: ResourceId,
+    pub mime: String,
+    pub node_ids: Vec<NodeId>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorFixedImageResourceError {
+    MissingSourceAsset {
+        resource_id: ResourceId,
+    },
+    MissingReplacementAsset {
+        sha256: Sha256Digest,
+    },
+    ResourceIdentityConflict {
+        resource_id: ResourceId,
+    },
+}
+
+impl fmt::Display for EditorFixedImageResourceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSourceAsset { resource_id } => write!(
+                formatter,
+                "source image resource {} has no exact PNG/JPEG byte backing",
+                resource_id.as_canonical()
+            ),
+            Self::MissingReplacementAsset { sha256 } => write!(
+                formatter,
+                "replacement image asset {sha256} is missing from the current editor session"
+            ),
+            Self::ResourceIdentityConflict { resource_id } => write!(
+                formatter,
+                "fixed-output image resource {} resolves to conflicting bytes or MIME",
+                resource_id.as_canonical()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EditorFixedImageResourceError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditorSourceImageAsset {
     mime: String,
@@ -1967,6 +2011,87 @@ impl EditorSession {
 
     pub fn image_replacement_for(&self, node_id: NodeId) -> Option<Sha256Digest> {
         self.image_replacements.get(&node_id).copied()
+    }
+
+    /// Project the current effective image state into a source-neutral fixed-output
+    /// resource set. Source image bytes are retained only for nodes without an
+    /// active ReplaceImage binding; replacement bytes always override the source
+    /// resource for that node.
+    pub fn fixed_image_resources_v1(
+        &self,
+    ) -> Result<Vec<EditorFixedImageResourceV1>, EditorFixedImageResourceError> {
+        fn insert_resource(
+            resources: &mut BTreeMap<ResourceId, EditorFixedImageResourceV1>,
+            resource_id: ResourceId,
+            mime: &str,
+            bytes: &[u8],
+            node_id: NodeId,
+        ) -> Result<(), EditorFixedImageResourceError> {
+            if let Some(existing) = resources.get_mut(&resource_id) {
+                if existing.mime != mime || existing.bytes != bytes {
+                    return Err(EditorFixedImageResourceError::ResourceIdentityConflict {
+                        resource_id,
+                    });
+                }
+                if !existing.node_ids.contains(&node_id) {
+                    existing.node_ids.push(node_id);
+                }
+                return Ok(());
+            }
+
+            resources.insert(
+                resource_id,
+                EditorFixedImageResourceV1 {
+                    resource_id,
+                    mime: mime.to_owned(),
+                    node_ids: vec![node_id],
+                    bytes: bytes.to_vec(),
+                },
+            );
+            Ok(())
+        }
+
+        let mut resources = BTreeMap::<ResourceId, EditorFixedImageResourceV1>::new();
+
+        for (node_id, resource_id) in &self.source_image_nodes {
+            if self.image_replacements.contains_key(node_id) {
+                continue;
+            }
+            let asset = self.source_image_assets.get(resource_id).ok_or(
+                EditorFixedImageResourceError::MissingSourceAsset {
+                    resource_id: *resource_id,
+                },
+            )?;
+            insert_resource(
+                &mut resources,
+                *resource_id,
+                &asset.mime,
+                &asset.bytes,
+                *node_id,
+            )?;
+        }
+
+        for (node_id, asset_sha) in &self.image_replacements {
+            let asset = self.replacement_assets.get(asset_sha).ok_or(
+                EditorFixedImageResourceError::MissingReplacementAsset {
+                    sha256: *asset_sha,
+                },
+            )?;
+            insert_resource(
+                &mut resources,
+                replacement_asset_resource_id(*asset_sha),
+                &asset.mime,
+                &asset.bytes,
+                *node_id,
+            )?;
+        }
+
+        let mut projected = resources.into_values().collect::<Vec<_>>();
+        for resource in &mut projected {
+            resource.node_ids.sort_unstable();
+            resource.node_ids.dedup();
+        }
+        Ok(projected)
     }
 
     pub fn import_replacement_asset(
@@ -5758,5 +5883,108 @@ mod asset_reachability_tests {
             ),
         };
         assert!(operation.durable_editor_asset_refs_v1().is_empty());
+    }
+
+    fn fixed_image_test_graph() -> PubResolvedGraph {
+        let source_hash = digest(0x44);
+        pub_model::ResolvedGraph {
+            cdm_version: "0.1".into(),
+            resolver_version: "fixed-image-resource-test".into(),
+            source: pub_model::SourceDescriptor {
+                format: "pub".into(),
+                format_version: Some("0x2c".into()),
+                adapter_version: "pub-editor/test".into(),
+                source_hash,
+            },
+            document: pub_model::Document {
+                id: serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
+                    .expect("canonical DocumentId"),
+                format_origin: "pub".into(),
+                source_hash,
+                pages: Vec::new(),
+                resources: Vec::new(),
+                styles: Vec::new(),
+            },
+            pages: BTreeMap::new(),
+            nodes: BTreeMap::new(),
+            stories: BTreeMap::new(),
+            paragraphs: BTreeMap::new(),
+            text_runs: BTreeMap::new(),
+            resources: BTreeMap::new(),
+            styles: BTreeMap::new(),
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn fixed_image_resources_replace_source_bytes_for_the_same_node() {
+        let mut session = EditorSession::new(fixed_image_test_graph()).expect("session");
+        let node_id: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId");
+        let source_resource: ResourceId =
+            serde_json::from_str("\"44000000-0000-4000-8000-000000000001\"")
+                .expect("canonical ResourceId");
+        let source_bytes = b"source-image".to_vec();
+        session.source_image_assets.insert(
+            source_resource,
+            EditorSourceImageAsset {
+                mime: "image/png".into(),
+                bytes: source_bytes,
+            },
+        );
+        session.source_image_nodes.insert(node_id, source_resource);
+
+        let replacement_bytes = b"\x89PNG\r\n\x1a\nreplacement".to_vec();
+        let replacement_sha = session
+            .import_replacement_asset("image/png", replacement_bytes.clone())
+            .expect("replacement import");
+        session.image_replacements.insert(node_id, replacement_sha);
+
+        let resources = session
+            .fixed_image_resources_v1()
+            .expect("fixed image resources");
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].node_ids, vec![node_id]);
+        assert_eq!(resources[0].mime, "image/png");
+        assert_eq!(resources[0].bytes, replacement_bytes);
+        assert_eq!(
+            resources[0].resource_id,
+            replacement_asset_resource_id(replacement_sha)
+        );
+        assert_ne!(resources[0].resource_id, source_resource);
+    }
+
+    #[test]
+    fn fixed_image_resources_group_shared_source_bytes_deterministically() {
+        let mut session = EditorSession::new(fixed_image_test_graph()).expect("session");
+        let node_a: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId");
+        let node_b: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+                .expect("canonical NodeId");
+        let resource_id: ResourceId =
+            serde_json::from_str("\"44000000-0000-4000-8000-000000000001\"")
+                .expect("canonical ResourceId");
+        let bytes = b"shared-source-image".to_vec();
+        session.source_image_assets.insert(
+            resource_id,
+            EditorSourceImageAsset {
+                mime: "image/jpeg".into(),
+                bytes: bytes.clone(),
+            },
+        );
+        session.source_image_nodes.insert(node_b, resource_id);
+        session.source_image_nodes.insert(node_a, resource_id);
+
+        let resources = session
+            .fixed_image_resources_v1()
+            .expect("fixed image resources");
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].resource_id, resource_id);
+        assert_eq!(resources[0].mime, "image/jpeg");
+        assert_eq!(resources[0].bytes, bytes);
+        assert_eq!(resources[0].node_ids, vec![node_a, node_b]);
     }
 }
