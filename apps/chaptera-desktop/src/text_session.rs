@@ -131,8 +131,8 @@ pub fn boolean_format_selection_state_v1(
         }
         cursor = segment.end_scalar;
 
-        let value = match segment.value {
-            FormatValueV1::Bool(value) => value,
+        let value = match &segment.value {
+            FormatValueV1::Bool(value) => *value,
             _ => {
                 return Err(format!(
                     "{} canonical effective value is not boolean",
