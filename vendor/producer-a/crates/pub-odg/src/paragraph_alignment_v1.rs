@@ -414,3 +414,158 @@ fn stable_name(prefix: &str, id: CanonicalId) -> String {
     }
     value
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ODG_ADAPTER_VERSION_V0_1, ODG_SCHEMA_FENCE_ODF_1_4, OdgPart, OdgPartKind};
+    use pub_export::TargetProfile;
+
+    fn canonical(byte: u8) -> CanonicalId {
+        CanonicalId::from_bytes([byte; 16])
+    }
+
+    fn story(byte: u8) -> StoryId {
+        StoryId::from_canonical(canonical(byte))
+    }
+
+    fn frame(byte: u8) -> NodeId {
+        NodeId::from_canonical(canonical(byte))
+    }
+
+    fn paragraph(byte: u8) -> ParagraphId {
+        ParagraphId::from_canonical(canonical(byte))
+    }
+
+    fn package(frame_id: NodeId) -> OdgPackage {
+        let content = format!(
+            "<?xml version=\"1.0\"?>\n<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\">\n  <office:automatic-styles/>\n<office:body><office:drawing><draw:page><draw:frame draw:name=\"{}\">\n          <draw:text-box>\n            <text:p>legacy split carrier</text:p>\n          </draw:text-box>\n        </draw:frame></draw:page></office:drawing></office:body></office:document-content>",
+            frame_name(frame_id)
+        );
+        OdgPackage {
+            target: TargetProfile {
+                format: "odg".into(),
+                adapter_version: ODG_ADAPTER_VERSION_V0_1.into(),
+                profile: "bounded-editable".into(),
+                schema_fence: Some(ODG_SCHEMA_FENCE_ODF_1_4.into()),
+            },
+            conversion_fence: None,
+            parts: vec![OdgPart {
+                path: ODG_CONTENT_PATH.into(),
+                kind: OdgPartKind::Content,
+                media_type: "text/xml".into(),
+                content: content.into_bytes(),
+            }],
+        }
+    }
+
+    #[test]
+    fn canonical_ranges_replace_legacy_split_and_keep_terminal_cr_owned() {
+        let story_id = story(1);
+        let frame_id = frame(2);
+        let first = paragraph(3);
+        let second = paragraph(4);
+        let mut package = package(frame_id);
+        let placement = OdgParagraphAlignmentPlacementV1 {
+            story_id,
+            story_text: "alpha\rbeta\r".into(),
+            frame_ids: vec![frame_id],
+            paragraphs: vec![
+                EffectiveParagraphAlignmentExportV1 {
+                    paragraph_id: first,
+                    story_id,
+                    range: TextRange::new(0, 6).unwrap(),
+                    alignment: Some(ParagraphAlignmentV1::Left),
+                },
+                EffectiveParagraphAlignmentExportV1 {
+                    paragraph_id: second,
+                    story_id,
+                    range: TextRange::new(6, 11).unwrap(),
+                    alignment: Some(ParagraphAlignmentV1::Right),
+                },
+            ],
+        };
+
+        add_effective_paragraph_alignment_to_odg_v1(
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect("paragraph-scoped ODG materialization");
+
+        let xml = std::str::from_utf8(&package.parts[0].content).unwrap();
+        assert!(!xml.contains("legacy split carrier"));
+        assert_eq!(xml.matches("<text:p ").count(), 2);
+        assert!(xml.contains(">alpha</text:p>"));
+        assert!(xml.contains(">beta</text:p>"));
+        assert!(xml.contains("fo:text-align=\"left\""));
+        assert!(xml.contains("fo:text-align=\"right\""));
+        assert!(!xml.contains("<text:p></text:p>"));
+    }
+
+    #[test]
+    fn unsupported_alignment_fails_closed_without_coercion() {
+        let story_id = story(5);
+        let frame_id = frame(6);
+        let mut package = package(frame_id);
+        let placement = OdgParagraphAlignmentPlacementV1 {
+            story_id,
+            story_text: "alpha".into(),
+            frame_ids: vec![frame_id],
+            paragraphs: vec![EffectiveParagraphAlignmentExportV1 {
+                paragraph_id: paragraph(7),
+                story_id,
+                range: TextRange::new(0, 5).unwrap(),
+                alignment: Some(ParagraphAlignmentV1::InterWord),
+            }],
+        };
+
+        let error = add_effective_paragraph_alignment_to_odg_v1(
+            &mut package,
+            std::slice::from_ref(&placement),
+        )
+        .expect_err("InterWord must remain explicit unsupported state");
+
+        assert!(matches!(
+            error,
+            OdgParagraphAlignmentErrorV1::UnsupportedAlignment {
+                alignment: ParagraphAlignmentV1::InterWord,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn non_contiguous_ranges_fail_closed() {
+        let story_id = story(8);
+        let frame_id = frame(9);
+        let mut package = package(frame_id);
+        let placement = OdgParagraphAlignmentPlacementV1 {
+            story_id,
+            story_text: "alpha beta".into(),
+            frame_ids: vec![frame_id],
+            paragraphs: vec![
+                EffectiveParagraphAlignmentExportV1 {
+                    paragraph_id: paragraph(10),
+                    story_id,
+                    range: TextRange::new(0, 5).unwrap(),
+                    alignment: Some(ParagraphAlignmentV1::Center),
+                },
+                EffectiveParagraphAlignmentExportV1 {
+                    paragraph_id: paragraph(11),
+                    story_id,
+                    range: TextRange::new(6, 10).unwrap(),
+                    alignment: Some(ParagraphAlignmentV1::Right),
+                },
+            ],
+        };
+
+        assert!(matches!(
+            add_effective_paragraph_alignment_to_odg_v1(
+                &mut package,
+                std::slice::from_ref(&placement),
+            ),
+            Err(OdgParagraphAlignmentErrorV1::InvalidParagraphTopology { .. })
+        ));
+    }
+}
