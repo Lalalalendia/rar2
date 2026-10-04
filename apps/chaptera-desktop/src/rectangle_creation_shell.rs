@@ -52,8 +52,9 @@ impl ViewerApp {
         }
         match self.rectangle_creation.activate() {
             Ok(()) => {
-                self.edit_status =
-                    Some("Rectangle tool active. Drag on the page to create one rectangle.".to_owned());
+                self.edit_status = Some(
+                    "Rectangle tool active. Drag on the page to create one rectangle.".to_owned(),
+                );
             }
             Err(error) => {
                 self.edit_status = Some(format!("Rectangle tool could not activate: {error}"));
@@ -82,8 +83,7 @@ impl ViewerApp {
                     self.edit_status = Some("Cancelled the Rectangle draw gesture.".to_owned());
                 }
                 Err(error) => {
-                    self.edit_status =
-                        Some(format!("Rectangle gesture cancel failed: {error}"));
+                    self.edit_status = Some(format!("Rectangle gesture cancel failed: {error}"));
                 }
             }
         } else {
@@ -158,7 +158,11 @@ impl ViewerApp {
         let result = if self.rectangle_creation.gesture_token.is_none() {
             self.rectangle_creation
                 .pointer_down(page_id, pointer_start, "rectangle-draw-v1".to_owned())
-                .and_then(|()| self.rectangle_creation.pointer_move(pointer_current).map(|_| ()))
+                .and_then(|()| {
+                    self.rectangle_creation
+                        .pointer_move(pointer_current)
+                        .map(|_| ())
+                })
         } else {
             self.rectangle_creation
                 .pointer_move(pointer_current)
@@ -300,4 +304,3 @@ impl ViewerApp {
         }
     }
 }
-
