@@ -69,28 +69,35 @@ jobs:
           test "${actual_bytes}" = "291840"
           echo "CHAPTERA_SAMPLE_NEWSLETTER=${fixture}" >> "${GITHUB_ENV}"
 
-      - name: Acquire pinned Quill boolean text-style witness
+      - name: Acquire pinned mature text-format corpus
         shell: bash
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/chaptera-text-format-fixtures"
           mkdir -p "${root}"
-          fixture="${root}/text-style.pub"
+
+          newsletter="${root}/SampleNewsletter.pub"
+          cp "${CHAPTERA_SAMPLE_NEWSLETTER}" "${newsletter}"
+          newsletter_blob_sha="$(git hash-object "${newsletter}")"
+          test "${newsletter_blob_sha}" = "94900925af5832c493784f3cb51563f838a64df8"
+
+          brochure="${root}/SampleBrochure.pub"
           curl --fail --location --silent --show-error \
-            "https://raw.githubusercontent.com/fosnola/libmspub-test/33d8f78db8b8b319098c3d5ba3ad3e952369b323/testset/9.0/text-style.pub" \
-            --output "${fixture}"
-          actual_sha="$(sha256sum "${fixture}" | cut -d' ' -f1)"
-          actual_bytes="$(wc -c < "${fixture}" | tr -d ' ')"
-          actual_blob_sha="$(git hash-object "${fixture}")"
-          test "${actual_sha}" = "525ee897523e09b2fb8e6d435e307c3cd4ce4c12d2060fc81854bcf619263967"
-          test "${actual_bytes}" = "20480"
-          test "${actual_blob_sha}" = "277a9e695b2151be33a1d4409ade8ce5e8947b77"
+            "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleBrochure.pub" \
+            --output "${brochure}"
+          brochure_sha="$(sha256sum "${brochure}" | cut -d' ' -f1)"
+          brochure_bytes="$(wc -c < "${brochure}" | tr -d ' ')"
+          brochure_blob_sha="$(git hash-object "${brochure}")"
+          test "${brochure_sha}" = "ffed034ac87e679f0bd08ff9cf74ad11c0e0e510a42b1bc1a7502415f6c29c87"
+          test "${brochure_bytes}" = "161792"
+          test "${brochure_blob_sha}" = "00deec14dc6cff6d8a47b120d6d84e7e20c72166"
+
           echo "CHAPTERA_TEXT_FORMAT_FIXTURES_DIR=${root}" >> "${GITHUB_ENV}"
 
       - name: Prove direct text session on real PUB
         run: cargo test -p chaptera-desktop real_sample_newsletter_direct_text_session_enters_types_rebinds_and_exits -- --nocapture
 
-      - name: Prove canonical Bold history on pinned Quill boolean witness
+      - name: Prove canonical Bold history on pinned mature PUB corpus
         run: cargo test -p chaptera-desktop real_pub_corpus_boolean_format_helper_is_durable_and_reversible -- --nocapture
 
   gui-direct-text:
