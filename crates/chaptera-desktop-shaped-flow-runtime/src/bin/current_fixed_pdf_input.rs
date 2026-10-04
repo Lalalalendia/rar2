@@ -169,8 +169,10 @@ fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, Stri
         .collect::<Vec<_>>();
     match classify_kind_family(&kinds, project.assets.len())? {
         ProjectAdmissionClass::StoryMove => {
-            let [EditOperation::ReplaceStoryRange { story_id, .. }, EditOperation::MoveNode { node_id, .. }] =
-                project.operations.as_slice()
+            let [
+                EditOperation::ReplaceStoryRange { story_id, .. },
+                EditOperation::MoveNode { node_id, .. },
+            ] = project.operations.as_slice()
             else {
                 return Err("Story+Move fixed-PDF input operation sequence changed".into());
             };
@@ -187,9 +189,7 @@ fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, Stri
 
             for operation in &project.operations {
                 match operation {
-                    EditOperation::ReplaceStoryRange { story_id: id, .. }
-                        if story_id.is_none() =>
-                    {
+                    EditOperation::ReplaceStoryRange { story_id: id, .. } if story_id.is_none() => {
                         story_id = Some(*id);
                     }
                     EditOperation::MoveNode { node_id, .. } if move_node_id.is_none() => {
@@ -214,8 +214,7 @@ fn exact_project_targets(project: &EditorProject) -> Result<ProjectTargets, Stri
 
             let targets = ProjectTargets::Stage02 {
                 story_id: story_id.ok_or_else(|| "Stage-0 Story operation missing".to_owned())?,
-                move_node_id: move_node_id
-                    .ok_or_else(|| "Stage-0 MoveNode missing".to_owned())?,
+                move_node_id: move_node_id.ok_or_else(|| "Stage-0 MoveNode missing".to_owned())?,
                 resize_node_id: resize_node_id
                     .ok_or_else(|| "Stage-0 ResizeNode missing".to_owned())?,
                 replacement_node_id: replacement_node_id
@@ -269,12 +268,13 @@ fn run(
         ProjectTargets::StoryMove { .. } => {
             if replacement_path.is_some() {
                 return Err(
-                    "Story+Move fixed-PDF input does not accept a replacement asset argument".into(),
+                    "Story+Move fixed-PDF input does not accept a replacement asset argument"
+                        .into(),
                 );
             }
-            editor
-                .apply_project(&project)
-                .map_err(|error| format!("fresh Story+Move EditorProject replay failed: {error}"))?;
+            editor.apply_project(&project).map_err(|error| {
+                format!("fresh Story+Move EditorProject replay failed: {error}")
+            })?;
         }
         ProjectTargets::Stage02 { .. } => {
             let replacement_path = replacement_path.ok_or_else(|| {
@@ -368,10 +368,7 @@ mod tests {
     fn story_move_profile_requires_exact_order_and_zero_assets() {
         assert_eq!(
             classify_kind_family(
-                &[
-                    ProjectOperationKind::StoryRange,
-                    ProjectOperationKind::Move,
-                ],
+                &[ProjectOperationKind::StoryRange, ProjectOperationKind::Move,],
                 0,
             ),
             Ok(ProjectAdmissionClass::StoryMove)
@@ -388,10 +385,7 @@ mod tests {
         );
         assert!(
             classify_kind_family(
-                &[
-                    ProjectOperationKind::Move,
-                    ProjectOperationKind::StoryRange,
-                ],
+                &[ProjectOperationKind::Move, ProjectOperationKind::StoryRange,],
                 0,
             )
             .is_err()
@@ -442,7 +436,10 @@ mod tests {
     fn unsupported_operation_family_fails_closed() {
         assert!(
             classify_kind_family(
-                &[ProjectOperationKind::StoryRange, ProjectOperationKind::Other],
+                &[
+                    ProjectOperationKind::StoryRange,
+                    ProjectOperationKind::Other
+                ],
                 0,
             )
             .is_err()
