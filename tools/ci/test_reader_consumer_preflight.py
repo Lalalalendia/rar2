@@ -71,6 +71,27 @@ class ReaderConsumerPreflightTests(unittest.TestCase):
         self.assertIn("--all-targets", vendor_clippy["argv"])
         self.assertEqual(vendor_clippy["argv"][-2:], ["-D", "warnings"])
 
+    def test_vendor_workspace_change_qualifies_donor_pub_model(self) -> None:
+        plan = MODULE.build_plan(
+            ["vendor/producer-a/Cargo.toml"],
+            "BASE",
+            "HEAD",
+        )
+        clippy = next(
+            command for command in plan["commands"] if command["id"] == "vendor-clippy"
+        )
+        source_free = next(
+            command
+            for command in plan["commands"]
+            if command["id"] == "vendor-source-free-tests"
+        )
+        self.assertIn("pub-model@0.1.0-donor", clippy["argv"])
+        self.assertIn("pub-model@0.1.0-donor", source_free["argv"])
+        self.assertNotIn(
+            ["-p", "pub-model"],
+            [clippy["argv"][index : index + 2] for index in range(len(clippy["argv"]) - 1)],
+        )
+
     def test_pub_editor_change_runs_one_shared_core_gate(self) -> None:
         plan = MODULE.build_plan(
             ["vendor/producer-a/crates/pub-editor/src/lib.rs"],
