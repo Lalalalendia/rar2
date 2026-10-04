@@ -53,8 +53,7 @@ fn gui_duplicate_button_commits_one_create_shape_and_selects_duplicate_on_real_p
         )
     };
 
-    let source_node_id =
-        pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
+    let source_node_id = pub_editor::NodeId::from_canonical(pub_model::new_editor_canonical_id());
     {
         let app = harness.state_mut();
         app.selected_page = page_index;
