@@ -76,7 +76,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             || replacement.chars().count() != before.chars().count()
             || replacement.encode_utf16().count() != before.encode_utf16().count()
         {
-            return Err("could not construct same-length paragraph-alignment invalidation edit".into());
+            return Err(
+                "could not construct same-length paragraph-alignment invalidation edit".into(),
+            );
         }
 
         session.replace_story_text(story_id, replacement)?;
