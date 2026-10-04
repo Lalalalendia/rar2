@@ -651,12 +651,16 @@ fn main() -> eframe::Result<()> {
         std::process::exit(2);
     }
 
-    let mut args = std::env::args_os().skip(1);
-    let first_arg = args.next();
-
-    if reader_update_control::try_handle(first_arg.as_deref(), &mut args) {
-        return Ok(());
+    let mut args = std::env::args_os().skip(1).peekable();
+    match reader_update_control::try_run_from_args(&mut args, reader_only_mode()) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
     }
+    let first_arg = args.next();
 
     if first_arg.as_deref() == Some(std::ffi::OsStr::new("--agent-v1")) {
         if args.next().is_some() {
