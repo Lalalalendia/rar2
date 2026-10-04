@@ -162,15 +162,10 @@ mod tests {
     }
 
     fn story_id() -> StoryId {
-        serde_json::from_str("\"10000000-0000-4000-8000-000000000001\"")
-            .expect("canonical StoryId")
+        serde_json::from_str("\"10000000-0000-4000-8000-000000000001\"").expect("canonical StoryId")
     }
 
-    fn run(
-        start: u32,
-        end: u32,
-        alignment: PubParagraphAlignment,
-    ) -> PubParagraphAlignmentRun {
+    fn run(start: u32, end: u32, alignment: PubParagraphAlignment) -> PubParagraphAlignmentRun {
         PubParagraphAlignmentRun {
             story_id: story_id(),
             story_utf16_start: start,
