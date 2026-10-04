@@ -1,0 +1,95 @@
+name: Editor Resize Modifiers V1
+
+on:
+  pull_request:
+    paths:
+      - "vendor/producer-a/crates/pub-interaction/src/lib.rs"
+      - "vendor/producer-a/crates/pub-interaction/tests/resize_modifiers_transaction_v1.rs"
+      - "apps/chaptera-desktop/src/main.rs"
+      - ".github/workflows/editor-resize-modifiers-v1.yml"
+  push:
+    branches:
+      - editor-resize-modifiers-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt, clippy
+
+      - name: Check interaction formatting
+        run: cargo fmt --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction -- --check
+
+      - name: Check pub-interaction
+        run: cargo check --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction --all-targets
+
+      - name: Lint pub-interaction
+        run: cargo clippy --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction --all-targets -- -D warnings
+
+      - name: Prove constrained ResizeTransaction modifiers
+        run: >-
+          cargo test --manifest-path vendor/producer-a/Cargo.toml -p pub-interaction
+          --test resize_modifiers_transaction_v1
+
+      - name: Check Desktop formatting
+        run: cargo fmt --manifest-path apps/chaptera-desktop/Cargo.toml -- --check
+
+      - name: Check Desktop
+        run: cargo check -p chaptera-desktop --all-targets
+
+      - name: Lint Desktop
+        run: >-
+          cargo clippy -p chaptera-desktop --all-targets --
+          -D warnings
+          -A dead_code
+          -A unused_variables
+          -A clippy::type_complexity
+          -A clippy::collapsible_if
+          -A clippy::too_many_arguments
+
+  real-gui:
+    needs: contract
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94.1"
+
+      - name: Acquire pinned Apache POI SampleNewsletter
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP "SampleNewsletter.pub"
+          $url = "https://raw.githubusercontent.com/apache/poi/942d95d85b15d0dfdb3bc9ba1b4f273f277757c8/test-data/publisher/SampleNewsletter.pub"
+          Invoke-WebRequest -Uri $url -OutFile $fixture
+          $hash = (Get-FileHash $fixture -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bytes = (Get-Item $fixture).Length
+          if ($hash -ne "6a825ba26ba35d6e885acdc62e859591ed37cb0ff7480b554b9cb362b644dfcf") {
+            throw "SampleNewsletter SHA-256 mismatch: $hash"
+          }
+          if ($bytes -ne 291840) {
+            throw "SampleNewsletter byte length mismatch: $bytes"
+          }
+          "CHAPTERA_SAMPLE_NEWSLETTER=$fixture" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove modifier toggle through real Desktop GUI
+        run: >-
+          cargo test -p chaptera-desktop
+          gui_resize_modifiers_toggle_mid_drag_and_commit_exact_constraint_plan
+          -- --ignored --nocapture
