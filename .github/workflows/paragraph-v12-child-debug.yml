@@ -1,0 +1,39 @@
+name: paragraph-v12-child-debug
+on:
+  push:
+    branches:
+      - delivery/paragraph-exact-fixture-v12-smoke
+    paths:
+      - .github/workflows/paragraph-v12-child-debug.yml
+jobs:
+  debug:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Debug encoded child
+        shell: powershell
+        run: |
+          $base = Join-Path $env:TEMP ('p12-'+[guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $base | Out-Null
+          $fake = Join-Path $base 'fake child.ps1'
+          @(
+            'param([string]$A,[string]$B)',
+            "if(`$A -ne 'path with spaces' -or `$B -ne 'second value'){exit 7}",
+            'exit 0'
+          ) | Set-Content -LiteralPath $fake -Encoding ASCII
+          function Q([string]$v){ return "'" + $v.Replace("'","''") + "'" }
+          $parts = @('&',(Q $fake))
+          foreach($a in @('path with spaces','second value')) { $parts += (Q $a) }
+          $command = $parts -join ' '
+          Write-Host "COMMAND=$command"
+          $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+          $stdout=Join-Path $base 'out.txt'; $stderr=Join-Path $base 'err.txt'
+          $argLine='-NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand '+$encoded
+          Write-Host "ARGLINE=$argLine"
+          $p=Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $argLine -NoNewWindow -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $p.WaitForExit()
+          Write-Host "EXIT=$($p.ExitCode)"
+          Write-Host 'FAKE:'; Get-Content -LiteralPath $fake
+          Write-Host 'STDOUT:'; if(Test-Path $stdout){Get-Content $stdout}
+          Write-Host 'STDERR:'; if(Test-Path $stderr){Get-Content $stderr}
+          if($p.ExitCode -ne 0){exit 1}
