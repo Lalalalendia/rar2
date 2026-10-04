@@ -5137,6 +5137,9 @@ impl ViewerApp {
         let mut resize_error = None;
         let mut rectangle_release = None;
         let mut rectangle_error = None;
+        let mut text_box_release = None;
+        let mut text_box_error = None;
+        let mut text_box_pointer_owned = false;
         let mut edit_text_request: Option<(pub_editor::StoryId, pub_editor::NodeId)> = None;
         let mut text_activation_request: Option<(
             pub_editor::StoryId,
@@ -5266,6 +5269,54 @@ impl ViewerApp {
 
                 if !reader_only_mode()
                     && self.text_mode.is_none()
+                    && self.text_box_creation.active()
+                {
+                    text_box_pointer_owned = true;
+                    if self.text_box_creation.gesture_token.is_none()
+                        && primary_pressed
+                        && let (Some(pointer_start_screen), Some(pointer_start)) =
+                            (press_screen, press_document)
+                        && page_rect.contains(pointer_start_screen)
+                        && let Err(error) = self.text_box_creation.pointer_down(
+                            page.id,
+                            pointer_start,
+                            "textbox-draw-v1".to_owned(),
+                        )
+                    {
+                        text_box_error = Some(format!("Text Box draw could not start: {error}"));
+                    }
+
+                    if self.text_box_creation.gesture_token.is_some()
+                        && primary_down
+                        && let Some(point) = pointer_document
+                        && let Err(error) = self.text_box_creation.pointer_move(point)
+                    {
+                        let _ = self.text_box_creation.cancel();
+                        text_box_error = Some(format!("Text Box preview cancelled: {error}"));
+                    }
+
+                    if self.text_box_creation.gesture_token.is_some() && primary_released {
+                        if let Some(point) = pointer_document {
+                            match self.text_box_creation.pointer_up(point) {
+                                Ok(release) => text_box_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.text_box_creation.cancel();
+                                    text_box_error =
+                                        Some(format!("Text Box draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error = Some(
+                                "Text Box draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
+
+                if !reader_only_mode()
+                    && self.text_mode.is_none()
                     && response.drag_started_by(egui::PointerButton::Primary)
                     && let (Some(pointer_start), Some(pointer_current)) =
                         (press_document, pointer_document)
@@ -5294,6 +5345,28 @@ impl ViewerApp {
                             let _ = self.rectangle_creation.cancel();
                             rectangle_error =
                                 Some(format!("Rectangle draw could not start: {error}"));
+                        }
+                    } else if self.text_box_creation.active() {
+                        text_box_pointer_owned = true;
+                        next_canvas_drag = None;
+                        next_canvas_resize = None;
+                        let result = if self.text_box_creation.gesture_token.is_none() {
+                            self.text_box_creation
+                                .pointer_down(page.id, pointer_start, "textbox-draw-v1".to_owned())
+                                .and_then(|()| {
+                                    self.text_box_creation
+                                        .pointer_move(pointer_current)
+                                        .map(|_| ())
+                                })
+                        } else {
+                            self.text_box_creation
+                                .pointer_move(pointer_current)
+                                .map(|_| ())
+                        };
+                        if let Err(error) = result {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error =
+                                Some(format!("Text Box draw could not start: {error}"));
                         }
                     } else {
                         let mut resize_started = false;
@@ -5392,6 +5465,26 @@ impl ViewerApp {
                                     .to_owned(),
                             );
                         }
+                    } else if self.text_box_creation.active()
+                        && self.text_box_creation.gesture_token.is_some()
+                    {
+                        text_box_pointer_owned = true;
+                        if let Some(point) = pointer_document {
+                            match self.text_box_creation.pointer_up(point) {
+                                Ok(release) => text_box_release = Some(release),
+                                Err(error) => {
+                                    let _ = self.text_box_creation.cancel();
+                                    text_box_error =
+                                        Some(format!("Text Box draw could not finish: {error}"));
+                                }
+                            }
+                        } else {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error = Some(
+                                "Text Box draw ended outside the document coordinate boundary."
+                                    .to_owned(),
+                            );
+                        }
                     } else if let (Some(mut resize), Some(point)) =
                         (next_canvas_resize.take(), pointer_document)
                     {
@@ -5437,6 +5530,14 @@ impl ViewerApp {
                             let _ = self.rectangle_creation.cancel();
                             rectangle_error = Some(format!("Rectangle preview cancelled: {error}"));
                         }
+                    } else if self.text_box_creation.active()
+                        && self.text_box_creation.gesture_token.is_some()
+                    {
+                        text_box_pointer_owned = true;
+                        if let Err(error) = self.text_box_creation.pointer_move(point) {
+                            let _ = self.text_box_creation.cancel();
+                            text_box_error = Some(format!("Text Box preview cancelled: {error}"));
+                        }
                     } else if let Some(mut resize) = next_canvas_resize {
                         match resize.update(point) {
                             Ok(ResizeUpdate::Preview(_)) | Ok(ResizeUpdate::Invalid { .. }) => {
@@ -5460,6 +5561,8 @@ impl ViewerApp {
 
                 if !reader_only_mode()
                     && !self.rectangle_creation.active()
+                    && !self.text_box_creation.active()
+                    && !text_box_pointer_owned
                     && response.clicked_by(egui::PointerButton::Primary)
                     && let Some(point) = pointer_document
                 {
@@ -5676,6 +5779,26 @@ impl ViewerApp {
                     );
                 }
 
+                if self.text_box_creation.page_id == Some(page.id)
+                    && let Ok(text_box_creation::TextBoxCreatePreviewV1::Bounds(bounds)) =
+                        self.text_box_creation.preview()
+                    && let Some(preview_rect) = render_backend::physical_rect_to_egui(
+                        page_rect,
+                        scene_scale,
+                        bounds.x.get(),
+                        bounds.y.get(),
+                        bounds.width.get(),
+                        bounds.height.get(),
+                    )
+                {
+                    painter.rect_stroke(
+                        preview_rect,
+                        0,
+                        egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(232, 126, 36)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
                 if let Some(mode) = self.text_mode.as_ref()
                     && let Some(stop) = text_session::focus_caret(mode)
                     && stop.page_id == page_id_text
@@ -5837,6 +5960,39 @@ impl ViewerApp {
                             }
                         }
                     }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.edit_status = Some(error);
+                }
+            }
+        }
+
+        if let Some(error) = text_box_error {
+            self.edit_status = Some(error);
+        }
+        if let Some(release) = text_box_release {
+            let outcome = match self.editor.as_mut() {
+                Some(editor) => self.text_box_creation.commit_release(editor, release),
+                None => Err("Editor session is unavailable.".to_owned()),
+            };
+            match outcome {
+                Ok(Some(created)) => {
+                    self.finish_authoring_change(
+                        "Created Text Box in the authoring session. One CreateTextBox operation was committed.",
+                    );
+                    match direct_page_local_instance_v1(
+                        &created.node_id.as_canonical().to_string(),
+                        &created.page_id.as_canonical().to_string(),
+                    ) {
+                        Ok(instance) => self.canvas_selection.select_only(instance.instance_id),
+                        Err(error) => {
+                            self.edit_status = Some(format!(
+                                "Text Box was created, but durable selection could not bind: {error}"
+                            ));
+                        }
+                    }
+                    self.enter_canvas_text_mode(created.story_id, created.node_id);
                 }
                 Ok(None) => {}
                 Err(error) => {
