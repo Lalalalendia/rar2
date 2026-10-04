@@ -5,7 +5,8 @@ use pub_editor::{
     EDITOR_PROJECT_VERSION_V0_5, EDITOR_PROJECT_VERSION_V0_6, EDITOR_PROJECT_VERSION_V0_7,
     EDITOR_PROJECT_VERSION_V0_8, EDITOR_PROJECT_VERSION_V0_9, EDITOR_PROJECT_VERSION_V0_10,
     EDITOR_PROJECT_VERSION_V0_11, EDITOR_PROJECT_VERSION_V0_12, EDITOR_PROJECT_VERSION_V0_13,
-    EDITOR_PROJECT_VERSION_V0_14, EditOperation, EditorProject, Sha256Digest,
+    EDITOR_PROJECT_VERSION_V0_14, EDITOR_PROJECT_VERSION_V0_15, EditOperation, EditorProject,
+    Sha256Digest,
     open_mature_0x2c_editor,
 };
 use serde::{Deserialize, Serialize};
@@ -485,6 +486,8 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
 
     for operation in &project.operations {
         let operation_rank = match operation {
+            EditOperation::SetParagraphAlignmentOverride { .. }
+            | EditOperation::ClearParagraphAlignmentOverride { .. } => 15,
             EditOperation::SetTextFormatProperty { .. }
             | EditOperation::ClearTextFormatPropertyOverride { .. } => 14,
             EditOperation::ReorderAuthoredStack { .. } => 13,
@@ -505,6 +508,7 @@ fn cloud_revision_project_schema(project: &EditorProject) -> &'static str {
     }
 
     match rank {
+        15 => EDITOR_PROJECT_VERSION_V0_15,
         14 => EDITOR_PROJECT_VERSION_V0_14,
         13 => EDITOR_PROJECT_VERSION_V0_13,
         12 => EDITOR_PROJECT_VERSION_V0_12,
