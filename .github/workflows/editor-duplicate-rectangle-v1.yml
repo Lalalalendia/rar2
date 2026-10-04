@@ -63,8 +63,8 @@ jobs:
           mkdir -p target/pub-editor-pr-fanout
           if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "duplicate_rectangle=true" >> "$GITHUB_OUTPUT"
-            echo "duplicate_reason=workflow_dispatch_fail_closed" >> "$GITHUB_OUTPUT"
-            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","duplicate_rectangle":true,"duplicate_reason":"workflow_dispatch_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
+            echo "duplicate_reason=non_pr_event_fail_closed" >> "$GITHUB_OUTPUT"
+            printf '%s\n' '{"schema":"chaptera.pub-editor-pr-fanout.v1","duplicate_rectangle":true,"duplicate_reason":"non_pr_event_fail_closed"}' > target/pub-editor-pr-fanout/receipt.json
             exit 0
           fi
           python tools/ci/pub_editor_pr_fanout.py \
