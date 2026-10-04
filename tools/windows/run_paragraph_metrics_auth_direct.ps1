@@ -29,7 +29,7 @@ $ProbeMain = Join-Path $RepoRoot "tools/research-runner/paragraph-metrics-probe/
 
 $PinnedFiles = @(
     [pscustomobject]@{ Path = $Packet; Sha = "c8532d9f2ccc4ca11ec7771e749c8a3ab5244ded" }
-    [pscustomobject]@{ Path = $Operation; Sha = "8339eb6ac719127a64c987e257c45050dfa54245" }
+    [pscustomobject]@{ Path = $Operation; Sha = "a7a8be3e871acd37a2539f1518e2e9822ac2346b" }
     [pscustomobject]@{ Path = $Analyzer; Sha = "bb728c54f250f43c9e8c2f096ede89cd94436860" }
     [pscustomobject]@{ Path = $Prepare; Sha = "0848e8e147dff5dab68065c37d2d73f72f09eb45" }
     [pscustomobject]@{ Path = $Finalize; Sha = "2a97d6f2c8be1265010a744c015ce8d288eb7e75" }
