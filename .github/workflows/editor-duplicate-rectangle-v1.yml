@@ -42,7 +42,7 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Fetch PR head for classification
-        if: ${{ github.event.pull_request.head.sha != '' }}
+        if: ${{ github.event_name == 'pull_request' }}
         shell: bash
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
