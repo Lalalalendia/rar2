@@ -720,38 +720,87 @@ mod tests {
             .collect::<Vec<_>>();
         paths.sort();
 
-        let (path, original, source_hash, mut editor, story_id, frame_id) = paths
-            .into_iter()
-            .find_map(|path| {
-                let original = fs::read(&path).ok()?;
-                let digest = Sha256::digest(&original);
-                let mut digest_bytes = [0_u8; 32];
-                digest_bytes.copy_from_slice(&digest);
-                let source_hash = Sha256Digest::from_bytes(digest_bytes);
-                let editor = open_mature_0x2c_editor(&original, source_hash).ok()?;
-                let visual = pub_viewer::open_mature_0x2c_geometry(
-                    &original,
-                    pub_viewer::viewer_geometry_environment_v0_1(),
-                )
-                .ok()?;
-                let (story_id, frame_id) = visual.text_fragments.iter().find_map(|fragment| {
-                    let mut mode =
-                        enter_explicit_text_mode(&editor, fragment.story_id, fragment.frame_id)
-                            .ok()?;
-                    select_all(&mut mode);
-                    boolean_format_selection_state_v1(
-                        &editor,
-                        &mode,
-                        DesktopBooleanFormatPropertyV1::Bold,
-                    )
-                    .ok()?;
-                    Some((fragment.story_id, fragment.frame_id))
-                })?;
-                Some((path, original, source_hash, editor, story_id, frame_id))
-            })
-            .expect(
-                "pinned real-PUB corpus exposes one Story with bounded complete text-format base",
-            );
+        let mut rejection_counts = std::collections::BTreeMap::<String, usize>::new();
+        let mut inspected_stories = 0_usize;
+        let witness = paths.into_iter().find_map(|path| {
+            let original = fs::read(&path).ok()?;
+            let digest = Sha256::digest(&original);
+            let mut digest_bytes = [0_u8; 32];
+            digest_bytes.copy_from_slice(&digest);
+            let source_hash = Sha256Digest::from_bytes(digest_bytes);
+            let editor = match open_mature_0x2c_editor(&original, source_hash) {
+                Ok(editor) => editor,
+                Err(error) => {
+                    *rejection_counts
+                        .entry(format!("open_editor:{error}"))
+                        .or_default() += 1;
+                    return None;
+                }
+            };
+            let visual = match pub_viewer::open_mature_0x2c_geometry(
+                &original,
+                pub_viewer::viewer_geometry_environment_v0_1(),
+            ) {
+                Ok(visual) => visual,
+                Err(error) => {
+                    *rejection_counts
+                        .entry(format!("open_viewer:{error}"))
+                        .or_default() += 1;
+                    return None;
+                }
+            };
+
+            let candidate = visual.text_fragments.iter().find_map(|fragment| {
+                inspected_stories += 1;
+                if let Err(error) = editor.source_text_format_overlay_v1(fragment.story_id) {
+                    *rejection_counts
+                        .entry(format!("source_overlay:{error}"))
+                        .or_default() += 1;
+                    return None;
+                }
+
+                let mut mode = match enter_explicit_text_mode(
+                    &editor,
+                    fragment.story_id,
+                    fragment.frame_id,
+                ) {
+                    Ok(mode) => mode,
+                    Err(error) => {
+                        *rejection_counts
+                            .entry(format!("enter_text_mode:{error}"))
+                            .or_default() += 1;
+                        return None;
+                    }
+                };
+                select_all(&mut mode);
+                match boolean_format_selection_state_v1(
+                    &editor,
+                    &mode,
+                    DesktopBooleanFormatPropertyV1::Bold,
+                ) {
+                    Ok(_) => Some((fragment.story_id, fragment.frame_id)),
+                    Err(error) => {
+                        *rejection_counts
+                            .entry(format!("bold_query:{error}"))
+                            .or_default() += 1;
+                        None
+                    }
+                }
+            })?;
+            let (story_id, frame_id) = candidate;
+            Some((path, original, source_hash, editor, story_id, frame_id))
+        });
+
+        let (path, original, source_hash, mut editor, story_id, frame_id) =
+            witness.unwrap_or_else(|| {
+                eprintln!("text-format admission census inspected {inspected_stories} placed Stories");
+                for (reason, count) in &rejection_counts {
+                    eprintln!("text-format rejection {count}x: {reason}");
+                }
+                panic!(
+                    "pinned real-PUB corpus exposes no Story with bounded complete text-format base"
+                );
+            });
 
         let source_text = editor.graph().stories[&story_id].text.clone();
         let operations_before = editor.operations().len();
