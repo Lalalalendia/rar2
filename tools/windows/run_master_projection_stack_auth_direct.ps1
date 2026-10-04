@@ -119,6 +119,67 @@ try {
     }
 
     $result = Get-Content -LiteralPath $analysis -Raw | ConvertFrom-Json
+    if ([string]$result.schema -ne "chaptera.master-projection-stack-auth.v1") {
+        throw "Unexpected stack receipt schema: $($result.schema)"
+    }
+    if ([string]$result.experiment_id -ne "MASTER-PROJECTION-STACK-AUTH-01") {
+        throw "Unexpected stack experiment identity: $($result.experiment_id)"
+    }
+
+    $allowedVerdicts = @(
+        "save_as_picture_master_visibility_not_proven",
+        "page_local_above_master",
+        "master_above_page_local",
+        "ambiguous_or_creation_order_sensitive"
+    )
+    $verdict = [string]$result.verdict
+    if ($allowedVerdicts -notcontains $verdict) {
+        throw "Unexpected stack oracle verdict: $verdict"
+    }
+
+    $arms = @($result.arms)
+    if ($arms.Count -ne 2) {
+        throw "Stack oracle must return exactly two creation-order arms."
+    }
+    $creationOrders = @($arms | ForEach-Object { [string]$_.creation_order } | Sort-Object -Unique)
+    if ($creationOrders.Count -ne 2 -or $creationOrders -notcontains "master_first" -or $creationOrders -notcontains "page_first") {
+        throw "Stack oracle creation-order arms are incomplete or duplicated."
+    }
+    $armWinners = @($arms | ForEach-Object { [string]$_.overlap.winner })
+    foreach ($winner in $armWinners) {
+        if ($winner -notin @("master", "page_local", "ambiguous")) {
+            throw "Unexpected stack arm winner: $winner"
+        }
+    }
+    $uniqueWinners = @($armWinners | Sort-Object -Unique)
+    $masterVisible = [bool]$result.master_visibility_control.master_visible
+
+    switch ($verdict) {
+        "save_as_picture_master_visibility_not_proven" {
+            if ($masterVisible) {
+                throw "Visibility-not-proven verdict contradicts positive master visibility control."
+            }
+        }
+        "page_local_above_master" {
+            if (-not $masterVisible -or $uniqueWinners.Count -ne 1 -or $uniqueWinners[0] -ne "page_local") {
+                throw "page_local_above_master verdict contradicts arm winners or visibility control."
+            }
+        }
+        "master_above_page_local" {
+            if (-not $masterVisible -or $uniqueWinners.Count -ne 1 -or $uniqueWinners[0] -ne "master") {
+                throw "master_above_page_local verdict contradicts arm winners or visibility control."
+            }
+        }
+        "ambiguous_or_creation_order_sensitive" {
+            if (-not $masterVisible) {
+                throw "Ambiguous/order-sensitive verdict requires the master visibility control to pass."
+            }
+            if ($uniqueWinners.Count -eq 1 -and $uniqueWinners[0] -in @("master", "page_local")) {
+                throw "Ambiguous/order-sensitive verdict contradicts a stable two-arm winner."
+            }
+        }
+    }
+
     if ([string]$result.source.sha256 -ne $ExpectedSourceSha256) {
         throw "Stack receipt source identity mismatch."
     }
