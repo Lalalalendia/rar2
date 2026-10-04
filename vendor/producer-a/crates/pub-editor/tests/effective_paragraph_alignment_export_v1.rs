@@ -86,8 +86,14 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
     session
         .clear_paragraph_alignment_override_v1(paragraph_ids.clone())
         .expect("clear full-Story Center override");
-    assert_eq!(export_counts(&session, EditorEditableTarget::Idml), source_idml);
-    assert_eq!(export_counts(&session, EditorEditableTarget::Odg), source_odg);
+    assert_eq!(
+        export_counts(&session, EditorEditableTarget::Idml),
+        source_idml
+    );
+    assert_eq!(
+        export_counts(&session, EditorEditableTarget::Odg),
+        source_odg
+    );
 
     session
         .set_paragraph_alignment_override_v1(
@@ -95,11 +101,13 @@ fn real_carlton_effective_full_story_alignment_drives_idml_and_odg() {
             AuthoredParagraphAlignmentValueV1::Left,
         )
         .expect("set unsupported Left override");
-    assert!(!session
-        .effective_full_story_paragraph_alignment_v1()
-        .expect("derive full-Story alignment after Left override")
-        .iter()
-        .any(|item| item.story_id == right.story_id));
+    assert!(
+        !session
+            .effective_full_story_paragraph_alignment_v1()
+            .expect("derive full-Story alignment after Left override")
+            .iter()
+            .any(|item| item.story_id == right.story_id)
+    );
 
     let left_idml = export_counts(&session, EditorEditableTarget::Idml);
     let left_odg = export_counts(&session, EditorEditableTarget::Odg);
