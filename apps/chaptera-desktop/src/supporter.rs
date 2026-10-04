@@ -343,6 +343,16 @@ impl SupporterState {
         self.meaningful_successes_since_prompt >= REQUIRED_SUCCESSES_AFTER_PROMPT
     }
 
+    pub(crate) fn current_prompt_impression_index(&self, now_unix: i64) -> Option<u8> {
+        if self.last_prompt_at_unix.is_none() {
+            return None;
+        }
+
+        u8::try_from(self.recent_prompt_count(now_unix))
+            .ok()
+            .filter(|index| (1..=MAX_PROMPTS_PER_WINDOW as u8).contains(index))
+    }
+
     pub(crate) fn record_prompt_shown(&mut self, now_unix: i64) {
         let now_unix = now_unix.max(0);
         self.recent_prompt_unix
