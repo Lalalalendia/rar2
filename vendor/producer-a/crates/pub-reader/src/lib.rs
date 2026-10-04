@@ -21,6 +21,8 @@ mod intake_protocol;
 mod legacy22_graph;
 mod legacy22_noquill_graph;
 mod legacy22_page_role;
+#[cfg(feature = "master-authority-bridge")]
+mod master_bridge;
 mod mature_wmf;
 mod ole_presentation;
 mod resolve;
@@ -87,6 +89,10 @@ pub use legacy22_noquill_graph::{
 pub use legacy22_page_role::{
     LEGACY22_PAGE_ROLE_OBSERVATION_SCHEMA_V1, Legacy22PageListEntryObservationV1,
     Legacy22PageRoleObservationReceiptV1, analyze_legacy_0x22_page_roles,
+};
+#[cfg(feature = "master-authority-bridge")]
+pub use master_bridge::{
+    PubMasterProjectionBridgeV1, build_mature_0x2c_master_projection_bridge_v1,
 };
 pub use mature_wmf::{
     MATURE_OFFICEART_WMF_PREVIEW_SOURCE_V1, PubMatureOfficeArtWmfPreviewBundle,
@@ -442,6 +448,10 @@ pub struct PubPageRoleObservation {
     pub oid_dword1: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_master_seq_num: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_master_field_id: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_master_block_type: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_master_raw_type: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1097,6 +1107,8 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
         let chunk = chunk_for_reference(contents_stream.clone(), &contents, reference)?;
         let mut oid = None;
         let mut applied_master_seq_num = None;
+        let mut applied_master_field_id = None;
+        let mut applied_master_block_type = None;
         let mut pgt_type = None;
 
         for field in &chunk.fields {
@@ -1117,6 +1129,14 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
                         bail!("PAGE {} field0x0D has inconsistent body", entry.handle);
                     };
                     applied_master_seq_num = Some(*value);
+                    applied_master_field_id = Some(field.id);
+                    applied_master_block_type = Some(field.block_type);
+                }
+                (0x0d, actual_wire) => {
+                    bail!(
+                        "PAGE {} OplPd.OhpdMaster field0x0D uses wire 0x{actual_wire:02X}, expected 0x{BLOCK_TYPE_REFERENCE_U32:02X}",
+                        entry.handle
+                    );
                 }
                 (0x10, BLOCK_TYPE_U32) => {
                     if pgt_type.is_some() {
@@ -1155,6 +1175,8 @@ pub fn analyze_mature_0x2c_page_roles<R: Read + Seek>(
             oid_dword0: oid.map(|value| value.0),
             oid_dword1: oid.map(|value| value.1),
             applied_master_seq_num,
+            applied_master_field_id,
+            applied_master_block_type,
             applied_master_raw_type,
             pgt_type,
             previous_document_entry_seq_num: previous_document_entry
