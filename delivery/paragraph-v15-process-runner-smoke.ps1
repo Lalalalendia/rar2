@@ -51,3 +51,4 @@ try {
 
   Write-Host 'PARAGRAPH V15 PROCESS RUNNER PASS'
 } finally { Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue }
+# trigger Windows PowerShell smoke
