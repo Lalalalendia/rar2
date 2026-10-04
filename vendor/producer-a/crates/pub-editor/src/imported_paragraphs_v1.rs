@@ -1,7 +1,7 @@
 use crate::{EditorSession, story_state_id_v1};
 use pub_model::{
-    AuthorityClass, ParagraphId, ReadConfidence, Sha256Digest, SourceDerivedIdInput, SourceRole,
-    StoryId, TextRange, derive_source_canonical_id,
+    AuthorityClass, ParagraphId, ReadConfidence, Sha256Digest, SourceDerivedIdInput,
+    SourceDescriptor, SourceRef, SourceRole, Story, StoryId, TextRange, derive_source_canonical_id,
 };
 use std::collections::BTreeSet;
 use std::fmt;
@@ -84,7 +84,7 @@ impl EditorSession {
                 continue;
             };
             let protected_terminal_cr =
-                imported_mature_quill_terminal_cr_is_proven_v1(self, *story_id);
+                imported_mature_quill_terminal_cr_is_proven_v1(&self.graph.source, story);
             if story.text.ends_with('\r') && !protected_terminal_cr {
                 return Err(
                     ImportedParagraphProjectionErrorV1::TerminalCrProvenanceUnknown {
@@ -174,17 +174,13 @@ fn derive_imported_paragraph_id_v1(
 // SYID/TEXT refs sharing one persisted Story object key. Never infer from a
 // trailing U+000D alone.
 fn imported_mature_quill_terminal_cr_is_proven_v1(
-    session: &EditorSession,
-    story_id: StoryId,
+    source: &SourceDescriptor,
+    story: &Story,
 ) -> bool {
-    let Some(story) = session.graph.stories.get(&story_id) else {
-        return false;
-    };
     if !story.text.ends_with('\r') {
         return false;
     }
 
-    let source = &session.graph.source;
     if source.format != "pub"
         || source.format_version.as_deref() != Some("0x2c")
         || !source.adapter_version.starts_with("pub-rs/")
@@ -247,6 +243,75 @@ mod tests {
 
     fn source_hash() -> Sha256Digest {
         Sha256Digest::from_bytes([0x24; 32])
+    }
+
+    fn source_descriptor() -> SourceDescriptor {
+        SourceDescriptor {
+            format: "pub".to_owned(),
+            format_version: Some("0x2c".to_owned()),
+            adapter_version: "pub-rs/test".to_owned(),
+            source_hash: source_hash(),
+        }
+    }
+
+    fn quill_ref(role: SourceRole, path: &str, object_key: &str) -> SourceRef {
+        SourceRef {
+            format: "pub".to_owned(),
+            adapter_version: "pub-rs/test".to_owned(),
+            source_hash: source_hash(),
+            carrier: pub_reader::QUILL_STREAM_PATH.to_owned(),
+            object_key: Some(object_key.to_owned()),
+            path: Some(path.to_owned()),
+            byte_range: None,
+            role,
+            authority: AuthorityClass::Authoritative,
+            confidence: Some(ReadConfidence::Exact),
+        }
+    }
+
+    fn source_story(text: &str, source_refs: Vec<SourceRef>) -> Story {
+        Story {
+            id: story_id(),
+            text: text.to_owned(),
+            paragraphs: Vec::new(),
+            runs: Vec::new(),
+            fields: Vec::new(),
+            hyperlinks: Vec::new(),
+            source_refs,
+        }
+    }
+
+    #[test]
+    fn terminal_cr_protection_requires_matching_exact_quill_story_refs() {
+        let source = source_descriptor();
+        let proven = source_story(
+            "alpha\r",
+            vec![
+                quill_ref(SourceRole::Relation, "SYID", "quill/syid/7"),
+                quill_ref(SourceRole::Semantic, "TEXT", "quill/syid/7"),
+            ],
+        );
+        assert!(imported_mature_quill_terminal_cr_is_proven_v1(
+            &source, &proven
+        ));
+
+        let trailing_cr_only = source_story("alpha\r", Vec::new());
+        assert!(!imported_mature_quill_terminal_cr_is_proven_v1(
+            &source,
+            &trailing_cr_only
+        ));
+
+        let mismatched = source_story(
+            "alpha\r",
+            vec![
+                quill_ref(SourceRole::Relation, "SYID", "quill/syid/7"),
+                quill_ref(SourceRole::Semantic, "TEXT", "quill/syid/8"),
+            ],
+        );
+        assert!(!imported_mature_quill_terminal_cr_is_proven_v1(
+            &source,
+            &mismatched
+        ));
     }
 
     #[test]
