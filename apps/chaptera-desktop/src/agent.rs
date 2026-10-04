@@ -2250,6 +2250,34 @@ fn operation_summary(operation: &EditOperation) -> Value {
             "before_state_hash":before_state_hash,
             "after_state_hash":after_state_hash
         }),
+        EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids,
+            value,
+            before,
+            after,
+        } => json!({
+            "kind":"set_paragraph_alignment_override",
+            "paragraph_ids":paragraph_ids
+                .iter()
+                .map(|paragraph_id| paragraph_id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "value":value,
+            "before":before,
+            "after":after
+        }),
+        EditOperation::ClearParagraphAlignmentOverride {
+            paragraph_ids,
+            before,
+            after,
+        } => json!({
+            "kind":"clear_paragraph_alignment_override",
+            "paragraph_ids":paragraph_ids
+                .iter()
+                .map(|paragraph_id| paragraph_id.as_canonical().to_string())
+                .collect::<Vec<_>>(),
+            "before":before,
+            "after":after
+        }),
     }
 }
 
@@ -2433,6 +2461,33 @@ mod tests {
             summary["text_preset"]["resource_id"],
             "chaptera.desktop.fallback-font.ubuntu-light.v1"
         );
+    }
+
+    #[test]
+    fn paragraph_alignment_operation_summary_is_explicit_and_source_safe() {
+        let paragraph_id: pub_editor::ParagraphId =
+            serde_json::from_str("\"44444444-4444-4444-8444-444444444444\"").unwrap();
+        let operation = EditOperation::SetParagraphAlignmentOverride {
+            paragraph_ids: vec![paragraph_id],
+            value: pub_editor::AuthoredParagraphAlignmentValueV1::Center,
+            before: vec![pub_editor::ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id,
+                value: None,
+            }],
+            after: vec![pub_editor::ParagraphAlignmentOverrideSnapshotV1 {
+                paragraph_id,
+                value: Some(pub_editor::AuthoredParagraphAlignmentValueV1::Center),
+            }],
+        };
+
+        let summary = operation_summary(&operation);
+        assert_eq!(summary["kind"], "set_paragraph_alignment_override");
+        assert_eq!(
+            summary["paragraph_ids"][0],
+            paragraph_id.as_canonical().to_string()
+        );
+        assert_eq!(summary["value"], "center");
+        assert!(summary.get("story_text").is_none());
     }
 
     #[test]
