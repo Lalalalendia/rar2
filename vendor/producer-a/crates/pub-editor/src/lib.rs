@@ -547,6 +547,41 @@ impl fmt::Display for EditorFixedImageResourceError {
 
 impl std::error::Error for EditorFixedImageResourceError {}
 
+/// Private handoff for fixed-output assembly after authoritative Rust replay.
+///
+/// current_graph is intentionally not renderer-safe because it can retain
+/// source provenance. A downstream bridge must project it to a source-neutral
+/// Scene before invoking a PDF backend.
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorFixedOutputStateV1 {
+    pub schema_version: String,
+    pub source_hash: Sha256Digest,
+    pub project_state_id: String,
+    pub current_graph: PubResolvedGraph,
+    pub image_resources: Vec<EditorFixedImageResourceV1>,
+}
+
+#[derive(Debug)]
+pub enum EditorFixedOutputStateError {
+    Session(EditorError),
+    Project(EditorProjectError),
+    ImageResources(EditorFixedImageResourceError),
+}
+
+impl fmt::Display for EditorFixedOutputStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Session(error) => write!(formatter, "current editor session is invalid: {error}"),
+            Self::Project(error) => write!(formatter, "current EditorProject is invalid: {error}"),
+            Self::ImageResources(error) => {
+                write!(formatter, "current fixed-output image resources are invalid: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EditorFixedOutputStateError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditorSourceImageAsset {
     mime: String,
@@ -2092,6 +2127,29 @@ impl EditorSession {
             resource.node_ids.dedup();
         }
         Ok(projected)
+    }
+
+    /// Snapshot the already-replayed authoritative current editor state for
+    /// private fixed-output assembly. This does not reopen or reparse the source.
+    pub fn fixed_output_state_v1(
+        &self,
+    ) -> Result<EditorFixedOutputStateV1, EditorFixedOutputStateError> {
+        self.validate_source_identity()
+            .map_err(EditorFixedOutputStateError::Session)?;
+        let project = self
+            .try_project()
+            .map_err(EditorFixedOutputStateError::Project)?;
+        let image_resources = self
+            .fixed_image_resources_v1()
+            .map_err(EditorFixedOutputStateError::ImageResources)?;
+
+        Ok(EditorFixedOutputStateV1 {
+            schema_version: "chaptera.editor-fixed-output-private-state.v1".into(),
+            source_hash: self.source_hash,
+            project_state_id: project.state_id_v1(),
+            current_graph: self.graph.clone(),
+            image_resources,
+        })
     }
 
     pub fn import_replacement_asset(
@@ -5986,5 +6044,38 @@ mod asset_reachability_tests {
         assert_eq!(resources[0].mime, "image/jpeg");
         assert_eq!(resources[0].bytes, bytes);
         assert_eq!(resources[0].node_ids, vec![node_a, node_b]);
+    }
+
+    #[test]
+    fn fixed_output_state_snapshots_authoritative_rust_state_without_replay() {
+        let mut session = EditorSession::new(fixed_image_test_graph()).expect("session");
+        let node_id: NodeId =
+            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+                .expect("canonical NodeId");
+        let replacement_bytes = b"\x89PNG\r\n\x1a\ncurrent-state".to_vec();
+        let replacement_sha = session
+            .import_replacement_asset("image/png", replacement_bytes.clone())
+            .expect("replacement import");
+        let operation = EditOperation::ReplaceImage {
+            node_id,
+            before_asset: None,
+            after_asset: replacement_sha,
+        };
+        session.image_replacements.insert(node_id, replacement_sha);
+        session.undo.push(operation);
+
+        let expected_project_state = session.project().state_id_v1();
+        let state = session.fixed_output_state_v1().expect("fixed output state");
+
+        assert_eq!(
+            state.schema_version,
+            "chaptera.editor-fixed-output-private-state.v1"
+        );
+        assert_eq!(state.source_hash, session.source_hash());
+        assert_eq!(state.project_state_id, expected_project_state);
+        assert_eq!(state.current_graph, *session.graph());
+        assert_eq!(state.image_resources.len(), 1);
+        assert_eq!(state.image_resources[0].node_ids, vec![node_id]);
+        assert_eq!(state.image_resources[0].bytes, replacement_bytes);
     }
 }
