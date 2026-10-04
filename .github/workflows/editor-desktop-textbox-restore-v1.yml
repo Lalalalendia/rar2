@@ -3,10 +3,12 @@ name: Editor Desktop TextBox Restore V1
 on:
   pull_request:
     paths:
-      - "apps/chaptera-desktop/src/main.rs"
       - "apps/chaptera-desktop/src/text_box_creation.rs"
+      - "apps/chaptera-desktop/src/text_box_creation_shell.rs"
+      - "apps/chaptera-desktop/src/text_box_creation_gui_tests.rs"
       - "apps/chaptera-desktop/src/text_session.rs"
       - "apps/chaptera-desktop/src/text_session_shell.rs"
+      - "apps/chaptera-desktop/src/selection_keyboard_shell.rs"
       - "apps/chaptera-desktop/Cargo.toml"
       - "crates/chaptera-canvas-creation-interaction/**"
       - "crates/chaptera-desktop-fallback-font-resource/**"
