@@ -1,0 +1,63 @@
+name: struct-txn-escher-01-tooling
+
+on:
+  push:
+    branches:
+      - research/struct-txn-escher-01-current
+    paths:
+      - tools/research-runner/experiments/struct-txn-escher-01.packet.json
+      - tools/research-runner/operations/struct_txn_escher_01.ps1
+      - tools/windows/run_struct_txn_escher_01_direct.ps1
+      - vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+      - .github/workflows/struct-txn-escher-01-tooling.yml
+  pull_request:
+    paths:
+      - tools/research-runner/experiments/struct-txn-escher-01.packet.json
+      - tools/research-runner/operations/struct_txn_escher_01.ps1
+      - tools/windows/run_struct_txn_escher_01_direct.ps1
+      - vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+      - .github/workflows/struct-txn-escher-01-tooling.yml
+
+jobs:
+  windows-contract:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse experiment packet
+        shell: powershell
+        run: |
+          $packet = Get-Content tools\research-runner\experiments\struct-txn-escher-01.packet.json -Raw | ConvertFrom-Json
+          if ([string]$packet.id -ne 'STRUCT-TXN-ESCHER-01') { throw 'wrong experiment id' }
+          if ([string]$packet.operation.script -ne 'tools/research-runner/operations/struct_txn_escher_01.ps1') { throw 'wrong operation path' }
+      - name: Parse PowerShell files
+        shell: powershell
+        run: |
+          $paths = @(
+            'tools\research-runner\operations\struct_txn_escher_01.ps1',
+            'tools\windows\run_struct_txn_escher_01_direct.ps1'
+          )
+          foreach ($path in $paths) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+  rust-helper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+          components: rustfmt
+      - name: Rustfmt helper
+        run: rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/bin/structural_base_manifest.rs
+      - name: Compile structural helper
+        working-directory: vendor/producer-a
+        run: cargo check -p pub-reader --bin structural_base_manifest
