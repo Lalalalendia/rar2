@@ -178,6 +178,14 @@ class ResidualCensusTests(unittest.TestCase):
         self.assertEqual(census["reason_node_counts"]["table_present"], 1)
         self.assertEqual(census["reason_node_counts"]["shared_resolved_unresolved_color"], 1)
         self.assertEqual(
+            census["reason_node_counts"]["shared_resolved_unresolved_color:missing_rgb"],
+            1,
+        )
+        self.assertEqual(
+            census["line_reason_counts"]["unresolved_text_color:missing_rgb"],
+            1,
+        )
+        self.assertEqual(
             census["reason_node_counts"]["shared_resolved_shaped_spans_only_or_partial"],
             1,
         )
@@ -218,6 +226,33 @@ class ResidualCensusTests(unittest.TestCase):
                 0,
                 5,
             )
+        )
+        self.assertEqual(
+            module.color_resolution_for_range(
+                [{"scalar_start": 0, "scalar_end": 5, "color_rgb": None}],
+                0,
+                5,
+            ),
+            "missing_rgb",
+        )
+        self.assertEqual(
+            module.color_resolution_for_range(
+                [
+                    {"scalar_start": 0, "scalar_end": 2, "color_rgb": [1, 2, 3]},
+                    {"scalar_start": 2, "scalar_end": 5, "color_rgb": [9, 9, 9]},
+                ],
+                0,
+                5,
+            ),
+            "mixed_rgb",
+        )
+        self.assertEqual(
+            module.color_resolution_for_range(
+                [{"scalar_start": 0, "scalar_end": 4, "color_rgb": [1, 2, 3]}],
+                0,
+                5,
+            ),
+            "coverage_gap",
         )
 
 
