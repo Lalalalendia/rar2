@@ -140,7 +140,9 @@ impl EditorSession {
                 | EditOperation::CreateTextBox { .. }
                 | EditOperation::CreateShape { .. }
                 | EditOperation::DeleteNode { .. }
-                | EditOperation::ReorderAuthoredStack { .. } => {}
+                | EditOperation::ReorderAuthoredStack { .. }
+                | EditOperation::SetTextFormatProperty { .. }
+                | EditOperation::ClearTextFormatPropertyOverride { .. } => {}
             }
         }
 
@@ -236,7 +238,9 @@ impl EditorSession {
                 | EditOperation::CreateTextBox { .. }
                 | EditOperation::CreateShape { .. }
                 | EditOperation::DeleteNode { .. }
-                | EditOperation::ReorderAuthoredStack { .. } => {
+                | EditOperation::ReorderAuthoredStack { .. }
+                | EditOperation::SetTextFormatProperty { .. }
+                | EditOperation::ClearTextFormatPropertyOverride { .. } => {
                     requirements.extend(operation.persistence_requirements());
                 }
             }
