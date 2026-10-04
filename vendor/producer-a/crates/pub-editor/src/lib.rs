@@ -553,8 +553,7 @@ fn current_image_resources_v1(
     replacement_assets: &BTreeMap<Sha256Digest, EditorReplacementAsset>,
     image_replacements: &BTreeMap<NodeId, Sha256Digest>,
 ) -> Result<Vec<EditorCurrentImageResourceV1>, EditorCurrentImageResourceError> {
-    let mut resources =
-        BTreeMap::<ResourceId, (String, Vec<u8>, BTreeSet<NodeId>)>::new();
+    let mut resources = BTreeMap::<ResourceId, (String, Vec<u8>, BTreeSet<NodeId>)>::new();
 
     for (node_id, resource_id) in source_image_nodes {
         if image_replacements.contains_key(node_id) {
@@ -587,9 +586,7 @@ fn current_image_resources_v1(
 
     for (node_id, asset_sha) in image_replacements {
         let asset = replacement_assets.get(asset_sha).ok_or(
-            EditorCurrentImageResourceError::MissingReplacementAsset {
-                sha256: *asset_sha,
-            },
+            EditorCurrentImageResourceError::MissingReplacementAsset { sha256: *asset_sha },
         )?;
         let resource_id = replacement_asset_resource_id(*asset_sha);
         match resources.entry(resource_id) {
@@ -614,12 +611,14 @@ fn current_image_resources_v1(
 
     Ok(resources
         .into_iter()
-        .map(|(resource_id, (mime, bytes, node_ids))| EditorCurrentImageResourceV1 {
-            resource_id,
-            mime,
-            node_ids: node_ids.into_iter().collect(),
-            bytes,
-        })
+        .map(
+            |(resource_id, (mime, bytes, node_ids))| EditorCurrentImageResourceV1 {
+                resource_id,
+                mime,
+                node_ids: node_ids.into_iter().collect(),
+                bytes,
+            },
+        )
         .collect())
 }
 
@@ -5866,9 +5865,8 @@ mod asset_reachability_tests {
 
     #[test]
     fn current_image_resources_replace_source_bytes_without_fallback() {
-        let node_id: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId");
+        let node_id: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
         let source_resource: ResourceId =
             serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
                 .expect("canonical ResourceId");
@@ -5908,18 +5906,14 @@ mod asset_reachability_tests {
 
     #[test]
     fn current_image_resources_group_shared_source_and_replacement_assets() {
-        let node_a: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
-                .expect("canonical NodeId");
-        let node_b: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
-                .expect("canonical NodeId");
-        let node_c: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000003\"")
-                .expect("canonical NodeId");
-        let node_d: NodeId =
-            serde_json::from_str("\"22000000-0000-4000-8000-000000000004\"")
-                .expect("canonical NodeId");
+        let node_a: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000001\"")
+            .expect("canonical NodeId");
+        let node_b: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000002\"")
+            .expect("canonical NodeId");
+        let node_c: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000003\"")
+            .expect("canonical NodeId");
+        let node_d: NodeId = serde_json::from_str("\"22000000-0000-4000-8000-000000000004\"")
+            .expect("canonical NodeId");
         let source_resource: ResourceId =
             serde_json::from_str("\"33000000-0000-4000-8000-000000000001\"")
                 .expect("canonical ResourceId");
