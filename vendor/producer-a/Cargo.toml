@@ -14,6 +14,7 @@ members = [
   "crates/pub-interaction",
   "crates/pub-export",
   "crates/pub-idml",
+  "crates/pub-docx",
   "crates/pub-odg",
   "crates/pub-writer",
   "crates/pub-editor",
