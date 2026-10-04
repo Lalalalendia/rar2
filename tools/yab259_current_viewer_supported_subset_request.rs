@@ -4,7 +4,7 @@ use pub_layout::{
     BoundedShapingDescriptor, ResolvedPhysicalNode, ResolvedSurface, SceneOriginMapping,
     font_fingerprint_sha256,
 };
-use pub_model::{Affine2D, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D};
+use pub_model::{Affine2D, CanonicalId, LengthEmu, NodeId, PageId, RectEmu, ResourceId, Size2D};
 use pub_output::{
     ExplicitFontResource, FixedOutputFontProfile, FontIdentity, OutputFontRequest,
     PreferredEmbedding, plan_output_fonts, read_opentype_embedding_flags,
@@ -42,6 +42,8 @@ struct CurrentPage {
 #[derive(Debug, Deserialize)]
 struct CurrentNode {
     node_id: NodeId,
+    #[serde(default)]
+    projected_scene_instance: Option<CurrentProjectedSceneInstance>,
     bounds: RectEmu,
     #[serde(default)]
     text_bounds: Option<RectEmu>,
@@ -58,6 +60,11 @@ struct CurrentNode {
     text: Option<CurrentText>,
     #[serde(default)]
     table: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentProjectedSceneInstance {
+    instance_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +168,7 @@ struct CurrentShaping {
 struct MappingSummary {
     input_page_count: usize,
     input_node_count: usize,
+    semantic_duplicate_node_id_count: usize,
     mapped_paint_node_count: usize,
     mapped_image_use_count: usize,
     mapped_text_node_count: usize,
@@ -232,6 +240,38 @@ fn checked_sub(left: i64, right: i64, label: &str) -> Result<i64> {
         .with_context(|| format!("{label} overflow"))
 }
 
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn resolved_output_node_id_v1(node: &CurrentNode) -> Result<NodeId> {
+    let Some(instance) = node.projected_scene_instance.as_ref() else {
+        return Ok(node.node_id);
+    };
+    let digest = instance
+        .instance_id
+        .strip_prefix("sha256:")
+        .context("projected scene instance id is not sha256-bound")?;
+    if digest.len() != 64 {
+        bail!("projected scene instance sha256 digest must contain 64 hex digits");
+    }
+    let raw = digest.as_bytes();
+    let mut bytes = [0_u8; 16];
+    for (index, slot) in bytes.iter_mut().enumerate() {
+        let high = hex_nibble(raw[index * 2])
+            .context("projected scene instance sha256 digest contains invalid hex")?;
+        let low = hex_nibble(raw[index * 2 + 1])
+            .context("projected scene instance sha256 digest contains invalid hex")?;
+        *slot = (high << 4) | low;
+    }
+    Ok(NodeId::from_canonical(CanonicalId::from_bytes(bytes)))
+}
+
 fn main() -> Result<()> {
     let mut raw = String::new();
     io::stdin()
@@ -248,9 +288,6 @@ fn main() -> Result<()> {
     let actual_node_count = input.pages.iter().map(|page| page.nodes.len()).sum::<usize>();
     if input.census.node_count != actual_node_count {
         bail!("current Viewer packet node census differs from page plans");
-    }
-    if input.census.duplicate_node_id_count != 0 {
-        bail!("current Viewer supported-subset mapping requires unique effective NodeIds");
     }
     if input.font.bytes.is_empty() {
         bail!("current Viewer explicit font bytes are required");
@@ -272,6 +309,7 @@ fn main() -> Result<()> {
     let mut summary = MappingSummary {
         input_page_count: input.pages.len(),
         input_node_count: actual_node_count,
+        semantic_duplicate_node_id_count: input.census.duplicate_node_id_count,
         ..MappingSummary::default()
     };
 
@@ -293,18 +331,19 @@ fn main() -> Result<()> {
         });
 
         for node in &page.nodes {
-            if !seen_nodes.insert(node.node_id) {
-                bail!("current Viewer packet contains duplicate effective NodeId");
+            let resolved_node_id = resolved_output_node_id_v1(node)?;
+            if !seen_nodes.insert(resolved_node_id) {
+                bail!("current Viewer packet contains duplicate resolved output NodeId");
             }
             nodes.push(ResolvedPhysicalNode {
-                origin: node.node_id,
+                origin: resolved_node_id,
                 parent_origin: page.page_id.into_canonical(),
                 bounds: node.bounds,
                 transform: node.transform.clone(),
             });
             origin_mapping.push(SceneOriginMapping {
                 authoring_origin: node.node_id.into_canonical(),
-                resolved_node_origin: node.node_id,
+                resolved_node_origin: resolved_node_id,
             });
 
             if node.transform != Affine2D::identity() {
@@ -319,7 +358,7 @@ fn main() -> Result<()> {
 
             if node.solid_fill_rgb.is_some() || node.solid_line.is_some() {
                 node_paints.push(FixedNodePaint {
-                    node_id: node.node_id,
+                    node_id: resolved_node_id,
                     fill_rgb: node.solid_fill_rgb,
                     stroke: node.solid_line.as_ref().map(|line| FixedStroke {
                         rgb: line.rgb,
@@ -348,7 +387,7 @@ fn main() -> Result<()> {
                     image_uses
                         .entry(image.resource_id)
                         .or_default()
-                        .push(node.node_id);
+                        .push(resolved_node_id);
                     summary.mapped_image_use_count += 1;
                 }
             }
@@ -457,7 +496,7 @@ fn main() -> Result<()> {
 
                         used_glyph_ids.extend(shaping.glyphs.iter().map(|glyph| glyph.glyph_id));
                         text_runs.push(FixedTextRun {
-                            node_id: node.node_id,
+                            node_id: resolved_node_id,
                             scalar_base: line.scalar_start,
                             logical_text: line.text.clone(),
                             shaped: BoundedShapedText {
@@ -475,7 +514,7 @@ fn main() -> Result<()> {
                     }
 
                     if node_mapped {
-                        mapped_text_nodes.insert(node.node_id);
+                        mapped_text_nodes.insert(resolved_node_id);
                     }
                 }
             }

@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use chaptera_scene_instance::SceneProjectionKindV1;
 use chaptera_viewer_render_plan::{
     ExplicitRenderTextFontResourceV1, NodeRenderPlanV1, RenderDecorativeBorderSlotV1,
-    RenderTextFragmentV1, RenderTextLayoutDispositionV1,
+    RenderTableV1, RenderTextFragmentV1, RenderTextLayoutDispositionV1,
     build_page_render_plan_with_text_layout_resolvers_v1, effective_source_font_family_v1,
     layout_decorative_border_v1, uniform_text_color_rgb_v1,
 };
@@ -437,9 +438,21 @@ fn reader_text_layout_from_render_text(
     (Some(mapped), partial)
 }
 
-fn projected_node_kind(node: &NodeRenderPlanV1) -> Result<&'static str, String> {
+fn projected_node_kind(
+    node: &NodeRenderPlanV1,
+    projection_kind: SceneProjectionKindV1,
+) -> Result<&'static str, String> {
     if node.table.is_some() {
-        return Err("projected Scene tables are not admitted by the Cmo consumer".to_owned());
+        return match projection_kind {
+            SceneProjectionKindV1::InheritedMaster => Ok("table"),
+            SceneProjectionKindV1::CmoStorySlot => {
+                Err("projected Scene tables are not admitted by the Cmo consumer".to_owned())
+            }
+            SceneProjectionKindV1::DirectPageLocal => Err(
+                "direct-page-local Scene instances must not enter the projected consumer"
+                    .to_owned(),
+            ),
+        };
     }
     match (node.text.is_some(), node.image.is_some()) {
         (true, false) => Ok("text_frame"),
@@ -450,6 +463,40 @@ fn projected_node_kind(node: &NodeRenderPlanV1) -> Result<&'static str, String> 
             node.node_id
         )),
     }
+}
+
+fn reader_table_from_render(table: &RenderTableV1) -> Result<ReaderTableV1, String> {
+    let cells = table
+        .cells
+        .iter()
+        .map(|cell| {
+            let bounds = cell.bounds.as_ref().map(rect_from_serialized).transpose()?;
+            if bounds
+                .as_ref()
+                .is_some_and(|bounds| bounds.width <= 0 || bounds.height <= 0)
+            {
+                return Err("projected table cell has non-positive resolved bounds".to_owned());
+            }
+            Ok(ReaderTableCellV1 {
+                cell_id: serialized_string(&cell.id, "projected table cell id")?,
+                row: cell.row,
+                column: cell.column,
+                row_span: cell.row_span,
+                column_span: cell.column_span,
+                text: cell.text.clone(),
+                bounds,
+                fill_rgb: cell.fill_rgb,
+                fill_visible: cell.fill_visible,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ReaderTableV1 {
+        story_id: serialized_string(&table.story_id, "projected table story id")?,
+        rows: table.rows,
+        columns: table.columns,
+        cells,
+        borders: Vec::new(),
+    })
 }
 
 fn insert_projected_nodes_after_targets(
@@ -472,6 +519,47 @@ fn insert_projected_nodes_after_targets(
             "projected Scene instances reference missing target frame(s): {}",
             dangling.join(",")
         ));
+    }
+    Ok(ordered)
+}
+
+fn insert_inherited_master_nodes_before_page_locals(
+    nodes: Vec<ReaderNodeV1>,
+    pages: &[ReaderPageV1],
+    mut inherited_by_page: HashMap<String, Vec<ReaderNodeV1>>,
+) -> Result<Vec<ReaderNodeV1>, String> {
+    let page_ids = pages
+        .iter()
+        .map(|page| page.page_id.clone())
+        .collect::<HashSet<_>>();
+    let inherited_count = inherited_by_page.values().map(Vec::len).sum::<usize>();
+    let mut direct_by_page = HashMap::<String, Vec<ReaderNodeV1>>::new();
+    for node in nodes {
+        if !page_ids.contains(&node.page_id) {
+            return Err(format!(
+                "render node {} targets unknown page {}",
+                node.node_id, node.page_id
+            ));
+        }
+        direct_by_page
+            .entry(node.page_id.clone())
+            .or_default()
+            .push(node);
+    }
+
+    let direct_count = direct_by_page.values().map(Vec::len).sum::<usize>();
+    let mut ordered = Vec::with_capacity(direct_count + inherited_count);
+    for page in pages {
+        if let Some(mut inherited) = inherited_by_page.remove(&page.page_id) {
+            ordered.append(&mut inherited);
+        }
+        if let Some(mut direct) = direct_by_page.remove(&page.page_id) {
+            ordered.append(&mut direct);
+        }
+    }
+
+    if !inherited_by_page.is_empty() || !direct_by_page.is_empty() {
+        return Err("page-local/master lane composition left unresolved page bindings".to_owned());
     }
     Ok(ordered)
 }
@@ -555,6 +643,11 @@ pub fn from_viewer_geometry_with_fonts(
     }
 
     let node_ids = parent_by_node.keys().cloned().collect::<HashSet<_>>();
+    let projected_origin_ids = geometry
+        .projected_instances
+        .iter()
+        .map(|projected| projected.scene_instance.origin_node_id.clone())
+        .collect::<HashSet<_>>();
     let mut page_cache = HashMap::new();
     for node_id in &node_ids {
         resolve_page(
@@ -572,10 +665,11 @@ pub fn from_viewer_geometry_with_fonts(
         .collect::<HashMap<_, _>>();
     for frame in &geometry.story_frames {
         let node_id = serialized_string(&frame.frame_id, "story frame node id")?;
-        if !node_ids.contains(&node_id) {
+        if node_ids.contains(&node_id) {
+            bind_kind(&mut kind_by_node, &node_id, "text_frame")?;
+        } else if !projected_origin_ids.contains(&node_id) {
             return Err(format!("story frame references unknown node {node_id}"));
         }
-        bind_kind(&mut kind_by_node, &node_id, "text_frame")?;
     }
 
     let mut resource_by_node = HashMap::new();
@@ -600,6 +694,9 @@ pub fn from_viewer_geometry_with_fonts(
         for placement in &image.placements {
             let node_id = serialized_string(&placement.node_id, "image placement node id")?;
             if !node_ids.contains(&node_id) {
+                if projected_origin_ids.contains(&node_id) {
+                    continue;
+                }
                 return Err(format!("image placement references unknown node {node_id}"));
             }
             if let Some(window) = placement.source_window.as_ref() {
@@ -644,15 +741,16 @@ pub fn from_viewer_geometry_with_fonts(
 
         for node_id in &image.node_ids {
             let node_id = serialized_string(node_id, "image node id")?;
-            if !node_ids.contains(&node_id) {
-                return Err(format!("image resource references unknown node {node_id}"));
-            }
-            bind_kind(&mut kind_by_node, &node_id, "picture_frame")?;
-            match resource_by_node.insert(node_id.clone(), resource_id.clone()) {
-                Some(existing) if existing != resource_id => {
-                    return Err(format!("node {node_id} has multiple image resources"));
+            if node_ids.contains(&node_id) {
+                bind_kind(&mut kind_by_node, &node_id, "picture_frame")?;
+                match resource_by_node.insert(node_id.clone(), resource_id.clone()) {
+                    Some(existing) if existing != resource_id => {
+                        return Err(format!("node {node_id} has multiple image resources"));
+                    }
+                    _ => {}
                 }
-                _ => {}
+            } else if !projected_origin_ids.contains(&node_id) {
+                return Err(format!("image resource references unknown node {node_id}"));
             }
         }
     }
@@ -677,6 +775,9 @@ pub fn from_viewer_geometry_with_fonts(
     for table in &geometry.tables {
         let node_id = serialized_string(&table.node_id, "table node id")?;
         if !node_ids.contains(&node_id) {
+            if projected_origin_ids.contains(&node_id) {
+                continue;
+            }
             return Err(format!("table references unknown node {node_id}"));
         }
         bind_kind(&mut kind_by_node, &node_id, "table")?;
@@ -732,6 +833,12 @@ pub fn from_viewer_geometry_with_fonts(
     let mut paint_by_node = HashMap::new();
     for paint in &geometry.paints {
         let node_id = serialized_string(&paint.node_id, "paint node id")?;
+        if !node_ids.contains(&node_id) {
+            if projected_origin_ids.contains(&node_id) {
+                continue;
+            }
+            return Err(format!("paint references unknown node {node_id}"));
+        }
         let mapped = ReaderPaintV1 {
             preset_shape: paint.preset_shape.map(|shape| match shape {
                 pub_viewer::ViewerPresetShape::RoundRect => "round_rect",
@@ -749,6 +856,9 @@ pub fn from_viewer_geometry_with_fonts(
     for fragment in &geometry.text_fragments {
         let node_id = serialized_string(&fragment.frame_id, "text fragment frame id")?;
         if !node_ids.contains(&node_id) {
+            if projected_origin_ids.contains(&node_id) {
+                continue;
+            }
             return Err(format!("text fragment references unknown node {node_id}"));
         }
         fragments_by_node.entry(node_id).or_default().push((
@@ -781,6 +891,7 @@ pub fn from_viewer_geometry_with_fonts(
     let mut text_bounds_by_node = HashMap::<String, ReaderRectV1>::new();
     let mut decorative_border_by_node = HashMap::<String, ReaderDecorativeBorderV1>::new();
     let mut projected_nodes_by_target = HashMap::<String, Vec<ReaderNodeV1>>::new();
+    let mut inherited_master_nodes_by_page = HashMap::<String, Vec<ReaderNodeV1>>::new();
     let mut projected_instance_ids = HashSet::<String>::new();
     let mut projected_text_layout_count = 0_usize;
     let mut projected_kind_partial = false;
@@ -909,16 +1020,41 @@ pub fn from_viewer_geometry_with_fonts(
                         instance.instance_id
                     ));
                 }
-                let target_frame_node_id =
-                    serialized_string(&projected.target_frame_node_id, "projected target frame")?;
-                if !node_ids.contains(&target_frame_node_id) {
-                    return Err(format!(
-                        "projected Scene instance {} targets unknown Viewer frame {}",
-                        instance.instance_id, target_frame_node_id
-                    ));
-                }
+                let target_frame_node_id = match instance.projection_kind {
+                    SceneProjectionKindV1::CmoStorySlot => {
+                        let target = projected.target_frame_node_id.as_ref().ok_or_else(|| {
+                            format!(
+                                "Cmo projected Scene instance {} is missing its target frame",
+                                instance.instance_id
+                            )
+                        })?;
+                        let target = serialized_string(target, "projected target frame")?;
+                        if !node_ids.contains(&target) {
+                            return Err(format!(
+                                "projected Scene instance {} targets unknown Viewer frame {}",
+                                instance.instance_id, target
+                            ));
+                        }
+                        Some(target)
+                    }
+                    SceneProjectionKindV1::InheritedMaster => {
+                        if projected.target_frame_node_id.is_some() {
+                            return Err(format!(
+                                "inherited-master Scene instance {} must not fabricate a target frame",
+                                instance.instance_id
+                            ));
+                        }
+                        None
+                    }
+                    SceneProjectionKindV1::DirectPageLocal => {
+                        return Err(format!(
+                            "direct-page-local Scene instance {} entered projected Reader lane",
+                            instance.instance_id
+                        ));
+                    }
+                };
 
-                let kind = projected_node_kind(&node)?;
+                let kind = projected_node_kind(&node, instance.projection_kind)?;
                 projected_kind_partial |= kind == "unknown";
                 let bounds = rect_from_serialized(&node.bounds)?;
                 let text_bounds = node
@@ -982,28 +1118,46 @@ pub fn from_viewer_geometry_with_fonts(
                 if mapped_layout.is_some() {
                     projected_text_layout_count += 1;
                 }
-                projected_nodes_by_target
-                    .entry(target_frame_node_id)
-                    .or_default()
-                    .push(ReaderNodeV1 {
-                        node_id: instance.instance_id.clone(),
-                        origin_node_id: Some(instance.origin_node_id.clone()),
-                        page_id: instance.target_page_id.clone(),
-                        parent_node_id: None,
-                        kind,
-                        bounds,
-                        text_bounds,
-                        transform: transform_from_serialized(&node.transform)?,
-                        paint,
-                        decorative_border,
-                        resource_id,
-                        image_source_window,
-                        image_content_rotation_degrees: None,
-                        image_recolor: None,
-                        table: None,
-                        text: node.text.as_ref().map(|text| text.text.clone()),
-                        text_layout: mapped_layout,
-                    });
+                let projected_node = ReaderNodeV1 {
+                    node_id: instance.instance_id.clone(),
+                    origin_node_id: Some(instance.origin_node_id.clone()),
+                    page_id: instance.target_page_id.clone(),
+                    parent_node_id: None,
+                    kind,
+                    bounds,
+                    text_bounds,
+                    transform: transform_from_serialized(&node.transform)?,
+                    paint,
+                    decorative_border,
+                    resource_id,
+                    image_source_window,
+                    image_content_rotation_degrees: None,
+                    image_recolor: None,
+                    table: node
+                        .table
+                        .as_ref()
+                        .map(reader_table_from_render)
+                        .transpose()?,
+                    text: node.text.as_ref().map(|text| text.text.clone()),
+                    text_layout: mapped_layout,
+                };
+                match instance.projection_kind {
+                    SceneProjectionKindV1::CmoStorySlot => {
+                        projected_nodes_by_target
+                            .entry(target_frame_node_id.expect("validated Cmo target frame"))
+                            .or_default()
+                            .push(projected_node);
+                    }
+                    SceneProjectionKindV1::InheritedMaster => {
+                        inherited_master_nodes_by_page
+                            .entry(instance.target_page_id.clone())
+                            .or_default()
+                            .push(projected_node);
+                    }
+                    SceneProjectionKindV1::DirectPageLocal => unreachable!(
+                        "direct-page-local projection was rejected before Reader node construction"
+                    ),
+                }
                 continue;
             }
 
@@ -1098,6 +1252,17 @@ pub fn from_viewer_geometry_with_fonts(
         // Persisted source page-paint receipts do not claim a total order across
         // projected Cmo visuals. Preserve direct-node source order and the
         // render-plan target-frame anchor while keeping the overall claim partial.
+        stacking_known = false;
+    }
+    if !inherited_master_nodes_by_page.is_empty() {
+        nodes = insert_inherited_master_nodes_before_page_locals(
+            nodes,
+            &pages,
+            inherited_master_nodes_by_page,
+        )?;
+        // The bounded ordinary master law is master below page-local. Keep the
+        // global fidelity claim conservative because other projected lanes may
+        // still have only partial total-order authority.
         stacking_known = false;
     }
 
@@ -1623,6 +1788,7 @@ mod tests {
         env, fs,
     };
 
+    use chaptera_scene_instance::SceneProjectionKindV1;
     use chaptera_viewer_render_plan::{
         RenderTextLayoutDispositionV1, build_page_render_plan_with_text_layout_resolver_v1,
         build_page_render_plan_with_text_layout_v1, effective_source_font_family_v1,
@@ -1633,11 +1799,11 @@ mod tests {
 
     use super::{
         MAX_INLINE_IMAGE_RESOURCE_BYTES, MAX_INLINE_IMAGE_TOTAL_BYTES,
-        ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPaintV1, ReaderRectV1,
+        ReaderConfiguredFontResourceV1, ReaderNodeV1, ReaderPageV1, ReaderPaintV1, ReaderRectV1,
         ReaderTransformV1, SHARED_FALLBACK_FONT_MIME, base64_encode, bind_visible_paint,
         from_viewer_geometry, from_viewer_geometry_with_fonts, inline_image_data_url,
-        insert_projected_nodes_after_targets, reader_image_resource, shared_text_font_resource,
-        take_direct_render_text,
+        insert_inherited_master_nodes_before_page_locals, insert_projected_nodes_after_targets,
+        reader_image_resource, shared_text_font_resource, take_direct_render_text,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2286,7 +2452,12 @@ mod tests {
                     .expect("exact reference render plan must build");
 
             for node in plan.nodes {
-                let projected = node.projected_scene_instance.is_some();
+                let projected = node
+                    .projected_scene_instance
+                    .as_ref()
+                    .is_some_and(|instance| {
+                        instance.projection_kind == SceneProjectionKindV1::CmoStorySlot
+                    });
                 let Some(text) = node.text else {
                     continue;
                 };
@@ -2556,6 +2727,60 @@ mod tests {
         );
         assert_eq!(ordered[1].origin_node_id.as_deref(), Some("carrier-1"));
         assert_eq!(ordered[2].origin_node_id.as_deref(), Some("carrier-2"));
+    }
+
+    #[test]
+    fn inherited_master_lane_precedes_page_local_without_reordering_within_page() {
+        let pages = vec![
+            ReaderPageV1 {
+                page_id: "page-a".to_owned(),
+                order: 0,
+                width_emu: 100,
+                height_emu: 100,
+            },
+            ReaderPageV1 {
+                page_id: "page-b".to_owned(),
+                order: 1,
+                width_emu: 100,
+                height_emu: 100,
+            },
+        ];
+        let direct = vec![
+            test_reader_node("direct-a1", "page-a"),
+            test_reader_node("direct-a2", "page-a"),
+            test_reader_node("direct-b1", "page-b"),
+        ];
+        let mut master_a1 = test_reader_node("master-a1", "page-a");
+        master_a1.origin_node_id = Some("origin-master-a1".to_owned());
+        let mut master_a2 = test_reader_node("master-a2", "page-a");
+        master_a2.origin_node_id = Some("origin-master-a2".to_owned());
+        let mut master_b1 = test_reader_node("master-b1", "page-b");
+        master_b1.origin_node_id = Some("origin-master-b1".to_owned());
+
+        let ordered = insert_inherited_master_nodes_before_page_locals(
+            direct,
+            &pages,
+            HashMap::from([
+                ("page-a".to_owned(), vec![master_a1, master_a2]),
+                ("page-b".to_owned(), vec![master_b1]),
+            ]),
+        )
+        .expect("known target pages must admit inherited-master lane");
+
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|node| node.node_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "master-a1",
+                "master-a2",
+                "direct-a1",
+                "direct-a2",
+                "master-b1",
+                "direct-b1",
+            ]
+        );
     }
 
     #[test]

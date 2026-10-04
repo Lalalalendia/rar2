@@ -19,6 +19,18 @@ class CurrentViewerSupportedSubsetSourceTests(unittest.TestCase):
         self.assertNotIn("pub_viewer", text)
         self.assertNotIn("open_mature", text)
 
+    def test_projected_instances_keep_semantic_origin_but_get_unique_resolved_identity(self) -> None:
+        text = MAPPER.read_text(encoding="utf-8")
+        self.assertIn("projected_scene_instance: Option<CurrentProjectedSceneInstance>", text)
+        self.assertIn("fn resolved_output_node_id_v1", text)
+        self.assertIn("authoring_origin: node.node_id.into_canonical()", text)
+        self.assertIn("resolved_node_origin: resolved_node_id", text)
+        self.assertIn("node_id: resolved_node_id", text)
+        self.assertNotIn(
+            "current Viewer supported-subset mapping requires unique effective NodeIds",
+            text,
+        )
+
     def test_mapper_does_not_silently_claim_known_residual_classes(self) -> None:
         text = MAPPER.read_text(encoding="utf-8")
         self.assertIn("cropped_image_use_count", text)

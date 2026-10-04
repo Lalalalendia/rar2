@@ -10,6 +10,10 @@ on:
       - "vendor/producer-a/crates/pub-reader/src/bin/master_projection_bridge_receipt.rs"
       - "crates/pub-master-projection/**"
       - "crates/pub-model/**"
+      - "vendor/producer-a/crates/pub-viewer/Cargo.toml"
+      - "vendor/producer-a/crates/pub-viewer/src/**"
+      - "crates/chaptera-scene-instance/**"
+      - "crates/chaptera-viewer-render-plan/**"
 
 permissions:
   contents: read
@@ -78,6 +82,17 @@ jobs:
           rustfmt --edition 2021 --check vendor/producer-a/crates/pub-reader/src/bin/master_projection_bridge_receipt.rs
           rustfmt --edition 2024 --check vendor/producer-a/crates/pub-reader/src/master_bridge.rs
           cargo build --manifest-path vendor/producer-a/Cargo.toml             -p pub-reader --bin master_projection_bridge_receipt             --features master-authority-bridge --jobs 2
+
+      - name: Check active Viewer master consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustfmt --edition 2024 --check vendor/producer-a/crates/pub-viewer/src/lib.rs
+          rustfmt --edition 2024 --check crates/chaptera-viewer-render-plan/src/lib.rs
+          cargo check --manifest-path vendor/producer-a/Cargo.toml \
+            -p pub-viewer --features cmo-slot-compose --jobs 2
+          cargo test --manifest-path crates/chaptera-viewer-render-plan/Cargo.toml \
+            --features projected-scene-instances --jobs 2
 
       - name: Prove root/vendor PAGE identity parity
         shell: bash

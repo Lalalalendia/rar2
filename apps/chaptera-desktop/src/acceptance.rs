@@ -84,7 +84,7 @@ fn select_visible_story_edit(
             if visual
                 .projected_instances
                 .iter()
-                .any(|projected| projected.target_frame_node_id == scene_node.origin)
+                .any(|projected| projected.target_frame_node_id == Some(scene_node.origin))
             {
                 continue;
             }
